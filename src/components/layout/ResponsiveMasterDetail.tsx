@@ -6,6 +6,8 @@ import { Button } from "../ui/button";
 import AnimatedNumber from "../ui/AnimatedNumber";
 import { useDate } from "@/hooks/useDate";
 import { cn } from "@/lib/utils";
+import { mdc, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
+import { mlc } from "@/lib/mobileListChrome";
 
 export function ResponsiveMasterDetail({
   title,
@@ -49,13 +51,13 @@ export function ResponsiveMasterDetail({
     if (mobileListOnly && hasSelectedItem) {
       return (
         <div className="h-full w-full overflow-hidden bg-background flex flex-col">
-          {/* py kam: row height ~aadha; title `text-base` / label `text-sm` same */}
-          <div className="flex flex-shrink-0 items-center gap-1.5 border-b px-2 py-1">
-            <Button variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0" onClick={onBackToList} aria-label="Back to list">
-              <ArrowLeft className="h-3.5 w-3.5" />
+          {/* Mobile detail title — compact row (party/staff/bank list → detail) */}
+          <div className={mdc.masterBackRow} {...mdcNoEdgeSwipeCapture}>
+            <Button variant="ghost" size="icon" className={mdc.backBtn} onClick={onBackToList} aria-label="Back to list">
+              <ArrowLeft className={mdc.backIcon} />
             </Button>
-            <div className="flex min-w-0 flex-1 items-center gap-1.5">
-              <h1 className="shrink-0 text-base font-bold">{title}</h1>
+            <div className="flex min-w-0 flex-1 items-center gap-1">
+              <h1 className={mdc.masterTitle}>{title}</h1>
               {mobileSelectionLabel ? (
                 <>
                   <span className="text-muted-foreground/55 shrink-0 select-none" aria-hidden>
@@ -63,7 +65,7 @@ export function ResponsiveMasterDetail({
                   </span>
                   <span
                     className={cn(
-                      "text-sm font-medium truncate min-w-0",
+                      mdc.masterSelectionName,
                       mobileSelectionLabelClassName ?? "text-muted-foreground"
                     )}
                     title={mobileSelectionLabel}
@@ -94,14 +96,14 @@ export function ResponsiveMasterDetail({
     if (mobileListOnly) {
       return (
         <div className="h-full w-full overflow-hidden bg-background flex flex-col">
-          <div className="flex flex-col flex-1 min-h-0">
-            <div className="p-4 border-b flex-shrink-0">
-              <div className="flex justify-between items-center gap-2 min-w-0">
-                <h1 className="text-xl font-bold font-headline min-w-0 flex-1">{title}</h1>
-                <span className={cn("font-semibold text-sm flex-shrink-0", isNegative ? "text-red-600" : "text-green-600")}>{balance}</span>
+          <div className="flex flex-col flex-1 min-h-0" data-pl-master-list-chrome="">
+            <div className={mlc.pageHeader}>
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <h1 className={mlc.pageTitle}>{title}</h1>
+                <span className={cn(mlc.pageBalance, isNegative ? "text-red-600" : "text-green-600")}>{balance}</span>
               </div>
             </div>
-            {tabs && <div className="p-3 border-b flex-shrink-0">{tabs}</div>}
+            {tabs && <div className={mlc.tabsRow}>{tabs}</div>}
             {/* overflow-hidden + flex column taaki andar ScrollArea ko height mile; overflow-auto yahan nested scroll tod deta tha */}
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{listView}</div>
           </div>
@@ -111,14 +113,18 @@ export function ResponsiveMasterDetail({
     return (
       <div className="h-full w-full overflow-hidden bg-background flex flex-col">
         {/* List on top, detail below */}
-        <div className="flex flex-col min-h-0 border-b flex-shrink-0" style={{ maxHeight: "45%" }}>
-          <div className="p-4 border-b flex-shrink-0">
-            <div className="flex justify-between items-center gap-2 min-w-0">
-              <h1 className="text-xl font-bold font-headline min-w-0 flex-1">{title}</h1>
-              <span className={cn("font-semibold text-sm flex-shrink-0", isNegative ? "text-red-600" : "text-green-600")}>{balance}</span>
+        <div
+          className="flex flex-col min-h-0 border-b flex-shrink-0"
+          data-pl-master-list-chrome=""
+          style={{ maxHeight: "45%" }}
+        >
+          <div className={mlc.pageHeader}>
+            <div className="flex min-w-0 items-center justify-between gap-2">
+              <h1 className={mlc.pageTitle}>{title}</h1>
+              <span className={cn(mlc.pageBalance, isNegative ? "text-red-600" : "text-green-600")}>{balance}</span>
             </div>
           </div>
-          {tabs && <div className="p-3 border-b flex-shrink-0">{tabs}</div>}
+          {tabs && <div className={mlc.tabsRow}>{tabs}</div>}
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{listView}</div>
         </div>
         {/* flex flex-col so detail ke andar scroll container ko height mile */}
@@ -134,12 +140,15 @@ export function ResponsiveMasterDetail({
       className="grid h-full min-h-0 grid-cols-1 overflow-hidden md:[grid-template-columns:minmax(0,25%)_minmax(0,1fr)]"
       data-master-detail-layout="25-75"
     >
-      <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r">
-        <div className="p-4 border-b flex justify-between items-center flex-shrink-0 gap-2 min-w-0">
-          <h1 className="text-xl font-bold truncate min-w-0 flex-1">{title}</h1>
-          <span className={cn("font-semibold text-sm whitespace-nowrap flex-shrink-0", isNegative ? "text-red-600" : "text-green-600")}>{balance}</span>
+      <div
+        className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r"
+        data-pl-master-list-chrome=""
+      >
+        <div className={cn(mlc.pageHeader, "flex justify-between items-center gap-2 min-w-0")}>
+          <h1 className={cn(mlc.pageTitle, "truncate")}>{title}</h1>
+          <span className={cn(mlc.pageBalance, "whitespace-nowrap", isNegative ? "text-red-600" : "text-green-600")}>{balance}</span>
         </div>
-        {tabs && <div className="p-3 border-b flex-shrink-0">{tabs}</div>}
+        {tabs && <div className={mlc.tabsRow}>{tabs}</div>}
         {/* PC: yahan bhi flex column zaroori — warna listView ka flex-1 apply nahi hota, ScrollArea ko height nahi milti */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{listView}</div>
       </div>

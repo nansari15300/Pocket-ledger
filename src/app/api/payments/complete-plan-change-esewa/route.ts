@@ -7,6 +7,12 @@ import {
   PENDING_PLAN_CHANGES_COLLECTION,
   type PlanChangeHistoryFirestore,
 } from "@/lib/payments/planChangeApply";
+import {
+  isBillingGatewayAvailable,
+  mergeGatewayKeysWithEnv,
+  parseGatewayPaymentFlags,
+  type GatewayKeys,
+} from "@/ai/flows/gateway-keys";
 
 type Body = {
   /** Decoded eSewa redirect payload (status, transaction_uuid, total_amount, …). */
@@ -49,6 +55,16 @@ export async function POST(req: NextRequest) {
     }
 
     const db = getAdminDb();
+    const gwSnap = await db.doc("app_settings/payment_gateways").get();
+    const gwRaw = gwSnap.exists ? (gwSnap.data() as Record<string, unknown>) : {};
+    const gwKeys = mergeGatewayKeysWithEnv(gwRaw as GatewayKeys);
+    const gwFlags = parseGatewayPaymentFlags(gwRaw);
+    if (!isBillingGatewayAvailable("esewa", gwKeys, gwFlags)) {
+      return NextResponse.json(
+        { error: "eSewa payments are disabled or not configured.", code: "gateway_disabled" },
+        { status: 403 }
+      );
+    }
     const pendingRef = db.collection(PENDING_PLAN_CHANGES_COLLECTION).doc(transactionUuid);
     const pendingSnap = await pendingRef.get();
     if (!pendingSnap.exists) {

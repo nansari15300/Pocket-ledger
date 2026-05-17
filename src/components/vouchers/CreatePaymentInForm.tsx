@@ -55,9 +55,17 @@ import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, updateVouc
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
+import {
+  apkEmbeddedSqliteFirstWritesPreferred,
+  preferLocalLedgerReads,
+  shouldAutoFlushOutboxAfterEnqueue,
+} from "@/lib/apkOnlineFirestoreWritePolicy";
 import { flushVoucherOutbox } from "@/lib/localVoucherOutbox";
-import { appendLocalOnlyVoucherFilesToUrls, shouldStageNewVoucherFilesAsLocalPending } from "@/lib/voucherLocalAttachmentUpload";
+import {
+  appendLocalOnlyVoucherFilesToUrls,
+  shouldDeferStorageIncrementUntilPendingUpload,
+  shouldStageNewVoucherFilesAsLocalPending,
+} from "@/lib/voucherLocalAttachmentUpload";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useSearchParams } from "next/navigation";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
@@ -1037,7 +1045,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const q = query(collection(firestore, `companies/${companyId}/vouchers`), where("type", "==", voucherType));
       let voucherNumbers: string[] = [];
       // APK/static offline: `getDocs` Firestore par hang — voucher numbers SQLite mirror se.
-      if (isLocalOnlyMode() || (typeof navigator !== "undefined" && !navigator.onLine)) {
+      if (preferLocalLedgerReads()) {
         const rows = await listCompanyDocsFromBrowserDb(companyId, "vouchers");
         voucherNumbers = rows
           .filter((r: { type?: string }) => String(r?.type ?? "") === String(voucherType))
@@ -1168,7 +1176,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       
       if (isEdit) {
         // Check edit permission - determine ownership
-        const preferLocalReads = isLocalOnlyMode() || (typeof navigator !== "undefined" && !navigator.onLine);
+        const preferLocalReads = preferLocalLedgerReads();
         const fetchVoucher = async (cid: string, vid: string) => {
           if (preferLocalReads) {
             const row = await getCompanyDocFromBrowserDb(cid, "vouchers", vid);
@@ -1192,7 +1200,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               ? existingVoucher.date.toDate()
               : new Date(existingVoucher.date);
           } else if (companyId) {
-            const preferLocalReadsDate = isLocalOnlyMode() || (typeof navigator !== "undefined" && !navigator.onLine);
+            const preferLocalReadsDate = preferLocalLedgerReads();
             if (preferLocalReadsDate) {
               const row = await getCompanyDocFromBrowserDb(companyId, "vouchers", savedVoucherId);
               if (row?.date != null) {
@@ -1240,7 +1248,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       });
 
       if (!idArgForFirestore || data.voucherNumber !== voucher?.voucherNumber) {
-        const preferLocalReads = isLocalOnlyMode() || (typeof navigator !== "undefined" && !navigator.onLine);
+        const preferLocalReads = preferLocalLedgerReads();
         let duplicateOtherId: string | null = null;
         if (preferLocalReads) {
           const hit = await findVoucherInLocalMirrorByNumberAndType(companyId, data.voucherNumber, voucherType);
@@ -1335,10 +1343,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             });
           sanitizedData.fileUrls = merged;
           if (preGen) preGeneratedVoucherId = preGen;
-          try {
-            await incrementCompanyStorage(companyId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
-          } catch {
-            /* offline */
+          // Counter flush-time par (`syncPendingFiles`) — yahan Firestore `updateDoc` await se save hang na ho.
+          if (!shouldDeferStorageIncrementUntilPendingUpload()) {
+            try {
+              await incrementCompanyStorage(companyId, {
+                attachmentsBytes: totalNewBytes,
+                storageBytes: totalNewBytes,
+              });
+            } catch {
+              /* offline */
+            }
           }
         } else {
           for (const file of newFilesToUpload) {
@@ -1432,11 +1446,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           initialFilesRef.current = persistedUrls;
         }
         // Online ho to outbox turant flush — Storage upload + dusre device ko HTTPS URLs.
-        if (
-          (isLocalOnlyMode() || apkEmbeddedSqliteFirstWritesPreferred()) &&
-          typeof navigator !== "undefined" &&
-          navigator.onLine
-        ) {
+        if (shouldAutoFlushOutboxAfterEnqueue()) {
           void flushVoucherOutbox().catch((err) => {
             console.warn("[CreatePaymentInForm] post-save outbox flush", err);
           });

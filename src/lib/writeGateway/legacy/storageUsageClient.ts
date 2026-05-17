@@ -107,6 +107,10 @@ export async function incrementCompanyStorage(
   const att = Math.max(0, Math.round(delta.attachmentsBytes ?? 0));
   const stor = Math.max(0, Math.round(delta.storageBytes ?? 0));
   if (att === 0 && stor === 0) return;
+  // Embedded/offline: counter baad me outbox flush — voucher+attachment SQLite save block mat karo.
+  if (apkEmbeddedSqliteFirstWritesPreferred() || (typeof navigator !== "undefined" && !navigator.onLine)) {
+    return;
+  }
 
   const ref = doc(firestore, "companies", companyId);
   const updates: Record<string, unknown> = {};
@@ -115,7 +119,12 @@ export async function incrementCompanyStorage(
   if (Object.keys(updates).length === 0) return;
 
   try {
-    await updateDoc(ref, updates as any);
+    await Promise.race([
+      updateDoc(ref, updates as any),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("incrementCompanyStorage-timeout")), COMPANY_USAGE_FIRESTORE_MS)
+      ),
+    ]);
   } catch (error: any) {
     // Shared roles may not have company document update access in rules.
     // Do not block voucher save if usage counters cannot be incremented.
@@ -123,9 +132,12 @@ export async function incrementCompanyStorage(
       console.warn("[storageUsage] Skipped increment due to insufficient permissions.");
       return;
     }
-    // Offline / unavailable: local file queue + SQLite save chalna chahiye; usage counter baad me sync ho sakta hai.
-    if (isLikelyOfflineFirestoreError(error)) {
-      console.warn("[storageUsage] Skipped increment (offline/unavailable).");
+    // Offline / unavailable / slow WAN: voucher+attachment save chalna chahiye; counter baad me sync ho sakta hai.
+    if (
+      isLikelyOfflineFirestoreError(error) ||
+      (error instanceof Error && error.message === "incrementCompanyStorage-timeout")
+    ) {
+      console.warn("[storageUsage] Skipped increment (offline/unavailable/timeout).");
       return;
     }
     throw error;

@@ -246,6 +246,39 @@ function migrateBrowserSqliteSchema(db: SqlJsDatabase): void {
       /* ignore */
     }
     setUserVersion(2);
+    v = 2;
+  }
+  // Local-company Drive/Dropbox delta sync — `sync_outbox` (Firestore) se alag queue
+  if (v < 3) {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS cloud_sync_outbox (
+        op_id TEXT PRIMARY KEY,
+        company_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        table_name TEXT NOT NULL,
+        action TEXT NOT NULL,
+        row_id TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        op_seq INTEGER NOT NULL,
+        payload TEXT NOT NULL,
+        synced_at INTEGER
+      )
+    `);
+    db.run(`
+      CREATE INDEX IF NOT EXISTS idx_cloud_sync_outbox_company_pending
+      ON cloud_sync_outbox(company_id, synced_at, op_seq)
+    `);
+    db.run(`
+      CREATE TABLE IF NOT EXISTS cloud_sync_meta (
+        company_id TEXT PRIMARY KEY,
+        last_local_op_seq INTEGER NOT NULL DEFAULT 0,
+        last_synced_op INTEGER NOT NULL DEFAULT 0,
+        last_sync_at INTEGER,
+        sync_status TEXT NOT NULL DEFAULT 'idle',
+        last_error TEXT
+      )
+    `);
+    setUserVersion(3);
   }
 }
 

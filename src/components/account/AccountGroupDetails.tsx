@@ -1,4 +1,4 @@
-
+﻿
 
 "use client";
 
@@ -8,6 +8,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Search, ChevronDown, Columns3 } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
+import { useStatementCheckMode } from "@/hooks/useStatementCheckMode";
+import { recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
+
+import { LedgerFooterTextPill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
 import { useTransactionVisibleColumns, COLUMN_LABELS } from "../vouchers/transactionColumnVisibility";
 import {
   DropdownMenu,
@@ -58,7 +64,7 @@ export function AccountGroupDetails({
 }) {
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const calendarMonths = useCalendarMonths();
-  const { company } = useCompany();
+  const { company, companyId } = useCompany();
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(['all']);
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
@@ -132,12 +138,38 @@ export function AccountGroupDetails({
     });
   }, [filteredTransactions, accounts]);
 
-  const totalPages = Math.max(1, Math.ceil(processedTransactions.length / rowsPerPage));
-  const paginatedTransactions = processedTransactions.slice(
+  const [statementKeyboardNav, setStatementKeyboardNav] = useState<
+    ReadonlyArray<{ id?: string; _rowKey?: string }>
+  >([]);
+  const statementCheck = useStatementCheckMode({
+    companyId,
+    context: "group",
+    contextId: group?.id,
+    viewMode: "statement",
+    orderedTransactions: processedTransactions,
+    keyboardNavTransactions: statementKeyboardNav,
+  });
+  const ledgerListForDisplay = useMemo(() => {
+    const filtered = statementCheck.filterTransactions([...processedTransactions]);
+    if (!statementCheck.checkModeActive) return filtered;
+    return recomputeRunningBalanceTopToBottom(filtered, group.openingBalance || 0);
+  }, [
+    processedTransactions,
+    statementCheck.filterTransactions,
+    statementCheck.checkModeActive,
+    group.openingBalance,
+  ]);
+
+  const totalPages = Math.max(1, Math.ceil(ledgerListForDisplay.length / rowsPerPage));
+  const paginatedTransactions = ledgerListForDisplay.slice(
       (currentPage - 1) * rowsPerPage,
       currentPage * rowsPerPage
   );
   
+
+  useEffect(() => {
+    setStatementKeyboardNav(paginatedTransactions ?? []);
+  }, [paginatedTransactions]);
   const handleOpenNoteDialog = (accountId?: string) => {
     if (accounts.length === 1) {
         setNoteEntityId(accounts[0].id);
@@ -204,9 +236,9 @@ export function AccountGroupDetails({
     <div className="h-full flex flex-col">
       <Card className="flex-1 flex flex-col min-h-0">
            <CardHeader className="space-y-4 overflow-auto min-h-0 scrollbar-slim-dim print:hidden p-0">
-              {/* Row 1: Part 1 (name→balance) and Part 2 (Add Note, Print) side by side; Part 2 wraps to bottom on small; parts never wrap internally */}
+              {/* Row 1: Part 1 (nameâ†’balance) and Part 2 (Add Note, Print) side by side; Part 2 wraps to bottom on small; parts never wrap internally */}
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-                <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim">
+                <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
                   <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-muted text-muted-foreground flex-shrink-0">
                     <Users className="h-6 w-6" />
                   </div>
@@ -231,7 +263,7 @@ export function AccountGroupDetails({
                     <div className="border rounded-md p-2 whitespace-nowrap"><span className="text-muted-foreground">Balance: </span><span className={cn("font-semibold", filteredBalance >= 0 ? "text-green-600" : "text-red-600")}>{formatCurrency(filteredBalance, {showDrCr: true})}</span></div>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+                <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
                   <Button variant="outline" size="sm" onClick={() => handleOpenNoteDialog()} className="flex-shrink-0 h-10">
                     <FilePlus className="mr-2 h-4 w-4" /> Add Note
                   </Button>
@@ -242,7 +274,7 @@ export function AccountGroupDetails({
               </div>
               {/* Row 2: Part 1 (date, filter) and Part 2 (Vouchers, Rows) side by side; Part 2 wraps to bottom on small; parts never wrap internally */}
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-                <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim">
+                <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
                   <div className="flex items-center gap-2 flex-nowrap flex-shrink-0">
                     {(dateSystem === 'BS' || dateSystem === 'Both') && (
                       <BsDatePicker isRange valueAD={dateRange} onChangeAD={(range) => onDateRangeChange(range as DateRange | undefined)} />
@@ -289,7 +321,7 @@ export function AccountGroupDetails({
                     onSelectionChange={setSelectedAccountIds}
                   />
                 </div>
-                <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+                <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
                   <span className="text-sm font-medium flex-shrink-0">Vouchers: {filteredTransactions.length}</span>
                   <p className="text-sm font-medium flex-shrink-0">Rows</p>
                   <Select
@@ -316,7 +348,7 @@ export function AccountGroupDetails({
           <CardContent className="flex-1 min-h-0 p-0">
               <ScrollArea className="h-full">
                   <div className="p-4 sm:p-6 md:p-8 pt-0">
-                      <TransactionsTable transactions={paginatedTransactions} context="group" contextId={group.id} showNarration={showNarration} visibleColumns={visibleColumns} openingBalance={group.openingBalance}/>
+                      <TransactionsTable transactions={paginatedTransactions} context="group" contextId={group.id} {...statementCheck.tableProps} showNarration={showNarration} visibleColumns={visibleColumns} openingBalance={group.openingBalance}/>
                       {paginatedTransactions.length === 0 && (
                           <div className="text-center py-8 text-muted-foreground">
                               No transactions found for the selected period.
@@ -328,16 +360,9 @@ export function AccountGroupDetails({
            {/* Footer: Part 1 (count) and Part 2 (pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
            <div className="py-2 px-4 sm:px-6 md:px-8 border-t overflow-auto min-h-0 scrollbar-slim-dim">
              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-               <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-                 <DropdownMenu>
-                   <DropdownMenuTrigger asChild>
-                     <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">
-                       <Columns3 className="h-4 w-4" />
-                       Columns
-                       <ChevronDown className="h-4 w-4 opacity-50" />
-                     </Button>
-                   </DropdownMenuTrigger>
-                   <DropdownMenuContent align="start" className="w-52 p-2">
+               <div className="flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
+                 <LedgerFooterColumnsMenu>
+                <DropdownMenuContent align="start" className="w-52 p-2">
                      {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[]).map((key) => (
                        <DropdownMenuItem
                          key={key}
@@ -355,43 +380,40 @@ export function AccountGroupDetails({
                        </DropdownMenuItem>
                      ))}
                    </DropdownMenuContent>
-                 </DropdownMenu>
+              </LedgerFooterColumnsMenu>
+              <StatementCheckModeFooterControls
+                idPrefix="income-expense-group"
+                enabled={statementCheck.checkModeEnabled}
+                onEnabledChange={statementCheck.setCheckModeEnabled}
+                viewMode="statement"
+                hiddenCount={statementCheck.hiddenCount}
+              />
                </div>
-               <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
-                 <p className="text-sm font-medium flex-shrink-0">
-                   Page {currentPage} of {totalPages}
-                 </p>
+               <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+                 <LedgerFooterTextPill>Page {currentPage} of {totalPages}</LedgerFooterTextPill>
                  <div className="flex items-center space-x-1 flex-shrink-0">
-                   <Button
-                     variant="outline"
-                     className="h-8 w-8 p-0"
+                   <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                      onClick={() => setCurrentPage(1)}
                      disabled={currentPage === 1}
                    >
                      <span className="sr-only">Go to first page</span>
                      <ChevronsLeft className="h-4 w-4" />
                    </Button>
-                   <Button
-                     variant="outline"
-                     className="h-8 w-8 p-0"
+                   <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                      onClick={() => setCurrentPage(currentPage - 1)}
                      disabled={currentPage === 1}
                    >
                      <span className="sr-only">Go to previous page</span>
                      <ChevronLeft className="h-4 w-4" />
                    </Button>
-                   <Button
-                     variant="outline"
-                     className="h-8 w-8 p-0"
+                   <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                      onClick={() => setCurrentPage(currentPage + 1)}
                      disabled={currentPage === totalPages}
                    >
                      <span className="sr-only">Go to next page</span>
                      <ChevronRight className="h-4 w-4" />
                    </Button>
-                   <Button
-                     variant="outline"
-                     className="h-8 w-8 p-0"
+                   <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                      onClick={() => setCurrentPage(totalPages)}
                      disabled={currentPage === totalPages}
                    >
@@ -399,7 +421,7 @@ export function AccountGroupDetails({
                      <ChevronsRight className="h-4 w-4" />
                    </Button>
                  </div>
-                <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {processedTransactions.length}</p>
+                <LedgerFooterTextPill>Total Trxn {processedTransactions.length}</LedgerFooterTextPill>
                </div>
              </div>
            </div>

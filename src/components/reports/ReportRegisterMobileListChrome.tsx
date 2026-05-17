@@ -9,6 +9,8 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Search } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { mdc } from "@/lib/mobileDetailChrome";
+import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 
 export type ReportRegisterMobileListChromeSummary = {
   label: string;
@@ -41,32 +43,35 @@ export function ReportRegisterMobileListChrome({
   children,
 }: ReportRegisterMobileListChromeProps) {
   return (
-    <div className="flex flex-col h-full min-h-0 overflow-hidden">
-      <header className="sticky top-0 z-10 flex-shrink-0 flex flex-col gap-2 p-3 border-b bg-white">
-        <h1 className="text-base font-bold text-muted-foreground">{title}</h1>
-        <div className="flex justify-center">
-          <span className="text-xs font-medium text-muted-foreground">{subtitle}</span>
-        </div>
-        {actionSlot ? <div className="flex flex-col gap-2">{actionSlot}</div> : null}
-        <Card className="p-3 text-center">
-          <p className="text-xs text-muted-foreground">{summary.label}</p>
-          <p className={cn("text-xl font-bold", summary.amountClassName)}>{summary.amountText}</p>
-        </Card>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <header className={mdc.listHeader}>
+        <h1 className={mdc.listTitle}>{title}</h1>
+        {/* Mobile: summary + search + section label collapse — txn list ke liye zyada jagah */}
+        <MobileDetailSummaryCollapsible>
+          <div className="flex justify-center">
+            <span className={mdc.listSubtitle}>{subtitle}</span>
+          </div>
+          {actionSlot ? <div className="flex flex-col gap-1">{actionSlot}</div> : null}
+          <Card className={mdc.listSummaryCard}>
+            <p className={mdc.listSummaryLabel}>{summary.label}</p>
+            <p className={cn(mdc.listSummaryAmount, summary.amountClassName)}>{summary.amountText}</p>
+          </Card>
+          <div className={mdc.listSearchRow}>
+            <div className={mdc.listSearchWrap}>
+              <Search className={mdc.listSearchIcon} />
+              <Input
+                placeholder={searchPlaceholder}
+                className={mdc.listSearchInput}
+                value={searchValue}
+                onChange={(e) => onSearchChange(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className={mdc.listSectionRow}>
+            <h3 className={mdc.listSectionTitle}>{listSectionTitle}</h3>
+          </div>
+        </MobileDetailSummaryCollapsible>
       </header>
-      <div className="p-3 border-b flex-shrink-0 bg-white">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder={searchPlaceholder}
-            className="pl-9"
-            value={searchValue}
-            onChange={(e) => onSearchChange(e.target.value)}
-          />
-        </div>
-      </div>
-      <div className="px-3 pt-2 pb-1 border-b flex-shrink-0 bg-white">
-        <h3 className="text-sm font-semibold">{listSectionTitle}</h3>
-      </div>
       <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
     </div>
   );

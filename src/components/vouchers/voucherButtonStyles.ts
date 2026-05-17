@@ -25,6 +25,18 @@ export const BTN_APPROVE_CLASS = "bg-violet-600 hover:bg-violet-700 text-white b
 export const VOUCHER_NARRATION_TEXTAREA_CLASS =
   "min-h-[9rem] max-h-[min(70vh,28rem)] w-full min-w-0 resize-y overflow-y-auto";
 
+/** Mobile 3-col attach: square `h-24 w-24` — Payment In ke Add / preview jaisa (pehle `w-full` = lamba rectangle). */
+export const VOUCHER_MOBILE_ATTACH_TILE_SLOT = "relative h-24 w-24 shrink-0";
+export const VOUCHER_MOBILE_ATTACH_PREVIEW_CLASS = "h-24 w-24 shrink-0";
+export const VOUCHER_MOBILE_ATTACH_ADD_SURFACE_CLASS =
+  "h-full w-full border-2 border-dashed rounded-md flex flex-col items-center justify-center transition-colors";
+
+/** Desktop flex-wrap: square preview — `w-full` hata (full row stretch); Payment In = `h-24 w-24` */
+export const VOUCHER_DESKTOP_ATTACH_TILE_SLOT = "relative h-24 w-24 shrink-0";
+export const VOUCHER_DESKTOP_ATTACH_PREVIEW_CLASS = "h-24 w-24 shrink-0";
+export const VOUCHER_DESKTOP_ATTACH_ADD_SURFACE_CLASS =
+  "h-full w-full border-2 border-dashed rounded-lg flex flex-col items-center justify-center transition-colors";
+
 /** Create/Edit dialog footers: Cancel — voucher `BTN_CANCEL_CLASS` jaisi pink pill (dusre actions ke saath height match). */
 export const BTN_DIALOG_CANCEL_CLASS =
   "bg-pink-500 hover:bg-pink-600 text-white border-0 rounded-full h-10 shrink-0 px-6";

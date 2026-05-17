@@ -20,6 +20,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { Button } from "@/components/ui/button";
 import { useSearchParams } from "next/navigation";
 import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
+import { mdc, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
 
 export function SaleReportDetail() {
   const isMobile = useIsMobile();
@@ -156,11 +157,11 @@ export function SaleReportDetail() {
     if (currentParty) {
       return (
         <div className="flex flex-col h-full min-h-0 overflow-hidden">
-          <div className="p-2 border-b flex-shrink-0 flex items-center gap-2">
-            <Button variant="ghost" size="icon" onClick={() => { setSelectedParty(null); setShowAllCompanyVouchers(false); }}>
-              <ArrowLeft className="h-5 w-5" />
+          <div className={mdc.reportBackRow} {...mdcNoEdgeSwipeCapture}>
+            <Button variant="ghost" size="icon" className={mdc.reportBackBtn} onClick={() => { setSelectedParty(null); setShowAllCompanyVouchers(false); }}>
+              <ArrowLeft className="h-3 w-3" />
             </Button>
-            <span className="font-semibold truncate">{currentParty.name}</span>
+            <span className="truncate text-sm font-semibold">{currentParty.name}</span>
           </div>
           <div className="flex-1 min-h-0 overflow-hidden">
             <PartyDetails

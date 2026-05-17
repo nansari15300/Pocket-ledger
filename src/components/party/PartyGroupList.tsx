@@ -2,12 +2,13 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { mlc } from "@/lib/mobileListChrome";
 import { Users, Lock, Building2, CreditCard, Receipt, Package, FileText, ChevronRight, ChevronDown } from "lucide-react";
 import type { Group } from "@/components/party/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
-import { Card } from "@/components/ui/card";
+import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../ui/tooltip";
 import { useMemo, useState } from "react";
 import {
@@ -18,7 +19,8 @@ import { filterAndSortEntityGroups } from "@/lib/entityGroupListQuickFilter";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import AnimatedNumber from "../ui/AnimatedNumber";
-import { isSystemParentGroup } from "@/lib/system-groups";
+import { isSystemParentGroup } from "@/lib/system-groups"
+import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 import { getAllSystemGroupNames } from "@/lib/system-group-names";
 
 type GroupWithType = Group & { groupType?: 'party' | 'tax' | 'staff' | 'account' | 'expense' | 'item' };
@@ -113,8 +115,8 @@ export function PartyGroupList({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="flex h-full min-h-0 min-w-0 w-full flex-col rounded-b-lg border-t-0 bg-background">
-        <ScrollArea className="min-h-0 min-w-0 w-full flex-1">
+      <div className={masterListShellCn}>
+        <ScrollArea listChrome className="min-h-0 min-w-0 w-full flex-1">
           <div className="px-3 pt-0 pb-2 space-y-2 w-full">
           {categories.length === 0 ? (
             <div className="p-8 text-center text-sm text-muted-foreground">No groups found.</div>
@@ -139,7 +141,7 @@ export function PartyGroupList({
                   {/* Category Header - same padding/height as party list section (Party (x)) */}
                   <div
                     className={cn(
-                      "px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground",
+                      mlc.sectionLabelRow,
                       collapsible && "cursor-pointer hover:bg-muted/50 rounded-none"
                     )}
                     onClick={() => collapsible && toggleCategory(categoryKey)}
@@ -159,7 +161,7 @@ export function PartyGroupList({
 
                   {/* Groups under category - full width like party list */}
                   {isExpanded && hasGroups && (
-                    <ul className="mt-1 space-y-1 w-full">
+                    <ul className="pl-master-list-ul mt-1 w-full">
                       {category.groups.map((group) => {
                         const isSelected = selectedGroup?.id === group.id;
                         const isSystem = (group as any).isSystemReserved;
@@ -177,12 +179,7 @@ export function PartyGroupList({
                           >
                             {(() => {
                               const href = getItemHref?.(group);
-                              const cardClassName = cn(
-                                "w-full min-w-0 max-w-full overflow-hidden p-1.5 cursor-pointer border rounded-lg transition-colors duration-200",
-                                isSelected
-                                  ? "border-primary bg-secondary shadow-sm"
-                                  : "border-gray-300 dark:border-gray-600 hover:border-primary/40 bg-card hover:bg-muted/30"
-                              );
+                              const cardClassName = masterListRowUnselectedCn(isSelected);
                               const cardContent = (
                               <div className="pl-master-list-row">
                                 <div className="pl-master-list-row-leading">
@@ -204,10 +201,13 @@ export function PartyGroupList({
                                     )}
                                   </div>
                                   <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <span className="pl-master-list-row-name min-w-0 flex-1 cursor-default truncate text-left text-sm font-semibold">
-                                        {group.name}
-                                      </span>
+                                    {/* asChild hata — motion layout + span ref merge par Radix setRef loop (party groups tab) */}
+                                    <TooltipTrigger
+                                      type="button"
+                                      onPointerDown={(e) => e.stopPropagation()}
+                                      className="pl-master-list-row-name min-w-0 flex-1 cursor-default truncate border-0 bg-transparent p-0 text-left text-sm font-semibold shadow-none"
+                                    >
+                                      {group.name}
                                     </TooltipTrigger>
                                     <TooltipContent>
                                       <p>{group.name}</p>
@@ -219,32 +219,25 @@ export function PartyGroupList({
                                     </TooltipContent>
                                   </Tooltip>
                                 </div>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <p
-                                      className={cn(
-                                        "pl-master-list-row-amount-xs ml-1 rounded px-1",
-                                        group.balance >= 0 ? "text-green-600" : "text-red-600"
-                                      )}
-                                    >
-                                      {formatCurrency(group.balance, { showDrCr: true })}
-                                    </p>
-                                  </TooltipTrigger>
-                                  <TooltipContent side="left">
-                                    <p className="font-medium">{formatCurrency(group.balance, { showDrCr: true })}</p>
-                                  </TooltipContent>
-                                </Tooltip>
+                                <p
+                                  className={cn(
+                                    "pl-master-list-row-amount-xs ml-1 rounded px-1",
+                                    group.balance >= 0 ? "text-green-600" : "text-red-600"
+                                  )}
+                                >
+                                  {formatCurrency(group.balance, { showDrCr: true })}
+                                </p>
                               </div>
                               );
                               return href ? (
                                 // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                                 <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
-                                  <Card className={cardClassName}>{cardContent}</Card>
+                                  <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
                                 </Link>
                               ) : (
-                                <Card className={cardClassName} onClick={() => onSelectGroup(group)}>
+                                <MasterListRow selected={isSelected} className={cardClassName} onClick={() => onSelectGroup(group)}>
                                   {cardContent}
-                                </Card>
+                                </MasterListRow>
                               );
                             })()}
                           </motion.li>

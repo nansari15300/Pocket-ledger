@@ -19,6 +19,53 @@ const GatewayKeysSchema = z.object({
 
 export type GatewayKeys = z.infer<typeof GatewayKeysSchema>;
 
+/** `app_settings/payment_gateways` — plan page par kaunsa gateway dikhe (keys alag configure hote hain). */
+export type GatewayPaymentFlags = {
+  stripePaymentEnabled: boolean;
+  khaltiPaymentEnabled: boolean;
+  esewaPaymentEnabled: boolean;
+};
+
+export const DEFAULT_GATEWAY_PAYMENT_FLAGS: GatewayPaymentFlags = {
+  stripePaymentEnabled: true,
+  khaltiPaymentEnabled: true,
+  esewaPaymentEnabled: true,
+};
+
+export function parseGatewayPaymentFlags(
+  raw: Record<string, unknown> | null | undefined
+): GatewayPaymentFlags {
+  if (!raw) return { ...DEFAULT_GATEWAY_PAYMENT_FLAGS };
+  return {
+    stripePaymentEnabled: raw.stripePaymentEnabled !== false,
+    khaltiPaymentEnabled: raw.khaltiPaymentEnabled !== false,
+    esewaPaymentEnabled: raw.esewaPaymentEnabled !== false,
+  };
+}
+
+/** Billing UI + `/api/payments/gateway-status` — configured keys + admin toggle dono true hon. */
+export function resolveBillingGatewayAvailability(
+  keys: GatewayKeys,
+  flags: GatewayPaymentFlags
+): { stripe: boolean; khalti: boolean; esewa: boolean } {
+  return {
+    stripe: !!keys.stripeSecretKey?.trim() && flags.stripePaymentEnabled,
+    khalti: !!keys.khaltiPublicKey?.trim() && flags.khaltiPaymentEnabled,
+    esewa:
+      !!(keys.esewaMerchantCode?.trim() && keys.esewaSecretKey?.trim()) && flags.esewaPaymentEnabled,
+  };
+}
+
+export type BillingGatewayId = "stripe" | "khalti" | "esewa";
+
+export function isBillingGatewayAvailable(
+  gateway: BillingGatewayId,
+  keys: GatewayKeys,
+  flags: GatewayPaymentFlags
+): boolean {
+  return resolveBillingGatewayAvailability(keys, flags)[gateway];
+}
+
 /** Official eSewa Epay v2 UAT merchant id — public test credential (developer.esewa.com.np Test credentials). */
 export const ESEWA_UAT_MERCHANT_CODE = 'EPAYTEST';
 
@@ -92,6 +139,13 @@ export async function getGatewayKeys(): Promise<GatewayKeys> {
     console.error('Error fetching gateway keys:', e);
     return {};
   }
+}
+
+/** Admin card switch — sirf plan page payment option; keys/doc merge. */
+export async function updateGatewayPaymentFlags(
+  patch: Partial<GatewayPaymentFlags>
+): Promise<void> {
+  await setDoc(keysDocRef, patch, { merge: true });
 }
 
 export async function updateGatewayKeys(keys: GatewayKeys): Promise<void> {

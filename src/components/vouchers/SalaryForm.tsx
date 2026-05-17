@@ -58,7 +58,11 @@ import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucher
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
-import { appendLocalOnlyVoucherFilesToUrls, shouldStageNewVoucherFilesAsLocalPending } from "@/lib/voucherLocalAttachmentUpload";
+import {
+  appendLocalOnlyVoucherFilesToUrls,
+  shouldDeferStorageIncrementUntilPendingUpload,
+  shouldStageNewVoucherFilesAsLocalPending,
+} from "@/lib/voucherLocalAttachmentUpload";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
@@ -1441,10 +1445,15 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
             });
           allFileUrls = merged;
           if (preGen) preGeneratedVoucherId = preGen;
-          try {
-            await incrementCompanyStorage(companyId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
-          } catch {
-            /* offline */
+          if (!shouldDeferStorageIncrementUntilPendingUpload()) {
+            try {
+              await incrementCompanyStorage(companyId, {
+                attachmentsBytes: totalNewBytes,
+                storageBytes: totalNewBytes,
+              });
+            } catch {
+              /* offline */
+            }
           }
         } else {
           allFileUrls = [...existingUrls];

@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { useAdminAccess } from '@/hooks/useAdminAccess';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -9,20 +9,34 @@ import { z } from 'zod';
 import {
   getGatewayKeys,
   updateGatewayKeys,
+  updateGatewayPaymentFlags,
+  parseGatewayPaymentFlags,
   ESEWA_UAT_MERCHANT_CODE,
   ESEWA_UAT_SECRET_KEY,
   type GatewayKeys,
+  type GatewayPaymentFlags,
+  type BillingGatewayId,
 } from '@/ai/flows/gateway-keys';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Loader2 } from 'lucide-react';
+import { Info, Loader2 } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { firestore } from '@/lib/firebase';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { parseBillingPolicyDoc } from '@/lib/billingPolicyFlags';
+
+/**
+ * Gateway cards: 1→full width, 2→50-50, 3→⅓ each — `auto-fit` + min width taaki
+ * “Show on plan page” + switch ek line me rahe (text wrap na ho).
+ */
+/** `20rem` min — “Show on plan page” + (i) + switch ek line, chhoti width par wrap na ho. */
+const adminGatewayCardsGridCn =
+  'grid w-full gap-4 grid-cols-[repeat(auto-fit,minmax(min(100%,20rem),1fr))]';
 
 const formSchema = z.object({
   stripeSecretKey: z.string().optional(),
@@ -32,6 +46,82 @@ const formSchema = z.object({
 });
 
 type GatewayFormValues = z.infer<typeof formSchema>;
+
+/** Section / toggle ke bagal — lambi help copy sirf (i) tooltip me. */
+function SettingsInfoTip({
+  label,
+  ariaLabel = 'More information',
+}: {
+  label: ReactNode;
+  ariaLabel?: string;
+}) {
+  return (
+    <TooltipProvider delayDuration={200}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            aria-label={ariaLabel}
+          >
+            <Info className="h-4 w-4" aria-hidden />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-[20rem] text-xs leading-snug">
+          {label}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+/** Title row ke saath — gateway naam + “Show on plan page” switch ek line. */
+function GatewayPlanPaymentRow({
+  id,
+  info,
+  checked,
+  disabled,
+  onCheckedChange,
+}: {
+  id: string;
+  info: string;
+  checked: boolean;
+  disabled?: boolean;
+  onCheckedChange: (next: boolean) => void;
+}) {
+  return (
+    <div className="flex shrink-0 flex-nowrap items-center gap-1.5 sm:gap-2">
+      <div className="flex shrink-0 flex-nowrap items-center gap-1">
+        <Label htmlFor={id} className="cursor-default shrink-0 text-sm whitespace-nowrap">
+          Show on plan page
+        </Label>
+        <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                aria-label="About show on plan page"
+              >
+                <Info className="h-4 w-4" aria-hidden />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-[16rem] text-xs leading-snug">
+              {info}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
+      <Switch
+        id={id}
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onCheckedChange}
+        className="shrink-0"
+      />
+    </div>
+  );
+}
 
 /** Firestore / spread `keys` can omit keys → `undefined`; `<Input {...field} />` must always get string (controlled). */
 function toGatewayFormDefaults(raw: Partial<GatewayKeys>): GatewayFormValues {
@@ -47,10 +137,17 @@ export default function BankSettingsPage() {
   useAdminAccess(['SuperAdmin']);
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  /** `app_settings/billing` — owners ko paid→cheaper paid downgrade dikhana / API allow karna. */
+  /** `app_settings/billing` — downgrade policy only (plan page payment toggles gateway cards me). */
   const [billingPolicyLoading, setBillingPolicyLoading] = useState(true);
+  /** Draft — Firestore par sirf Save Settings click se likhega. */
   const [planDowngradeEnabled, setPlanDowngradeEnabled] = useState(true);
-  const [policySaving, setPolicySaving] = useState(false);
+  /** `app_settings/payment_gateways` — har card ka “Show on plan page” (draft). */
+  const [gatewayFlagsLoading, setGatewayFlagsLoading] = useState(true);
+  const [gatewayFlags, setGatewayFlags] = useState<GatewayPaymentFlags>({
+    stripePaymentEnabled: true,
+    khaltiPaymentEnabled: true,
+    esewaPaymentEnabled: true,
+  });
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -76,11 +173,16 @@ export default function BankSettingsPage() {
               }
             : {};
         form.reset({ ...base, ...devPrefill });
+        const snap = await getDoc(doc(firestore, 'app_settings', 'payment_gateways'));
+        setGatewayFlags(
+          parseGatewayPaymentFlags(snap.exists() ? (snap.data() as Record<string, unknown>) : null)
+        );
       } catch (error) {
         console.error("Failed to fetch gateway keys:", error);
         toast({ variant: 'destructive', title: 'Error', description: 'Could not load existing keys.' });
       } finally {
         setLoading(false);
+        setGatewayFlagsLoading(false);
       }
     }
     fetchKeys();
@@ -92,8 +194,10 @@ export default function BankSettingsPage() {
       try {
         const snap = await getDoc(doc(firestore, 'app_settings', 'billing'));
         if (cancelled) return;
-        const v = snap.exists() ? (snap.data() as { planDowngradeEnabled?: unknown }).planDowngradeEnabled : undefined;
-        setPlanDowngradeEnabled(typeof v === 'boolean' ? v : true);
+        const flags = parseBillingPolicyDoc(
+          snap.exists() ? (snap.data() as Record<string, unknown>) : null
+        );
+        setPlanDowngradeEnabled(flags.planDowngradeEnabled);
       } catch (error) {
         console.error('Failed to load billing policy:', error);
         toast({ variant: 'destructive', title: 'Error', description: 'Could not load billing policy.' });
@@ -106,65 +210,78 @@ export default function BankSettingsPage() {
     };
   }, []);
 
+  const gatewayFlagKey = (id: BillingGatewayId): keyof GatewayPaymentFlags => {
+    if (id === 'stripe') return 'stripePaymentEnabled';
+    if (id === 'khalti') return 'khaltiPaymentEnabled';
+    return 'esewaPaymentEnabled';
+  };
+
+  /** Card switch — local draft; Firestore Save Settings par. */
+  const setGatewayPlanPaymentDraft = (id: BillingGatewayId, next: boolean) => {
+    const key = gatewayFlagKey(id);
+    setGatewayFlags((f) => ({ ...f, [key]: next }));
+  };
+
+  /** Keys + payment toggles + downgrade — ek hi Save button. */
   const onSubmit = async (data: z.infer<typeof formSchema>) => {
     setIsSaving(true);
     try {
-      // SuperAdmin / RHF can pass `undefined` for untouched optional fields — Firestore setDoc rejects undefined.
-      await updateGatewayKeys(toGatewayFormDefaults(data));
-      toast({ title: 'Success', description: 'Gateway keys have been updated.' });
+      await Promise.all([
+        updateGatewayKeys(toGatewayFormDefaults(data)),
+        updateGatewayPaymentFlags({ ...gatewayFlags }),
+        setDoc(
+          doc(firestore, 'app_settings', 'billing'),
+          { planDowngradeEnabled },
+          { merge: true }
+        ),
+      ]);
+      toast({ title: 'Success', description: 'All bank and billing settings have been saved.' });
     } catch (error) {
-      console.error("Failed to update gateway keys:", error);
-      toast({ variant: 'destructive', title: 'Error', description: 'Failed to save keys.' });
+      console.error('Failed to save bank settings:', error);
+      toast({ variant: 'destructive', title: 'Error', description: 'Could not save settings. Try again.' });
     } finally {
       setIsSaving(false);
     }
   };
 
-  /** Toggle Firestore — billing page `onSnapshot` se turant owners ko UI update. */
-  const persistPlanDowngradeEnabled = async (next: boolean) => {
-    setPolicySaving(true);
-    const prev = planDowngradeEnabled;
-    setPlanDowngradeEnabled(next);
-    try {
-      await setDoc(doc(firestore, 'app_settings', 'billing'), { planDowngradeEnabled: next }, { merge: true });
-      toast({
-        title: 'Saved',
-        description: next
-          ? 'Owners can downgrade to a lower paid tier again.'
-          : 'Paid-to-cheaper-paid downgrades are disabled for owners (Basic/free switch unchanged).',
-      });
-    } catch (error) {
-      console.error('Failed to save billing policy:', error);
-      setPlanDowngradeEnabled(prev);
-      toast({ variant: 'destructive', title: 'Error', description: 'Could not save billing policy.' });
-    } finally {
-      setPolicySaving(false);
-    }
-  };
+  const settingsBusy = isSaving || gatewayFlagsLoading || billingPolicyLoading;
 
   if (loading) {
     return <div className="flex justify-center items-center h-full"><Loader2 className="h-8 w-8 animate-spin" /></div>;
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex w-full flex-col gap-4 p-4 sm:p-6">
         <Card>
-            <CardHeader>
-                <CardTitle>Payment Gateway Settings</CardTitle>
-                <CardDescription>
-                  Manage API keys for Stripe, Khalti, and eSewa (stored in Firestore). In development, eSewa UAT
-                  (EPAYTEST) is suggested when fields are empty; Stripe/Khalti still need your own test keys or{' '}
-                  <code className="text-xs">.env.local</code> — see <code className="text-xs">.env.example</code>.
-                </CardDescription>
+            <CardHeader className="flex flex-row items-center gap-2 space-y-0 pb-4">
+                <CardTitle className="leading-none">Payment Gateway Settings</CardTitle>
+                <SettingsInfoTip
+                  ariaLabel="About payment gateway settings"
+                  label={
+                    <>
+                      Manage API keys for Stripe, Khalti, and eSewa (stored in Firestore). In development, eSewa UAT
+                      (EPAYTEST) is suggested when fields are empty; Stripe/Khalti still need your own test keys or{' '}
+                      <code className="text-[11px]">.env.local</code> — see <code className="text-[11px]">.env.example</code>.
+                    </>
+                  }
+                />
             </CardHeader>
         </Card>
         <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
-                <Card>
-                    <CardHeader>
-                        <CardTitle>Stripe</CardTitle>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="flex w-full flex-col gap-4">
+                <div className={adminGatewayCardsGridCn}>
+                <Card className="flex h-full min-w-0 w-full flex-col">
+                    <CardHeader className="flex flex-row flex-nowrap items-center justify-between gap-x-2 space-y-0 overflow-x-auto pb-4">
+                        <CardTitle className="shrink-0 text-xl leading-none">Stripe</CardTitle>
+                        <GatewayPlanPaymentRow
+                          id="stripe-plan-payment"
+                          info="Off: Stripe is hidden on the Billing plan page only — API keys stay saved."
+                          checked={gatewayFlags.stripePaymentEnabled}
+                          disabled={settingsBusy}
+                          onCheckedChange={(c) => setGatewayPlanPaymentDraft('stripe', c)}
+                        />
                     </CardHeader>
-                    <CardContent>
+                    <CardContent className="flex-1 pt-0">
                         <FormField
                             control={form.control}
                             name="stripeSecretKey"
@@ -186,11 +303,18 @@ export default function BankSettingsPage() {
                     </CardContent>
                 </Card>
 
-                 <Card>
-                    <CardHeader>
-                        <CardTitle>Khalti</CardTitle>
+                 <Card className="flex h-full min-w-0 w-full flex-col">
+                    <CardHeader className="flex flex-row flex-nowrap items-center justify-between gap-x-2 space-y-0 overflow-x-auto pb-4">
+                        <CardTitle className="shrink-0 text-xl leading-none">Khalti</CardTitle>
+                        <GatewayPlanPaymentRow
+                          id="khalti-plan-payment"
+                          info="Off: Khalti is hidden on the Billing plan page only — API keys stay saved."
+                          checked={gatewayFlags.khaltiPaymentEnabled}
+                          disabled={settingsBusy}
+                          onCheckedChange={(c) => setGatewayPlanPaymentDraft('khalti', c)}
+                        />
                     </CardHeader>
-                    <CardContent>
+                    <CardContent className="flex-1 pt-0">
                        <FormField
                             control={form.control}
                             name="khaltiPublicKey"
@@ -207,11 +331,18 @@ export default function BankSettingsPage() {
                     </CardContent>
                 </Card>
 
-                 <Card>
-                    <CardHeader>
-                        <CardTitle>eSewa</CardTitle>
+                 <Card className="flex h-full min-w-0 w-full flex-col">
+                    <CardHeader className="flex flex-row flex-nowrap items-center justify-between gap-x-2 space-y-0 overflow-x-auto pb-4">
+                        <CardTitle className="shrink-0 text-xl leading-none">eSewa</CardTitle>
+                        <GatewayPlanPaymentRow
+                          id="esewa-plan-payment"
+                          info="Off: eSewa is hidden on the Billing plan page only — API keys stay saved."
+                          checked={gatewayFlags.esewaPaymentEnabled}
+                          disabled={settingsBusy}
+                          onCheckedChange={(c) => setGatewayPlanPaymentDraft('esewa', c)}
+                        />
                     </CardHeader>
-                    <CardContent className="space-y-4">
+                    <CardContent className="flex flex-1 flex-col gap-4 pt-0">
                         <FormField
                             control={form.control}
                             name="esewaMerchantCode"
@@ -245,45 +376,60 @@ export default function BankSettingsPage() {
                         />
                     </CardContent>
                 </Card>
-                
-                <div className="flex justify-end">
-                    <Button type="submit" disabled={isSaving}>
+                </div>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center gap-2 space-y-0 pb-4">
+            <CardTitle className="leading-none">Billing behaviour</CardTitle>
+            <SettingsInfoTip
+              ariaLabel="About billing behaviour"
+              label={
+                <>
+                  Control whether company owners can use the Downgrade button to move to a cheaper paid tier (remaining
+                  value converts to more days at that plan&apos;s rate). &quot;Just change plan&quot; is only for upgrading
+                  tiers. Switching to Basic (free) from the current plan column stays available when Basic is free.
+                </>
+              }
+            />
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="flex flex-row flex-nowrap items-center justify-between gap-x-2 overflow-x-auto">
+              <div className="flex shrink-0 flex-nowrap items-center gap-1">
+                <Label htmlFor="plan-downgrade-enabled" className="cursor-default shrink-0 text-base whitespace-nowrap">
+                  Allow downgrade to lower paid plans
+                </Label>
+                <SettingsInfoTip
+                  ariaLabel="About allow downgrade setting"
+                  label={
+                    <>
+                      {/* `app_settings/billing.planDowngradeEnabled` — billing page + downgrade API */}
+                      Off: owners cannot move to a cheaper paid tier (button hidden, API 403); post-upgrade
+                      &quot;locked&quot; tiers stay blocked. On: Downgrade works including back to tiers that were locked
+                      after an upgrade. Basic (free) from the current plan column is unchanged when Off.
+                    </>
+                  }
+                />
+              </div>
+              <Switch
+                id="plan-downgrade-enabled"
+                checked={planDowngradeEnabled}
+                disabled={settingsBusy}
+                onCheckedChange={setPlanDowngradeEnabled}
+                className="shrink-0"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+                {/* Sab changes — keys, plan-page toggles, downgrade — ek hi Save (page ke niche) */}
+                <div className="flex w-full justify-end pt-1">
+                    <Button type="submit" disabled={settingsBusy}>
                         {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                         Save Settings
                     </Button>
                 </div>
             </form>
         </Form>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Billing behaviour</CardTitle>
-            <CardDescription>
-              Control whether company owners can use the Downgrade button to move to a cheaper paid tier (remaining
-              value converts to more days at that plan’s rate). “Just change plan” is only for upgrading tiers. Switching
-              to Basic (free) from the current plan column stays available when Basic is free.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="space-y-1">
-              <Label htmlFor="plan-downgrade-enabled" className="text-base">
-                Allow downgrade to lower paid plans
-              </Label>
-              <p className="text-sm text-muted-foreground">
-                {/* `app_settings/billing.planDowngradeEnabled` — billing page `onSnapshot` + `/api/company/downgrade-plan` dono isi se. */}
-                Off: owners cannot move to a cheaper paid tier (button hidden, API 403); post-upgrade &quot;locked&quot;
-                tiers stay blocked. On: Downgrade works including back to tiers that were locked after an upgrade. Basic
-                (free) from the current plan column is unchanged when Off.
-              </p>
-            </div>
-            <Switch
-              id="plan-downgrade-enabled"
-              checked={planDowngradeEnabled}
-              disabled={billingPolicyLoading || policySaving}
-              onCheckedChange={(c) => void persistPlanDowngradeEnabled(c)}
-            />
-          </CardContent>
-        </Card>
     </div>
   );
 }

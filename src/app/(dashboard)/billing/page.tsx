@@ -41,6 +41,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCompany, type Company as CompanyRow } from "@/hooks/useCompany";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useBillingPolicyFlags } from "@/hooks/useBillingPolicyFlags";
 import { useBillingStatementWhenFormatters } from "@/hooks/useBillingStatementWhenFormatters";
 import { useDate } from "@/hooks/useDate";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -559,8 +560,8 @@ export default function BillingPage() {
   /** Paid footer: fetch statement API — preview (Print) ya file save (Download). */
   const [printStatementBusy, setPrintStatementBusy] = useState(false);
   const [downloadStatementBusy, setDownloadStatementBusy] = useState(false);
-  /** Admin `app_settings/billing` — false par paid→cheaper paid columns (Downgrade / Just change plan) band. */
-  const [planDowngradeEnabled, setPlanDowngradeEnabled] = useState(true);
+  /** Super Admin `app_settings/billing` — paid→cheaper paid downgrade policy. */
+  const { planDowngradeEnabled, loading: billingPolicyLoading } = useBillingPolicyFlags();
   const formatBillingDate = useCallback(
     (dDate: Date | null | undefined) => {
       if (!dDate || isNaN(dDate.getTime())) return "N/A";
@@ -708,23 +709,6 @@ export default function BillingPage() {
     );
     return () => unsub();
   }, [fetchServerPlanCatalog]);
-
-  // Realtime billing policy — bank-settings toggle ke baad table bina refresh ke align ho.
-  useEffect(() => {
-    const unsub = onSnapshot(
-      doc(firestore, "app_settings", "billing"),
-      (snap) => {
-        if (!snap.exists()) {
-          setPlanDowngradeEnabled(true);
-          return;
-        }
-        const v = (snap.data() as { planDowngradeEnabled?: unknown }).planDowngradeEnabled;
-        setPlanDowngradeEnabled(typeof v === "boolean" ? v : true);
-      },
-      () => setPlanDowngradeEnabled(true)
-    );
-    return () => unsub();
-  }, []);
 
   // Gateway radios: server pe keys na hon to disabled — user pehle hi dekh le.
   const fetchGatewayAvailability = useCallback(async () => {
@@ -1452,7 +1436,7 @@ export default function BillingPage() {
   /** Mobile basic users: checkout card must follow selected tab so paid plans can subscribe from phone too. */
   const showMobileCheckoutSection = isMobile && !isPaidCompany;
 
-  if (loading || !selectedPlanDetails) {
+  if (loading || !selectedPlanDetails || billingPolicyLoading) {
     return (
       // Billing page: mobile true full-width vs viewport (2px side gap), ignores parent content padding.
       <div className="relative left-1/2 w-[calc(100vw-4px)] max-w-[calc(100vw-4px)] -translate-x-1/2 box-border py-4 sm:left-auto sm:w-[calc(100%-10px)] sm:max-w-[calc(100vw-10px)] sm:translate-x-0 sm:mx-[5px] sm:py-6">

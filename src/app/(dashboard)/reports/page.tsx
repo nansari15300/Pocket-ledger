@@ -21,6 +21,27 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useEdgeSwipeTrigger } from "@/hooks/useMobileEdgeSwipe";
 import { pathnameForModalRouterReplace } from "@/lib/modalUrlSync";
+import { appNavHref } from "@/lib/appNavHref";
+
+/** Path + query same ho to `router.replace` mat chalao — static/Electron par dobara RSC fetch + "200ms refresh" feel. */
+function reportListUrlMatchesWindow(targetPathAndQuery: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const next = new URL(targetPathAndQuery, window.location.origin);
+    const cur = new URL(window.location.href);
+    const norm = (p: string) => (p.replace(/\/+$/, "") || "/").toLowerCase();
+    if (norm(next.pathname) !== norm(cur.pathname)) return false;
+    const nq = new URLSearchParams(next.search);
+    const cq = new URLSearchParams(cur.search);
+    if ([...nq.keys()].length !== [...cq.keys()].length) return false;
+    for (const k of nq.keys()) {
+      if (nq.get(k) !== cq.get(k)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export default function ReportsPage() {
   return (
@@ -77,7 +98,8 @@ function ReportsPageContent() {
       const found = reportsForCompany.find((r) => r.id === reportIdFromUrl);
       if (found) {
         hasRestoredFromUrl.current = true;
-        setSelectedReportWithUrl(found);
+        // URL pehle se dashboard deep-link se sahi hai — `setSelectedReportWithUrl` = extra `router.replace` + SW churn (EXE refresh).
+        setSelectedReport(found);
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRestoredFromUrl ref prevents re-restore
@@ -95,7 +117,12 @@ function ReportsPageContent() {
       }
       const q = params.toString();
       const basePath = pathnameForModalRouterReplace(pathname || "");
-      router.replace(q ? `${basePath}?${q}` : basePath);
+      const nextRaw = q ? `${basePath}?${q}` : basePath;
+      const nextHref = appNavHref(nextRaw);
+      if (typeof window !== "undefined" && reportListUrlMatchesWindow(nextHref)) {
+        return;
+      }
+      router.replace(nextHref, { scroll: false });
     },
     [pathname, searchParams, router]
   );
@@ -183,8 +210,8 @@ function ReportsPageContent() {
         {!selectedReport ? (
           // List full page
           <div className="h-full w-full overflow-hidden bg-background flex flex-col">
-            <div className="p-4 border-b flex-shrink-0">
-              <h1 className="text-xl font-bold font-headline">Reports</h1>
+            <div className="flex-shrink-0 border-b px-2 py-1">
+              <h1 className="text-sm font-bold font-headline">Reports</h1>
             </div>
             <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
               {listView}

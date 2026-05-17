@@ -25,6 +25,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSearchParams } from "next/navigation";
+import { mdc, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
 
 type NotedEntity = {
     id: string;
@@ -56,9 +57,7 @@ function NotedEntityList({ entities, selectedEntity, onSelectEntity, searchTerm 
                             <Card
                                 className={cn(
                                     "p-1.5 cursor-pointer border",
-                                    isSelected
-                                        ? "border-primary bg-secondary"
-                                        : "hover:border-primary/50"
+                                    !isSelected && "hover:border-orange-300/80 hover:bg-orange-50/30"
                                 )}
                                 onClick={() => onSelectEntity(entity)}
                             >
@@ -266,9 +265,9 @@ export function NotesReportDetail() {
     if (entityForDetails) {
       return (
         <div className="flex flex-col h-full min-h-0 overflow-hidden">
-          <div className="p-2 border-b flex-shrink-0 flex items-center gap-2">
-            <Button variant="ghost" size="icon" onClick={() => { setSelectedEntity(null); setShowAllNotes(false); }}>
-              <ArrowLeft className="h-5 w-5" />
+          <div className={mdc.reportBackRow} {...mdcNoEdgeSwipeCapture}>
+            <Button variant="ghost" size="icon" className={mdc.reportBackBtn} onClick={() => { setSelectedEntity(null); setShowAllNotes(false); }}>
+              <ArrowLeft className="h-3 w-3" />
             </Button>
             <span className="font-semibold truncate">{entityForDetails.name}</span>
           </div>

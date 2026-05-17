@@ -3,7 +3,7 @@
 
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Card } from "@/components/ui/card";
+import { MasterListRow } from "@/components/ui/master-list-row";
 import { Item } from "@/components/items/types";
 import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
@@ -17,7 +17,8 @@ import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
 } from "@/components/entity/EntityListQuickFilterBar";
-import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows";
+import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows"
+import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
@@ -117,7 +118,7 @@ export function ItemList({
   if (filteredAndSortedRows.length === 0) {
     return (
       <TooltipProvider delayDuration={200}>
-        <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-x border-b bg-background" data-theme-list="account-list">
+        <div className={masterListShellCn} data-theme-list="account-list">
           <div className="flex flex-1 min-h-[120px] items-center justify-center p-4 text-sm text-muted-foreground">
             No items found.
           </div>
@@ -129,9 +130,9 @@ export function ItemList({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-x border-b bg-background" data-theme-list="account-list">
-        <ScrollArea className="min-h-0 flex-1 min-w-0">
-          <div className="space-y-2 p-2">
+      <div className={masterListShellCn} data-theme-list="account-list">
+        <ScrollArea listChrome className="min-h-0 flex-1 min-w-0">
+          <div className="pl-master-list-ul">
             <AnimatePresence>
               {filteredAndSortedRows.map(({ item, metrics }) => {
                 const isSelected = selectedItem?.id === item.id;
@@ -139,10 +140,7 @@ export function ItemList({
 
                 const href = getItemHref?.(item);
                 const attachmentPreviewUrl = trimEntityFileUrlForPreview(item.fileUrls?.[0]);
-                const cardClassName = cn(
-                  "min-w-0 max-w-full overflow-hidden p-1 cursor-pointer border",
-                  isSelected ? "border-primary bg-secondary" : "hover:border-primary/50"
-                );
+                const cardClassName = masterListRowUnselectedCn(isSelected);
                 const cardContent = (
                   <div className="pl-master-list-row">
                     <div className="pl-master-list-row-leading">
@@ -170,8 +168,13 @@ export function ItemList({
                         )}
                       </div>
                       <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className="pl-master-list-row-name cursor-default">{item.name}</span>
+                        {/* asChild hata — motion layout + span ref merge par Radix/ScrollArea setRef loop */}
+                        <TooltipTrigger
+                          type="button"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          className="pl-master-list-row-name cursor-default block w-full truncate border-0 bg-transparent p-0 text-left shadow-none"
+                        >
+                          {item.name}
                         </TooltipTrigger>
                         <TooltipContent>
                           <p>{item.name}</p>
@@ -207,12 +210,12 @@ export function ItemList({
                     {href ? (
                       // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                       <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
-                        <Card className={cardClassName}>{cardContent}</Card>
+                        <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
                       </Link>
                     ) : (
-                      <Card className={cardClassName} onClick={() => onSelectItem(item)}>
+                      <MasterListRow selected={isSelected} className={cardClassName} onClick={() => onSelectItem(item)}>
                         {cardContent}
-                      </Card>
+                      </MasterListRow>
                     )}
                   </motion.li>
                 );

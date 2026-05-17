@@ -12,9 +12,9 @@ function touchDistance(a: Touch, b: Touch): number {
 export type GalleryImageZoomApi = {
   zoomIn: () => void;
   zoomOut: () => void;
-  /** Entire image visible inside viewport (tall stitched JPEG shrinks to see full height). */
+  /** Entire image visible inside viewport — default on open (tall JPEG poora screen me). */
   fitHeight: () => void;
-  /** Image width matches viewport width; scroll vertically to read (default on open). */
+  /** Image width matches viewport width; scroll vertically to read. */
   fitWidth: () => void;
   /** @deprecated use fitHeight */
   fit: () => void;
@@ -278,6 +278,21 @@ export function mountGalleryImageZoom(
   scrollHost.addEventListener("touchend", (e) => endPinch(e), { passive: true });
   scrollHost.addEventListener("touchcancel", () => endPinch(), { passive: true });
 
+  // Zoom ke baad wheel: Radix dialog / preview layer par native scroll miss — manual scrollTop
+  scrollHost.addEventListener(
+    "wheel",
+    (ev) => {
+      const canY = scrollHost.scrollHeight > scrollHost.clientHeight + 1;
+      const canX = scrollHost.scrollWidth > scrollHost.clientWidth + 1;
+      if (!canY && !canX) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      scrollHost.scrollTop += ev.deltaY;
+      scrollHost.scrollLeft += ev.deltaX;
+    },
+    { passive: false }
+  );
+
   const initImageLayout = () => {
     if (disposed) return;
     if (img.naturalWidth < 1 && img.offsetWidth < 2) return;
@@ -301,11 +316,14 @@ export function mountGalleryImageZoom(
         requestAnimationFrame(finish);
         return;
       }
-      scale = computeFitWidthScale();
+      // Default: poora image ek screen me (W+H) — fitWidth se tall JPEG zoomed / scrollbars khulte the
+      scale = computeFitHeightScale();
       emitScale();
       syncLayout();
       requestAnimationFrame(() => {
-        scrollHost.scrollTo({ left: 0, top: 0, behavior: "auto" });
+        const sl = Math.max(0, (scrollHost.scrollWidth - scrollHost.clientWidth) / 2);
+        const st = Math.max(0, (scrollHost.scrollHeight - scrollHost.clientHeight) / 2);
+        scrollHost.scrollTo({ left: sl, top: st, behavior: "auto" });
       });
     };
 

@@ -19,6 +19,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { mlc, mlcListChromeRoot, mlcListChromeRootData } from "@/lib/mobileListChrome";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -505,17 +506,17 @@ function IncomeExpensePageContent() {
   
   // Mobile list column: flex-1 + min-h-0 (h-full nahi) taaki parent flex chain se height mile aur ScrollArea scroll kare
   const listView = (
-    <div className="flex min-h-0 flex-1 flex-col">
-        <div className={cn("p-3 border-b flex shrink-0 items-center gap-2", listDisabled && "pointer-events-none opacity-60")}>
-            <div className="relative flex-1 min-w-0">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input placeholder={activeView === 'accounts' ? 'Search accounts...' : 'Search groups...'} className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
+    <div className={cn(mlcListChromeRoot, "flex min-h-0 flex-1")} {...mlcListChromeRootData}>
+        <div className={cn(mlc.searchRow, "shrink-0", listDisabled && "pointer-events-none opacity-60")}>
+            <div className={mlc.searchWrap}>
+              <Search className={mlc.searchIcon} />
+              <Input placeholder={activeView === 'accounts' ? 'Search accounts...' : 'Search groups...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
             </div>
             {activeView === "accounts" &&
             showApproveOnList &&
             totalPendingApprovalVoucherCount > 0 &&
             !listDisabled ? (
-              <PendingApprovalListFilterBadge
+              <PendingApprovalListFilterBadge compact
                 count={totalPendingApprovalVoucherCount}
                 pressed={showOnlyExpenseAccountsWithPendingApproval}
                 onToggle={() => setShowOnlyExpenseAccountsWithPendingApproval((v) => !v)}
@@ -529,7 +530,7 @@ function IncomeExpensePageContent() {
             showApproveOnList &&
             totalPendingApprovalVoucherCount > 0 &&
             !listDisabled ? (
-              <PendingApprovalListFilterBadge
+              <PendingApprovalListFilterBadge compact
                 count={totalPendingApprovalVoucherCount}
                 pressed={showOnlyExpenseGroupsWithPendingApproval}
                 onToggle={() => setShowOnlyExpenseGroupsWithPendingApproval((v) => !v)}
@@ -541,36 +542,39 @@ function IncomeExpensePageContent() {
             ) : null}
             {activeView === "accounts" ? (
               <CreateExpenseAccountDialog onExpenseAccountCreated={() => {}} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
-                <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateAccountOpen(true)}>
+                <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateAccountOpen(true)}>
                   + Add Account
                 </PermissionButton>
               </CreateExpenseAccountDialog>
             ) : (
               <CreateExpenseGroupDialog onGroupCreated={() => {}} groups={processedExpenseGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
-                <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateGroupOpen(true)}>
+                <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
                   + Add Group
                 </PermissionButton>
               </CreateExpenseGroupDialog>
             )}
         </div>
         {activeView === 'accounts' && (
-          <div className={cn("shrink-0 border-b p-2 flex gap-2", listDisabled && "pointer-events-none opacity-60")}>
-            <PermissionButton permission="create_records" variant="outline" size="sm" className="flex-1 bg-blue-50 hover:bg-blue-100 border-blue-200 text-black hover:text-black" onClick={() => openVoucherDialog("direct_income")}>
-              Direct Income
-            </PermissionButton>
-            <PermissionButton permission="create_records" variant="outline" size="sm" className="flex-1 bg-blue-50 hover:bg-blue-100 border-blue-200 text-black hover:text-black" onClick={() => openVoucherDialog("direct_expense")}>
-              Direct Expense
-            </PermissionButton>
-            <PermissionButton permission="create_records" variant="outline" size="sm" className="flex-1 bg-blue-50 hover:bg-blue-100 border-blue-200 text-black hover:text-black" onClick={() => openVoucherDialog("add_salary")}>
-              Add Salary
-            </PermissionButton>
+          <div className={cn(mlc.actionRow, listDisabled && "pointer-events-none opacity-60")}>
+            <div className={cn(mlc.actionGrid, "grid-cols-3")}>
+              {/* Voucher shortcuts — list toolbar height (`size="list"`) */}
+              <PermissionButton permission="create_records" variant="chromePill" size="list" className="w-full" onClick={() => openVoucherDialog("direct_income")}>
+                Direct Income
+              </PermissionButton>
+              <PermissionButton permission="create_records" variant="chromePill" size="list" className="w-full" onClick={() => openVoucherDialog("direct_expense")}>
+                Direct Expense
+              </PermissionButton>
+              <PermissionButton permission="create_records" variant="chromePill" size="list" className="w-full" onClick={() => openVoucherDialog("add_salary")}>
+                Add Salary
+              </PermissionButton>
+            </div>
           </div>
         )}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {activeView === 'accounts' ? (
             <>
               <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-sm font-semibold text-muted-foreground">
-                <DollarSign className="h-4 w-4" />
+                <DollarSign className={mlc.sectionIcon} />
                 <span>Account ({filteredExpenseAccountListCount})</span>
               </div>
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -580,7 +584,7 @@ function IncomeExpensePageContent() {
         ) : (
             <>
               <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-sm font-semibold text-muted-foreground">
-                <Users className="h-4 w-4" />
+                <Users className={mlc.sectionIcon} />
                 <span>Groups ({filteredExpenseGroupListCount})</span>
               </div>
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -652,9 +656,9 @@ function IncomeExpensePageContent() {
             if (v === "groups" && !groupsTabEnabled) return;
             setActiveView(v);
           }} className="w-full">
-            <TabsList className="w-full">
-              <TabsTrigger value="accounts" className="flex-1" disabled={!incomesListEnabled || !accountsTabEnabled}>Accounts</TabsTrigger>
-              <TabsTrigger value="groups" className="flex-1" disabled={!incomesListEnabled || !groupsTabEnabled}>Groups</TabsTrigger>
+            <TabsList listChrome>
+              <TabsTrigger listChrome value="accounts" className="flex-1" disabled={!incomesListEnabled || !accountsTabEnabled}>Accounts</TabsTrigger>
+              <TabsTrigger listChrome value="groups" className="flex-1" disabled={!incomesListEnabled || !groupsTabEnabled}>Groups</TabsTrigger>
             </TabsList>
           </Tabs>
         }

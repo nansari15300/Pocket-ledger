@@ -93,7 +93,7 @@ import usePermissions from '@/hooks/usePermissions';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DaybookReport } from '@/components/reports/DaybookReport';
 import { useVouchers } from '@/hooks/useVouchers';
-import Link from 'next/link';
+import { DashboardStatCardTxnLink } from "@/components/dashboard/DashboardStatCardTxnLink";
 import { TransactionsTable } from '@/components/vouchers/TransactionsTable';
 import { useDashboard } from '@/hooks/useDashboard';
 import { Calendar } from "@/components/ui/calendar";
@@ -2025,13 +2025,13 @@ export default function DashboardPage() {
                       </div>
                   )}
                   {canClickTxns ? (
-                    <Link
+                    <DashboardStatCardTxnLink
                       href={deepHref}
                       // Dashboard quick-jump labels: blue link treatment so users can identify click target.
-                      className="text-xs text-blue-600 underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded inline-block mt-0.5"
+                      className="text-xs text-blue-600 underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded inline-block mt-0.5 text-left"
                     >
                       {stat.count} transaction(s)
-                    </Link>
+                    </DashboardStatCardTxnLink>
                   ) : (
                     <p className="text-xs text-muted-foreground">{stat.count} transaction(s)</p>
                   )}

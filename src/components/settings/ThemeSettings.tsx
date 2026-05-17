@@ -1,13 +1,26 @@
 
 "use client";
 
+import type { CSSProperties } from "react";
 import { useTheme } from "@/hooks/useTheme";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { Check } from "lucide-react";
+import { LIGHT_THEME_DISPLAY_NAME, PRO_THEME_DISPLAY_NAME } from "@/lib/proTheme";
 
 const themes = [
-  { name: "Default Light", themeValue: "theme-pure-white", primaryValue: "primary-pure-white", color: "hsl(0, 0%, 100%)" },
+  {
+    name: PRO_THEME_DISPLAY_NAME,
+    themeValue: "theme-pro",
+    primaryValue: "primary-pro",
+    color: "linear-gradient(90deg, #ecfdf5, #e0f2fe, #ede9fe, #fffbeb, #ffe4e6)",
+  },
+  {
+    name: LIGHT_THEME_DISPLAY_NAME,
+    themeValue: "theme-pure-white",
+    primaryValue: "primary-pure-white",
+    color: "hsl(0, 0%, 100%)",
+  },
   { name: "Soft Green", themeValue: "theme-soft-green", primaryValue: "primary-soft-green", color: "hsl(95, 35%, 45%)" },
   { name: "Dim Soft Green", themeValue: "theme-dim-soft-green", primaryValue: "primary-dim-soft-green", color: "hsl(140, 70%, 50%)" },
   { name: "Soft Blue", themeValue: "theme-soft-blue", primaryValue: "primary-soft-blue", color: "hsl(210, 90%, 50%)" },
@@ -16,6 +29,10 @@ const themes = [
   { name: "Soft Pink", themeValue: "theme-soft-pink", primaryValue: "primary-soft-pink", color: "hsl(350, 80%, 60%)" },
   { name: "Colorfull", themeValue: "theme-colorfull", primaryValue: "primary-colorfull", color: "hsl(270, 70%, 55%)" },
 ];
+
+function themeSwatchStyle(color: string): CSSProperties {
+  return color.startsWith("linear-gradient") ? { background: color } : { backgroundColor: color };
+}
 
 /** `localOnlyHint`: shared user — theme pehle se localStorage me; sirf is browser/device par. */
 export function ThemeSettings({ localOnlyHint }: { localOnlyHint?: boolean }) {
@@ -51,8 +68,8 @@ export function ThemeSettings({ localOnlyHint }: { localOnlyHint?: boolean }) {
                 <div className="flex items-center gap-4">
                   <div
                     className="h-8 w-8 rounded-full border"
-                    style={{ backgroundColor: t.color }}
-                  ></div>
+                    style={themeSwatchStyle(t.color)}
+                  />
                   <span className="font-medium">{t.name}</span>
                 </div>
                 {theme === t.themeValue && (
@@ -87,8 +104,8 @@ export function ThemeSettings({ localOnlyHint }: { localOnlyHint?: boolean }) {
                 <div className="flex items-center gap-4">
                   <div
                     className="h-8 w-8 rounded-full border"
-                    style={{ backgroundColor: t.color }}
-                  ></div>
+                    style={themeSwatchStyle(t.color)}
+                  />
                   <span className="font-medium">{t.name}</span>
                 </div>
                 {primaryColor === t.primaryValue && (

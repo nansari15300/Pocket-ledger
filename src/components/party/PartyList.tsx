@@ -3,10 +3,11 @@
 
 import type { Party } from "@/components/party/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/utils"
+import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
-import { Card } from "@/components/ui/card";
+import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../ui/tooltip";
 import React, { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -105,9 +106,9 @@ export const PartyList = React.memo(({
   return (
     <TooltipProvider delayDuration={200}>
       {/* min-w-0: grid 25% column bhitra ScrollArea overflow — lamba naam failaaundaina */}
-      <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background" data-theme-list="account-list">
-        <ScrollArea className="min-h-0 min-w-0 flex-1">
-          <ul className="p-2 space-y-1">
+      <div className={masterListShellCn} data-theme-list="account-list">
+        <ScrollArea listChrome className="min-h-0 min-w-0 flex-1">
+          <ul className="pl-master-list-ul">
             <AnimatePresence mode="popLayout">
               {filteredAndSortedParties.map((party) => {
                 const isSelected = selectedParty?.id === party.id;
@@ -141,10 +142,13 @@ export const PartyList = React.memo(({
                             )}
                           </div>
                           <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="pl-master-list-row-name cursor-default">
-                                {party.name}
-                              </span>
+                            {/* asChild hata — motion layout + span ref merge par Radix setRef loop */}
+                            <TooltipTrigger
+                              type="button"
+                              onPointerDown={(e) => e.stopPropagation()}
+                              className="pl-master-list-row-name block w-full cursor-default truncate border-0 bg-transparent p-0 text-left shadow-none"
+                            >
+                              {party.name}
                             </TooltipTrigger>
                             {/* Narrow list column: tooltip niche — amount column se overlap kam */}
                             <TooltipContent side="bottom" align="start">
@@ -156,39 +160,23 @@ export const PartyList = React.memo(({
                           </Tooltip>
                         </div>
 
-                        {/* दायाँ भाग: ब्यालेन्स वा Overdue को लागि voucher count */}
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <div
-                              className={cn(
-                                "pl-master-list-row-amount ml-2",
-                                topPartyId && party.id === topPartyId && overdueVoucherCount != null
-                                  ? "text-muted-foreground"
-                                  : party.balance >= 0 ? "text-green-600" : "text-red-600",
-                                isSelected && !(topPartyId && party.id === topPartyId) && (party.balance >= 0 ? "text-green-700" : "text-red-700")
-                              )}
-                            >
-                              {topPartyId && party.id === topPartyId && overdueVoucherCount != null
-                                ? `${overdueVoucherCount} voucher${overdueVoucherCount === 1 ? "" : "s"}`
-                                : formatCurrency(party.balance, { showDrCr: true })}
-                            </div>
-                          </TooltipTrigger>
-                          <TooltipContent side="left">
-                            <p className="font-medium">
-                              {topPartyId && party.id === topPartyId && overdueVoucherCount != null
-                                ? `${overdueVoucherCount} overdue voucher${overdueVoucherCount === 1 ? "" : "s"}`
-                                : formatCurrency(party.balance, { showDrCr: true })}
-                            </p>
-                          </TooltipContent>
-                        </Tooltip>
+                        {/* दायाँ भाग: amount par tooltip/ref loop avoid */}
+                        <p
+                          className={cn(
+                            "pl-master-list-row-amount ml-2",
+                            topPartyId && party.id === topPartyId && overdueVoucherCount != null
+                              ? "text-muted-foreground"
+                              : party.balance >= 0 ? "text-green-600" : "text-red-600",
+                            isSelected && !(topPartyId && party.id === topPartyId) && (party.balance >= 0 ? "text-green-700" : "text-red-700")
+                          )}
+                        >
+                          {topPartyId && party.id === topPartyId && overdueVoucherCount != null
+                            ? `${overdueVoucherCount} voucher${overdueVoucherCount === 1 ? "" : "s"}`
+                            : formatCurrency(party.balance, { showDrCr: true })}
+                        </p>
                       </div>
                 );
-                const cardClassName = cn(
-                  "min-w-0 max-w-full overflow-hidden p-1.5 cursor-pointer border rounded-md transition-all duration-200",
-                  isSelected
-                    ? "border-primary bg-secondary shadow-sm"
-                    : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30"
-                );
+                const cardClassName = masterListRowUnselectedCn(isSelected);
                 return (
                   <motion.li
                     key={party.id}
@@ -200,12 +188,12 @@ export const PartyList = React.memo(({
                     {href ? (
                       // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                       <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
-                        <Card className={cardClassName}>{cardContent}</Card>
+                        <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
                       </Link>
                     ) : (
-                      <Card className={cardClassName} onClick={() => onSelectParty(party)}>
+                      <MasterListRow selected={isSelected} className={cardClassName} onClick={() => onSelectParty(party)}>
                         {cardContent}
-                      </Card>
+                      </MasterListRow>
                     )}
                   </motion.li>
                 );

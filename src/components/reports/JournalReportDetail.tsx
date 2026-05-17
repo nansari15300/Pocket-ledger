@@ -181,6 +181,7 @@ export function JournalReportDetail() {
     if (currentAccount) {
       return (
         <div className="flex h-full min-h-0 flex-col overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <AccountDetails
             account={currentAccount as any}
             allAccounts={allAccounts as any}
@@ -203,6 +204,7 @@ export function JournalReportDetail() {
             mobileFooterVariant="report"
             mobileReportStickyTitle="Journal"
           />
+          </div>
         </div>
       );
     }

@@ -18,6 +18,7 @@ import { mergePaymentAndLedgerJournalContraFlows } from "@/lib/reportStatementMo
 import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatementHeaderAvatar";
 import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
+import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -491,6 +492,7 @@ export default function DesktopStaffStatementPage() {
             </div>
           ) : null}
         </div>
+        <MobileDetailSummaryCollapsible className="gap-2">
         <div className="flex justify-center items-center gap-2">
           <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
           {hasDateFilter && (
@@ -537,6 +539,7 @@ export default function DesktopStaffStatementPage() {
             />
           </div>
         </div>
+        </MobileDetailSummaryCollapsible>
       </header>
 
       <Drawer
@@ -634,11 +637,13 @@ export default function DesktopStaffStatementPage() {
           </div>
         ) : (
           <>
+            <MobileDetailSummaryCollapsible>
             <div className="flex flex-nowrap gap-2 pt-0.5 pb-3 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               {summaryCards.map((card) => (
                 <ReportSummaryCard key={card.title} title={card.title} amount={card.amount} color={card.color} />
               ))}
             </div>
+            </MobileDetailSummaryCollapsible>
 
             <div className="flex flex-1 min-h-0 flex-col -mx-4 md:mx-0">
             <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:mx-0 md:px-0" data-floating-button-scroll>

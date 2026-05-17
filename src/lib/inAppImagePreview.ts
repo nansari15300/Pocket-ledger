@@ -137,10 +137,10 @@ export function showInAppImagePreview(
 
   imageZoomApi = mountGalleryImageZoom(scrollHost, img, () => {});
 
-  /** Default fit = width (gallery init) — button rang sync */
-  const syncFitButtonsToWidth = () => styleFitButtons(true);
-  if (img.complete && img.naturalWidth > 1) syncFitButtonsToWidth();
-  else img.addEventListener("load", syncFitButtonsToWidth, { once: true });
+  /** Default fit = height (poora image screen me) — button rang sync */
+  const syncFitButtonsToHeight = () => styleFitButtons(false);
+  if (img.complete && img.naturalWidth > 1) syncFitButtonsToHeight();
+  else img.addEventListener("load", syncFitButtonsToHeight, { once: true });
 
   const bar = document.createElement("div");
   bar.setAttribute("role", "toolbar");

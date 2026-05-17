@@ -1,9 +1,14 @@
 "use client";
 
 import * as React from "react";
+import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
+import { useMobileDetailSummaryCollapsed } from "@/contexts/MobileDetailSummaryCollapseContext";
+import { MobileDetailSummaryFloatingToggle } from "@/components/layout/MobileDetailSummaryFloatingToggle";
 
 type Props = {
   currentPage: number;
@@ -30,91 +35,112 @@ export function MobileTransactionsPager({
   edgeCounts,
   trimSummary = false,
 }: Props) {
+  const isMobile = useIsMobile();
+  const { registerPagerFabHost, unregisterPagerFabHost } = useMobileDetailSummaryCollapsed();
   const totalPages = Math.max(1, rowsPerPage > 0 ? Math.ceil(totalItems / rowsPerPage) : 1);
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
 
+  useEffect(() => {
+    if (!isMobile) return;
+    registerPagerFabHost();
+    return () => unregisterPagerFabHost();
+  }, [isMobile, registerPagerFabHost, unregisterPagerFabHost]);
+
   return (
-    <div className={cn("border-t bg-muted/20 px-2 py-0.5 font-bold", className)}>
-      <div className="overflow-x-auto">
-        <div className="flex w-max min-w-full items-center justify-between gap-1.5">
-          <div className="flex min-w-0 items-center gap-1">
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              className="h-5 shrink-0 px-1.5 text-[10px] font-bold bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-200 disabled:text-gray-500"
-              // Page − 1 — party ledger me latest-first: yahi «naye» taraf
-              onClick={() => onPageChange(Math.max(1, safePage - 1))}
-              disabled={safePage <= 1}
-            >
-              Prev
-            </Button>
-            {edgeCounts != null && rowsPerPage > 0 ? (
-              <span
-                className="min-w-[1.25rem] shrink-0 text-center text-[10px] font-bold tabular-nums text-muted-foreground"
-                title="Count beside Prev (parent slice)"
-                aria-label={`${edgeCounts.before} transactions beside Prev`}
-              >
-                {edgeCounts.before}
-              </span>
-            ) : null}
+    <div className={cn("relative flex-shrink-0", className)}>
+      {/* Summary FAB — pagination bar ke bilkul upar, right side */}
+      {isMobile ? (
+        <div
+          className="pointer-events-none absolute bottom-full right-2 z-[60] mb-1 flex justify-end"
+          {...mdcNoEdgeSwipeCapture}
+        >
+          <div className="pointer-events-auto">
+            <MobileDetailSummaryFloatingToggle placement="inline" />
           </div>
-          <div
-            className={cn(
-              "flex shrink-0 items-center gap-1 text-[10px] font-bold",
-              trimSummary && "flex-1 justify-center min-w-0"
-            )}
-          >
-            {!trimSummary ? (
-              <span className="whitespace-nowrap text-muted-foreground">Showing</span>
-            ) : null}
-            <Select
-              value={String(rowsPerPage)}
-              onValueChange={(value) => onRowsPerPageChange(Number(value) || 0)}
-            >
-              <SelectTrigger
-                className="h-5 w-[70px] text-[10px] font-bold"
-                aria-label="Rows per page"
-                title="Rows per page"
+        </div>
+      ) : null}
+      <div className="border-t bg-muted/20 px-2 py-0.5 font-bold">
+        <div className="overflow-x-auto">
+          <div className="flex w-max min-w-full items-center justify-between gap-1.5">
+            <div className="flex min-w-0 items-center gap-1">
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                className="h-5 shrink-0 px-1.5 text-[10px] font-bold bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-200 disabled:text-gray-500"
+                // Page − 1 — party ledger me latest-first: yahi «naye» taraf
+                onClick={() => onPageChange(Math.max(1, safePage - 1))}
+                disabled={safePage <= 1}
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PAGE_SIZE_OPTIONS.map((size) => (
-                  <SelectItem key={size} value={String(size)}>
-                    {size}
-                  </SelectItem>
-                ))}
-                <SelectItem value="0">All</SelectItem>
-              </SelectContent>
-            </Select>
-            {!trimSummary ? (
-              <span className="whitespace-nowrap text-muted-foreground">
-                Trxn Of <span className="tabular-nums">{totalItems}</span>
-              </span>
-            ) : null}
-          </div>
-          <div className="flex min-w-0 items-center gap-1">
-            {edgeCounts != null && rowsPerPage > 0 ? (
-              <span
-                className="min-w-[1.25rem] shrink-0 text-center text-[10px] font-bold tabular-nums text-muted-foreground"
-                title="Count beside Next (parent slice)"
-                aria-label={`${edgeCounts.after} transactions beside Next`}
-              >
-                {edgeCounts.after}
-              </span>
-            ) : null}
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              className="h-5 shrink-0 px-1.5 text-[10px] font-bold bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-200 disabled:text-gray-500"
-              // Page + 1 — party latest-first: «purane» chunk
-              onClick={() => onPageChange(Math.min(totalPages, safePage + 1))}
-              disabled={safePage >= totalPages}
+                Prev
+              </Button>
+              {edgeCounts != null && rowsPerPage > 0 ? (
+                <span
+                  className="min-w-[1.25rem] shrink-0 text-center text-[10px] font-bold tabular-nums text-muted-foreground"
+                  title="Count beside Prev (parent slice)"
+                  aria-label={`${edgeCounts.before} transactions beside Prev`}
+                >
+                  {edgeCounts.before}
+                </span>
+              ) : null}
+            </div>
+            <div
+              className={cn(
+                "flex shrink-0 items-center gap-1 text-[10px] font-bold",
+                trimSummary && "flex-1 justify-center min-w-0"
+              )}
             >
-              Next
-            </Button>
+              {!trimSummary ? (
+                <span className="whitespace-nowrap text-muted-foreground">Showing</span>
+              ) : null}
+              <Select
+                value={String(rowsPerPage)}
+                onValueChange={(value) => onRowsPerPageChange(Number(value) || 0)}
+              >
+                <SelectTrigger
+                  className="h-5 w-[70px] text-[10px] font-bold"
+                  aria-label="Rows per page"
+                  title="Rows per page"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAGE_SIZE_OPTIONS.map((size) => (
+                    <SelectItem key={size} value={String(size)}>
+                      {size}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="0">All</SelectItem>
+                </SelectContent>
+              </Select>
+              {!trimSummary ? (
+                <span className="whitespace-nowrap text-muted-foreground">
+                  Trxn Of <span className="tabular-nums">{totalItems}</span>
+                </span>
+              ) : null}
+            </div>
+            <div className="flex min-w-0 items-center gap-1">
+              {edgeCounts != null && rowsPerPage > 0 ? (
+                <span
+                  className="min-w-[1.25rem] shrink-0 text-center text-[10px] font-bold tabular-nums text-muted-foreground"
+                  title="Count beside Next (parent slice)"
+                  aria-label={`${edgeCounts.after} transactions beside Next`}
+                >
+                  {edgeCounts.after}
+                </span>
+              ) : null}
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                className="h-5 shrink-0 px-1.5 text-[10px] font-bold bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-200 disabled:text-gray-500"
+                // Page + 1 — party latest-first: «purane» chunk
+                onClick={() => onPageChange(Math.min(totalPages, safePage + 1))}
+                disabled={safePage >= totalPages}
+              >
+                Next
+              </Button>
+            </div>
           </div>
         </div>
       </div>

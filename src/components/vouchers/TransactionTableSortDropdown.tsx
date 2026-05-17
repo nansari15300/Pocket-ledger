@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 /** Sort field for transaction list (Statement / Bill wise / Spend wise). By Type removed from all views. */
 export type TransactionSortBy =
@@ -44,6 +45,8 @@ export type TransactionTableSortDropdownProps = {
   onSortChange: (sortBy: TransactionSortBy, sortOrder: TransactionSortOrder) => void;
   /** View mode for label (Statement / Bill wise / Spend wise) */
   viewMode?: "statement" | "bill_wise" | "spend_wise";
+  /** PC footer: chrome pill trigger (global ledger footer). */
+  chromePill?: boolean;
   className?: string;
 };
 
@@ -53,8 +56,12 @@ export function TransactionTableSortDropdown({
   sortOrder,
   onSortChange,
   viewMode = "statement",
+  chromePill: chromePillProp,
   className,
 }: TransactionTableSortDropdownProps) {
+  const isMobile = useIsMobile();
+  // PC ledger footer: default chrome pill jab caller ne override na kiya ho.
+  const chromePill = chromePillProp ?? !isMobile;
   const visibleOptions = React.useMemo(() => getVisibleOptions(viewMode), [viewMode]);
   const currentLabel =
     visibleOptions.find((o) => o.value === sortBy)?.label ?? visibleOptions[0]?.label ?? "Sort";
@@ -62,7 +69,11 @@ export function TransactionTableSortDropdown({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className={cn("h-8 gap-1 flex-shrink-0", className)}>
+        <Button
+          variant={chromePill ? "chromePill" : "outline"}
+          size="sm"
+          className={cn("h-8 shrink-0 gap-1", className)}
+        >
           <ArrowUpDown className="h-4 w-4 opacity-70" />
           <span className="whitespace-nowrap">{currentLabel}</span>
           <span className="text-muted-foreground">

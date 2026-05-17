@@ -34,14 +34,18 @@ import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { preferLocalLedgerReads, shouldAutoFlushOutboxAfterEnqueue } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { flushVoucherOutbox } from "@/lib/localVoucherOutbox";
 import {
   findVoucherInLocalMirrorByNumberAndType,
   getCompanyDocFromBrowserDb,
   listCompanyDocsFromBrowserDb,
 } from "@/lib/localCompanyDocMirror";
-import { appendLocalOnlyVoucherFilesToUrls, shouldStageNewVoucherFilesAsLocalPending } from "@/lib/voucherLocalAttachmentUpload";
+import {
+  appendLocalOnlyVoucherFilesToUrls,
+  shouldDeferStorageIncrementUntilPendingUpload,
+  shouldStageNewVoucherFilesAsLocalPending,
+} from "@/lib/voucherLocalAttachmentUpload";
 import { toast as sonnerToast } from "sonner";
 import type { CopyMasterDraftRequestPayload } from "./AddVoucherDialog";
 import BsDatePicker from "../ui/BsDatePicker";
@@ -1120,7 +1124,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       if (isEdit) {
         // Check edit permission - determine ownership
         // Offline: `getDoc` network par block — mirror se voucher row (save hang avoid).
-        const preferLocalReads = isLocalOnlyMode() || (typeof navigator !== "undefined" && !navigator.onLine);
+        const preferLocalReads = preferLocalLedgerReads();
         const fetchVoucher = async (cid: string, vid: string) => {
           if (preferLocalReads) {
             return await getCompanyDocFromBrowserDb(cid, "vouchers", vid);
@@ -1144,7 +1148,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               : new Date(existingVoucher.date);
           } else if (companyId) {
             // Edit date baseline: offline par Firestore read mat karo — mirror row se `date`.
-            const preferLocalReadsDate = isLocalOnlyMode() || (typeof navigator !== "undefined" && !navigator.onLine);
+            const preferLocalReadsDate = preferLocalLedgerReads();
             if (preferLocalReadsDate) {
               const row = await getCompanyDocFromBrowserDb(companyId, "vouchers", savedVoucherId);
               if (row?.date != null) {
@@ -1193,7 +1197,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
       if (!idArgForFirestore || data.voucherNumber !== voucher?.voucherNumber) {
         // Duplicate check: offline par `getDocs` hang — mirror scan (outbox/SQLite-backed list).
-        const preferLocalReads = isLocalOnlyMode() || (typeof navigator !== "undefined" && !navigator.onLine);
+        const preferLocalReads = preferLocalLedgerReads();
         let duplicateOtherId: string | null = null;
         if (preferLocalReads) {
           const hit = await findVoucherInLocalMirrorByNumberAndType(companyId, data.voucherNumber, voucherType);
@@ -1314,10 +1318,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             });
           sanitizedData.fileUrls = merged;
           if (preGen) preGeneratedVoucherId = preGen;
-          try {
-            await incrementCompanyStorage(companyId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
-          } catch {
-            /* offline */
+          if (!shouldDeferStorageIncrementUntilPendingUpload()) {
+            try {
+              await incrementCompanyStorage(companyId, {
+                attachmentsBytes: totalNewBytes,
+                storageBytes: totalNewBytes,
+              });
+            } catch {
+              /* offline */
+            }
           }
         } else {
           for (const file of newFilesToUpload) {
@@ -1381,11 +1390,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           setFiles(persistedUrls);
           initialFilesRef.current = persistedUrls;
         }
-        if (
-          (isLocalOnlyMode() || apkEmbeddedSqliteFirstWritesPreferred()) &&
-          typeof navigator !== "undefined" &&
-          navigator.onLine
-        ) {
+        if (shouldAutoFlushOutboxAfterEnqueue()) {
           void flushVoucherOutbox().catch((err) => {
             console.warn("[CreatePaymentOutForm] post-save outbox flush", err);
           });

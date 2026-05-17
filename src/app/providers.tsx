@@ -15,13 +15,17 @@ import { usePresence } from "@/hooks/usePresence";
 import { ThemeProvider } from "@/hooks/useTheme";
 import { CapacitorAndroidBackButton } from "@/components/CapacitorAndroidBackButton";
 import { VoucherOutboxFlushManager } from "@/components/VoucherOutboxFlushManager";
+import { LocalCompanyCloudSyncManager } from "@/components/LocalCompanyCloudSyncManager";
 import { StaticFastResumeSyncManager } from "@/components/StaticFastResumeSyncManager";
+import { OnlineResumeRouteShield } from "@/components/OnlineResumeRouteShield";
 import { OfflineWarmSyncManager } from "@/components/OfflineWarmSyncManager";
 import { CompanyAttachmentOfflineBackfillManager } from "@/components/CompanyAttachmentOfflineBackfillManager";
 import { LiveMirrorFolderMissingDialog } from "@/components/LiveMirrorFolderMissingDialog";
 import { FirstDeviceCompanyHydrationOverlay } from "@/components/FirstDeviceCompanyHydrationOverlay";
 import { EmbeddedDeviceLockGate } from "@/components/EmbeddedDeviceLockGate";
+import { EmbeddedOfflineFirestoreTransport } from "@/components/EmbeddedOfflineFirestoreTransport";
 import { FirstLoginWarmGateProvider } from "@/contexts/FirstLoginWarmGateContext";
+import { MobileDetailSummaryCollapseProvider } from "@/contexts/MobileDetailSummaryCollapseContext";
 import { EmbeddedAttachmentPrefetchProvider } from "@/contexts/EmbeddedAttachmentPrefetchContext";
 import { primeLocalFileRefMetaRuntimeCache } from "@/lib/localPendingFiles";
 import { isPerfDebugEnabled } from "@/lib/perfDebug";
@@ -65,12 +69,15 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <ThemeProvider>
         <AuthProvider>
             <FirebaseErrorListener />
+            <EmbeddedOfflineFirestoreTransport />
             <CompanyProvider>
                 <EmbeddedAttachmentPrefetchProvider>
                 {/* APK/static pehli login: full warm chalte waqt background warm band — gate overlay set karti hai */}
                 <FirstLoginWarmGateProvider>
                 <CapacitorAndroidBackButton />
                 <StaticFastResumeSyncManager />
+                {/* Offline→online: dashboard/company silent jump block; sync background me chale */}
+                <OnlineResumeRouteShield />
                 {/* Online par masters/vouchers/plans SQLite + IndexedDB attachments preload */}
                 <OfflineWarmSyncManager />
                 {/* Online: mirror ki saari attachment URLs IndexedDB/native — offline par open jaisa online */}
@@ -83,8 +90,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
                         <DialogBackHandlerProvider>
                             <VoucherProvider>
                                 <VoucherOutboxFlushManager />
+                                <LocalCompanyCloudSyncManager />
                                 <TooltipProvider>
-                                    {children}
+                                    <MobileDetailSummaryCollapseProvider>
+                                      {children}
+                                    </MobileDetailSummaryCollapseProvider>
                                 </TooltipProvider>
                             </VoucherProvider>
                         </DialogBackHandlerProvider>

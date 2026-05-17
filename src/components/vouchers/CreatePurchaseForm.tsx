@@ -58,12 +58,16 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
 import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
-import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_MOBILE_ATTACH_TILE_SLOT, VOUCHER_MOBILE_ATTACH_PREVIEW_CLASS, VOUCHER_MOBILE_ATTACH_ADD_SURFACE_CLASS, VOUCHER_DESKTOP_ATTACH_TILE_SLOT, VOUCHER_DESKTOP_ATTACH_PREVIEW_CLASS, VOUCHER_DESKTOP_ATTACH_ADD_SURFACE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { appendLocalOnlyVoucherFilesToUrls, shouldStageNewVoucherFilesAsLocalPending } from "@/lib/voucherLocalAttachmentUpload";
+import {
+  appendLocalOnlyVoucherFilesToUrls,
+  shouldDeferStorageIncrementUntilPendingUpload,
+  shouldStageNewVoucherFilesAsLocalPending,
+} from "@/lib/voucherLocalAttachmentUpload";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { LinkAdvancesToVoucherDialog, applyAdvancesAllocationsToServer } from "@/components/vouchers/LinkAdvancesToVoucherDialog";
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
@@ -1032,10 +1036,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               });
             existingFileUrls = mergedUrls;
             if (preGen) preGeneratedVoucherId = preGen;
-            try {
-              await incrementCompanyStorage(companyId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
-            } catch {
-              /* offline */
+            if (!shouldDeferStorageIncrementUntilPendingUpload()) {
+              try {
+                await incrementCompanyStorage(companyId, {
+                  attachmentsBytes: totalNewBytes,
+                  storageBytes: totalNewBytes,
+                });
+              } catch {
+                /* offline */
+              }
             }
           } else {
             for (const file of newFilesToUpload) {
@@ -2906,12 +2915,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((f) => f !== file)) : undefined}
                               className={cn(
                                 !allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : "",
-                                "h-16"
+                                VOUCHER_MOBILE_ATTACH_PREVIEW_CLASS
                               )}
                             />
                           ))}
                           {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                            <div className="relative h-16 min-w-0">
+                            /* tile slot = square h-24 w-24 (Payment In jaisa) */
+                            <div className={VOUCHER_MOBILE_ATTACH_TILE_SLOT}>
                               <AttachmentHoldPasteSurface
                                 enabled={
                                   !editingDisabled &&
@@ -2937,7 +2947,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   })
                                 }
                                 className={cn(
-                                  "h-16 border-2 border-dashed rounded-md flex flex-col justify-center items-center transition-colors",
+                                  VOUCHER_MOBILE_ATTACH_ADD_SURFACE_CLASS,
                                   allowAttachments && fileAttachmentLimits.maxFileCount > 0
                                     ? "text-muted-foreground hover:border-primary cursor-pointer"
                                     : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
@@ -3174,11 +3184,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               file={file} 
                               attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                               onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((f) => f !== file)) : undefined}
-                              className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
+                              className={cn(
+                                !allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : "",
+                                VOUCHER_DESKTOP_ATTACH_PREVIEW_CLASS
+                              )}
                             />
                           ))}
                           {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                            <div className="relative h-24 w-24 shrink-0">
+                            <div className={VOUCHER_DESKTOP_ATTACH_TILE_SLOT}>
                               <AttachmentHoldPasteSurface
                                 enabled={
                                   !editingDisabled &&
@@ -3204,7 +3217,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   })
                                 }
                                 className={cn(
-                                  "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                                  VOUCHER_DESKTOP_ATTACH_ADD_SURFACE_CLASS,
                                   allowAttachments && fileAttachmentLimits.maxFileCount > 0
                                     ? "text-muted-foreground hover:border-primary cursor-pointer"
                                     : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"

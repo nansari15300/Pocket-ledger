@@ -116,9 +116,9 @@ async function askRestoreChoiceInApp(entityLabel: string, name: string): Promise
 }
 
 /**
- * Shared create-flow guard:
- * - Active duplicate => block creation
- * - Recycle-bin duplicate => ask user: Restore or Create New
+ * Shared create-flow guard (sare masters):
+ * - Active duplicate naam => block (`active_exists`) — naya duplicate create na ho
+ * - Sirf recycle-bin me ho to Restore ya Create New
  */
 export async function resolveRecycleBinDuplicate({
   companyId,

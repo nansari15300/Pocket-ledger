@@ -16,7 +16,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { registerImperativeDialogBack } from "@/contexts/DialogBackHandlerContext";
+import type { PrintColorMode } from "@/lib/printColorPalette";
 
 export type PrintOptionsResult = {
   printIncludeLogo: boolean;
@@ -26,6 +28,8 @@ export type PrintOptionsResult = {
   printIncludeUserColumn?: boolean;
   printIncludeFileColumn?: boolean;
   printIncludeNotes?: boolean;
+  /** Color = green/red amounts; bw = sab amounts black/gray (printer-friendly). */
+  printColorMode?: PrintColorMode;
 };
 
 export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
@@ -53,6 +57,7 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
       const [printUserColumn, setPrintUserColumn] = React.useState(false);
       const [printFileColumn, setPrintFileColumn] = React.useState(false);
       const [printNotes, setPrintNotes] = React.useState(false);
+      const [printColorMode, setPrintColorMode] = React.useState<PrintColorMode>("color");
 
       React.useEffect(() => {
         if (!open) return;
@@ -192,6 +197,38 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
                   </p>
                 </div>
               </div>
+              {/* Print color: PDF me green/red vs black-only amounts */}
+              <div className="space-y-2 rounded-lg border p-3">
+                <p className="text-sm font-medium">Print color</p>
+                <RadioGroup
+                  value={printColorMode}
+                  onValueChange={(v) => setPrintColorMode(v === "bw" ? "bw" : "color")}
+                  className="flex flex-col gap-3"
+                >
+                  <div className="flex items-start gap-3">
+                    <RadioGroupItem value="color" id="print-color-mode-color" className="mt-0.5" />
+                    <div className="grid gap-1 leading-none">
+                      <Label htmlFor="print-color-mode-color" className="cursor-pointer font-medium">
+                        Color
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        Green debit, red credit, and colored bill-wise voucher links.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <RadioGroupItem value="bw" id="print-color-mode-bw" className="mt-0.5" />
+                    <div className="grid gap-1 leading-none">
+                      <Label htmlFor="print-color-mode-bw" className="cursor-pointer font-medium">
+                        Black &amp; white
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        All amounts print in black/gray — better for B&amp;W printers.
+                      </p>
+                    </div>
+                  </div>
+                </RadioGroup>
+              </div>
             </div>
             <DialogFooter className="flex-row items-center justify-end gap-2 [&>*]:mt-0">
               {/* Company-login-like action styling: blue cancel + green continue in one row. */}
@@ -214,6 +251,7 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
                     printIncludeUserColumn: printUserColumn,
                     printIncludeFileColumn: printFileColumn,
                     printIncludeNotes: printNotes,
+                    printColorMode,
                   })
                 }
               >

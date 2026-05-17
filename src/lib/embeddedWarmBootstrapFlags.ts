@@ -8,6 +8,16 @@
 
 const KEY_PREFIX = "pl_embedded_full_warm_ok_v1:";
 
+/** Account / company warm pehle ho chuka? */
+export function readEmbeddedFullWarmSucceeded(uid: string | null | undefined): boolean {
+  if (typeof window === "undefined" || !uid?.trim()) return false;
+  try {
+    return window.localStorage.getItem(`${KEY_PREFIX}${uid.trim()}`) === "1";
+  } catch {
+    return false;
+  }
+}
+
 /** Warm sync successfully finished — current Firebase uid ke liye flag (multi-account safe). */
 export function markEmbeddedFullWarmSucceeded(uid: string | null | undefined): void {
   if (typeof window === "undefined" || !uid?.trim()) return;

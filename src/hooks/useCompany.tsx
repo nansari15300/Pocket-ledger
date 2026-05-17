@@ -26,6 +26,7 @@ import { clearCompanyPlanLocalCache, readCompanyPlanLocalCache } from "@/lib/com
 import {
   syncCompanyPlanFromServer,
   markDailyAuthoritativePlanSyncDone,
+  PLAN_SERVER_SYNC_INTERVAL_MS,
   recomputePlanSyncBannerState,
   shouldRunDailyAuthoritativePlanSync,
   type PlanSyncBannerState,
@@ -857,6 +858,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
   /** Login + selected company: server → local plan + offline license; `normalizeLocalCompany` ke baad hook order safe. */
   const planSyncBurstRef = useRef(0);
+  const planPeriodicSyncInFlightRef = useRef(false);
   useEffect(() => {
     if (!user || !companyId || authLoading) return;
 
@@ -885,10 +887,22 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     // Web "Local" data source bhi: `window` `online` par turant POST/auth churn na ho — session + SQLite pehle se theek.
     const skipOnlinePlanSyncForLocalOnly = isLocalOnlyMode();
 
+    /** Online + selected company: har 5 min server se planId/expiry refresh (overlap skip). */
+    const runPeriodicOnlinePlanSync = () => {
+      if (cancelled || planPeriodicSyncInFlightRef.current) return;
+      if (typeof navigator !== "undefined" && !navigator.onLine) return;
+      if (skipOnlinePlanSyncForLocalOnly) return;
+      planPeriodicSyncInFlightRef.current = true;
+      void refreshAuthoritativePlan().finally(() => {
+        planPeriodicSyncInFlightRef.current = false;
+      });
+    };
+
     // Browser timer ids — `NodeJS.Timeout` union avoid (tsc DOM vs @types/node)
     let planSyncIdleCallbackId: number | undefined;
     let planSyncIdleFallbackTimerId: number | undefined;
     let deferredLazyPlanTimer: number | null = null;
+    let planPeriodicIntervalId: number | undefined;
     if (typeof window === "undefined") {
       return () => {
         cancelled = true;
@@ -921,8 +935,20 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
     win.addEventListener("online", onOnline);
 
+    // Online rehne par har 5 min plan sync — `online` event + daily idle ke alawa
+    if (!skipOnlinePlanSyncForLocalOnly) {
+      planPeriodicIntervalId = win.setInterval(
+        runPeriodicOnlinePlanSync,
+        PLAN_SERVER_SYNC_INTERVAL_MS
+      );
+    }
+
     return () => {
       cancelled = true;
+      if (planPeriodicIntervalId !== undefined) {
+        win.clearInterval(planPeriodicIntervalId);
+        planPeriodicIntervalId = undefined;
+      }
       if (deferredLazyPlanTimer != null) {
         win.clearTimeout(deferredLazyPlanTimer);
         deferredLazyPlanTimer = null;

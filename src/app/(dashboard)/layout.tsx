@@ -739,9 +739,9 @@ function DeviceLimitOverlay() {
 }
 
 /** Stable opts ref — har render naya `{}` na bane warna `resize` effect bar-bar chale */
-/** `preventDefault` edge strip — LTR swipe = menu; browser “back” gesture na kha le */
+/** `preventDefault` edge strip — LTR swipe = menu; ~4mm taaki detail back button (px-2) tap na mare */
 const LEFT_EDGE_OPEN_APP_MENU_OPTS: EdgeSwipeDocumentOptions = {
-  edgeWidthMm: 10,
+  edgeWidthMm: 4,
   blockOverscrollHistoryOnLeftEdge: true,
 };
 
@@ -925,7 +925,7 @@ export default function DashboardLayout({
     <MobileViewProvider>
       <SidebarProvider>
         <DashboardProvider>
-          {/* Global file + avatar click preview — header pill se ON/OFF (AttachmentHoverPortal). */}
+          {/* Global file preview — header 3-step: Off / Hover / Click (AttachmentHoverPortal). */}
           <FileHoverPreviewProvider>
             {/* Overlay LayoutContent ke bahar: `/company` jaisi bare routes par bhi trace dikhai de */}
             <DashboardDocumentTitleSync />

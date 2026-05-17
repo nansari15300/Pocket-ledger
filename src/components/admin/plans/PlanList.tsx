@@ -26,7 +26,7 @@ export function PlanList({ plans, selectedPlan, onSelectPlan }: PlanListProps) {
 
     return (
         <ScrollArea className="h-full border rounded-lg">
-            <div className="p-2 space-y-1">
+            <div className="pl-master-list-ul">
                 {plans.map(plan => (
                     <Card 
                         key={plan.id}

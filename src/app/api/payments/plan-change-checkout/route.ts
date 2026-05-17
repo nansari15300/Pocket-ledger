@@ -3,7 +3,12 @@ import Stripe from "stripe";
 import admin from "firebase-admin";
 import { v4 as uuidv4 } from "uuid";
 import crypto from "crypto";
-import { mergeGatewayKeysWithEnv, type GatewayKeys } from "@/ai/flows/gateway-keys";
+import {
+  isBillingGatewayAvailable,
+  mergeGatewayKeysWithEnv,
+  parseGatewayPaymentFlags,
+  type GatewayKeys,
+} from "@/ai/flows/gateway-keys";
 import { getAdminDb } from "@/lib/firebaseAdmin";
 import { DEFAULT_PLANS, type PlanId, normalizePlanIdForClient } from "@/config/plans";
 import {
@@ -183,6 +188,16 @@ export async function POST(req: NextRequest) {
             "Lower paid tiers use the Downgrade button. This checkout is for renewals and upgrades only.",
         },
         { status: 400 }
+      );
+    }
+
+    const adminGwGate = await getGatewayKeysFromAdmin();
+    const keysGate = mergeGatewayKeysWithEnv(adminGwGate.stored);
+    const paymentFlagsGate = parseGatewayPaymentFlags(adminGwGate.stored as Record<string, unknown>);
+    if (!isBillingGatewayAvailable(gateway, keysGate, paymentFlagsGate)) {
+      return NextResponse.json(
+        { error: "This payment method is disabled or not configured.", code: "gateway_disabled" },
+        { status: 403 }
       );
     }
 

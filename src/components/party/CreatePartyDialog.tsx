@@ -30,6 +30,8 @@ export function CreatePartyDialog({
     parentIsOpen !== undefined ? parentIsOpen : internalIsOpen;
   const setOpen =
     parentOnOpenChange !== undefined ? parentOnOpenChange : setInternalIsOpen;
+  /** Parent `isOpen` pass = controlled — trigger bahar; DialogTrigger asChild ref loop avoid */
+  const isDialogControlled = parentIsOpen !== undefined;
 
   const handlePartyCreated = (isSaveAndNew: boolean, newId: string) => {
     onPartyCreated(newId);
@@ -39,10 +41,14 @@ export function CreatePartyDialog({
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={setOpen}>
-  {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-  {/* MOBILE: max-h 85vh; PC (sm+): max-h 90vh taaki lamba form scroll ho — inner div overflow-y-auto. */}
-  <DialogContent
+    <>
+      {isDialogControlled && children}
+      <Dialog open={isOpen} onOpenChange={setOpen}>
+      {!isDialogControlled && children && (
+        <DialogTrigger asChild>{children}</DialogTrigger>
+      )}
+      {/* MOBILE: max-h 85vh; PC (sm+): max-h 90vh taaki lamba form scroll ho — inner div overflow-y-auto. */}
+      <DialogContent
     className="z-50 max-h-[85vh] w-[98vw] max-w-[98vw] flex min-h-0 flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:w-full sm:max-w-3xl sm:px-6"
     onOpenAutoFocus={(e) => e.preventDefault()}
     onCloseAutoFocus={(e) => e.preventDefault()}
@@ -81,5 +87,6 @@ export function CreatePartyDialog({
         </div>
       </DialogContent>
     </Dialog>
+    </>
   );
 }

@@ -1170,19 +1170,30 @@ export function showInAppPdfPreview(
     pinchTouchOpts
   );
 
-  // Ctrl + wheel zoom (desktop / trackpad)
+  // Wheel: Ctrl = zoom; warna scroll (zoom ke baad native wheel preview layer par miss hota hai)
   scrollHost.addEventListener(
     "wheel",
     (ev) => {
-      if (!usePdfJs || !ev.ctrlKey) return;
+      if (!usePdfJs) return;
+      if (ev.ctrlKey) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const delta = ev.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+        const a = midpointToScrollClientAnchor(ev.clientX, ev.clientY);
+        void setZoom(zoomPercent + delta, {
+          preserveAnchor: true,
+          anchorClientX: a.ax,
+          anchorClientY: a.ay,
+        });
+        return;
+      }
+      const canY = scrollHost.scrollHeight > scrollHost.clientHeight + 1;
+      const canX = scrollHost.scrollWidth > scrollHost.clientWidth + 1;
+      if (!canY && !canX) return;
       ev.preventDefault();
-      const delta = ev.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
-      const a = midpointToScrollClientAnchor(ev.clientX, ev.clientY);
-      void setZoom(zoomPercent + delta, {
-        preserveAnchor: true,
-        anchorClientX: a.ax,
-        anchorClientY: a.ay,
-      });
+      ev.stopPropagation();
+      scrollHost.scrollTop += ev.deltaY;
+      scrollHost.scrollLeft += ev.deltaX;
     },
     { passive: false }
   );

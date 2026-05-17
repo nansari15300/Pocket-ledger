@@ -1,30 +1,37 @@
 import { NextResponse } from "next/server";
-import { mergeGatewayKeysWithEnv, type GatewayKeys } from "@/ai/flows/gateway-keys";
+import {
+  mergeGatewayKeysWithEnv,
+  parseGatewayPaymentFlags,
+  resolveBillingGatewayAvailability,
+  type GatewayKeys,
+} from "@/ai/flows/gateway-keys";
 import { getAdminDb } from "@/lib/firebaseAdmin";
 
-/** Admin read — `/api/payments/initiate` jaisa; client ko sirf boolean (secrets expose nahi). */
-async function getGatewayKeysFromAdmin(): Promise<GatewayKeys> {
+/** Admin read — keys merge + payment toggles (`app_settings/payment_gateways`). */
+async function getGatewayStateFromAdmin(): Promise<{
+  keys: GatewayKeys;
+  flags: ReturnType<typeof parseGatewayPaymentFlags>;
+}> {
   try {
     const db = getAdminDb();
     const snap = await db.doc("app_settings/payment_gateways").get();
-    const stored = (snap.exists ? (snap.data() as GatewayKeys) : {}) as GatewayKeys;
-    return mergeGatewayKeysWithEnv(stored);
+    const raw = snap.exists ? (snap.data() as Record<string, unknown>) : {};
+    const stored = raw as GatewayKeys;
+    return {
+      keys: mergeGatewayKeysWithEnv(stored),
+      flags: parseGatewayPaymentFlags(raw),
+    };
   } catch {
-    return mergeGatewayKeysWithEnv({});
+    return { keys: mergeGatewayKeysWithEnv({}), flags: parseGatewayPaymentFlags(null) };
   }
 }
 
 /**
- * Billing UI: kaunse gateway configure hain — keys ke bina radio disable (`initiate` / `plan-change-checkout` jaisa).
+ * Billing UI: keys configured + admin “Show on plan page” — dono true par radio enable.
  */
 export async function GET() {
-  const keys = await getGatewayKeysFromAdmin();
-  return NextResponse.json(
-    {
-      stripe: !!keys.stripeSecretKey?.trim(),
-      khalti: !!keys.khaltiPublicKey?.trim(),
-      esewa: !!(keys.esewaMerchantCode?.trim() && keys.esewaSecretKey?.trim()),
-    },
-    { headers: { "Cache-Control": "no-store" } }
-  );
+  const { keys, flags } = await getGatewayStateFromAdmin();
+  return NextResponse.json(resolveBillingGatewayAvailability(keys, flags), {
+    headers: { "Cache-Control": "no-store" },
+  });
 }

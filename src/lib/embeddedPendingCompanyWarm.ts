@@ -4,14 +4,13 @@
  * APK/static: company select ke baad full SQLite mirror pehle — `FirstDeviceCompanyHydrationOverlay` session flag.
  * Data phase ke baad flag clear; attachment cache header progress + background me.
  */
-import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
-import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 import type { Company } from "@/hooks/useCompany";
 import { isCloudBackedCompanyShape } from "@/lib/offlineFullWarmSync";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 
 function embeddedClient(): boolean {
-  return isStaticAppBuild() || (typeof window !== "undefined" && isCapacitorNativeApp());
+  return isEmbeddedOfflinePreloadClient();
 }
 
 function storageKey(uid: string, companyId: string): string {

@@ -36,6 +36,8 @@ export function getEmbeddedLockShellKind(): EmbeddedLockShellKind {
 }
 
 const SESSION_UNLOCK_KEY = "pl_embedded_unlock_v1";
+/** APK: native biometric activity ke baad WebView reload/resume par `sessionStorage` khali ho sakta hai — unlock yahan bhi likho */
+const PERSISTENT_UNLOCK_KEY = "pl_embedded_unlock_persist_v1";
 const PIN_HASH_SUFFIX = "pl_embedded_pin_hash_v1";
 const PIN_SALT_SUFFIX = "pl_embedded_pin_salt_v1";
 const BIO_FLAG_SUFFIX = "pl_embedded_bio_on_v1";
@@ -128,9 +130,16 @@ export function setBiometricUnlockEnabled(firebaseUid: string, enabled: boolean)
 
 export function isEmbeddedSessionUnlocked(): boolean {
   try {
-    return sessionStorage.getItem(SESSION_UNLOCK_KEY) === "1";
-  } catch {
+    if (sessionStorage.getItem(SESSION_UNLOCK_KEY) === "1") return true;
+    // APK: fingerprint dialog se wapas aane par sessionStorage reset ho to bhi gate na atke
+    if (isCapacitorNativeApp() && localStorage.getItem(PERSISTENT_UNLOCK_KEY) === "1") return true;
     return false;
+  } catch {
+    try {
+      return isCapacitorNativeApp() && localStorage.getItem(PERSISTENT_UNLOCK_KEY) === "1";
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -140,12 +149,24 @@ export function markEmbeddedSessionUnlocked(): void {
   } catch {
     /* ignore */
   }
+  try {
+    if (isCapacitorNativeApp()) {
+      localStorage.setItem(PERSISTENT_UNLOCK_KEY, "1");
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Logout / sign-out: agla cold open dubara PIN/biometric maange — PIN hash mat todo. */
 export function clearEmbeddedSessionUnlock(): void {
   try {
     sessionStorage.removeItem(SESSION_UNLOCK_KEY);
+  } catch {
+    /* ignore */
+  }
+  try {
+    localStorage.removeItem(PERSISTENT_UNLOCK_KEY);
   } catch {
     /* ignore */
   }

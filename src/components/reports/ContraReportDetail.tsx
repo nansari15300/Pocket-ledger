@@ -59,6 +59,7 @@ export function ContraReportDetail() {
       accountName: "All Contra Vouchers",
       balance: 0,
       openingBalance: 0,
+      accountType: "contra_view", // use-transactions: All Contra list scope (journal_view jaisa)
     };
   }, [showAllCompanyVouchers]);
 
@@ -126,6 +127,7 @@ export function ContraReportDetail() {
     if (currentAccount) {
       return (
         <div className="flex h-full min-h-0 flex-col overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {/* Sticky Party-style chrome + Print/Excel/Date – header AccountDetails ke andar (duplicate top bar hataya). */}
           <AccountDetails
             account={currentAccount as any}
@@ -148,6 +150,7 @@ export function ContraReportDetail() {
             mobileFooterVariant="report"
             mobileReportStickyTitle="Contra"
           />
+          </div>
         </div>
       );
     }

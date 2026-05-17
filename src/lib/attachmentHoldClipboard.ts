@@ -53,12 +53,22 @@ export function putSameTabBlobForHoldCopy(blob: Blob): string {
   return sid;
 }
 
-function takeSameTabBlob(sid: string): Blob | null {
+/** Paste par blob mat hatao — jab tak naya copy na ho, bar-bar paste same file se ho sake */
+function getSameTabBlob(sid: string): Blob | null {
   pruneSameTab();
   const e = sameTabBlobs.get(sid);
-  if (!e) return null;
-  sameTabBlobs.delete(sid);
+  if (!e || e.blob.size === 0) return null;
+  e.createdAt = Date.now();
   return e.blob;
+}
+
+/** Session backup dubara likho — multi-paste ke baad bhi last copy readable rahe */
+export function refreshAttachmentHoldSessionBackup(payload: AttachmentHoldPayloadV1): void {
+  try {
+    sessionStorage.setItem(SESSION_BACKUP_KEY, encodePayload(payload));
+  } catch {
+    /* private mode */
+  }
 }
 
 function encodePayload(p: AttachmentHoldPayloadV1): string {
@@ -121,6 +131,13 @@ export async function writeAttachmentHoldClipboard(
 }
 
 export async function readAttachmentHoldClipboardText(): Promise<string | null> {
+  /* Pehle session — OS clipboard paste/clear ke baad bhi last PL copy */
+  try {
+    const fb = sessionStorage.getItem(SESSION_BACKUP_KEY);
+    if (fb && fb.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return fb;
+  } catch {
+    /* */
+  }
   try {
     if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
       const t = await navigator.clipboard.readText();
@@ -128,12 +145,6 @@ export async function readAttachmentHoldClipboardText(): Promise<string | null> 
     }
   } catch {
     /* denied */
-  }
-  try {
-    const fb = sessionStorage.getItem(SESSION_BACKUP_KEY);
-    if (fb && fb.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return fb;
-  } catch {
-    /* */
   }
   return null;
 }
@@ -144,7 +155,7 @@ export async function fetchBlobForAttachmentHoldPaste(
   signal?: AbortSignal
 ): Promise<{ blob: Blob; fileName: string; contentType: string } | null> {
   if (payload.sid) {
-    const blob = takeSameTabBlob(payload.sid);
+    const blob = getSameTabBlob(payload.sid);
     if (!blob || blob.size === 0) return null;
     const fileName = payload.n || "attachment";
     const contentType = payload.t || blob.type || "application/octet-stream";

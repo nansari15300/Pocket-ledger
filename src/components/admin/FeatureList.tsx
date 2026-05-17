@@ -31,7 +31,7 @@ export function FeatureList({
 
     return (
         <ScrollArea className="h-[calc(100vh-22rem)] border rounded-lg">
-            <div className="p-2 space-y-1">
+            <div className="pl-master-list-ul">
                 {features.map(feature => (
                     <Card 
                         key={feature.id}

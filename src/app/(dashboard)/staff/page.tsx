@@ -33,6 +33,7 @@ import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDeta
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { mlc, mlcListChromeRoot, mlcListChromeRootData } from "@/lib/mobileListChrome";
 
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
@@ -348,20 +349,21 @@ function StaffPageContent() {
  }
 
  const listView = (
-    <div className="flex flex-col h-full">
-        <div className="p-3 border-b flex items-center gap-2">
-            <div className="relative flex-1 min-w-0">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+    <div className={mlcListChromeRoot} {...mlcListChromeRootData}>
+        <div className={mlc.searchRow}>
+            <div className={mlc.searchWrap}>
+                <Search className={mlc.searchIcon} />
                 <Input
                     placeholder={activeView === 'staff' ? 'Search staff...' : 'Search groups...'}
-                    className="pl-9"
+                    listChrome
+                    listChromeSearch
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     autoComplete="off"
                 />
             </div>
             {activeView === "staff" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-              <PendingApprovalListFilterBadge
+              <PendingApprovalListFilterBadge compact
                 count={totalPendingApprovalVoucherCount}
                 pressed={showOnlyStaffWithPendingApproval}
                 onToggle={() => setShowOnlyStaffWithPendingApproval((v) => !v)}
@@ -372,7 +374,7 @@ function StaffPageContent() {
               />
             ) : null}
             {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-              <PendingApprovalListFilterBadge
+              <PendingApprovalListFilterBadge compact
                 count={totalPendingApprovalVoucherCount}
                 pressed={showOnlyStaffGroupsWithPendingApproval}
                 onToggle={() => setShowOnlyStaffGroupsWithPendingApproval((v) => !v)}
@@ -384,32 +386,33 @@ function StaffPageContent() {
             ) : null}
             {activeView === "staff" ? (
                 <CreateStaffDialog onStaffCreated={() => {}} groups={processedStaffGroups} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen}>
-                    <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateStaffOpen(true)}>
+                    <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateStaffOpen(true)}>
                         + Add Staff
                     </PermissionButton>
                 </CreateStaffDialog>
             ) : (
                 <CreateStaffGroupDialog onGroupCreated={() => {}} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={processedStaffGroups}>
-                    <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateGroupOpen(true)}>
+                    <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
                         + Add Group
                     </PermissionButton>
                 </CreateStaffGroupDialog>
             )}
         </div>
-        <div className="p-3 border-b">
-            <div className="grid grid-cols-2 gap-2">
-                <PermissionButton permission="create_records" variant="outline" onClick={() => openVoucherDialog("add_salary")}>
+        <div className={mlc.actionRow}>
+            <div className={mlc.actionGrid}>
+                {/* List action row: search/+ Add jitni height (`size="list"`) */}
+                <PermissionButton permission="create_records" variant="outline" size="list" className="w-full" onClick={() => openVoucherDialog("add_salary")}>
                     Add Salary
                 </PermissionButton>
-                <PermissionButton permission="create_records" variant="outline" onClick={() => openVoucherDialog("payment_out")}>
+                <PermissionButton permission="create_records" variant="chromePill" size="list" className="w-full" onClick={() => openVoucherDialog("payment_out")}>
                     Pay Salary
                 </PermissionButton>
             </div>
         </div>
         {activeView === "staff" ? (
           <>
-            <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
-              <Briefcase className="h-4 w-4" />
+            <div className={mlc.sectionLabelRow}>
+              <Briefcase className={mlc.sectionIcon} />
               <span>Staff ({filteredStaffListCount})</span>
             </div>
             <div className="flex-1 min-h-0 overflow-hidden">
@@ -425,8 +428,8 @@ function StaffPageContent() {
           </>
         ) : (
           <>
-            <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
-              <Users className="h-4 w-4" />
+            <div className={mlc.sectionLabelRow}>
+              <Users className={mlc.sectionIcon} />
               <span>Groups ({filteredStaffGroupCount})</span>
             </div>
             <div className="flex-1 min-h-0 overflow-hidden">
@@ -493,9 +496,9 @@ function StaffPageContent() {
       }
       tabs={
         <Tabs value={activeView} onValueChange={setActiveView} className="w-full">
-          <TabsList className="w-full">
-            <TabsTrigger value="staff" className="flex-1">Staff</TabsTrigger>
-            <TabsTrigger value="groups" className="flex-1">Groups</TabsTrigger>
+          <TabsList listChrome>
+            <TabsTrigger listChrome value="staff" className="flex-1">Staff</TabsTrigger>
+            <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
           </TabsList>
         </Tabs>
       }

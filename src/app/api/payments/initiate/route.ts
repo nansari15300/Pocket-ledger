@@ -2,7 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { v4 as uuidv4 } from "uuid";
 import crypto from "crypto";
-import { mergeGatewayKeysWithEnv, type GatewayKeys } from "@/ai/flows/gateway-keys";
+import {
+  isBillingGatewayAvailable,
+  mergeGatewayKeysWithEnv,
+  parseGatewayPaymentFlags,
+  type BillingGatewayId,
+  type GatewayKeys,
+} from "@/ai/flows/gateway-keys";
 import { getAdminDb } from "@/lib/firebaseAdmin";
 import { DEFAULT_PLANS, type PlanId } from "@/config/plans";
 import { getEffectivePlanPrices } from "@/lib/server/getEffectivePlanPrices";
@@ -12,7 +18,6 @@ import {
   type SubscriptionTermKey,
 } from "@/lib/subscriptionPlanMath";
 import { getPublicAppOriginForPaymentRedirects } from "@/lib/checkoutPublicOrigin";
-
 type AdminKeysResult = {
   stored: GatewayKeys;
   adminReadOk: boolean;
@@ -110,6 +115,7 @@ export async function POST(req: NextRequest) {
     if (!userId?.trim()) {
       throw new Error("userId is required for checkout.");
     }
+
     const intent = billingIntent ?? "subscribe";
     const periodYears =
       billingCycle === "yearly"
@@ -137,6 +143,15 @@ export async function POST(req: NextRequest) {
     const appOrigin = getPublicAppOriginForPaymentRedirects(req);
     const adminResult = await getGatewayKeysFromAdmin();
     const keys = mergeGatewayKeysWithEnv(adminResult.stored);
+    const paymentFlags = parseGatewayPaymentFlags(adminResult.stored as Record<string, unknown>);
+    const gw: BillingGatewayId =
+      gateway === "khalti" ? "khalti" : gateway === "esewa" ? "esewa" : "stripe";
+    if (!isBillingGatewayAvailable(gw, keys, paymentFlags)) {
+      return NextResponse.json(
+        { error: "This payment method is disabled or not configured.", code: "gateway_disabled" },
+        { status: 403 }
+      );
+    }
 
     if (gateway === "stripe") {
         if (!keys.stripeSecretKey) {

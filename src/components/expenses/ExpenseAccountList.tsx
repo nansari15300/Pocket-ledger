@@ -2,7 +2,7 @@
 import type { ExpenseAccount } from "@/components/expenses/types";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Card } from "@/components/ui/card";
+import { MasterListRow } from "@/components/ui/master-list-row";
 import { DollarSign, Lock } from "lucide-react";
 import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
@@ -14,7 +14,8 @@ import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
 } from "@/components/entity/EntityListQuickFilterBar";
-import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows";
+import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows"
+import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 
 interface ExpenseAccountListProps {
   accounts: ExpenseAccount[];
@@ -52,10 +53,7 @@ export function ExpenseAccountList({
     return (
       <TooltipProvider delayDuration={200}>
         <div
-          className={cn(
-            "flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background",
-            disabled && "pointer-events-none opacity-60"
-          )}
+          className={cn(masterListShellCn, disabled && "pointer-events-none opacity-60")}
           data-theme-list="account-list"
         >
           <div className="flex flex-1 min-h-0 items-center justify-center p-8 text-center text-sm text-muted-foreground">
@@ -69,27 +67,18 @@ export function ExpenseAccountList({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div
-        className={cn(
-          "flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background",
-          disabled && "pointer-events-none opacity-60"
-        )}
+      <motion.div
+        className={cn(masterListShellCn, disabled && "pointer-events-none opacity-60")}
         data-theme-list="account-list"
       >
-        <ScrollArea className="min-h-0 min-w-0 flex-1">
-          <ul className="p-2 space-y-1">
+        <ScrollArea listChrome className="min-h-0 min-w-0 flex-1">
+          <ul className="pl-master-list-ul">
             <AnimatePresence mode="popLayout">
               {filteredAndSortedAccounts.map((account) => {
                 const isSelected = selectedAccount?.id === account.id;
                 const isSystem = (account as any).isSystemReserved;
                 const href = getItemHref?.(account);
-                const cardClassName = cn(
-                  "min-w-0 max-w-full overflow-hidden p-1.5 cursor-pointer border rounded-md transition-all duration-200",
-                  disabled && "cursor-not-allowed",
-                  isSelected
-                    ? "border-primary bg-secondary shadow-sm"
-                    : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30"
-                );
+                const cardClassName = cn(disabled && "cursor-not-allowed", masterListRowUnselectedCn(isSelected));
                 const cardContent = (
                       <div className="pl-master-list-row">
                         <div className="pl-master-list-row-leading">
@@ -108,10 +97,12 @@ export function ExpenseAccountList({
                             )}
                           </div>
                           <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="pl-master-list-row-name cursor-default">
-                                {account.name}
-                              </span>
+                            <TooltipTrigger
+                              type="button"
+                              onPointerDown={(e) => e.stopPropagation()}
+                              className="pl-master-list-row-name cursor-default block w-full truncate border-0 bg-transparent p-0 text-left shadow-none"
+                            >
+                              {account.name}
                             </TooltipTrigger>
                             <TooltipContent side="right">
                               <p className="font-medium">{account.name}</p>
@@ -122,16 +113,16 @@ export function ExpenseAccountList({
                           </Tooltip>
                         </div>
                         <Tooltip>
-                          <TooltipTrigger asChild>
-                            <div
-                              className={cn(
-                                "pl-master-list-row-amount ml-2",
-                                account.balance >= 0 ? "text-green-600" : "text-red-600",
-                                isSelected && (account.balance >= 0 ? "text-green-700" : "text-red-700")
-                              )}
-                            >
-                              {formatCurrency(account.balance, { showDrCr: true })}
-                            </div>
+                          <TooltipTrigger
+                            type="button"
+                            onPointerDown={(e) => e.stopPropagation()}
+                            className={cn(
+                              "pl-master-list-row-amount ml-2 rounded border-0 bg-transparent px-1 text-left shadow-none",
+                              account.balance >= 0 ? "text-green-600" : "text-red-600",
+                              isSelected && (account.balance >= 0 ? "text-green-700" : "text-red-700")
+                            )}
+                          >
+                            {formatCurrency(account.balance, { showDrCr: true })}
                           </TooltipTrigger>
                           <TooltipContent side="left">
                             <p className="font-medium">{formatCurrency(account.balance, { showDrCr: true })}</p>
@@ -150,12 +141,12 @@ export function ExpenseAccountList({
                     {href ? (
                       // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                       <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
-                        <Card className={cardClassName}>{cardContent}</Card>
+                        <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
                       </Link>
                     ) : (
-                      <Card className={cardClassName} onClick={() => onSelectAccount(account)}>
+                      <MasterListRow selected={isSelected} className={cardClassName} onClick={() => onSelectAccount(account)}>
                         {cardContent}
-                      </Card>
+                      </MasterListRow>
                     )}
                   </motion.li>
                 );
@@ -164,7 +155,7 @@ export function ExpenseAccountList({
           </ul>
         </ScrollArea>
         <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
-      </div>
+      </motion.div>
     </TooltipProvider>
   );
 }

@@ -655,7 +655,7 @@ export function CreateCompanyForm({
 
         {/* Jab plan me online slot bachi ho: cloud vs device-only — bina slot ke sirf local + short notice */}
         {!forceLocalCompanyCreation && hasFreeOnlineSlot && (
-          <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+          <div className="space-y-2 rounded-md border border-black bg-muted/30 p-3">
             <FormLabel className="text-xs sm:text-sm">Save company as</FormLabel>
             <FormDescription className="text-xs">
               Your plan has a free online company slot. Pick cloud sync or keep data only on this device.
@@ -684,7 +684,7 @@ export function CreateCompanyForm({
           </p>
         )}
 
-        <div className="space-y-4 rounded-md border border-sky-200 bg-sky-50/40 p-3 dark:border-sky-900/40 dark:bg-sky-950/20">
+        <div className="space-y-4 rounded-md border border-black bg-muted/25 p-3 dark:border-black dark:bg-muted/15">
           {/* Admin security section highlight: password protection controls grouped in separate color. */}
           <FormItem>
             <div className="flex items-center justify-between rounded-md border p-3">
@@ -785,7 +785,7 @@ export function CreateCompanyForm({
         </div>
 
         {passwordEnabled && (
-        <div className="space-y-4 rounded-md border border-emerald-200 bg-emerald-50/40 p-3 dark:border-emerald-900/40 dark:bg-emerald-950/20">
+        <div className="space-y-4 rounded-md border border-black bg-muted/25 p-3 dark:border-black dark:bg-muted/15">
           {/* Company user management section highlight: user fields grouped with distinct color. */}
           <FormItem>
             <div className="flex items-center justify-between rounded-md border p-3">

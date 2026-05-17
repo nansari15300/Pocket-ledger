@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { mlc, mlcListChromeRoot, mlcListChromeRootData } from "@/lib/mobileListChrome";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams } from "next/navigation";
 import { TaxList } from "@/components/tax/TaxList";
@@ -411,14 +412,14 @@ function TaxPageContent() {
   }
   
   const listView = (
-    <div className="flex flex-col h-full">
-      <div className="p-3 border-b flex items-center gap-2">
-        <div className="relative flex-1 min-w-0">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder={activeView === 'taxes' ? 'Search taxes...' : 'Search groups...'} className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
+    <div className={mlcListChromeRoot} {...mlcListChromeRootData}>
+      <div className={mlc.searchRow}>
+        <div className={mlc.searchWrap}>
+          <Search className={mlc.searchIcon} />
+          <Input placeholder={activeView === 'taxes' ? 'Search taxes...' : 'Search groups...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
         </div>
         {activeView === "taxes" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-          <PendingApprovalListFilterBadge
+          <PendingApprovalListFilterBadge compact
             count={totalPendingApprovalVoucherCount}
             pressed={showOnlyTaxesWithPendingApproval}
             onToggle={() => setShowOnlyTaxesWithPendingApproval((v) => !v)}
@@ -429,7 +430,7 @@ function TaxPageContent() {
           />
         ) : null}
         {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-          <PendingApprovalListFilterBadge
+          <PendingApprovalListFilterBadge compact
             count={totalPendingApprovalVoucherCount}
             pressed={showOnlyTaxGroupsWithPendingApproval}
             onToggle={() => setShowOnlyTaxGroupsWithPendingApproval((v) => !v)}
@@ -441,13 +442,13 @@ function TaxPageContent() {
         ) : null}
         {activeView === "taxes" ? (
           <CreateTaxDialog onTaxCreated={() => {}} isOpen={isCreateTaxOpen} onOpenChange={setIsCreateTaxOpen}>
-            <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateTaxOpen(true)}>
+            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateTaxOpen(true)}>
               + Add Tax
             </PermissionButton>
           </CreateTaxDialog>
         ) : (
           <CreateTaxGroupDialog onGroupCreated={() => {}} groups={processedTaxGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
-            <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateGroupOpen(true)}>
+            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
               + Add Group
             </PermissionButton>
           </CreateTaxGroupDialog>
@@ -455,8 +456,8 @@ function TaxPageContent() {
       </div>
        {activeView === 'taxes' ? (
             <>
-              <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
-                <Receipt className="h-4 w-4" />
+              <div className={mlc.sectionLabelRow}>
+                <Receipt className={mlc.sectionIcon} />
                 <span>Tax ({filteredTaxListCount})</span>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
@@ -465,8 +466,8 @@ function TaxPageContent() {
             </>
         ) : (
             <>
-              <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
-                <Users className="h-4 w-4" />
+              <div className={mlc.sectionLabelRow}>
+                <Users className={mlc.sectionIcon} />
                 <span>Groups ({filteredGroupCount})</span>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
@@ -505,9 +506,9 @@ function TaxPageContent() {
       }
       tabs={
         <Tabs value={activeView} onValueChange={setActiveView} className="w-full">
-          <TabsList className="w-full">
-            <TabsTrigger value="taxes" className="flex-1">Taxes</TabsTrigger>
-            <TabsTrigger value="groups" className="flex-1">Groups</TabsTrigger>
+          <TabsList listChrome>
+            <TabsTrigger listChrome value="taxes" className="flex-1">Taxes</TabsTrigger>
+            <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
           </TabsList>
         </Tabs>
       }

@@ -444,9 +444,9 @@ export function openAttachmentGalleryInApp(
           currentImageScale = s;
         });
         setZoomControlsVisible(zoomOutBtn, zoomInBtn, fitWidthBtn, fitHeightBtn, true);
-        const syncFitW = () => styleFitButtons(true);
-        if (img.complete && img.naturalWidth > 1) syncFitW();
-        else img.addEventListener("load", syncFitW, { once: true });
+        const syncFitH = () => styleFitButtons(false);
+        if (img.complete && img.naturalWidth > 1) syncFitH();
+        else img.addEventListener("load", syncFitH, { once: true });
 
         img.addEventListener("dblclick", (e) => {
           e.preventDefault();

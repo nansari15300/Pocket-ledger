@@ -1,10 +1,11 @@
-
+﻿
 "use client";
 
 import * as React from "react";
 import { openPrintDirect } from "@/lib/printDirect";
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { Button } from "@/components/ui/button";
+import { LedgerViewModePills } from "@/components/ui/LedgerViewModePills";
 import {
   Card,
   CardHeader,
@@ -53,6 +54,8 @@ import {
   searchParamsStringAfterClosingModal,
   searchParamsStringForModalClose,
 } from "@/lib/modalUrlSync";
+import { mdc, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
+import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import AdCalendar from "@/components/ui/ad-calendar";
 import {
   Select,
@@ -80,7 +83,13 @@ import { LinkAdvancesToVoucherDialog } from "../vouchers/LinkAdvancesToVoucherDi
 import { LinkPaymentToTxnsDialog } from "../vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import { LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
+
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
+import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
+import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
+import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
 import {
   sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
@@ -99,6 +108,9 @@ import { firestore } from "@/lib/firebase";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
+import { useDateRangeTimestamps } from "@/hooks/useLedgerDetailDateRange";
+import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
+import { ROWS_PER_PAGE_OPTIONS_STAFF } from "@/lib/rowsPerPageSelect";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
@@ -169,6 +181,14 @@ export function StaffDetails({
 
   const [dateRange, setDateRange] = useState<DateRange | undefined>(parentDateRange);
   const [isDateChange, setIsDateChange] = useState(false);
+  const parentFromMs = parentDateRange?.from?.getTime();
+  const parentToMs = parentDateRange?.to?.getTime();
+  useEffect(() => {
+    setDateRange((prev) => {
+      if (prev?.from?.getTime() === parentFromMs && prev?.to?.getTime() === parentToMs) return prev;
+      return parentDateRange;
+    });
+  }, [parentFromMs, parentToMs, parentDateRange]);
     
   const staff = useMemo(() => {
     if (!processedStaff) return initialStaff;
@@ -215,10 +235,22 @@ export function StaffDetails({
   // Local State for Calendar Buffer
   const [tempDateRange, setTempDateRange] = useState<DateRange | undefined>(dateRange);
 
-  const handleDateRangeChange = (newRange: DateRange | undefined) => {
-    setDateRange(newRange);
-    parentOnDateRangeChange(newRange);
-  };
+  const handleDateRangeChange = useCallback(
+    (newRange: DateRange | undefined) => {
+      setDateRange(newRange);
+      parentOnDateRangeChange(newRange);
+    },
+    [parentOnDateRangeChange]
+  );
+  const { fromMs: dateRangeFromMs, toMs: dateRangeToMs } = useDateRangeTimestamps(dateRange);
+  const { selectValue: rowsPerPageSelectValue, onSelectValueChange: handleRowsPerPageChange } =
+    useRowsPerPageSelectControl(rowsPerPage, setRowsPerPage, setCurrentPage, ROWS_PER_PAGE_OPTIONS_STAFF, "15");
+  const handleBsDateRangeChange = useCallback(
+    (range?: DateRange) => {
+      handleDateRangeChange(range);
+    },
+    [handleDateRangeChange]
+  );
   
   const transactionDates = useMemo(() => {
     const dates = new Set<number>();
@@ -420,57 +452,22 @@ export function StaffDetails({
     [displayTransactions, sortBy, sortOrder, ledgerOpeningForRunning, company]
   );
   
-  // Desktop pagination: page 1 latest-side; opening row values should follow visible page.
-  const desktopPaginationMeta = useMemo(() => {
-    const list = sortedTransactions;
-    const total = list.length;
-    if (rowsPerPage <= 0) {
-      const pageDr = list.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
-      const pageCr = list.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
-      return {
-        totalPages: 1,
-        pageTransactions: list,
-        beforeCount: 0,
-        afterCount: 0,
-        openingForPage: ledgerOpeningForRunning,
-        periodDrForPage: pageDr,
-        periodCrForPage: pageCr,
-        closingForPage: ledgerOpeningForRunning + pageDr - pageCr,
-      };
-    }
-    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
-    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
-    const end = total - (safePage - 1) * rowsPerPage;
-    const start = Math.max(0, end - rowsPerPage);
-    const pageTransactions = list.slice(start, Math.max(start, end));
-    const previousTx = start > 0 ? list[start - 1] : null;
-    const previousRunningBalance =
-      previousTx != null
-        ? (typeof previousTx.balance === "number"
-            ? previousTx.balance
-            : typeof previousTx.runningBalance === "number"
-              ? previousTx.runningBalance
-              : undefined)
-        : undefined;
-    const openingForPage =
-      typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)
-        ? previousRunningBalance
-        : ledgerOpeningForRunning;
-    const periodDrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
-    const periodCrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
-    return {
-      totalPages: totalPagesLocal,
-      pageTransactions,
-      beforeCount: start,
-      afterCount: Math.max(0, total - end),
-      openingForPage,
-      periodDrForPage,
-      periodCrForPage,
-      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
-    };
-  }, [sortedTransactions, rowsPerPage, currentPage, ledgerOpeningForRunning]);
-  const totalPages = desktopPaginationMeta.totalPages;
-  const paginatedTransactions = desktopPaginationMeta.pageTransactions;
+  // Statement check mode + desktop tail paging (PartyDetails jaisa)
+  const {
+    statementCheck,
+    desktopPaginationMeta,
+    paginatedTransactions,
+    totalPages,
+  } = useStatementLedgerCheckModePaging({
+    companyId,
+    context: "staff",
+    contextId: staff?.id,
+    viewMode: balanceMode === "bill_wise" ? "bill_wise" : "statement",
+    searchFilteredTransactions: sortedTransactions,
+    rowsPerPage,
+    currentPage,
+    ledgerOpeningForRunning,
+  });
 
   const buildDateRangeText = () => {
     const from = dateRange?.from;
@@ -673,8 +670,11 @@ export function StaffDetails({
   useEffect(() => {
     const total = rowsPerPage > 0 ? Math.ceil(filteredMobileTransactions.length / rowsPerPage) : 1;
     const safeTotal = Math.max(1, total);
-    setCurrentPage((prev) => Math.min(Math.max(1, prev), safeTotal));
-  }, [dateRange, filteredMobileTransactions.length, rowsPerPage]);
+    setCurrentPage((prev) => {
+      const next = Math.min(Math.max(1, prev), safeTotal);
+      return next === prev ? prev : next;
+    });
+  }, [dateRangeFromMs, dateRangeToMs, filteredMobileTransactions.length, rowsPerPage]);
 
   const dateRangeLabel = useMemo(() => {
     if (!dateRange || (dateRange.from == null && dateRange.to == null)) {
@@ -699,19 +699,20 @@ export function StaffDetails({
       {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
       {/* Top row: Party-style header (label + selected account name). */}
       {onBack ? (
-        <div className="flex flex-shrink-0 items-center gap-1.5 border-b px-2 py-1">
-          <Button variant="ghost" size="icon" onClick={handleMobileBack} className="h-7 w-7 flex-shrink-0" aria-label="Back">
-            <ArrowLeft className="h-3.5 w-3.5" />
+        <div className="flex flex-shrink-0 items-center gap-1 border-b px-2 py-0.5" {...mdcNoEdgeSwipeCapture}>
+          <Button variant="ghost" size="icon" onClick={handleMobileBack} className="h-6 w-6 flex-shrink-0" aria-label="Back">
+            <ArrowLeft className="h-3 w-3" />
           </Button>
-          <h1 className="shrink-0 text-base font-bold text-muted-foreground">Staff details</h1>
-          <span className="min-w-0 flex-1 truncate text-sm font-medium" title={staff.name}>
+          <h1 className="shrink-0 text-sm font-bold text-muted-foreground">Staff details</h1>
+          <span className="min-w-0 flex-1 truncate text-xs font-medium" title={staff.name}>
             {staff.name}
           </span>
         </div>
       ) : null}
+      <MobileDetailSummaryCollapsible>
       {/* Row 2: Last 10 Txns or date range label */}
-      <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
-        <span className="text-xs font-medium text-muted-foreground">
+      <div className="flex flex-shrink-0 items-center justify-center gap-1 border-b px-2 py-0.5">
+        <span className="text-[11px] font-medium leading-tight text-muted-foreground">
           {dateRangeLabel}
         </span>
         {dateRange != null &&
@@ -727,23 +728,18 @@ export function StaffDetails({
           )}
       </div>
       {/* Balance - same as bank mobile: amount + Dr/Cr */}
-      <div className="px-3 py-2 border-b flex-shrink-0">
-        <p className={cn("text-2xl font-bold flex justify-center items-baseline gap-px", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-          {closingBalance === 0 ? (
-            "Settled Up"
-          ) : (
-            <>
-              <span>{formatCurrency(Math.abs(closingBalance), { noSuffix: true })}</span>
-              <span className="text-lg">{closingBalance >= 0 ? "Dr" : "Cr"}</span>
-            </>
-          )}
+      <div className={mdc.balanceRow}>
+        <p className={cn(mdc.balanceTextCenter, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+          {closingBalance === 0
+            ? "Settled Up"
+            : formatCurrency(closingBalance, { showDrCr: true })}
         </p>
       </div>
       {/* Staff dropdown + Edit + Search */}
-      <div className="p-2 border-b flex-shrink-0">
-        <div className="flex items-stretch gap-2">
+      <div className="flex-shrink-0 border-b px-2 py-1">
+        <div className="flex items-stretch gap-1.5">
           {allStaff && allStaff.length > 0 && (
-            <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
+            <div className="h-8 min-w-0 flex-1 [&_button]:h-8 [&_button]:text-xs">
               <Combobox
                 options={[
                   ...allStaff.map((s) => ({
@@ -784,7 +780,7 @@ export function StaffDetails({
             <Button
               variant="outline"
               size="icon"
-              className="h-9 w-8 flex-shrink-0"
+              className="h-8 w-8 flex-shrink-0"
               disabled
               aria-disabled="true"
             >
@@ -810,17 +806,17 @@ export function StaffDetails({
               <Button
                 variant="outline"
                 size="icon"
-                className="h-9 w-8 flex-shrink-0"
+                className="h-8 w-8 flex-shrink-0"
               >
                 <Edit className="h-4 w-4" />
               </Button>
             </EditStaffDialog>
           )}
-          <div className="flex-1 min-w-0 h-9 relative">
+          <div className="relative h-8 min-w-0 flex-1">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
             <Input
               placeholder="Search transactions"
-              className="pl-8 h-9 text-sm w-full min-w-0"
+              className="h-8 w-full min-w-0 pl-7 text-xs"
               value={mobileSearchTerm}
               onChange={(e) => {
                 setMobileSearchTerm(e.target.value);
@@ -833,6 +829,7 @@ export function StaffDetails({
           </div>
         </div>
       </div>
+      </MobileDetailSummaryCollapsible>
       {/* Transactions list - extends to footer line */}
       {/* scroll-touch + inline style for APK/WebView touch scroll */}
       <div
@@ -880,6 +877,7 @@ export function StaffDetails({
           hideDebitColumn={false}
           hideCreditColumn={false}
           scrollOnlyTransactions
+          {...statementCheck.tableProps}
         />
         </div>
       </div>
@@ -908,14 +906,17 @@ export function StaffDetails({
           <Printer className="mr-1 h-3.5 w-3.5" />
           Print
         </Button>
-        <Button
-          type="button"
-          className={cn("flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0", balanceMode === "bill_wise" ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "bg-violet-600 hover:bg-violet-700 text-white border-0")}
-          onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
-          data-theme-btn={balanceMode === "bill_wise" ? "statement" : "bill-wise"}
-        >
-          {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
-        </Button>
+        {/* Mobile: header jaisa pill â€” active mode par green border */}
+        <LedgerViewModePills
+          className="flex-1 min-w-0"
+          buttonClassName="h-6 flex-1 min-w-0 px-1 text-xs"
+          value={balanceMode}
+          onChange={setBalanceMode}
+          options={[
+            { value: "statement", label: "Statement" },
+            { value: "bill_wise", label: "Bill wise" },
+          ]}
+        />
         <AddVoucherDialog
           defaultTab="payment_out"
           defaultVoucherData={{ payeeType: "staff", staffId: staff.id }}
@@ -1040,13 +1041,13 @@ export function StaffDetails({
 
   const renderDesktopView = () => (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
+      {/* Header: Part 1 (nameâ†’balance) and Part 2 (dateâ†’print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
       <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-          <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim">
+          <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
             {isMobile && onBack && (
               <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
-                <ArrowLeft className="h-5 w-5" />
+                <ArrowLeft className="h-3 w-3" />
               </Button>
             )}
             <EntityFileAttachmentHover fileUrl={staffHeaderAttachmentUrl} triggerClassName="inline-flex shrink-0 rounded-full">
@@ -1077,12 +1078,12 @@ export function StaffDetails({
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+          <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
             {(dateSystem === 'BS' || dateSystem === 'Both') && (
               <BsDatePicker
                 isRange
                 valueAD={dateRange}
-                onChangeAD={(range) => handleDateRangeChange(range as DateRange | undefined)}
+                onChangeAD={handleBsDateRangeChange}
                 transactionDates={transactionDates}
                 className="w-auto"
               />
@@ -1092,7 +1093,7 @@ export function StaffDetails({
                 <PopoverTrigger asChild>
                   <Button
                     id="date"
-                    variant={"outline"}
+                    variant="chromePill"
                     className={cn("justify-start text-left font-normal h-10 px-2 w-auto flex-shrink-0", !dateRange && "text-muted-foreground")}
                     data-theme-detail="date-range"
                   >
@@ -1152,17 +1153,16 @@ export function StaffDetails({
                 <XCircle className="h-4 w-4" />
               </Button>
             )}
+            <LedgerViewModePills
+              value={balanceMode}
+              onChange={setBalanceMode}
+              options={[
+                { value: "statement", label: "Statement" },
+                { value: "bill_wise", label: "Bill wise" },
+              ]}
+            />
             <Button
-              variant="outline"
-              size="sm"
-              className={cn("flex-shrink-0 h-10", balanceMode === "bill_wise" ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "")}
-              onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
-              data-theme-btn={balanceMode === "bill_wise" ? "statement" : "bill-wise"}
-            >
-              {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
-            </Button>
-            <Button
-              variant="outline"
+              variant="chromePill"
               size="sm"
               onClick={() => setIsNoteOpen(true)}
               className="flex-shrink-0 h-10"
@@ -1172,12 +1172,12 @@ export function StaffDetails({
               Add Note
             </Button>
             {onShowAll && (
-              <Button variant="outline" size="sm" onClick={onShowAll} className="flex-shrink-0 h-10">
+              <Button variant="chromePill" size="sm" onClick={onShowAll} className="flex-shrink-0 h-10">
                 All Vouchers
               </Button>
             )}
             <Button
-              variant="outline"
+              variant="chromePill"
               size="icon"
               onClick={balanceMode === "bill_wise" ? handlePrintBillWise : handlePrintStatement}
               className="flex-shrink-0 h-10 w-10"
@@ -1240,6 +1240,7 @@ export function StaffDetails({
                   hideDebitColumn={false}
                   hideCreditColumn={false}
                   scrollOnlyTransactions
+                  {...statementCheck.tableProps}
                 />
           {paginatedTransactions.length === 0 && (
             <div className="text-center py-8 text-muted-foreground">No transactions found for this staff member in the selected period.</div>
@@ -1249,20 +1250,15 @@ export function StaffDetails({
       {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
       <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-          <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-            <div className="flex items-center space-x-2 flex-shrink-0">
-              <Checkbox id="show-narration-staff" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
-              <label htmlFor="show-narration-staff" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
-            </div>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">
-                  <Columns3 className="h-4 w-4" />
-                  Columns
-                  <ChevronDown className="h-4 w-4 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-52 p-2">
+          <div className="flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
+              <LedgerFooterCheckboxPill
+                id="show-narration-staff"
+                checked={showNarration}
+                onCheckedChange={(checked) => (checked) => handleShowNarrationChange(Boolean(checked))}
+                label="Show Narration"
+              />
+            <LedgerFooterColumnsMenu>
+                <DropdownMenuContent align="start" className="w-52 p-2">
                 {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
                   .filter((key) => key !== "status" || balanceMode === "bill_wise")
                   .map((key) => {
@@ -1288,71 +1284,68 @@ export function StaffDetails({
                   );
                 })}
               </DropdownMenuContent>
-            </DropdownMenu>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <Checkbox id="show-notes-staff" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
-              <label htmlFor="show-notes-staff" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
-            </div>
+              </LedgerFooterColumnsMenu>
+              <LedgerFooterCheckboxPill
+                id="show-notes-staff"
+                checked={includeNotesInTable}
+                disabled={notesPreferenceLockedOnMobile}
+                onCheckedChange={(c) => setShowNotes(Boolean(c))}
+                label="Note"
+              />
+            <StatementCheckModeFooterControls
+              idPrefix="staff"
+              enabled={statementCheck.checkModeEnabled}
+              onEnabledChange={statementCheck.setCheckModeEnabled}
+              viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+              hiddenCount={statementCheck.hiddenCount}
+            />
           </div>
-          <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+          <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
             <TransactionTableSortDropdown
               sortBy={sortBy}
               sortOrder={sortOrder}
               onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
               viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
             />
-            <p className="text-sm font-medium flex-shrink-0 tabular-nums">({desktopPaginationMeta.beforeCount})</p>
-            <Button
-              variant="outline"
-              className="h-8 w-8 p-0"
+            <LedgerFooterTextPill>({desktopPaginationMeta.beforeCount})</LedgerFooterTextPill>
+            <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
               onClick={() => setCurrentPage(totalPages)}
               disabled={currentPage === totalPages}
             >
               <ChevronsLeft className="h-4 w-4" />
             </Button>
-            <Button
-              variant="outline"
-              className="h-8 w-8 p-0"
+            <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
               onClick={() => setCurrentPage(currentPage + 1)}
               disabled={currentPage === totalPages}
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
-            <Select
-              value={`${rowsPerPage}`}
-              onValueChange={(value) => {
-                setRowsPerPage(Number(value) || 0);
-                setCurrentPage(1);
-              }}
-            >
-              <SelectTrigger className="h-8 w-[70px]">
-                <SelectValue placeholder={`${rowsPerPage}`} />
+            <LedgerFooterChromePill className="px-1">
+                <Select value={rowsPerPageSelectValue} onValueChange={handleRowsPerPageChange}>
+                  <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
+                <SelectValue placeholder={rowsPerPageSelectValue} />
               </SelectTrigger>
               <SelectContent side="top">
-                {[15, 30, 50, 100].map((pageSize) => (
+                {ROWS_PER_PAGE_OPTIONS_STAFF.map((pageSize) => (
                   <SelectItem key={pageSize} value={`${pageSize}`}>{pageSize}</SelectItem>
                 ))}
                 <SelectItem value="0">All</SelectItem>
               </SelectContent>
             </Select>
-            <Button
-              variant="outline"
-              className="h-8 w-8 p-0"
+              </LedgerFooterChromePill><Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
               onClick={() => setCurrentPage(currentPage - 1)}
               disabled={currentPage === 1}
             >
               <ChevronRight className="h-4 w-4" />
             </Button>
-            <Button
-              variant="outline"
-              className="h-8 w-8 p-0"
+            <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
               onClick={() => setCurrentPage(1)}
               disabled={currentPage === 1}
             >
               <ChevronsRight className="h-4 w-4" />
             </Button>
-            <p className="text-sm font-medium flex-shrink-0 tabular-nums">({desktopPaginationMeta.afterCount})</p>
-            <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {displayTransactions.length}</p>
+            <LedgerFooterTextPill>({desktopPaginationMeta.afterCount})</LedgerFooterTextPill>
+            <LedgerFooterTextPill>Total Trxn {displayTransactions.length}</LedgerFooterTextPill>
           </div>
         </div>
       </div>

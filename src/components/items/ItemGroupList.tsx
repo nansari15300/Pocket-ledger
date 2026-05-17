@@ -7,7 +7,7 @@ import type { ItemGroup } from "@/components/items/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
-import { Card } from "@/components/ui/card";
+import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 import { useMemo, useState } from "react";
 import {
@@ -18,7 +18,8 @@ import { filterAndSortEntityGroups } from "@/lib/entityGroupListQuickFilter";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import AnimatedNumber from "../ui/AnimatedNumber";
-import { isSystemParentGroup } from "@/lib/system-groups";
+import { isSystemParentGroup } from "@/lib/system-groups"
+import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 
 export function ItemGroupList({
   groups,
@@ -60,19 +61,14 @@ export function ItemGroupList({
   }, [groups, searchTerm, quickFilter]);
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-x border-b bg-background">
-      <ScrollArea className="min-h-0 min-w-0 flex-1">
-        <ul className="p-2 space-y-1">
+    <div className={masterListShellCn}>
+      <ScrollArea listChrome className="min-h-0 min-w-0 flex-1">
+        <ul className="pl-master-list-ul">
           <AnimatePresence>
             {filteredAndSortedGroups.map((group) => {
               const isSelected = selectedGroup?.id === group.id;
               const href = getItemHref?.(group);
-              const cardClassName = cn(
-                "min-w-0 max-w-full overflow-hidden p-1 cursor-pointer border",
-                isSelected
-                  ? "border-primary bg-secondary"
-                  : "hover:border-primary/50"
-              );
+              const cardClassName = masterListRowUnselectedCn(isSelected);
               const cardContent = (
                     <div className="pl-master-list-row">
                       <div className="pl-master-list-row-leading">
@@ -91,10 +87,13 @@ export function ItemGroupList({
                           )}
                         </div>
                         <Tooltip>
-                          <TooltipTrigger asChild>
-                             <span className="pl-master-list-row-name-strong cursor-default">
-                               {group.name}
-                             </span>
+                          {/* asChild hata — motion layout + span ref merge par Radix/ScrollArea setRef loop */}
+                          <TooltipTrigger
+                            type="button"
+                            onPointerDown={(e) => e.stopPropagation()}
+                            className="pl-master-list-row-name-strong cursor-default block w-full truncate border-0 bg-transparent p-0 text-left shadow-none"
+                          >
+                            {group.name}
                           </TooltipTrigger>
                           <TooltipContent>
                             <p>{group.name}</p>
@@ -133,12 +132,12 @@ export function ItemGroupList({
                   {href ? (
                     // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                     <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
-                      <Card className={cardClassName}>{cardContent}</Card>
+                      <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
                     </Link>
                   ) : (
-                    <Card className={cardClassName} onClick={() => onSelectGroup(group)}>
+                    <MasterListRow selected={isSelected} className={cardClassName} onClick={() => onSelectGroup(group)}>
                       {cardContent}
-                    </Card>
+                    </MasterListRow>
                   )}
                 </motion.li>
               );

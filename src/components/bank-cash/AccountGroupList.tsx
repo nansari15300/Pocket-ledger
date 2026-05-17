@@ -7,8 +7,8 @@ import type { AccountGroup } from "@/components/bank-cash/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
-import { Card } from "@/components/ui/card";
-import { Tooltip, TooltipTrigger, TooltipContent } from "../ui/tooltip";
+import { MasterListRow } from "@/components/ui/master-list-row";
+import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 import AnimatedNumber from "../ui/AnimatedNumber";
 import { useMemo, useState } from "react";
 import {
@@ -18,7 +18,8 @@ import {
 import { filterAndSortEntityGroups } from "@/lib/entityGroupListQuickFilter";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from 'next/link';
-import { isSystemParentGroup } from "@/lib/system-groups";
+import { isSystemParentGroup } from "@/lib/system-groups"
+import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 
 export function AccountGroupList({
   groups,
@@ -55,21 +56,17 @@ export function AccountGroupList({
   }, [groups, searchTerm, quickFilter]);
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-x border-b bg-background">
-      <ScrollArea className="min-h-0 min-w-0 flex-1">
-        <ul className="p-2 space-y-1">
+    <TooltipProvider delayDuration={200}>
+    <div className={masterListShellCn}>
+      <ScrollArea listChrome className="min-h-0 min-w-0 flex-1">
+        <ul className="pl-master-list-ul">
           <AnimatePresence mode="popLayout">
             {filteredAndSortedGroups.map((group) => {
               const isSelected = selectedGroup?.id === group.id;
               const hasSpecial = (group as any).hasSpecial;
               const isBalanceMasked = typeof group.balance !== 'number';
               const href = getItemHref?.(group);
-              const cardClassName = cn(
-                "min-w-0 max-w-full overflow-hidden p-1 cursor-pointer border",
-                isSelected
-                  ? "border-primary bg-secondary"
-                  : "hover:border-primary/50"
-              );
+              const cardClassName = masterListRowUnselectedCn(isSelected);
               const cardContent = (
                     <div className="pl-master-list-row">
                       <div className="pl-master-list-row-leading">
@@ -88,8 +85,13 @@ export function AccountGroupList({
                           )}
                         </div>
                         <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="pl-master-list-row-name-strong cursor-default">{group.name}</span>
+                          {/* asChild hata — Framer layout + span ref = setRef infinite loop */}
+                          <TooltipTrigger
+                            type="button"
+                            onPointerDown={(e) => e.stopPropagation()}
+                            className="pl-master-list-row-name-strong cursor-default block w-full truncate border-0 bg-transparent p-0 text-left shadow-none"
+                          >
+                            {group.name}
                           </TooltipTrigger>
                           <TooltipContent>
                             <p>{group.name}</p>
@@ -99,18 +101,23 @@ export function AccountGroupList({
                           </TooltipContent>
                         </Tooltip>
                       </div>
-                      <p
-                        className={cn(
-                          "pl-master-list-row-amount font-semibold ml-2",
-                           !isBalanceMasked && (group.balance >= 0 ? "text-green-600" : "text-red-600"),
-                          isSelected &&
-                            (!isBalanceMasked && (group.balance >= 0
-                              ? "text-green-800"
-                              : "text-red-800"))
-                        )}
-                      >
-                        {isBalanceMasked ? '*****' : formatCurrency(group.balance, { showDrCr: true })}
-                      </p>
+                      <Tooltip>
+                        <TooltipTrigger
+                          type="button"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          className={cn(
+                            "pl-master-list-row-amount-xs ml-1 rounded border-0 bg-transparent px-1 text-left shadow-none",
+                            !isBalanceMasked && (group.balance >= 0 ? "text-green-600" : "text-red-600")
+                          )}
+                        >
+                          {isBalanceMasked ? "*****" : formatCurrency(group.balance, { showDrCr: true })}
+                        </TooltipTrigger>
+                        <TooltipContent side="left">
+                          <p className="font-medium">
+                            {isBalanceMasked ? "*****" : formatCurrency(group.balance, { showDrCr: true })}
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
                     </div>
               );
               return (
@@ -124,12 +131,12 @@ export function AccountGroupList({
                   {href ? (
                     // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                     <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
-                      <Card className={cardClassName}>{cardContent}</Card>
+                      <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
                     </Link>
                   ) : (
-                    <Card className={cardClassName} onClick={() => onSelectGroup(group)}>
+                    <MasterListRow selected={isSelected} className={cardClassName} onClick={() => onSelectGroup(group)}>
                       {cardContent}
-                    </Card>
+                    </MasterListRow>
                   )}
                 </motion.li>
               );
@@ -144,6 +151,7 @@ export function AccountGroupList({
       </ScrollArea>
       <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
     </div>
+    </TooltipProvider>
   );
 }
 

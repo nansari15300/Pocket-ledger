@@ -6,7 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import type { Report } from "./report-data";
 import { FileText, Users, ReceiptText, TrendingUp } from "lucide-react";
 import Link from "next/link";
-import { Card } from "@/components/ui/card";
+import { MasterListRow } from "@/components/ui/master-list-row";
 
 interface ReportListProps {
   reports: Report[];
@@ -45,7 +45,7 @@ export function ReportList({
   })).filter((group) => group.items.length > 0);
 
   return (
-     <ScrollArea className="flex-1 min-h-0">
+     <ScrollArea listChrome className="flex-1 min-h-0">
         <ul className="p-2 space-y-2">
             {groupedReports.map((group) => (
               <li key={group.category} className="space-y-1">
@@ -66,27 +66,19 @@ export function ReportList({
                     <div key={report.id}>
                         {report.href ? (
                           <Link href={report.href}>
-                            <Card
-                              className={cn(
-                                "p-1.5 cursor-pointer border",
-                                "hover:border-primary/50"
-                              )}
-                            >
+                            <MasterListRow className="hover:border-orange-300/80 hover:bg-orange-50/30">
                               {cardContent}
-                            </Card>
+                            </MasterListRow>
                           </Link>
                         ) : (
-                          <Card
+                          <MasterListRow
                             className={cn(
-                              "p-1.5 cursor-pointer border",
-                              isSelected
-                                ? "border-primary bg-secondary"
-                                : "hover:border-primary/50"
+                              !isSelected && "hover:border-orange-300/80 hover:bg-orange-50/30"
                             )}
                             onClick={() => onSelectReport(report)}
                           >
                             {cardContent}
-                          </Card>
+                          </MasterListRow>
                         )}
                     </div>
                 )

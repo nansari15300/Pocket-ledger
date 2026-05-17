@@ -1,4 +1,4 @@
-
+﻿
 "use client";
 
 import * as React from "react";
@@ -7,6 +7,7 @@ import { openPrintDirect } from "@/lib/printDirect";
 import type { Party, Group } from "@/components/party/types";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { LedgerViewModePills } from "@/components/ui/LedgerViewModePills";
 import {
   Card,
   CardHeader,
@@ -36,7 +37,13 @@ import {
 } from "lucide-react";
 import { TransactionsTable, type VisibleColumns, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import { LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
+
 import { useShowNotes } from "../vouchers/transactionColumnVisibility";
+import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
+import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
+import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
 import {
   sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
@@ -47,6 +54,7 @@ import { mergeLedgerUserDisplayNameMaps } from "@/lib/ledgerUserColumnDisplay";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
+import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -73,6 +81,8 @@ import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
+import { useSyncTempDateRangeFromProp } from "@/hooks/useLedgerDetailDateRange";
+import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { EditGroupDialog } from "./EditGroupDialog";
 import { PartyFilterDropdown } from "./PartyFilterDropdown";
 import {
@@ -266,14 +276,29 @@ export function GroupDetails({
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isDesktopCalendarOpen, setIsDesktopCalendarOpen] = useState(false);
   const [tempDateRange, setTempDateRange] = useState<DateRange | undefined>(dateRange);
+  // dateRange object har render par naya ref ho sakta hai — sirf from/to timestamps (infinite loop avoid).
+  const dateRangeFromMs = dateRange?.from?.getTime();
+  const dateRangeToMs = dateRange?.to?.getTime();
   const [mobileSearchTerm, setMobileSearchTerm] = useState("");
   const [isDateSearchMode, setIsDateSearchMode] = useState(false);
   const [mobileFooterDialogOpen, setMobileFooterDialogOpen] = useState<null | "sale" | "purchase">(null);
   const openingModalRef = useRef(false);
 
-  useEffect(() => {
-    setTempDateRange(dateRange);
-  }, [dateRange]);
+  // Radix Select: value list me na ho to ref/setState loop — sirf maujood option strings.
+  const rowsPerPageSelectValue = useMemo(() => {
+    if (rowsPerPage === 0) return "0";
+    if ((ROWS_PER_PAGE_OPTIONS_DEFAULT as readonly number[]).includes(rowsPerPage)) return `${rowsPerPage}`;
+    return "10";
+  }, [rowsPerPage]);
+  const handleRowsPerPageChange = useCallback(
+    (value: string) => {
+      setRowsPerPage(Number(value) || 0);
+      setCurrentPage(1);
+    },
+    [setRowsPerPage, setCurrentPage]
+  );
+
+  useSyncTempDateRangeFromProp(dateRange, setTempDateRange);
 
   // Determine group type
   const groupType = useMemo(() => {
@@ -448,7 +473,7 @@ export function GroupDetails({
       if (localUser?.username) next[String(localUser.username)] = localDisplayName;
       return next;
     });
-  }, [isLocalMode, companyId, company]);
+  }, [isLocalMode, companyId, (company as { adminUsername?: string })?.adminUsername]);
   
   // Merge prop userNames with locally fetched userNames
   // Merge: recurring "Auto" jaise voucher naam Firestore fetch se overwrite na hon
@@ -459,6 +484,12 @@ export function GroupDetails({
     [journalAccountNames, mergedUserNames]
   );
   
+  // useTransactions ko har render par naya entity object mat do — sirf group/items badle tab.
+  const groupTransactionEntity = useMemo(
+    () => ({ ...group, items: allItemsInGroup, expenseGroupIds: expenseGroupIdsInGroup }),
+    [group, allItemsInGroup, expenseGroupIdsInGroup]
+  );
+
   const {
     openingBalanceForPeriod,
     processedTransactions,
@@ -468,7 +499,7 @@ export function GroupDetails({
     openingBalanceOutstanding,
     openingBalanceLinkedVoucherNos,
   } = useTransactions(
-    { ...group, items: allItemsInGroup, expenseGroupIds: expenseGroupIdsInGroup },
+    groupTransactionEntity,
     "group",
     dateRange,
     undefined,
@@ -481,12 +512,18 @@ export function GroupDetails({
     mergedUserNames
   );
   
+  // User ids stable key — processedTransactions naya array ref par effect loop na chale.
+  const transactionUserIdsKey = useMemo(() => {
+    if (!processedTransactions?.length) return "";
+    return [...new Set(processedTransactions.map((t: any) => t.userId).filter(Boolean) as string[])].sort().join(",");
+  }, [processedTransactions]);
+
   // Fetch missing user names directly from Firestore and store in local state
   useEffect(() => {
-    if (!processedTransactions || processedTransactions.length === 0) return;
+    if (!transactionUserIdsKey) return;
     if (isLocalMode) return;
     
-    const uids = new Set(processedTransactions.map((t: any) => t.userId).filter(Boolean) as string[]);
+    const uids = new Set(transactionUserIdsKey.split(",").filter(Boolean));
     
     // Fetch missing user names - check both prop and local state
     const missingUids = Array.from(uids).filter(uid => {
@@ -550,10 +587,20 @@ export function GroupDetails({
         }
       });
       if (Object.keys(newUserNames).length > 0) {
-        setLocalFetchedUserNames(prev => ({ ...prev, ...newUserNames }));
+        setLocalFetchedUserNames((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const [uid, name] of Object.entries(newUserNames)) {
+            if (next[uid] !== name) {
+              next[uid] = name;
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
       }
     });
-  }, [processedTransactions, userNames, localFetchedUserNames, isLocalMode]);
+  }, [transactionUserIdsKey, userNames, isLocalMode]);
 
   // Use group balance if no date range, otherwise use calculated balance
   const closingBalance = shouldUseGroupBalance ? (group.balance || 0) : calculatedClosingBalance;
@@ -615,7 +662,7 @@ export function GroupDetails({
     const params = new URLSearchParams(raw);
     params.delete("modal");
     params.delete("modalts");
-    // Party groups tab: `view=groups` + `selected` dono pakke — approve ke baad Parties tab pe mat kheench
+    // Party groups tab: `view=groups` + `selected` dono pakke â€” approve ke baad Parties tab pe mat kheench
     patchMasterDetailUrlAfterModalClose(params, { entityId: group.id, groupsTab: true });
     const q = params.toString();
     const basePath = pathnameForModalRouterReplace(pathname);
@@ -742,60 +789,22 @@ export function GroupDetails({
     [statusFilteredTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
 
-  // Desktop pagination: page 1 should show latest-side transactions (same behavior as Party details).
-  const desktopPaginationMeta = useMemo(() => {
-    const list = sortedTransactions;
-    const total = list.length;
-    if (rowsPerPage <= 0) {
-      const pageDr = list.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
-      const pageCr = list.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
-      return {
-        totalPages: 1,
-        pageTransactions: list,
-        beforeCount: 0,
-        afterCount: 0,
-        sliceStart: 0,
-        openingForPage: openingBalanceForPeriod,
-        periodDrForPage: pageDr,
-        periodCrForPage: pageCr,
-        closingForPage: openingBalanceForPeriod + pageDr - pageCr,
-      };
-    }
-    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
-    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
-    const end = total - (safePage - 1) * rowsPerPage;
-    const start = Math.max(0, end - rowsPerPage);
-    const pageTransactions = list.slice(start, Math.max(start, end));
-    const previousTx = start > 0 ? list[start - 1] : null;
-    const previousRunningBalance =
-      previousTx != null
-        ? (typeof previousTx.balance === "number"
-            ? previousTx.balance
-            : typeof previousTx.runningBalance === "number"
-              ? previousTx.runningBalance
-              : undefined)
-        : undefined;
-    // Each desktop page opening row should match its first visible transaction's brought-forward balance.
-    const openingForPage =
-      typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)
-        ? previousRunningBalance
-        : openingBalanceForPeriod;
-    const periodDrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
-    const periodCrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
-    return {
-      totalPages: totalPagesLocal,
-      pageTransactions,
-      beforeCount: start,
-      afterCount: Math.max(0, total - end),
-      sliceStart: start,
-      openingForPage,
-      periodDrForPage,
-      periodCrForPage,
-      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
-    };
-  }, [sortedTransactions, rowsPerPage, currentPage, openingBalanceForPeriod]);
-  const totalPages = desktopPaginationMeta.totalPages;
-  const paginatedTransactions = desktopPaginationMeta.pageTransactions;
+  // Statement check mode + desktop tail paging (PartyDetails jaisa)
+  const {
+    statementCheck,
+    desktopPaginationMeta,
+    paginatedTransactions,
+    totalPages,
+  } = useStatementLedgerCheckModePaging({
+    companyId,
+    context: "group",
+    contextId: group?.id,
+    viewMode: balanceMode === "bill_wise" ? "bill_wise" : "statement",
+    searchFilteredTransactions: sortedTransactions,
+    rowsPerPage,
+    currentPage,
+    ledgerOpeningForRunning: openingBalanceForPeriod,
+  });
 
   /** Desktop table: Book OB sirf jab slice chronological shuru se (PartyDetails jaisa). */
   const desktopLedgerOpeningPeriodStartDate = useMemo(() => {
@@ -933,11 +942,15 @@ export function GroupDetails({
     });
   }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, group.id]);
 
-  // Keep page in valid range when list size/page-size changes.
+  // Keep page in valid range when list size/page-size changes (dateRange object deps se loop avoid).
   useEffect(() => {
-    const total = Math.max(1, Math.ceil(filteredMobileTransactions.length / rowsPerPage));
-    setCurrentPage((prev) => Math.min(Math.max(1, prev), total));
-  }, [dateRange, filteredMobileTransactions.length, rowsPerPage]);
+    const perPage = rowsPerPage <= 0 ? filteredMobileTransactions.length || 1 : rowsPerPage;
+    const total = Math.max(1, Math.ceil(filteredMobileTransactions.length / perPage));
+    setCurrentPage((prev) => {
+      const next = Math.min(Math.max(1, prev), total);
+      return next === prev ? prev : next;
+    });
+  }, [dateRangeFromMs, dateRangeToMs, filteredMobileTransactions.length, rowsPerPage, group.id]);
 
   const mobileTransactionsToShow = useMemo(() => {
     if (rowsPerPage <= 0) return filteredMobileTransactions;
@@ -1093,7 +1106,7 @@ export function GroupDetails({
         </div>
         <div className="flex justify-between items-center mt-1">
           <p className="text-xs text-muted-foreground">
-            {displayDate()} • {formatVoucherEntryTimeLocal(transaction as Record<string, unknown>)}
+            {displayDate()} â€¢ {formatVoucherEntryTimeLocal(transaction as Record<string, unknown>)}
           </p>
           <Badge
             variant="secondary"
@@ -1116,8 +1129,9 @@ export function GroupDetails({
     <>
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
         {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
-        <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
-          <span className="text-xs font-medium text-muted-foreground">{!dateRange || (dateRange.from == null && dateRange.to == null) ? "All Time" : dateRangeLabel}</span>
+        <MobileDetailSummaryCollapsible>
+        <div className="flex flex-shrink-0 items-center justify-center gap-1 border-b px-2 py-0.5">
+          <span className="text-[11px] font-medium leading-tight text-muted-foreground">{!dateRange || (dateRange.from == null && dateRange.to == null) ? "All Time" : dateRangeLabel}</span>
           {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
             <button
               type="button"
@@ -1129,15 +1143,15 @@ export function GroupDetails({
             </button>
           )}
         </div>
-        <div className="px-3 py-3 border-b flex-shrink-0">
-          <p className={cn("text-2xl font-bold text-center", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+        <div className="flex-shrink-0 border-b px-2 py-1">
+          <p className={cn("text-center text-lg font-bold leading-tight", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
             {balanceText} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
           </p>
         </div>
         {/* Group dropdown + Edit icon + Search - same size as Party Details (equal width & height, edit h-9 w-8) */}
-        <div className="p-2 border-b flex-shrink-0">
-          <div className="flex items-stretch gap-2">
-            <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
+        <div className="flex-shrink-0 border-b px-2 py-1">
+          <div className="flex items-stretch gap-1.5">
+            <div className="h-8 min-w-0 flex-1 [&_button]:h-8 [&_button]:text-xs">
               <Combobox
                 options={groupDropdownOptions}
                 value={group?.id || ""}
@@ -1149,16 +1163,16 @@ export function GroupDetails({
             </div>
             {group.id !== "ungrouped" && (
               <EditGroupDialog group={group} allGroups={allGroups} onGroupUpdated={onGroupUpdated} onGroupDeleted={onGroupDeleted} hasAccounts={partiesInGroup.length > 0 || childGroups.length > 0}>
-                <Button variant="outline" size="icon" className="h-9 w-8 flex-shrink-0" data-theme-detail="edit">
-                  <Edit className="h-4 w-4" />
+                <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
+                  <Edit className="h-3.5 w-3.5" />
                 </Button>
               </EditGroupDialog>
             )}
-            <div className="flex-1 min-w-0 h-9 relative">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
+            <div className="relative h-8 min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-2 top-1/2 z-10 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder="Search transactions"
-                className="pl-8 h-9 text-sm w-full min-w-0"
+                className="h-8 w-full min-w-0 pl-7 text-xs"
                 value={mobileSearchTerm}
                 onChange={(e) => {
                   setMobileSearchTerm(e.target.value);
@@ -1168,13 +1182,14 @@ export function GroupDetails({
             </div>
           </div>
         </div>
+        </MobileDetailSummaryCollapsible>
         {/* scroll-touch + inline style for APK/WebView touch scroll */}
         <div
           className="flex-1 min-h-0 overflow-auto scroll-touch"
           style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
         >
           <div className="pb-2">
-          {/* Unapproved: pink row — default `highlightPendingApproval` */}
+          {/* Unapproved: pink row â€” default `highlightPendingApproval` */}
           <TransactionsTable
             transactions={mobileTransactionsToShow}
             context="group"
@@ -1218,6 +1233,7 @@ export function GroupDetails({
             onStatusFilterAll={handleStatusFilterAll}
             onStatusFilterChange={handleStatusFilterChange}
             statusFilterIdPrefix="group"
+            {...statementCheck.tableProps}
           />
           </div>
         </div>
@@ -1235,14 +1251,17 @@ export function GroupDetails({
         />
       </div>
       <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
-        <Button
-          type="button"
-          className="flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0 bg-orange-600 hover:bg-orange-700 text-white border-0"
-          onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
-          data-theme-btn={balanceMode === "bill_wise" ? "statement" : "bill-wise"}
-        >
-          {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
-        </Button>
+        {/* Mobile: header jaisa pill â€” active mode par green border */}
+        <LedgerViewModePills
+          className="flex-1 min-w-0"
+          buttonClassName="h-6 flex-1 min-w-0 px-1 text-xs"
+          value={balanceMode}
+          onChange={setBalanceMode}
+          options={[
+            { value: "statement", label: "Statement" },
+            { value: "bill_wise", label: "Bill wise" },
+          ]}
+        />
         <Button className="flex-1 h-6 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("sale"); openModalInUrl(); }}>
           New Sale
         </Button>
@@ -1343,14 +1362,14 @@ export function GroupDetails({
 
   const renderDesktopView = () => (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
+      {/* Header: Part 1 (nameâ†’balance) and Part 2 (dateâ†’print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
       <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-          {/* Part 1: account name through balance — single line, no wrap */}
-          <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim">
+          {/* Part 1: account name through balance â€” single line, no wrap */}
+          <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
             {onBack && (
               <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
-                <ArrowLeft className="h-5 w-5" />
+                <ArrowLeft className="h-3 w-3" />
               </Button>
             )}
             <Avatar className="h-12 w-12 text-lg flex-shrink-0">
@@ -1383,8 +1402,8 @@ export function GroupDetails({
               </div>
             </div>
           </div>
-          {/* Part 2: date range, Add Note, print — single line, no wrap; on small screens this row is below */}
-          <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+          {/* Part 2: date range, Add Note, print â€” single line, no wrap; on small screens this row is below */}
+          <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
             {(dateSystem === "BS" || dateSystem === "Both") && (
               <div className="flex items-center gap-1 flex-shrink-0">
                 <BsDatePicker
@@ -1508,17 +1527,16 @@ export function GroupDetails({
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
+            <LedgerViewModePills
+              value={balanceMode}
+              onChange={setBalanceMode}
+              options={[
+                { value: "statement", label: "Statement" },
+                { value: "bill_wise", label: "Bill wise" },
+              ]}
+            />
             <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
-              className="flex-shrink-0 h-10"
-              data-theme-btn={balanceMode === "bill_wise" ? "statement" : "bill-wise"}
-            >
-              {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
-            </Button>
-            <Button
-              variant="outline"
+              variant="chromePill"
               size="sm"
               onClick={() => handleOpenNoteDialog()}
               className="flex-shrink-0 h-10"
@@ -1526,7 +1544,7 @@ export function GroupDetails({
             >
               <FilePlus className="mr-2 h-4 w-4" /> Add Note
             </Button>
-            <Button variant="outline" size="icon" onClick={handlePrint} className="flex-shrink-0 h-10 w-10" data-theme-detail="print">
+            <Button variant="chromePill" size="icon" onClick={handlePrint} className="flex-shrink-0 h-10 w-10" data-theme-detail="print">
               <Printer className="h-4 w-4" />
             </Button>
           </div>
@@ -1585,6 +1603,7 @@ export function GroupDetails({
             onStatusFilterAll={handleStatusFilterAll}
             onStatusFilterChange={handleStatusFilterChange}
             statusFilterIdPrefix="group"
+            {...statementCheck.tableProps}
           />
           {paginatedTransactions.length === 0 && (
             <div className="text-center py-8 text-muted-foreground">
@@ -1596,20 +1615,15 @@ export function GroupDetails({
       {/* Footer: Part 1 (count, narration, columns) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
       <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-          <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-            <div className="flex items-center space-x-2 flex-shrink-0">
-              <Checkbox id="show-narration-party-group" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
-              <label htmlFor="show-narration-party-group" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
-            </div>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">
-                  <Columns3 className="h-4 w-4" />
-                  Columns
-                  <ChevronDown className="h-4 w-4 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-52 p-2">
+          <div className="flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
+              <LedgerFooterCheckboxPill
+                id="show-narration-party-group"
+                checked={showNarration}
+                onCheckedChange={(checked) => (checked) => handleShowNarrationChange(Boolean(checked))}
+                label="Show Narration"
+              />
+            <LedgerFooterColumnsMenu>
+                <DropdownMenuContent align="start" className="w-52 p-2">
                 {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
                   .filter((key) => key !== "status" || balanceMode === "bill_wise")
                   .map((key) => {
@@ -1635,51 +1649,53 @@ export function GroupDetails({
                   );
                 })}
               </DropdownMenuContent>
-            </DropdownMenu>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <Checkbox id="show-notes-group" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
-              <label htmlFor="show-notes-group" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
-            </div>
+              </LedgerFooterColumnsMenu>
+              <LedgerFooterCheckboxPill
+                id="show-notes-group"
+                checked={includeNotesInTable}
+                disabled={notesPreferenceLockedOnMobile}
+                onCheckedChange={(c) => setShowNotes(Boolean(c))}
+                label="Note"
+              />
+            <StatementCheckModeFooterControls
+              idPrefix="party-group"
+              enabled={statementCheck.checkModeEnabled}
+              onEnabledChange={statementCheck.setCheckModeEnabled}
+              viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+              hiddenCount={statementCheck.hiddenCount}
+            />
           </div>
-          <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+          <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
             <TransactionTableSortDropdown
               sortBy={sortBy}
               sortOrder={sortOrder}
               onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
               viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
             />
-            {/* Tail paging (page1=latest): (xx) << < [rows] > >> (xx) — PartyDetails jaisa */}
-            <p className="text-sm font-medium flex-shrink-0 tabular-nums">({desktopPaginationMeta.beforeCount})</p>
-            <Button
-              variant="outline"
-              className="h-8 w-8 p-0"
+            {/* Tail paging (page1=latest): (xx) << < [rows] > >> (xx) â€” PartyDetails jaisa */}
+            <LedgerFooterTextPill>({desktopPaginationMeta.beforeCount})</LedgerFooterTextPill>
+            <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
               // Left side goes toward older pages.
               onClick={() => setCurrentPage(totalPages)}
               disabled={currentPage === totalPages}
             >
               <ChevronsLeft className="h-4 w-4" />
             </Button>
-            <Button
-              variant="outline"
-              className="h-8 w-8 p-0"
+            <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
               // Older side single step.
               onClick={() => setCurrentPage(currentPage + 1)}
               disabled={currentPage === totalPages}
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
-            <Select
-              value={`${rowsPerPage}`}
-              onValueChange={(value) => {
-                setRowsPerPage(Number(value));
-                setCurrentPage(1);
-              }}
-            >
-              <SelectTrigger className="h-8 w-[70px]">
-                <SelectValue placeholder={`${rowsPerPage}`} />
+            <LedgerFooterChromePill className="px-1">
+
+            <Select value={rowsPerPageSelectValue} onValueChange={handleRowsPerPageChange}>
+              <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
+                <SelectValue placeholder={rowsPerPageSelectValue} />
               </SelectTrigger>
               <SelectContent side="top">
-                {[10, 20, 30, 50].map((pageSize) => (
+                {ROWS_PER_PAGE_OPTIONS_DEFAULT.map((pageSize) => (
                   <SelectItem key={pageSize} value={`${pageSize}`}>
                     {pageSize}
                   </SelectItem>
@@ -1687,27 +1703,24 @@ export function GroupDetails({
                 <SelectItem value="0">All</SelectItem>
               </SelectContent>
             </Select>
-            <Button
-              variant="outline"
-              className="h-8 w-8 p-0"
+            </LedgerFooterChromePill>
+            <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
               // Right side goes toward newest pages.
               onClick={() => setCurrentPage(currentPage - 1)}
               disabled={currentPage === 1}
             >
               <ChevronRight className="h-4 w-4" />
             </Button>
-            <Button
-              variant="outline"
-              className="h-8 w-8 p-0"
+            <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
               // Jump to newest end (page 1 in latest-first pagination).
               onClick={() => setCurrentPage(1)}
               disabled={currentPage === 1}
             >
               <ChevronsRight className="h-4 w-4" />
             </Button>
-            <p className="text-sm font-medium flex-shrink-0 tabular-nums">({desktopPaginationMeta.afterCount})</p>
+            <LedgerFooterTextPill>({desktopPaginationMeta.afterCount})</LedgerFooterTextPill>
             {/* Footer count right-side short controls ke paas hi rahe. */}
-            <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {statusFilteredTransactions.length}</p>
+            <LedgerFooterTextPill>Total Trxn {statusFilteredTransactions.length}</LedgerFooterTextPill>
           </div>
         </div>
       </div>

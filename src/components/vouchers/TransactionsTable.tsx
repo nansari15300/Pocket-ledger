@@ -41,6 +41,8 @@ import {
   getStatusDetail,
   getStatusDetailVouchers,
   LinkedVouchersColored,
+  voucherTypePillClassName,
+  type TxnDrCrSide,
 } from "./transactionTableShared";
 import { Badge } from "@/components/ui/badge";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -67,6 +69,7 @@ import { highlightQueryInText } from "@/lib/highlightQueryInText";
 import { isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay } from "@/lib/ledgerUserColumnDisplay";
 import { prewarmHoverPreviewHttpsUrls } from "@/components/vouchers/attachmentHoverPreviewBody";
 import { updateAttachmentPrefetchPriorityFromVisibleRows } from "@/lib/attachmentPrefetchPriorityBuffer";
+import { statementCheckTxnId } from "@/lib/statementCheckModeStorage";
 
 export type { Context, Transaction };
 
@@ -196,6 +199,11 @@ interface TransactionsTableProps {
   ledgerShowBookOpeningRow?: boolean;
   /** Range `from` — period-carry opening row ki Date column (BS/AD). */
   openingBalancePeriodStartDate?: unknown;
+  /** Statement check mode (PC): focus / mark rows — Tally-style reconciliation */
+  statementCheckModeActive?: boolean;
+  statementCheckFocusId?: string | null;
+  statementCheckMarkedIds?: ReadonlySet<string>;
+  onStatementCheckRowFocus?: (transaction: { id?: string; _rowKey?: string }) => void;
 }
 
 export function TransactionsTable({
@@ -264,6 +272,10 @@ export function TransactionsTable({
   ledgerShowBookOpeningRow = true,
   openingBalancePeriodStartDate,
   transactionCardSearchHighlight,
+  statementCheckModeActive = false,
+  statementCheckFocusId = null,
+  statementCheckMarkedIds,
+  onStatementCheckRowFocus,
 }: TransactionsTableProps) {
   const { company, companyId } = useCompany();
   // FY merge: neela divider row — company par local fiscal merge `useCompany` se aa chuka hai.
@@ -379,8 +391,45 @@ export function TransactionsTable({
     return () => cancelAnimationFrame(id);
   }, [isStaffGroup, selectedId]);
 
+  // Check mode: focus row scroll into view (keyboard navigation)
+  useEffect(() => {
+    if (!statementCheckModeActive || !statementCheckFocusId) return;
+    const el = tableContainerRef.current?.querySelector('[data-check-focus="true"]');
+    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [statementCheckModeActive, statementCheckFocusId, tableTransactions]);
+
+  const getStatementCheckRowProps = useCallback(
+    (t: any) => {
+      const rowId = statementCheckTxnId(t);
+      if (statementCheckModeActive) {
+        return {
+          // Check mode: focus = normal blue selected border; Space mark = green border
+          isSelected: statementCheckFocusId === rowId,
+          isCheckModeFocused: statementCheckFocusId === rowId,
+          isCheckModeMarked: statementCheckMarkedIds?.has(rowId) ?? false,
+          onRowSelect: () => onStatementCheckRowFocus?.(t),
+        };
+      }
+      return {
+        isSelected: selectedId === t.id,
+        isCheckModeFocused: false,
+        isCheckModeMarked: false,
+        onRowSelect: () => setSelectedId(t.id),
+      };
+    },
+    [
+      statementCheckModeActive,
+      statementCheckFocusId,
+      statementCheckMarkedIds,
+      onStatementCheckRowFocus,
+      selectedId,
+    ]
+  );
+
   const handleTableKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Check mode shortcuts hook `useStatementCheckMode` window par handle karta hai
+      if (statementCheckModeActive) return;
       if (tableTransactions.length === 0) return;
       const idx = tableTransactions.findIndex((t) => t.id === selectedId);
       const currentIndex = idx >= 0 ? idx : -1;
@@ -398,7 +447,7 @@ export function TransactionsTable({
         if (t && (t as any).type !== FISCAL_YEAR_PARTITION_ROW_TYPE) onRowClick?.(t);
       }
     },
-    [tableTransactions, selectedId, onRowClick]
+    [tableTransactions, selectedId, onRowClick, statementCheckModeActive]
   );
 
   /** Spend-wise multi-row: clicked row = selected (border); other rows of same voucher = blink only, not selected. */
@@ -803,14 +852,18 @@ export function TransactionsTable({
       )
     ) : null;
 
-  const renderOpeningBalanceMiddleCells = (pillLabel: string, showSearchSlot: boolean) => (
+  const renderOpeningBalanceMiddleCells = (
+    pillLabel: string,
+    showSearchSlot: boolean,
+    drCrSide: TxnDrCrSide
+  ) => (
     <>
       {showCol("type") && (
         <TableCell className={cn("align-middle", ensureMinGaps && "min-w-[75px] px-[5px]")}>
           <div className="flex flex-wrap items-center gap-2">
             {showSearchSlot ? openingBalanceLeftContent : null}
             {showSearchSlot ? openingBalanceSearch : null}
-            <Badge variant="outline" className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium">
+            <Badge variant="outline" className={voucherTypePillClassName(drCrSide)}>
               {pillLabel}
             </Badge>
           </div>
@@ -833,6 +886,7 @@ export function TransactionsTable({
     hasOpeningBalanceNarrationSubRow ? (
       <tr
         data-row="opening-balance-narration"
+        data-pl-spend-wise-opening={useSpendWiseOpeningBalanceCard ? "" : undefined}
         className={cn(
           "narration-row border-b",
           useSpendWiseOpeningBalanceCard && "bg-blue-50/50 dark:bg-blue-950/20",
@@ -905,9 +959,8 @@ export function TransactionsTable({
           }
           i++;
         }
-        if (items.length <= 1) {
-          blocks.push({ type: "single", item: items[0] ?? t });
-        } else {
+        // Mobile: single spend-wise bhi group shell — linked jaisa rounded card
+        if (items.length > 0) {
           blocks.push({ type: "group", colorIndex, items });
         }
         continue;
@@ -981,12 +1034,9 @@ export function TransactionsTable({
         const lastItem = items[items.length - 1] as any;
         const clippedTop = firstItem?._spendWiseGroupFirst !== true;
         const clippedBottom = lastItem?._spendWiseGroupLast !== true;
-        if (items.length > 0 && (items.length > 1 || clippedTop || clippedBottom || items.some((row: any) => row?._spendWiseChild === true))) {
+        // Har linked/unlinked spend-wise voucher — group card (rounded box); single row par scalloped border na ho
+        if (items.length > 0) {
           blocks.push({ type: "group", colorIndex, items, clippedTop, clippedBottom });
-          continue;
-        }
-        if (items.length === 1) {
-          blocks.push({ type: "single", item: items[0] });
           continue;
         }
       }
@@ -1003,10 +1053,8 @@ export function TransactionsTable({
           }
           i++;
         }
-        if (items.length <= 1) {
-          blocks.push({ type: "single", item: items[0] ?? t });
-        } else {
-          blocks.push({ type: "group", colorIndex, items });
+        if (items.length > 0) {
+          blocks.push({ type: "group", colorIndex, items, clippedTop: false, clippedBottom: false });
         }
         continue;
       }
@@ -1244,7 +1292,13 @@ export function TransactionsTable({
               <Card className="p-2.5 min-h-9 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
                 <div className="flex justify-between items-start gap-2 min-w-0">
                   <div className="flex min-w-0 flex-1 flex-col gap-0.5 min-h-9 justify-center">
-                    <Badge variant="outline" className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium w-fit">
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "w-fit",
+                        voucherTypePillClassName(masterBookSignedScaled >= 0 ? "dr" : "cr")
+                      )}
+                    >
                       Opening Balance
                     </Badge>
                     {showCol("date") && openingBalanceRowDate ? (
@@ -1288,7 +1342,10 @@ export function TransactionsTable({
                     {openingBalanceLeftContent}
                     {openingBalanceSearch}
                     {/* Table ke Type column pill: ledger = "Opening Balance"; reports = `openingBalanceLabel` */}
-                    <Badge variant="outline" className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium">
+                    <Badge
+                      variant="outline"
+                      className={voucherTypePillClassName(displayOpeningForDrCr >= 0 ? "dr" : "cr")}
+                    >
                       {primaryOpeningRowPillText}
                     </Badge>
                   </div>
@@ -1510,6 +1567,7 @@ export function TransactionsTable({
                   {showBookOpeningAboveDatedRow && (
                     <tr
                       data-row="opening-book"
+                      data-pl-spend-wise-opening=""
                       // Narration `<tr>` book ke turant baad — dual mode mein dated row se pehle
                       data-ob-narration-follows={showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow ? true : undefined}
                       className={cn(
@@ -1523,7 +1581,11 @@ export function TransactionsTable({
                       )}
                     >
                       {renderOpeningBalanceDateCells(openingBalanceRowDate)}
-                      {renderOpeningBalanceMiddleCells("Opening Balance", false)}
+                      {renderOpeningBalanceMiddleCells(
+                        "Opening Balance",
+                        false,
+                        masterBookSignedScaled >= 0 ? "dr" : "cr"
+                      )}
                       {showFileBySelection && (
                         <TableCell
                           className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
@@ -1571,6 +1633,7 @@ export function TransactionsTable({
                   {showBookOpeningAboveDatedRow && openingBalanceNarrationRow}
                   <tr
                     data-row="opening-balance-dated"
+                    data-pl-spend-wise-opening=""
                     data-ob-narration-follows={!showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow ? true : undefined}
                     className={cn(
                       "bg-blue-50/50 dark:bg-blue-950/20",
@@ -1583,7 +1646,11 @@ export function TransactionsTable({
                     )}
                   >
                     {renderOpeningBalanceDateCells(datedOpeningBalanceRowDate)}
-                    {renderOpeningBalanceMiddleCells(primaryOpeningRowPillText, true)}
+                    {renderOpeningBalanceMiddleCells(
+                      primaryOpeningRowPillText,
+                      true,
+                      displayOpeningForDrCr >= 0 ? "dr" : "cr"
+                    )}
                     {showFileBySelection && (
                       <TableCell
                         className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
@@ -1668,7 +1735,11 @@ export function TransactionsTable({
                       )}
                     >
                       {renderOpeningBalanceDateCells(openingBalanceRowDate)}
-                      {renderOpeningBalanceMiddleCells("Opening Balance", false)}
+                      {renderOpeningBalanceMiddleCells(
+                        "Opening Balance",
+                        false,
+                        masterBookSignedScaled >= 0 ? "dr" : "cr"
+                      )}
                       {showFileBySelection && (
                         <TableCell
                           className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
@@ -1723,7 +1794,11 @@ export function TransactionsTable({
                     )}
                   >
                     {renderOpeningBalanceDateCells(datedOpeningBalanceRowDate)}
-                    {renderOpeningBalanceMiddleCells(primaryOpeningRowPillText, true)}
+                    {renderOpeningBalanceMiddleCells(
+                      primaryOpeningRowPillText,
+                      true,
+                      displayOpeningForDrCr >= 0 ? "dr" : "cr"
+                    )}
                     {showFileBySelection && (
                       <TableCell
                         className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
@@ -1787,7 +1862,9 @@ export function TransactionsTable({
             {tableTransactions.length > 0 ? (
               tableBlocks ? (
                 <AnimatePresence mode="popLayout">
-                  {tableBlocks.map((block) => {
+                  {(() => {
+                    let txnStripeSeq = 0;
+                    return tableBlocks.map((block) => {
                     if (block.type === "spacer") {
                       return (
                         <React.Fragment key={block.id}>
@@ -1813,7 +1890,7 @@ export function TransactionsTable({
                       const tableGroupCardClass = (colorIndex: number, clippedTop?: boolean, clippedBottom?: boolean) =>
                         cn(
                           // Add a same-color outer outline so rounded corners look uniformly thick.
-                          "overflow-hidden border-2 shadow-sm",
+                          "overflow-hidden border-[2.5px] shadow-sm",
                           clippedTop && clippedBottom
                             ? "rounded-none border-y-0"
                             : clippedTop
@@ -1840,6 +1917,7 @@ export function TransactionsTable({
                               initial={false}
                               exit={{ transition: { duration: 0 } }}
                               transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
+                              data-pl-spend-group-card=""
                               className={tableGroupCardClass(block.colorIndex, block.clippedTop, block.clippedBottom)}
                             >
                               {/* Inner spend-wise rows should follow the same min-width contract as the outer header table. */}
@@ -1854,9 +1932,11 @@ export function TransactionsTable({
                                 <tbody>
                                   {block.items.map((t: any) => {
                                     const rowKey = (t as any)._rowKey ?? (t as any).id;
+                                    const txnStripeIndex = txnStripeSeq++;
                                     return (
                                       <TransactionRow
                                         key={rowKey}
+                                        txnStripeIndex={txnStripeIndex}
                                         transaction={t}
                                         fullRowColSpan={fullRowColSpan}
                                         animateLayout={true}
@@ -1867,6 +1947,7 @@ export function TransactionsTable({
                                         spendWiseRunningBalance={(t as any)._spendWiseRunningBalance}
                                         spendWiseGroupColorIndex={(t as any)._spendWiseGroupColorIndex}
                                         spendWiseGroupSize={block.items.length}
+                                        spendWiseInGroupCard
                                         blinkMode={blinkMode}
                                         showNarration={showNarration}
                                         userNames={userNames}
@@ -1883,8 +1964,7 @@ export function TransactionsTable({
                                         onAddLink={onAddLink}
                                         onHistoryVoucher={onHistoryVoucher}
                                         onApproveVoucher={effectiveOnApproveVoucher}
-                                        onRowSelect={(tx: { id: string }) => setSelectedId(tx.id)}
-                                        isSelected={selectedId === t.id}
+                                        {...getStatementCheckRowProps(t)}
                                         isRelatedBlink={getIsRelatedBlink(t)}
                                         isSelectedRowBlink={getIsSelectedRowBlink(t)}
                                         getDisplayValue={getDisplayValue}
@@ -1912,10 +1992,12 @@ export function TransactionsTable({
                     }
                     const t = block.item;
                     const rowKey = (t as any)._rowKey ?? (t as any).id;
+                    const txnStripeIndex = txnStripeSeq++;
                     return (
                       <React.Fragment key={rowKey}>
                         <TransactionRow
                           key={rowKey}
+                          txnStripeIndex={txnStripeIndex}
                           transaction={t}
                           fullRowColSpan={fullRowColSpan}
                           animateLayout={true}
@@ -1942,8 +2024,7 @@ export function TransactionsTable({
                           onAddLink={onAddLink}
                           onHistoryVoucher={onHistoryVoucher}
                           onApproveVoucher={effectiveOnApproveVoucher}
-                          onRowSelect={(tx: { id: string }) => setSelectedId(tx.id)}
-                          isSelected={selectedId === t.id}
+                          {...getStatementCheckRowProps(t)}
                           isRelatedBlink={getIsRelatedBlink(t)}
                           isSelectedRowBlink={getIsSelectedRowBlink(t)}
                           getDisplayValue={getDisplayValue}
@@ -1962,10 +2043,13 @@ export function TransactionsTable({
                         />
                       </React.Fragment>
                     );
-                  })}
+                  });
+                  })()}
                 </AnimatePresence>
               ) : (
-                tableTransactions.map((t: any, rowIndex: number) => {
+                (() => {
+                  let txnStripeSeq = 0;
+                  return tableTransactions.map((t: any, rowIndex: number) => {
                     const rowKey = (t as any)._rowKey ?? (t as any).id ?? `row-${rowIndex}`;
                     return (t as any)._spendWiseSpacer ? (
                       <motion.tr
@@ -1985,6 +2069,7 @@ export function TransactionsTable({
                     ) : (
                       <TransactionRow
                         key={rowKey}
+                        txnStripeIndex={txnStripeSeq++}
                         transaction={t}
                         fullRowColSpan={fullRowColSpan}
                         animateLayout={true}
@@ -2010,9 +2095,8 @@ export function TransactionsTable({
                         onAddLink={onAddLink}
                         onHistoryVoucher={onHistoryVoucher}
                         onApproveVoucher={effectiveOnApproveVoucher}
-                        onRowSelect={(tx: { id: string }) => setSelectedId(tx.id)}
-                        isSelected={selectedId === t.id}
-                                        isRelatedBlink={getIsRelatedBlink(t)}
+                        {...getStatementCheckRowProps(t)}
+                        isRelatedBlink={getIsRelatedBlink(t)}
                         isSelectedRowBlink={getIsSelectedRowBlink(t)}
                         getDisplayValue={getDisplayValue}
                         isTaxContext={isTaxContext}
@@ -2029,7 +2113,8 @@ export function TransactionsTable({
                         textSearchHighlight={transactionCardSearchHighlight}
                       />
                     );
-                  })
+                  });
+                })()
               )
             ) : (
              <tr key="no-records-row">

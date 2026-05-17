@@ -691,10 +691,19 @@ export function useTransactions(
              return { processedTransactions: [], totalTransactions: 0, openingBalanceForPeriod: 0, periodDr: 0, periodCr: 0, closingBalance: 0, daybookSummary: null };
         }
         
-        // Ledger math generally needs full vouchers, but report deep-link "All Vouchers" uses
-        // pre-scoped `passedTransactions` (e.g. Pay Salary subset) and must stay aligned with dashboard count.
+        // Ledger math generally needs full vouchers, but report/dashboard "All Vouchers" uses
+        // pre-scoped `passedTransactions` (e.g. Pay Salary subset, Journal/Contra report lists).
+        const isReportAllAccountView =
+            context === "account" &&
+            entity.id === "all" &&
+            ((entity as any).accountType === "journal_view" ||
+                (entity as any).accountType === "contra_view" ||
+                String((entity as any).accountName || "").includes("All Journal") ||
+                String((entity as any).accountName || "").includes("All Contra"));
         const shouldUseScopedPassedTransactions =
-            entity.id === "all" && Boolean(transactionContext) && Array.isArray(passedTransactions);
+            entity.id === "all" &&
+            Array.isArray(passedTransactions) &&
+            (Boolean(transactionContext) || isReportAllAccountView);
         const transactionsToProcess = shouldUseScopedPassedTransactions
             ? (passedTransactions ?? [])
             : (vouchers ?? []);
@@ -801,6 +810,27 @@ export function useTransactions(
                 v.items?.some((li: any) => li.itemId === entity.id) ||
                 (v.type === 'note' && v.entityId === entity.id)
             );
+        } else if (context === "account" && entity.id === "all") {
+            // Journal/Contra reports: AccountDetails passes pre-scoped list; do not match entity.id on voucher legs.
+            if (shouldUseScopedPassedTransactions) {
+                entityTransactions = [...transactionsToProcess];
+            } else {
+                const isJournalAllView =
+                    (entity as any).accountType === "journal_view" ||
+                    String((entity as any).accountName || "").includes("All Journal");
+                const isContraAllView =
+                    (entity as any).accountType === "contra_view" ||
+                    String((entity as any).accountName || "").includes("All Contra");
+                if (isJournalAllView) {
+                    entityTransactions = transactionsToProcess.filter(
+                        (v: any) => v.type === "journal" && v.subType !== "add_salary"
+                    );
+                } else if (isContraAllView) {
+                    entityTransactions = transactionsToProcess.filter((v: any) => v.type === "contra");
+                } else {
+                    entityTransactions = [];
+                }
+            }
         } else {
             entityTransactions = transactionsToProcess.filter((v: any) => {
                 // Standard filters

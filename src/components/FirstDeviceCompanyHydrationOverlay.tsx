@@ -3,7 +3,7 @@
 /**
  * Pehli login / embedded company pick:
  * - Web: registry hydrate + min ~2s (purana behaviour).
- * - APK/static: SQLite UI turant — blocking splash nahi; `runOfflineFullWarmSync` + attachment prefetch background (`FirstLoginWarmGate` duplicate warm rokta hai).
+ * - APK/static/EXE: account ki **saari** cloud-backed companies — SQLite mirror + attachment prefetch serial (`FirstLoginWarmGate` duplicate warm rokta hai).
  *   `OfflineWarmSyncManager` `gateActive` ke dauran debounced warm band.
  */
 
@@ -19,8 +19,17 @@ import {
   hasCompanyHydrationSplashBeenSeen,
   markCompanyHydrationSplashSeen,
 } from "@/lib/deviceFirstCompanyHydrationSplash";
-import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
-import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
+import {
+  EMBEDDED_ACCOUNT_WARM_GAP_MS,
+  EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
+  orderCloudCompaniesForAccountWarm,
+  sleepMs,
+} from "@/lib/embeddedAccountOfflineWarm";
+import {
+  markEmbeddedFullWarmSucceeded,
+  readEmbeddedFullWarmSucceeded,
+} from "@/lib/embeddedWarmBootstrapFlags";
 import { useFirstLoginWarmGate } from "@/contexts/FirstLoginWarmGateContext";
 import { useEmbeddedAttachmentPrefetch } from "@/contexts/EmbeddedAttachmentPrefetchContext";
 import {
@@ -63,8 +72,8 @@ export function FirstDeviceCompanyHydrationOverlay() {
   const uid = user?.uid ?? "";
   const isLoginRoute = pathname === "/" || pathname === "";
   const isCompanySelectionRoute = pathname.startsWith("/company");
-  const embeddedFullWarm =
-    isStaticAppBuild() || (typeof window !== "undefined" && isCapacitorNativeApp());
+  /** APK / static build / Electron EXE — poora account offline preload. */
+  const embeddedFullWarm = isEmbeddedOfflinePreloadClient();
 
   const firstSplashPending =
     !!uid &&
@@ -204,19 +213,19 @@ export function FirstDeviceCompanyHydrationOverlay() {
     router.replace("/dashboard");
   }, [companyId, router, setGateActive, setHeaderAttachmentPercent, uid]);
 
-  /** APK/static: registry ke baad cloud company — pehle data mirror, phir splash dismiss + attachment background. */
+  /** APK/static/EXE: account ki saari cloud companies — selected pehle, phir baaki serial warm + attachments. */
   const startEmbeddedWarm = useCallback(async () => {
     if (!embeddedFullWarm || warmStartedRef.current || !uid) return;
     warmStartedRef.current = true;
 
-    const selectedRegistryRow = (allCompanies ?? []).find((c) => c.id === companyId) ?? null;
-    const selectedCloudRow =
-      selectedRegistryRow && isCloudBackedCompanyShape(selectedRegistryRow as Company)
-        ? (selectedRegistryRow as Company)
-        : company && company.id === companyId && isCloudBackedCompanyShape(company as Company)
-          ? (company as Company)
-          : null;
-    const rows = selectedCloudRow ? [selectedCloudRow] : [];
+    const ordered = orderCloudCompaniesForAccountWarm(allCompanies ?? [], companyId);
+    /** Pehli baar poora account; baad mein sirf nayi/changed company (switch) — dubara saari companies mat khinchao. */
+    const accountWideFirstWarm = !readEmbeddedFullWarmSucceeded(uid);
+    const rows = accountWideFirstWarm
+      ? ordered
+      : companyId?.trim()
+        ? ordered.filter((c) => c.id === companyId.trim())
+        : ordered;
     setCloudRows(rows);
 
     if (rows.length === 0) {
@@ -229,7 +238,7 @@ export function FirstDeviceCompanyHydrationOverlay() {
       return;
     }
 
-    // UI turant SQLite mirror se — blocking `waitOnline` + full warm splash hata; Firestore pull + attachment cache background me.
+    // UI turant SQLite mirror se — blocking splash hata; saari account companies background me.
     for (const r of rows) {
       clearEmbeddedPendingCompanyDataWarm(uid, r.id);
     }
@@ -246,27 +255,26 @@ export function FirstDeviceCompanyHydrationOverlay() {
     }
     setProgressById(doneProgress);
 
-    const pathNorm = (pathname || "").replace(/\/+$/, "") || "/";
-    if (!pathNorm.toLowerCase().startsWith("/dashboard")) {
-      router.replace("/dashboard");
-    }
+    // Offline→online / party-voucher par user ko mat hilaao — warm background me; pehle yahan `/dashboard` replace tha (poora app jump).
 
     void (async () => {
       setGateActive(true);
+      const accountAc = new AbortController();
+      warmAbortRef.current = accountAc;
       try {
         for (let i = 0; i < rows.length; i++) {
+          if (accountAc.signal.aborted) break;
           setWarmCompanyIndex(i);
           const row = rows[i];
-          warmAbortRef.current?.abort();
-          const ac = new AbortController();
-          warmAbortRef.current = ac;
+          const localId = String(row.id).trim();
 
           try {
             await runOfflineFullWarmSync({
               company: row,
-              localCompanyId: String(row.id).trim(),
-              signal: ac.signal,
+              localCompanyId: localId,
+              signal: accountAc.signal,
               includeAttachmentPrefetch: false,
+              skipWarmBootstrapFlag: accountWideFirstWarm,
               onProgress: (e) => {
                 if (e.kind === "data_subcollection" && e.localCompanyId === row.id) {
                   const data = e.total ? Math.min(100, Math.round((e.completed / e.total) * 100)) : 0;
@@ -278,13 +286,15 @@ export function FirstDeviceCompanyHydrationOverlay() {
               },
             });
           } catch {
-            /* per-company network */
+            /* per-company network / abort */
           }
 
           setProgressById((prev) => ({
             ...prev,
             [row.id]: { data: 100, attach: 0 },
           }));
+
+          if (accountAc.signal.aborted) break;
 
           attachmentBgAbortRef.current?.abort();
           const bgAc = new AbortController();
@@ -293,15 +303,27 @@ export function FirstDeviceCompanyHydrationOverlay() {
             setHeaderAttachmentPercent(1);
             await runEmbeddedAttachmentPrefetchPhase({
               company: row,
-              localCompanyId: String(row.id).trim(),
+              localCompanyId: localId,
               signal: bgAc.signal,
               onProgressPercent: (pct) => setHeaderAttachmentPercent(pct),
+              prefetchOverrides: EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
             });
           } catch {
             /* offline mid-run */
           } finally {
             setHeaderAttachmentPercent(null);
           }
+
+          if (i < rows.length - 1 && !accountAc.signal.aborted) {
+            try {
+              await sleepMs(EMBEDDED_ACCOUNT_WARM_GAP_MS, accountAc.signal);
+            } catch {
+              break;
+            }
+          }
+        }
+        if (!accountAc.signal.aborted && accountWideFirstWarm) {
+          markEmbeddedFullWarmSucceeded(uid);
         }
       } finally {
         warmAbortRef.current = null;
@@ -315,7 +337,6 @@ export function FirstDeviceCompanyHydrationOverlay() {
     allCompanies,
     company,
     companyId,
-    pathname,
     router,
     setGateActive,
     setHeaderAttachmentPercent,
@@ -416,8 +437,9 @@ export function FirstDeviceCompanyHydrationOverlay() {
               <p className="text-xs tabular-nums text-muted-foreground text-right">{currentDataPct}%</p>
             </div>
             <p className="text-[11px] text-center text-muted-foreground leading-snug">
-              After this step, attachments cache in the background — a thin progress line appears under the app header
-              while downloads run (online only).
+              {cloudRows.length > 1
+                ? `Downloading all ${cloudRows.length} companies in your account for offline use. Attachments cache after each company — progress appears under the header.`
+                : "After this step, attachments cache in the background — a thin progress line appears under the app header while downloads run (online only)."}
             </p>
             <Button type="button" variant="outline" className="w-full" onClick={() => void skipToDashboard()}>
               Go to dashboard

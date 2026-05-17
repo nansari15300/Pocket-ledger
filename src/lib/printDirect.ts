@@ -15,6 +15,7 @@ import { shouldUseInAppPdfPreviewOverlay } from "@/lib/shouldUseInAppPdfPreview"
 import { showInAppPdfPreview } from "@/lib/inAppPdfPreview";
 import { FISCAL_YEAR_PARTITION_ROW_TYPE, insertFiscalPartitionRows } from "@/lib/fiscalPartitionRows";
 import { buildFiscalMergePartitionBannerLabel } from "@/lib/fiscalYearLabel";
+import { getPrintColorPalette, type PrintColorMode } from "@/lib/printColorPalette";
 
 const DEFAULT_AD_FORMAT: ADFormatKey = "yyyy-MM-dd";
 const DEFAULT_BS_FORMAT: BSFormatKey = "YYYY-MM-DD";
@@ -144,6 +145,8 @@ export type PrintPayload = {
   printIncludeCompanyDetails?: boolean;
   /** Mobile print option: report title + total vouchers line toggle. */
   printIncludeTitle?: boolean;
+  /** Print options: color (green/red) vs black & white PDF amounts. */
+  printColorMode?: PrintColorMode;
 };
 
 // ------------ LOGO CACHE (preload for instant print) ------------
@@ -223,6 +226,7 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
         ...(typeof opts.printIncludeUserColumn === "boolean" ? { user: opts.printIncludeUserColumn } : {}),
         ...(typeof opts.printIncludeFileColumn === "boolean" ? { file: opts.printIncludeFileColumn } : {}),
       },
+      printColorMode: opts.printColorMode ?? "color",
     };
   }
 
@@ -417,6 +421,7 @@ function buildDocDefinition(p: PrintPayload): TDocumentDefinitions {
   const { rows, periodDr, periodCr, closing } = computeRows(p);
   const { formatDate, formatDateBS, formatCurrencyForPrint, formatRunning, numToWords } = getFormatters(p);
   const voucherRowCount = rows.filter((r: any) => r?.type !== FISCAL_YEAR_PARTITION_ROW_TYPE).length;
+  const palette = getPrintColorPalette(p.printColorMode);
 
   const includeLogo = p.printIncludeLogo !== false;
   const includeCompanyDetails = p.printIncludeCompanyDetails !== false;
@@ -483,7 +488,7 @@ function buildDocDefinition(p: PrintPayload): TDocumentDefinitions {
           text: "pocket-ledger.com",
           link: "https://pocket-ledger.com",
           decoration: "underline",
-          color: "#1d4ed8",
+          color: palette.link,
           alignment: "left",
           fontSize: 8,
           margin: [8, 0, 0, 0],
@@ -511,8 +516,8 @@ const reportTitleContent: Content = {
 const daybookSummaryContent = (summary: DaybookSummary): Content => {
     if (!summary) return { text: '' };
     const { formatRunning } = getFormatters(p);
-    const positiveColor = '#008000';
-    const negativeColor = '#ff0000';
+    const positiveColor = palette.debit;
+    const negativeColor = palette.credit;
 
     return {
         layout: {
@@ -537,7 +542,7 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
                     },
                     {
                        stack: [
-                            { text: [{ text: 'Total Bank+Cash Balance: ', bold: true, color: 'blue'}, { text: formatRunning(summary.total.today), bold: true, color: summary.total.today >= 0 ? positiveColor : negativeColor }] }
+                            { text: [{ text: 'Total Bank+Cash Balance: ', bold: true, color: palette.labelBlue}, { text: formatRunning(summary.total.today), bold: true, color: summary.total.today >= 0 ? positiveColor : negativeColor }] }
                        ],
                        alignment: 'center',
                        margin: [0, 5, 0, 0],
@@ -564,7 +569,7 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
     body.push({
         columns: [
             { text: p.title, style: 'subheader', alignment: 'left', width: '*' },
-            { text: '(Note: Summary is for Bank & Cash only)', alignment: 'center', fontSize: 8, italics: true, color: 'gray', width: '*'},
+            { text: '(Note: Summary is for Bank & Cash only)', alignment: 'center', fontSize: 8, italics: true, color: palette.muted, width: '*'},
             { text: `Total Vouchers: ${voucherRowCount}`, style: 'subheader', alignment: 'right', width: '*' }
         ],
         margin: [0, 0, 0, 5],
@@ -624,7 +629,7 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
                   alignment: 'right',
                   width: 'auto', // Takes only needed space
                   bold: true,
-                  color: closing >= 0 ? 'green' : 'red',
+                  color: palette.balanceSigned(closing),
                   noWrap: true,
                   // Keep top closing-balance label same size as "Total Vouchers".
                   fontSize: getAutoFontSize(closingText, 8) // Apply dynamic font
@@ -1229,6 +1234,7 @@ function ensureRowLength(row: TableCell[], expectedLength: number): TableCell[] 
 }
 
 const buildOpeningBalanceRow = (p: PrintPayload, formatRunning: Function, formatCurrencyForPrint: Function, colSpan: number): TableCell[][] | null => {
+  const palette = getPrintColorPalette(p.printColorMode);
   if (p.context === 'daybook' || p.context === 'sale' || p.context === 'overdue') return null;
   
   const factor = p.context === 'item' && p.stockView === 'qty' ? getConversionFactor(findItem(p.itemsData, p.contextId), p.displayUnit) : 1;
@@ -1282,7 +1288,7 @@ const buildOpeningBalanceRow = (p: PrintPayload, formatRunning: Function, format
     text: balanceDisplayText,
     alignment: 'right',
     bold: true,
-    color: signedOutstanding >= 0 ? 'green' : 'red',
+    color: palette.balanceSigned(signedOutstanding),
     fontSize: getAutoFontSize(typeof balanceDisplayText === 'string' ? balanceDisplayText : '', 9),
     noWrap: true
   };
@@ -1291,7 +1297,7 @@ const buildOpeningBalanceRow = (p: PrintPayload, formatRunning: Function, format
     text: displayOpeningBalanceDr,
     alignment: 'right',
     bold: true,
-    color: 'green',
+    color: palette.debit,
     fontSize: getAutoFontSize(displayOpeningBalanceDr, 9),
     noWrap: true
   };
@@ -1300,7 +1306,7 @@ const buildOpeningBalanceRow = (p: PrintPayload, formatRunning: Function, format
     text: displayOpeningBalanceCr,
     alignment: 'right',
     bold: true,
-    color: 'red',
+    color: palette.credit,
     fontSize: getAutoFontSize(displayOpeningBalanceCr, 9),
     noWrap: true
   };
@@ -1334,13 +1340,13 @@ const buildOpeningBalanceRow = (p: PrintPayload, formatRunning: Function, format
           const label = amt > 0 ? `${displayNo}) ${formatVoucherAmount(amt, decimalPlaces)}` : displayNo;
           return [
             ...(i > 0 ? [{ text: " + ", fontSize: 7 }] : []),
-            { text: label, color: BILLWISE_VOUCHER_COLORS[i % 3], fontSize: 7 },
+            { text: label, color: palette.billWiseVoucher(i), fontSize: 7 },
           ];
         })
       : [];
     const statusCell: TableCell = {
       text: obStatusLabel,
-      color: obStatusLabel === 'Paid' ? 'green' : 'red',
+      color: obStatusLabel === 'Paid' ? palette.paid : palette.unpaid,
       fontSize: 9,
       alignment: 'left',
       noWrap: true,
@@ -1480,9 +1486,6 @@ const getBillStatusLabelForPrint = (t: any, context: Context, isOverdue?: boolea
   return formatBillStatus(t.paymentStatus, false);
 };
 
-// Bill-wise print: cyclical colors like table — Blue, Pink, Green.
-const BILLWISE_VOUCHER_COLORS = ["#2563eb", "#db2777", "#16a34a"] as const; // blue-600, pink-600, green-600
-
 // Voucher detail amount: decimal .00 hide karo, warna dikhao.
 const formatVoucherAmount = (n: number, decimalPlaces = 2): string => {
   if (typeof n !== "number" || isNaN(n)) return "0";
@@ -1497,9 +1500,17 @@ const formatVoucherAmount = (n: number, decimalPlaces = 2): string => {
 // Returns content for pdfmake: string (simple) or array of { text, color } for multi-color.
 const getStatusDetailForPrint = (
   t: any,
-  opts?: { billWiseOnly?: boolean; vouchers?: any[]; formatCurrency?: (n: number, o?: any) => string; decimalPlaces?: number }
+  opts?: {
+    billWiseOnly?: boolean;
+    vouchers?: any[];
+    formatCurrency?: (n: number, o?: any) => string;
+    decimalPlaces?: number;
+    /** Print options Color vs B&W — bill-wise voucher detail colors */
+    colorMode?: PrintColorMode;
+  }
 ): string | Array<{ text: string; color?: string; fontSize?: number }> => {
   const billWiseOnly = opts?.billWiseOnly === true;
+  const palette = getPrintColorPalette(opts?.colorMode);
   const from = (
     billWiseOnly
       ? (t.linkedFromVoucherNosBillWise as string[] | undefined)
@@ -1546,7 +1557,7 @@ const getStatusDetailForPrint = (
     const amt = vouchers.length ? getAmt(no) : 0;
     const displayNo = no === "Opening Balance" ? "Opening" : no;
     const label = amt > 0 ? `${displayNo}) ${formatVoucherAmount(amt, decimalPlaces)}` : displayNo;
-    const color = BILLWISE_VOUCHER_COLORS[i % 3];
+    const color = palette.billWiseVoucher(i);
     content.push({ text: label, color, fontSize });
   });
   return content;
@@ -1572,6 +1583,7 @@ function getOverdueDays(dueDate: any): number {
 }
 
 const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDateBS: Function, formatCurrencyForPrint: Function, formatRunning: Function, ledgerColCount: number): TableCell[][] => {
+    const palette = getPrintColorPalette(p.printColorMode);
     if (row.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
       const n = Math.max(1, ledgerColCount);
       const label = row._partitionLabel || "── Closing fiscal period · New fiscal period ──";
@@ -1606,8 +1618,8 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
       const days = getOverdueDays(row.dueDate);
       const daysText = days > 0 ? `${days} day${days === 1 ? '' : 's'}` : '';
       const statusContentMain = daysText
-        ? { text: 'Overdue', fontSize: 9, color: 'red', bold: true, noWrap: true }
-        : { text: 'Overdue', fontSize: 9, color: 'red', noWrap: true };
+        ? { text: 'Overdue', fontSize: 9, color: palette.overdue, bold: true, noWrap: true }
+        : { text: 'Overdue', fontSize: 9, color: palette.overdue, noWrap: true };
       const isCreditSide = row.type === 'purchase';
       const balanceVal = isCreditSide ? -Number(row.outstanding) : Number(row.outstanding);
       const balanceText = formatRunning(balanceVal);
@@ -1616,10 +1628,10 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
         { text: typeText, fontSize: 9, noWrap: true },
         { text: voucherNo, fontSize: 9, noWrap: true },
         { text: partyName, fontSize: 9, noWrap: true },
-        { text: debit > 0 ? formatCurrencyForPrint(debit, { noSuffix: true }) : '-', alignment: 'right', color: 'green', fontSize: 9, noWrap: true },
-        { text: credit > 0 ? formatCurrencyForPrint(credit, { noSuffix: true }) : '-', alignment: 'right', color: 'red', fontSize: 9, noWrap: true },
+        { text: debit > 0 ? formatCurrencyForPrint(debit, { noSuffix: true }) : '-', alignment: 'right', color: palette.debit, fontSize: 9, noWrap: true },
+        { text: credit > 0 ? formatCurrencyForPrint(credit, { noSuffix: true }) : '-', alignment: 'right', color: palette.credit, fontSize: 9, noWrap: true },
         statusContentMain,
-        { text: balanceText, alignment: 'right', bold: true, color: balanceVal >= 0 ? 'green' : 'red', fontSize: 9, noWrap: true },
+        { text: balanceText, alignment: 'right', bold: true, color: palette.balanceSigned(balanceVal), fontSize: 9, noWrap: true },
       ];
       const n = mainRow.length;
       const narrationSpan = n - 2;
@@ -1628,7 +1640,7 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
         { text: p.showNarration ? [{ text: 'Narration: ', bold: true }, narrationText] : '', colSpan: narrationSpan, fontSize: 8, italics: true, margin: [0, 0, 0, 0], style: 'narrationRow' },
       ];
       for (let i = 1; i < narrationSpan; i++) subRow.push({});
-      subRow.push({ text: daysText, fontSize: 8, color: 'red', alignment: 'left', noWrap: true });
+      subRow.push({ text: daysText, fontSize: 8, color: palette.overdue, alignment: 'left', noWrap: true });
       subRow.push({ text: '' });
       ensureRowLength(subRow, n);
       return [mainRow, subRow];
@@ -1665,18 +1677,18 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
     const debitText = debit > 0 ? (p.context === 'item' && p.stockView === 'qty' ? `${(debit / factor).toFixed(2)} ${p.displayUnit || ''}` : formatCurrencyForPrint(debit / factor, { noSuffix: true })) : '-';
     const creditText = credit > 0 ? (p.context === 'item' && p.stockView === 'qty' ? `${(credit / factor).toFixed(2)} ${p.displayUnit || ''}` : formatCurrencyForPrint(credit / factor, { noSuffix: true })) : '-';
 
-    // Always apply colors: DR (Debit) = Green, CR (Credit) = Red (for all prints)
+    // DR/CR colors: print options Color vs B&W (palette)
     const debitContent: TableCell = { 
         text: debitText, 
         alignment: 'right', 
-        color: 'green', // Always green for DR column
+        color: palette.debit,
         fontSize: getAutoFontSize(debitText, 9), 
         noWrap: true 
     }; 
     const creditContent: TableCell = { 
         text: creditText, 
         alignment: 'right', 
-        color: 'red', // Always red for CR column
+        color: palette.credit,
         fontSize: getAutoFontSize(creditText, 9), 
         noWrap: true 
     }; 
@@ -1711,7 +1723,7 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
     const balanceContent: any = { 
         text: balanceText, 
         alignment: 'right', 
-        color: balanceValue >= 0 ? 'green' : 'red', 
+        color: palette.balanceSigned(balanceValue),
         fontSize: getAutoFontSize(balanceText, 9), 
         bold: true, 
         noWrap: true 
@@ -1759,7 +1771,12 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
         const isOverdueDisplay = row.isOverdue || overdueDays > 0;
         // Keep bill-wise status text in print aligned with table logic for staff/group rows.
         const statusLabel = getBillStatusLabelForPrint(row, p.context, isOverdueDisplay);
-        const statusColor = statusLabel === 'Paid' ? 'green' : (statusLabel === 'Overdue' || statusLabel === 'Unpaid' || statusLabel === 'Partial') ? 'red' : undefined;
+        const statusColor =
+          statusLabel === "Paid"
+            ? palette.paid
+            : statusLabel === "Overdue" || statusLabel === "Unpaid" || statusLabel === "Partial"
+              ? palette.unpaid
+              : undefined;
         statusContent = { text: statusLabel || '-', fontSize: 9, alignment: 'left' as const, color: statusColor };
       }
     }
@@ -1822,14 +1839,17 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
       p.spendWise === true &&
       (row._spendWiseGroupFirst === true || row._spendWiseChild === true || row._spendWiseGroupLast === true)
     );
-    const spendWiseColor = (() => {
-      const idx = Number(row._spendWiseGroupColorIndex);
-      if (idx === 1) return "#16a34a"; // green-600
-      if (idx === 2) return "#db2777"; // pink-600
-      return "#2563eb"; // blue-600
-    })();
+    const spendWiseColor = palette.spendWiseBorder(Number(row._spendWiseGroupColorIndex) || 0);
 
-    const statusDetailText = isBillWise && p.showNarration ? getStatusDetailForPrint(row, { billWiseOnly: true, vouchers: p.vouchers, decimalPlaces: p.company.decimalPlaces ?? 2 }) : '';
+    const statusDetailText =
+      isBillWise && p.showNarration
+        ? getStatusDetailForPrint(row, {
+            billWiseOnly: true,
+            vouchers: p.vouchers,
+            decimalPlaces: p.company.decimalPlaces ?? 2,
+            colorMode: p.printColorMode,
+          })
+        : "";
     const mainHasSubRow = Boolean(
       (isBillWise && (p.showNarration && (narration || statusDetailText || overdueDaysText || isOverdueRow))) ||
       (!isBillWise && p.showNarration && narration)
@@ -1862,7 +1882,7 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
       if (p.showNarration && (overdueDaysText || isOverdueRow)) {
         const overdueOnly = overdueDaysText || 'Overdue';
         if (statusParts.length > 0) statusParts.push({ text: ', ', color: 'black', fontSize: 7 });
-        statusParts.push({ text: overdueOnly, color: 'red', fontSize: 7, italics: false });
+        statusParts.push({ text: overdueOnly, color: palette.overdue, fontSize: 7, italics: false });
       }
       const subRow: TableCell[] = [];
       if (isBillWise && isColVisible(p, "status")) {
@@ -1911,6 +1931,7 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
 
 
 const buildTableFooter = (p: PrintPayload, periodDr: number, periodCr: number, closing: number, formatCurrencyForPrint: Function, formatRunning: Function, header: TableCell[], numToWords: Function): TableCell[][] => {
+    const palette = getPrintColorPalette(p.printColorMode);
     if (p.context === 'daybook') return [];
     
     if (p.context === 'overdue') {
@@ -1919,10 +1940,10 @@ const buildTableFooter = (p: PrintPayload, periodDr: number, periodCr: number, c
       const footerRow: TableCell[] = [
         { text: 'Total', colSpan: labelColSpan, bold: true, alignment: 'left', fontSize: 10, noWrap: true },
         ...Array.from({ length: labelColSpan - 1 }, () => ({})),
-        { text: formatCurrencyForPrint(periodDr, { noSuffix: true }), bold: true, fontSize: 10, color: 'green', alignment: 'right', noWrap: true },
-        { text: formatCurrencyForPrint(periodCr, { noSuffix: true }), bold: true, fontSize: 10, color: 'red', alignment: 'right', noWrap: true },
+        { text: formatCurrencyForPrint(periodDr, { noSuffix: true }), bold: true, fontSize: 10, color: palette.debit, alignment: 'right', noWrap: true },
+        { text: formatCurrencyForPrint(periodCr, { noSuffix: true }), bold: true, fontSize: 10, color: palette.credit, alignment: 'right', noWrap: true },
         { text: '-', bold: true, fontSize: 10, alignment: 'left', noWrap: true },
-        { text: formatRunning(closing), bold: true, fontSize: 10, color: closing >= 0 ? 'green' : 'red', alignment: 'right', noWrap: true },
+        { text: formatRunning(closing), bold: true, fontSize: 10, color: palette.balanceSigned(closing), alignment: 'right', noWrap: true },
       ];
       return [footerRow];
     }
@@ -2008,12 +2029,12 @@ const buildTableFooter = (p: PrintPayload, periodDr: number, periodCr: number, c
     const debitText = formatFooterValue(totalDr);
     const creditText = formatFooterValue(totalCr);
 
-    if (showDr) footerRow.push({ text: debitText, bold: true, fontSize: getAutoFontSize(debitText, 10), color: 'green', alignment: 'right', noWrap: true });
-    if (showCr) footerRow.push({ text: creditText, bold: true, fontSize: getAutoFontSize(creditText, 10), color: 'red', alignment: 'right', noWrap: true });
+    if (showDr) footerRow.push({ text: debitText, bold: true, fontSize: getAutoFontSize(debitText, 10), color: palette.debit, alignment: 'right', noWrap: true });
+    if (showCr) footerRow.push({ text: creditText, bold: true, fontSize: getAutoFontSize(creditText, 10), color: palette.credit, alignment: 'right', noWrap: true });
     if (showStatus) {
       footerRow.push({ text: '-', bold: true, fontSize: 10, alignment: 'left', noWrap: true });
     }
-    if (showBalance) footerRow.push({ text: footerClosingText, bold: true, fontSize: getAutoFontSize(footerClosingText, 10), color: closing >= 0 ? 'green' : 'red', alignment: 'right', noWrap: true });
+    if (showBalance) footerRow.push({ text: footerClosingText, bold: true, fontSize: getAutoFontSize(footerClosingText, 10), color: palette.balanceSigned(closing), alignment: 'right', noWrap: true });
     
     return [footerRow];
 }

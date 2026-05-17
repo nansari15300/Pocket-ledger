@@ -15,7 +15,15 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Settings, X } from "lucide-react";
+import { CalendarDays, Loader2, Settings, X } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { DateFormatSettingsDialog } from "@/components/settings/DateFormatSettingsDialog";
 import { cn } from "@/lib/utils";
 import { startOfDay } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -60,7 +68,12 @@ import { stripIdsForCrossCompanyClone } from "@/lib/crossCompanyMasterPrefill";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { persistLedgerModalParentFromBrowser } from "@/lib/modalUrlSync";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
-import { apkCloudCompanyOfflineViewOnly, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import {
+  apkCloudCompanyOfflineViewOnly,
+  apkEmbeddedSqliteFirstWritesPreferred,
+  apkEntityWriteUsesLocalSqliteMirror,
+  preferLocalLedgerReads,
+} from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { useDate } from "@/hooks/useDate";
 import { recurringAutoVoucherLabels } from "@/lib/calendarDisplayLabels";
@@ -751,6 +764,52 @@ function masterRowCanonicalName(row: Record<string, unknown>): string {
   return String(row?.name ?? row?.itemName ?? row?.accountName ?? row?.title ?? "").trim();
 }
 
+/** Voucher dialog: header jaisa BS/AD/Both + Setting — voucher khulte hi date system/format change. */
+function VoucherDialogDateSystemSwitcher({ className }: { className?: string }) {
+  const { dateSystem, setDateSystem } = useDate();
+  const { company } = useCompany();
+  const isMobile = useIsMobile();
+  const [dateFormatDialogOpen, setDateFormatDialogOpen] = useState(false);
+
+  // Nepal ke alawa country par BS switcher hide (DesktopAppHeader jaisa).
+  if (company?.country && company.country !== "Nepal") {
+    return null;
+  }
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="outline"
+            size="sm"
+            className={cn(
+              "h-9 shrink-0 whitespace-nowrap rounded-full border-slate-400/80 bg-white/90 px-2.5 text-xs font-semibold",
+              isMobile && "px-2.5",
+              className
+            )}
+            data-theme-header="date-selector"
+          >
+            {!isMobile && <CalendarDays className="mr-1.5 h-3.5 w-3.5" />}
+            <span>{dateSystem}</span>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="z-[200]">
+          <DropdownMenuItem onSelect={() => setDateSystem("BS")}>Bikram Samvat (BS)</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setDateSystem("AD")}>Anno Domini (AD)</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setDateSystem("Both")}>Both</DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => setDateFormatDialogOpen(true)}>
+            <Settings className="mr-2 h-4 w-4" />
+            Setting
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <DateFormatSettingsDialog open={dateFormatDialogOpen} onOpenChange={setDateFormatDialogOpen} />
+    </>
+  );
+}
+
 function VoucherDialogContent({ 
   voucher, 
   defaultVoucherData, 
@@ -779,7 +838,7 @@ function VoucherDialogContent({
   formInstanceKey,
   /** Copy-draft: header company change pe forms bill/spend link state reset karein — sirf tab pass jab post-copy seed active ho. */
   copySaveTargetCompanyId,
-  /** Sirf copied-draft (Save & Copy To) ke baad header me company switch dikhao; navin Add/Edit me chhupa rakho. */
+  /** Multi-company account: create/edit/copy sab par header company dropdown. */
   showHeaderCompanySelector,
   copyMismatchCategories,
   onCopyMissingCategory,
@@ -822,7 +881,7 @@ function VoucherDialogContent({
   onCashflowQuadTabNavigate?: () => void;
   onRefreshCopyMismatch?: () => void | Promise<void>;
   onActiveTabChange?: (tab: VoucherType) => void;
-  /** `true` sirf jab copied draft (post-copy seed) — header company dropdown dikhane ke liye. */
+  /** `true` jab account me 1 se zyada company — header company dropdown dikhane ke liye. */
   showHeaderCompanySelector?: boolean;
   /** Legacy prop: parent ab hamesha `false` bhejta — Auto switch sirf main voucher Save se commit hota hai. */
   recurringVoucherSaveBlocked?: boolean;
@@ -1001,7 +1060,7 @@ function VoucherDialogContent({
                 })}
               </SelectContent>
             </Select>
-            {/* Company header: Save & Copy To draft target, ya APK plain add/edit (shell company switch). */}
+            {/* Company header: multi-company create/edit/copy — target company scope (sidebar copy-draft par change nahi). */}
             {showHeaderCompanySelector && (
             <Select value={targetCompanyId || ""} onValueChange={(v) => onTargetCompanyChange?.(v)}>
               {/* Company selector: mobile par item-section jaisa soft green tone for visual consistency. */}
@@ -1017,6 +1076,8 @@ function VoucherDialogContent({
               </SelectContent>
             </Select>
             )}
+            {/* Mobile: date selector — desktop par sirf purple ribbon (tab strip duplicate hata diya). */}
+            <VoucherDialogDateSystemSwitcher className="ml-auto" />
           </div>
         ) : (
           <Tabs
@@ -1036,8 +1097,8 @@ function VoucherDialogContent({
                     value={key}
                     disabled={disabled}
                     className={cn(
-                      // Desktop tabs: selected pill रहे; बाकी tabs rounded-square रहे (mobile feel match).
-                      "capitalize rounded-md border px-4 py-2 transition-all",
+                      // Desktop tabs: pill width ~2× (px-4→px-8 + min-w) taaki Sale/Purchase wagaira zyada readable.
+                      "capitalize rounded-md border px-8 py-2 min-w-[8.5rem] transition-all",
                       disabled
                         // Disabled tabs bhi pill shape me hi dikhayein so tab strip geometry consistent rahe.
                         ? "rounded-full border-slate-300 bg-slate-100 text-slate-500 cursor-not-allowed"
@@ -1244,6 +1305,9 @@ export function AddVoucherDialog(props: any) {
     if (eid && eid !== ctx) return false;
     return true;
   }, [postCopyNewFormSeed, editCompanyId, ctxCompanyId]);
+
+  /** Create / edit / copy: header company dropdown jab account me 1 se zyada company ho. */
+  const showHeaderCompanySelector = allCompanies.length > 1;
 
   /** Header company Select: copy-draft = sirf targetCompanyId; APK shell = global setCompanyId + storage pin. */
   const handleLedgerHeaderCompanyChange = useCallback(
@@ -2552,107 +2616,7 @@ export function AddVoucherDialog(props: any) {
       }
     }
 
-    if (status === "saved" && companyId && canUseVoucherAutoMonthlyEditors) {
-      const savedVoucherId = String(newId || voucher?.id || "").trim();
-      if (savedVoucherId) {
-        // Saved doc se type — sirf journal par recurring Firestore likho; sale/purchase + stale ON = skip (clear nahi).
-        let sourceType = String(voucher?.type || defaultVoucherData?.type || "journal");
-        try {
-          const savedSnap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, savedVoucherId));
-          if (savedSnap.exists()) {
-            const d = savedSnap.data() as Record<string, unknown>;
-            sourceType = String(d.type || sourceType || "journal");
-          }
-        } catch {
-          /* snapshot fallback: existing inferred type use */
-        }
-        const isJournalSaved = sourceType === "journal";
-        if (autoMonthlyEnabled && isJournalSaved) {
-          try {
-            await setRecurringTemplateForVoucher(companyId, {
-              sourceVoucherId: savedVoucherId,
-              sourceVoucherType: sourceType,
-              enabled: true,
-              actorUserId: user?.uid,
-              actorName: customUser?.displayName || user?.displayName || user?.email || null,
-              scheduleBsDay: autoMonthlyScheduleBsDay,
-              rateAdjustMode: autoMonthlyRateMode,
-              rateAdjustValue: recurringRatePayload(autoMonthlyRateMode, autoMonthlyRateValue),
-              rateAdjustEffectiveFrom: recurringRateEffectiveFromForSave(autoMonthlyRateMode, autoMonthlyRateEffectiveFromAd),
-              ...recurringRateCadencePayload(
-                autoMonthlyRateMode,
-                autoMonthlyRateCadence,
-                autoMonthlyYearlyBsMonth,
-                autoMonthlyYearlyBsDay,
-              ),
-              rateAdjustEveryN: recurringRateEveryNForSave(autoMonthlyRateMode, autoMonthlyRateEveryN),
-              // Optional BS-year anchor for every-N-years phase; empty keeps effective-from year.
-              rateAdjustYearlyBaseAnchorIso: recurringYearlyBaseAnchorForSave(
-                autoMonthlyRateMode,
-                autoMonthlyRateCadence,
-                autoMonthlyYearlyBaseAnchorAd,
-              ),
-            });
-            void refreshRecurringTemplateMeta(companyId, savedVoucherId);
-            setCommittedAutoMonthlyEnabled(true);
-
-            // 2+ missing BS periods: tick-popup — parent dialog yahin roke rakho jab tak user cancel/complete na kare.
-            const rsRec = (company as Record<string, unknown> | null | undefined)?.recurringVoucherSettings as
-              | Record<string, unknown>
-              | undefined;
-            if (
-              rsRec?.enabled === true &&
-              !apkOfflineViewOnly &&
-              user?.uid &&
-              !isSaveAndNew &&
-              !skipDialogCloseForSaveCopy
-            ) {
-              try {
-                const tplFresh = await getRecurringTemplateForVoucher(companyId, savedVoucherId);
-                if (tplFresh?.enabled) {
-                  const activeLine = String(tplFresh.cloneSourceVoucherId || tplFresh.sourceVoucherId || "").trim();
-                  if (!activeLine || activeLine === savedVoucherId) {
-                    const templateDocId = await getRecurringTemplateDocIdForVoucher(companyId, savedVoucherId);
-                    const slots = await listMissingRecurringPeriodSlotsAscending(
-                      companyId,
-                      templateDocId,
-                      tplFresh,
-                      new Date(),
-                    );
-                    if (slots.length >= 2) {
-                      recurringPickerCloseParentRef.current = true;
-                      setRecurringGeneratePicker({
-                        open: true,
-                        slots,
-                        selected: Object.fromEntries(slots.map((s) => [s.periodKey, false])),
-                        voucherId: savedVoucherId,
-                        templateForSchedule: tplFresh,
-                      });
-                      suppressMainDialogCloseForRecurringPicker = true;
-                    }
-                  }
-                }
-              } catch {
-                /* gap list optional — save already committed */
-              }
-            }
-          } catch (recErr) {
-            toast.error(recErr instanceof Error ? recErr.message : "Auto Monthly save failed.");
-          }
-        } else if (!autoMonthlyEnabled) {
-          // User ne OFF kiya ho to existing recurring config clean rakho.
-          await clearRecurringTemplateForVoucher(companyId, savedVoucherId);
-          setRecurringTemplateLastPeriodKey(null);
-          setRecurringTemplateSuppressedKeys([]);
-          setRecurringTemplateSnapshot(null);
-          setRecurringLastGeneratedAtMs(null);
-          setCommittedAutoMonthlyEnabled(false);
-        }
-        // else: ON + non-journal — Firestore mat chhedo (tab switch par local toggle stale ho sakta hai)
-      }
-    }
-  
-    // ३. Propagate action
+    // ३. Propagate action — pehle parent ko saved batao + dialog band (static/offline par niche recurring `getDoc` await se form mat chipke)
     let keepDialogAsNew = Boolean(isSaveAndNew);
     if (status === "saved" && keepDialogAsNew) {
       // Save & New: next fresh voucher par auto-monthly stale ON state carry mat karo.
@@ -2693,6 +2657,106 @@ export function AddVoucherDialog(props: any) {
   
     if (!keepDialogAsNew && !skipDialogCloseForSaveCopy && !suppressMainDialogCloseForRecurringPicker) {
       onOpenChange?.(false);
+    }
+
+    /** Auto Monthly / recurring — background; sale/purchase save par dialog pehle band ho chuka hota hai. */
+    if (status === "saved" && companyId && canUseVoucherAutoMonthlyEditors) {
+      const savedVoucherIdForRecurring = String(newId || voucher?.id || "").trim();
+      if (savedVoucherIdForRecurring) {
+        void (async () => {
+          const sourceType = String(voucher?.type || defaultVoucherData?.type || "journal");
+          const isJournalSaved = sourceType === "journal";
+          if (autoMonthlyEnabled && isJournalSaved) {
+            try {
+              await setRecurringTemplateForVoucher(companyId, {
+                sourceVoucherId: savedVoucherIdForRecurring,
+                sourceVoucherType: sourceType,
+                enabled: true,
+                actorUserId: user?.uid,
+                actorName: customUser?.displayName || user?.displayName || user?.email || null,
+                scheduleBsDay: autoMonthlyScheduleBsDay,
+                rateAdjustMode: autoMonthlyRateMode,
+                rateAdjustValue: recurringRatePayload(autoMonthlyRateMode, autoMonthlyRateValue),
+                rateAdjustEffectiveFrom: recurringRateEffectiveFromForSave(
+                  autoMonthlyRateMode,
+                  autoMonthlyRateEffectiveFromAd
+                ),
+                ...recurringRateCadencePayload(
+                  autoMonthlyRateMode,
+                  autoMonthlyRateCadence,
+                  autoMonthlyYearlyBsMonth,
+                  autoMonthlyYearlyBsDay
+                ),
+                rateAdjustEveryN: recurringRateEveryNForSave(autoMonthlyRateMode, autoMonthlyRateEveryN),
+                rateAdjustYearlyBaseAnchorIso: recurringYearlyBaseAnchorForSave(
+                  autoMonthlyRateMode,
+                  autoMonthlyRateCadence,
+                  autoMonthlyYearlyBaseAnchorAd
+                ),
+              });
+              void refreshRecurringTemplateMeta(companyId, savedVoucherIdForRecurring);
+              setCommittedAutoMonthlyEnabled(true);
+
+              const rsRec = (company as Record<string, unknown> | null | undefined)?.recurringVoucherSettings as
+                | Record<string, unknown>
+                | undefined;
+              if (
+                rsRec?.enabled === true &&
+                !apkOfflineViewOnly &&
+                user?.uid &&
+                !isSaveAndNew &&
+                !skipDialogCloseForSaveCopy
+              ) {
+                try {
+                  const tplFresh = await getRecurringTemplateForVoucher(companyId, savedVoucherIdForRecurring);
+                  if (tplFresh?.enabled) {
+                    const activeLine = String(tplFresh.cloneSourceVoucherId || tplFresh.sourceVoucherId || "").trim();
+                    if (!activeLine || activeLine === savedVoucherIdForRecurring) {
+                      const templateDocId = await getRecurringTemplateDocIdForVoucher(
+                        companyId,
+                        savedVoucherIdForRecurring
+                      );
+                      const slots = await listMissingRecurringPeriodSlotsAscending(
+                        companyId,
+                        templateDocId,
+                        tplFresh,
+                        new Date()
+                      );
+                      if (slots.length >= 2) {
+                        recurringPickerCloseParentRef.current = true;
+                        setRecurringGeneratePicker({
+                          open: true,
+                          slots,
+                          selected: Object.fromEntries(slots.map((s) => [s.periodKey, false])),
+                          voucherId: savedVoucherIdForRecurring,
+                          templateForSchedule: tplFresh,
+                        });
+                      }
+                    }
+                  }
+                } catch {
+                  /* gap list optional */
+                }
+              }
+            } catch (recErr) {
+              toast.error(recErr instanceof Error ? recErr.message : "Auto Monthly save failed.");
+            }
+          } else if (!autoMonthlyEnabled) {
+            try {
+              if (!preferLocalLedgerReads() && !apkEmbeddedSqliteFirstWritesPreferred()) {
+                await clearRecurringTemplateForVoucher(companyId, savedVoucherIdForRecurring);
+              }
+            } catch {
+              /* offline */
+            }
+            setRecurringTemplateLastPeriodKey(null);
+            setRecurringTemplateSuppressedKeys([]);
+            setRecurringTemplateSnapshot(null);
+            setRecurringLastGeneratedAtMs(null);
+            setCommittedAutoMonthlyEnabled(false);
+          }
+        })();
+      }
     }
   }, [
     onOpenChange,
@@ -3091,7 +3155,8 @@ export function AddVoucherDialog(props: any) {
                     </p>
                   </div>
                   <div className="flex shrink-0 flex-row items-center justify-end justify-self-end self-center gap-[10px]">
-                    {(postCopyNewFormSeed || (apkLedgerPinsShellCompanyContext && !voucherForDialogChrome?.id)) && (
+                    <VoucherDialogDateSystemSwitcher />
+                    {showHeaderCompanySelector && (
                       <Select value={targetCompanyId || ""} onValueChange={handleLedgerHeaderCompanyChange}>
                         <SelectTrigger className="h-9 min-w-[9rem] w-auto max-w-[22vw] shrink rounded-full border-emerald-300/80 bg-emerald-50">
                           <SelectValue placeholder="Company" />
@@ -3125,7 +3190,8 @@ export function AddVoucherDialog(props: any) {
                     )}
                   </div>
                   <div className="ml-auto flex shrink-0 items-center gap-[10px]">
-                    {(postCopyNewFormSeed || (apkLedgerPinsShellCompanyContext && !voucherForDialogChrome?.id)) && (
+                    <VoucherDialogDateSystemSwitcher />
+                    {showHeaderCompanySelector && (
                       <Select value={targetCompanyId || ""} onValueChange={handleLedgerHeaderCompanyChange}>
                         <SelectTrigger className="h-9 min-w-[9rem] w-auto max-w-[22vw] shrink rounded-full border-emerald-300/80 bg-emerald-50">
                           <SelectValue placeholder="Company" />
@@ -3441,13 +3507,10 @@ export function AddVoucherDialog(props: any) {
   const needsNestedVoucherProvider = useMemo(() => {
     const shellId = String(ctxCompanyId || "").trim();
     if (apkLedgerPinsShellCompanyContext) return false;
-    if (postCopyNewFormSeed) {
-      const dest = String(targetCompanyId || shellId).trim();
-      return dest !== shellId;
-    }
-    const dialogCo = String(companyId || shellId).trim();
-    return dialogCo !== shellId;
-  }, [apkLedgerPinsShellCompanyContext, postCopyNewFormSeed, targetCompanyId, ctxCompanyId, companyId]);
+    // Header company change: target ≠ sidebar shell → nested masters (create/edit/copy sab).
+    const dest = String(targetCompanyId || shellId).trim();
+    return dest !== shellId;
+  }, [apkLedgerPinsShellCompanyContext, targetCompanyId, ctxCompanyId]);
 
   /** Auto switch Settings modal se commit nahi — sirf main voucher Save; forms ko block karne ki zaroorat nahi. */
   const recurringVoucherSaveBlocked = false;
@@ -3463,8 +3526,8 @@ export function AddVoucherDialog(props: any) {
       <>
         <VoucherDialogContent
           {...rest}
-          // Journal ledger list: copied-draft me target company scope (compare edit me `editCompanyId`).
-          ledgerScopeCompanyId={postCopyNewFormSeed ? targetCompanyId || undefined : editCompanyId}
+          // Journal / ledger lists: header target company, warna compare-edit `editCompanyId`.
+          ledgerScopeCompanyId={targetCompanyId || editCompanyId || undefined}
           // Copy flow ke baad new form force: old voucher edit ke badle seeded new voucher open karo.
           voucher={postCopyNewFormSeed ? undefined : effectiveVoucher}
           defaultVoucherData={postCopyNewFormSeed ?? defaultVoucherData}
@@ -3488,8 +3551,8 @@ export function AddVoucherDialog(props: any) {
           targetCompanyOptions={allCompanies.map((c) => ({ id: c.id, name: c.name }))}
           onTargetCompanyChange={handleLedgerHeaderCompanyChange}
           formInstanceKey={copyDraftSeedVersion}
-          // APK: sirf new txn (+ copy-target shell) par company switch; saved edit par company dropdown nahin (`voucherForDialogChrome` = live doc).
-          showHeaderCompanySelector={Boolean(postCopyNewFormSeed || (apkLedgerPinsShellCompanyContext && !voucherForDialogChrome?.id))}
+          // Multi-company: create / edit / copy sab par header company dropdown.
+          showHeaderCompanySelector={showHeaderCompanySelector}
           copySaveTargetCompanyId={postCopyNewFormSeed ? (targetCompanyId || undefined) : undefined}
           copyMismatchCategories={postCopyNewFormSeed ? copyMismatchCategories : undefined}
           // Party/staff/tax/item/account sab: pehle prefilled Create dialog — direct Firestore clone nahi (user save se pehle edit mile).

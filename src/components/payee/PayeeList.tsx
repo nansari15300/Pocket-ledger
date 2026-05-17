@@ -3,7 +3,7 @@
 
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Card } from "@/components/ui/card";
+import { MasterListRow } from "@/components/ui/master-list-row";
 import { Badge } from "@/components/ui/badge";
 import { useDate } from "@/hooks/useDate";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
@@ -45,19 +45,17 @@ export function PayeeList({
 
   return (
     <div className="flex flex-col h-full min-h-0 rounded-b-lg border-t-0 bg-background">
-      <ScrollArea className="flex-1 min-h-0">
-        <ul className="p-2 space-y-1">
+      <ScrollArea listChrome className="flex-1 min-h-0">
+        <ul className="pl-master-list-ul">
           {filteredPayees.map((payee) => {
             const isSelected = selectedPayee?.id === payee.id && selectedPayee?.type === payee.type;
             const Icon = typeIconMap[payee.type] || Building;
             return (
               <li key={`${payee.type}-${payee.id}`}>
-                <Card
+                <MasterListRow
+                  selected={isSelected}
                   className={cn(
-                    "p-1.5 cursor-pointer border",
-                    isSelected
-                      ? "border-primary bg-secondary"
-                      : "hover:border-primary/50"
+                    !isSelected && "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-orange-300/80 hover:bg-orange-50/30"
                   )}
                   onClick={() => onSelectPayee(payee)}
                 >
@@ -89,7 +87,7 @@ export function PayeeList({
                       {formatCurrency(payee.balance, { showDrCr: true })}
                     </p>
                   </div>
-                </Card>
+                </MasterListRow>
               </li>
             );
           })}

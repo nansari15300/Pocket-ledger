@@ -9,6 +9,7 @@ import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 
 /**
  * Voucher/attachment pipeline: `navigator.onLine === false` par Storage `uploadBytes` / `getDownloadURL` await mat karo —
@@ -25,11 +26,23 @@ export function shouldForceFirestoreWritesOnStaticOrApk(): boolean {
 }
 
 /**
- * APK ya static build: vouchers/masters hamesha SQLite + outbox (ya mirror-first) se save.
+ * APK / static build / Electron EXE: vouchers/masters hamesha SQLite + outbox se save.
  * Web (dono false): sirf `isLocalOnlyMode()` + niche company `storageOption` rules.
  */
 export function apkEmbeddedSqliteFirstWritesPreferred(): boolean {
-  return isCapacitorNativeApp() || isStaticAppBuild();
+  return isEmbeddedOfflinePreloadClient();
+}
+
+/** Voucher forms: duplicate check / backdate — Firestore `getDoc` offline mat. */
+export function preferLocalLedgerReads(): boolean {
+  return isLocalOnlyMode() || apkEmbeddedSqliteFirstWritesPreferred() || isClientNavigatorOffline();
+}
+
+/** Outbox enqueue ke baad turant flush — embedded offline par band (console Write spam + hang). */
+export function shouldAutoFlushOutboxAfterEnqueue(): boolean {
+  if (typeof navigator === "undefined") return false;
+  if (isClientNavigatorOffline()) return false;
+  return navigator.onLine;
 }
 
 /** True sirf Capacitor + company row explicitly `storageOption: local` nahi */

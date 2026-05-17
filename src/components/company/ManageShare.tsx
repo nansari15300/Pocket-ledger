@@ -49,8 +49,16 @@ import { updateCompanyDocRoot } from "@/lib/companyDocsClient";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
-import { numericEntitlement, companyStorageIsLocal, type PlanId } from "@/config/plans";
+import { getNextPaidUpgrade, numericEntitlement, companyStorageIsLocal, type PlanId } from "@/config/plans";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
+import {
+  companyProfileChromeRoot,
+  companyProfileGreenZone,
+  companyProfilePageBg,
+  companyProfileTabsList3,
+  companyProfileTabsTrigger,
+  settingsDetailCardShell,
+} from "@/lib/companyProfileChrome";
 
 type SharedUser = {
   email: string;
@@ -264,6 +272,16 @@ export function ManageShare() {
     ? Math.min(roleMaxFilesRaw, planMaxFilesPerVoucher)
     : 0;
   const showPlanFileLimitNotice = planAllowsFileAttachment && roleMaxFilesRaw > planMaxFilesPerVoucher;
+  // Pro / Pro Plus (ya koi tier jahan agla plan file cap badhaye na) — upgrade banner mat dikhao
+  const nextPaidUpgradePlanId = getNextPaidUpgrade(effectivePlanId);
+  const showFileAttachmentUpgradeBanner = useMemo(() => {
+    if (!nextPaidUpgradePlanId) return false;
+    const nextMax = Math.max(
+      0,
+      Number(getPlanFromPlans(livePlans, nextPaidUpgradePlanId).entitlements.maxVoucherFileCount) || 0
+    );
+    return nextMax > planMaxFilesPerVoucher;
+  }, [nextPaidUpgradePlanId, livePlans, planMaxFilesPerVoucher]);
   const currentUserCount = useMemo(() => {
     if (!companyData) return 0;
     const ownerEmailNorm = (companyData.ownerEmail || "").toLowerCase().trim();
@@ -673,7 +691,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
   if (loading) {
     return (
         <div className="space-y-8">
-            <Card>
+            <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
                 <CardHeader>
                     <Skeleton className="h-8 w-64 mb-1" />
                     <Skeleton className="h-4 w-full max-w-sm" />
@@ -693,7 +711,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
   if (!companyId || !companyData) {
     return (
         <div className="p-4 sm:p-6 md:p-8">
-            <Card className="w-full max-w-lg mx-auto text-center">
+            <Card className={cn("w-full max-w-lg mx-auto text-center", settingsDetailCardShell)} {...{ [companyProfileChromeRoot]: "" }}>
                  <CardHeader>
                     <CardTitle>No Company Selected</CardTitle>
                     <CardDescription>Please select a company from the header to manage settings.</CardDescription>
@@ -713,22 +731,37 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
   return (
     <div className="space-y-8">
         {isDeviceLocalCompany ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>Sharing — {companyData.name}</CardTitle>
+          <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
+            <CardHeader className={companyProfilePageBg}>
+              <CardTitle className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span>Sharing</span>
+                <span className="text-muted-foreground font-normal tracking-tight" aria-hidden>
+                  ----&gt;
+                </span>
+                <span className="text-base sm:text-lg font-semibold">{companyData.name}</span>
+              </CardTitle>
               <CardDescription>
                 Device-local company — language below. Firebase email share is for cloud-uploaded companies only.
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Eng / Nep / Hindi: same guidance, tabs se team pick kare */}
+            <CardContent className="space-y-4 px-6 pb-6">
+              {/* Eng / Nep / Hindi: Company Profile jaisa tabs + green content */}
               <Tabs defaultValue="eng" className="w-full">
-                <TabsList className="grid w-full max-w-md grid-cols-3">
-                  <TabsTrigger value="eng">English</TabsTrigger>
-                  <TabsTrigger value="nep">नेपाली</TabsTrigger>
-                  <TabsTrigger value="hi">हिन्दी</TabsTrigger>
+                <TabsList className={companyProfileTabsList3}>
+                  <TabsTrigger value="eng" className={companyProfileTabsTrigger}>
+                    English
+                  </TabsTrigger>
+                  <TabsTrigger value="nep" className={companyProfileTabsTrigger}>
+                    नेपाली
+                  </TabsTrigger>
+                  <TabsTrigger value="hi" className={companyProfileTabsTrigger}>
+                    हिन्दी
+                  </TabsTrigger>
                 </TabsList>
-                <TabsContent value="eng" className="mt-3 rounded-lg border border-blue-200 bg-blue-50/90 dark:bg-blue-950/40 dark:border-blue-900 p-4 text-sm space-y-2 outline-none">
+                <TabsContent
+                  value="eng"
+                  className={`mt-3 p-4 text-sm space-y-2 outline-none ${companyProfileGreenZone}`}
+                >
                   <p className="text-muted-foreground">
                     This company lives only on this device. Firebase &quot;Add Person&quot; / email sharing works for companies
                     that are uploaded to the cloud.
@@ -753,7 +786,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                 <TabsContent
                   value="nep"
                   lang="ne"
-                  className="mt-3 rounded-lg border border-blue-200 bg-blue-50/90 dark:bg-blue-950/40 dark:border-blue-900 p-4 text-sm space-y-2 outline-none"
+                  className={`mt-3 p-4 text-sm space-y-2 outline-none ${companyProfileGreenZone}`}
                 >
                   {/* नेपाली देवनागरी — Roman placeholder हटाया */}
                   <p className="text-muted-foreground">
@@ -780,7 +813,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                 <TabsContent
                   value="hi"
                   lang="hi"
-                  className="mt-3 rounded-lg border border-blue-200 bg-blue-50/90 dark:bg-blue-950/40 dark:border-blue-900 p-4 text-sm space-y-2 outline-none"
+                  className={`mt-3 p-4 text-sm space-y-2 outline-none ${companyProfileGreenZone}`}
                 >
                   {/* पूरी हिंदी देवनागरी; अंग्रेज़ी शब्द जहाँ UI से मेल खाते हों वही रखे */}
                   <p className="text-muted-foreground">
@@ -808,10 +841,16 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
             </CardContent>
           </Card>
         ) : (
-          <Card>
-            <CardHeader className="flex flex-row items-start justify-between">
+          <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
+            <CardHeader className={cn(companyProfilePageBg, "flex flex-row flex-wrap items-start justify-between gap-4")}>
                 <div>
-                    <CardTitle>Manage Sharing for {companyData.name}</CardTitle>
+                    <CardTitle className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span>Manage Sharing</span>
+                      <span className="text-muted-foreground font-normal tracking-tight" aria-hidden>
+                        ----&gt;
+                      </span>
+                      <span className="text-base sm:text-lg font-semibold">{companyData.name}</span>
+                    </CardTitle>
                     <CardDescription>
                         Control who has access. Change a shared user&apos;s <strong>role</strong> in the table below, or
                         when inviting from{" "}
@@ -841,7 +880,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                   </ShareCompanyDialog>
                 </div>
             </CardHeader>
-            <CardContent>
+            <CardContent className={`p-4 ${companyProfileGreenZone}`}>
             <Table>
                 <TableHeader>
                     <TableRow>
@@ -998,8 +1037,8 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
              </DialogContent>
         </Dialog>
 
-        <Card>
-             <CardHeader className="flex flex-col md:flex-row justify-between md:items-start">
+        <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
+             <CardHeader className={cn(companyProfilePageBg, "flex flex-col md:flex-row justify-between md:items-start gap-4")}>
                 <div className="flex-1">
                     <CardTitle>Role Permissions</CardTitle>
                     <CardDescription>Select a role to view and edit its permissions.</CardDescription>
@@ -1010,7 +1049,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                     <div className="text-red-600 border rounded-lg p-2 flex items-center">Disabled: {disabledPermissions}</div>
                 </div>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className={cn("space-y-4 p-4", companyProfileGreenZone)}>
                 {/* Top Button */}
                 <div className="flex justify-end pb-4 border-b">
                     <Button onClick={handleSavePermissions} disabled={isSavingPermissions || !hasUnsavedChanges}>
@@ -1074,6 +1113,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                 {/* File Attachment Settings */}
                 <div className="space-y-4 pt-4">
                     <h3 className="text-lg font-semibold border-b pb-2">File Attachment Settings</h3>
+                    {showFileAttachmentUpgradeBanner ? (
                     <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
                         <p className="font-medium text-amber-800">
                             Your current plan allows max {planMaxFilesPerVoucher} file(s) per voucher.
@@ -1085,6 +1125,11 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                             </Link>.
                         </p>
                     </div>
+                    ) : (
+                    <p className="text-sm text-muted-foreground rounded-lg border border-black bg-muted/30 p-3">
+                        Your current plan allows max {planMaxFilesPerVoucher} file(s) per voucher.
+                    </p>
+                    )}
                     
                     {/* Global Toggle */}
                     <div className="flex items-center justify-between rounded-lg border p-4">

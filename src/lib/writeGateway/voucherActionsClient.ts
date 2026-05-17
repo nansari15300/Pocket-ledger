@@ -841,9 +841,11 @@ export async function saveVoucher(
   await assertCompanyAllowsLedgerMutations(companyId);
   const cleanVoucherData = removeUndefined(voucherData);
   const voucherPath = `companies/${companyId}/vouchers`;
-  /** Sidebar OFF / transport-offline: SQLite/outbox-first — offline par Firestore+Storage await se "Saving…" na atke. */
+  /** APK/static/EXE + offline: hamesha SQLite/outbox — Firestore/Storage await se "Saving…" (attachments) na atke. */
   const sqliteFirst =
-    (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) || isClientNavigatorOffline();
+    apkEmbeddedSqliteFirstWritesPreferred() ||
+    isClientNavigatorOffline() ||
+    (await apkCloudCompanyUsesSqliteFirstWrites(companyId));
 
   // Edit: form/outbox se `date` key missing ho to purani voucher date merge — static/APK offline me pehla `getDoc` hang/slow kar sakta tha (“Saving…” chipka)
   if (voucherId) {

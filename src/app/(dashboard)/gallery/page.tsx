@@ -242,6 +242,112 @@ function GalleryPagerInCard({
   );
 }
 
+/** Mobile collapsed ribbon ki height (~20% patla) — grid scroll `pb` isi se match */
+const GALLERY_COLLAPSED_RIBBON_SCROLL_PB =
+  "pb-[calc(2.6rem+env(safe-area-inset-bottom,0px))]";
+
+/** Footer collapse: poori width ribbon — ← bilkul left, → bilkul right; ↑ + beech me current page; arrow ke paas page counts */
+function GalleryCollapsedFooterBar({
+  page,
+  totalPages,
+  onPageChange,
+  onExpand,
+  expandAriaLabel,
+  variant = "company",
+}: {
+  page: number;
+  totalPages: number;
+  onPageChange: (p: number) => void;
+  onExpand: () => void;
+  expandAriaLabel: string;
+  variant?: "company" | "unassigned";
+}) {
+  const isMobile = useIsMobile();
+  const safeTotal = Math.max(1, totalPages);
+  const safePage = Math.min(Math.max(1, page), safeTotal);
+  const isCompany = variant === "company";
+  // Peeche kitne page, aage kitne page — ribbon ke left/right text (arrow ke just andar)
+  const pagesBehind = safePage - 1;
+  const pagesAhead = safeTotal - safePage;
+  // ~20% chhota ribbon: side buttons 32px, beech 36px (pehle 40/44px)
+  const ribbonBtnClass = cn(
+    "h-8 w-8 shrink-0 rounded-full border-2 shadow-sm",
+    isCompany
+      ? "border-blue-400/90 bg-blue-50/95 dark:border-blue-600 dark:bg-blue-950/90"
+      : "border-primary/30 bg-background"
+  );
+  const sideCountClass =
+    "max-w-[4rem] shrink truncate text-center text-[10px] font-semibold tabular-nums leading-tight text-muted-foreground sm:max-w-none";
+  return (
+    <div
+      className={cn(
+        "pointer-events-auto flex w-full shrink-0 items-center justify-between gap-0.5 border-t-2 px-1 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))] sm:px-1.5",
+        // Mobile: viewport ke bilkul niche chipka ribbon (neeche white gap na rahe)
+        isMobile && "fixed bottom-0 left-0 right-0 z-[56] rounded-none",
+        isCompany
+          ? "border-blue-300/90 bg-blue-100/95 shadow-[0_-4px_12px_-4px_rgba(30,58,138,0.12)] dark:border-blue-800/70 dark:bg-blue-950/45"
+          : "border-primary/25 bg-background/95 shadow-[0_-2px_8px_-2px_rgba(0,0,0,0.08)]"
+      )}
+      aria-label={`Page ${safePage} of ${safeTotal}`}
+    >
+      {/* Left edge: ← sabse pehle; uske baad peeche kitne page */}
+      <div className="flex min-w-0 max-w-[42%] flex-1 items-center justify-start gap-1 sm:max-w-none sm:gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className={ribbonBtnClass}
+          disabled={safePage <= 1}
+          onClick={() => onPageChange(safePage - 1)}
+          aria-label="Previous page"
+        >
+          <ChevronLeft className="h-4 w-4" aria-hidden />
+        </Button>
+        <span className={sideCountClass} title="Pages before this page (tap ←)">
+          {pagesBehind}
+        </span>
+      </div>
+
+      {/* Beech: expand — upar ↑, neeche current page number */}
+      <Button
+        type="button"
+        variant="outline"
+        className={cn(
+          "flex h-9 min-w-[2.35rem] shrink-0 flex-col items-center justify-center gap-0 rounded-full border-2 px-2 pb-0.5 pt-0 shadow-md",
+          isCompany
+            ? "border-blue-400/90 bg-blue-100/95 dark:border-blue-600 dark:bg-blue-950/90"
+            : "border-primary/30 bg-background"
+        )}
+        aria-label={`${expandAriaLabel}. Page ${safePage} of ${safeTotal}`}
+        onClick={onExpand}
+      >
+        <ChevronUp className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="text-xs font-bold leading-none tabular-nums" aria-live="polite">
+          {safePage}
+        </span>
+      </Button>
+
+      {/* Right edge: aage kitne page, phir → sabse last */}
+      <div className="flex min-w-0 max-w-[42%] flex-1 items-center justify-end gap-1 sm:max-w-none sm:gap-2">
+        <span className={sideCountClass} title="Pages after this page (tap →)">
+          {pagesAhead}
+        </span>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className={ribbonBtnClass}
+          disabled={safePage >= safeTotal}
+          onClick={() => onPageChange(safePage + 1)}
+          aria-label="Next page"
+        >
+          <ChevronRight className="h-4 w-4" aria-hidden />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // --- Sub-Component: Company Files Tab ---
 function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { previewSize: number, onSizeChange: (size: string | number) => void, onEditVoucher: (voucher: any) => void }) {
   const isMobile = useIsMobile();
@@ -681,7 +787,11 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
     <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", isMobile && "w-full")}>
       {/* Sirf file grid yahan scroll — header/tab neeche wale footer card me fixed */}
       <div
-        className={cn("min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain", isMobile && "px-0.5")}
+        className={cn(
+          "min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain",
+          isMobile && "px-0.5",
+          isMobile && !companyFooterExpanded && GALLERY_COLLAPSED_RIBBON_SCROLL_PB
+        )}
       >
         <TooltipProvider delayDuration={100}>
         <div
@@ -1052,18 +1162,14 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
         </CardContent>
       </Card>
       ) : (
-        <div className="pointer-events-auto flex shrink-0 justify-center pt-1">
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="h-11 w-11 shrink-0 rounded-full border-2 border-blue-400/90 bg-blue-100/95 shadow-md dark:border-blue-600 dark:bg-blue-950/90"
-            aria-label="Show gallery panel"
-            onClick={() => setCompanyFooterExpanded(true)}
-          >
-            <ChevronUp className="h-5 w-5" aria-hidden />
-          </Button>
-        </div>
+        <GalleryCollapsedFooterBar
+          page={companyPageClamped}
+          totalPages={companyTotalPages}
+          onPageChange={setCompanyFilesPage}
+          onExpand={() => setCompanyFooterExpanded(true)}
+          expandAriaLabel="Show gallery panel"
+          variant="company"
+        />
       )}
     </div>
   );
@@ -1665,7 +1771,12 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {/* Upload + tiles scroll; filters/title footer me fix (company tab jaisa) */}
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden overscroll-contain pb-2">
+      <div
+        className={cn(
+          "min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden overscroll-contain",
+          isMobile && !unassignedFooterExpanded ? GALLERY_COLLAPSED_RIBBON_SCROLL_PB : "pb-2"
+        )}
+      >
         <div
           {...getRootProps()}
           className="cursor-pointer rounded-lg border-2 border-dashed p-10 text-center transition-colors hover:bg-slate-50"
@@ -2009,18 +2120,14 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
         </CardHeader>
       </Card>
       ) : (
-        <div className="pointer-events-auto flex shrink-0 justify-center pt-1">
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="h-11 w-11 shrink-0 rounded-full border-2 border-primary/30 bg-background shadow-md"
-            aria-label="Show unassigned panel"
-            onClick={() => setUnassignedFooterExpanded(true)}
-          >
-            <ChevronUp className="h-5 w-5" aria-hidden />
-          </Button>
-        </div>
+        <GalleryCollapsedFooterBar
+          page={unassignedPageClamped}
+          totalPages={unassignedTotalPages}
+          onPageChange={setUnassignedFilesPage}
+          onExpand={() => setUnassignedFooterExpanded(true)}
+          expandAriaLabel="Show unassigned panel"
+          variant="unassigned"
+        />
       )}
 
         <AlertDialog open={!!fileToDelete} onOpenChange={(open) => !open && setFileToDelete(null)}>

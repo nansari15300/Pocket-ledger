@@ -82,6 +82,12 @@ import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type VisibleColumns, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import { LedgerFooterCheckboxPill, LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
+import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
+import { useStatementCheckMode } from "@/hooks/useStatementCheckMode";
+
+
 import { COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
   sortTransactionsWithFiscalMergeForCompany,
@@ -260,13 +266,39 @@ export function PayeeDetails({
       ),
     [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
-  
-  const totalPages = rowsPerPage > 0 ? Math.ceil(sortedTransactions.length / rowsPerPage) : 1;
-  const paginatedTransactions = rowsPerPage > 0 ? sortedTransactions.slice(
+
+  const [statementKeyboardNav, setStatementKeyboardNav] = useState<
+    ReadonlyArray<{ id?: string; _rowKey?: string }>
+  >([]);
+  const statementCheck = useStatementCheckMode({
+    companyId,
+    context: "payee",
+    contextId: party?.id,
+    viewMode: "statement",
+    orderedTransactions: sortedTransactions,
+    keyboardNavTransactions: statementKeyboardNav,
+  });
+  const ledgerListForDisplay = useMemo(() => {
+    const filtered = statementCheck.filterTransactions([...sortedTransactions]);
+    if (!statementCheck.checkModeActive) return filtered;
+    return recomputeRunningBalanceTopToBottom(filtered, openingBalanceForPeriod);
+  }, [
+    sortedTransactions,
+    statementCheck.filterTransactions,
+    statementCheck.checkModeActive,
+    openingBalanceForPeriod,
+  ]);
+
+  const totalPages = rowsPerPage > 0 ? Math.ceil(ledgerListForDisplay.length / rowsPerPage) : 1;
+  const paginatedTransactions = rowsPerPage > 0 ? ledgerListForDisplay.slice(
       (currentPage - 1) * rowsPerPage,
       currentPage * rowsPerPage
-  ) : sortedTransactions;
+  ) : ledgerListForDisplay;
 
+
+  useEffect(() => {
+    setStatementKeyboardNav(paginatedTransactions ?? []);
+  }, [paginatedTransactions]);
   const buildDateRangeText = () => {
     if (!dateRange?.from) return "All Time";
     const from = dateRange.from;
@@ -338,7 +370,7 @@ export function PayeeDetails({
         <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             {/* Part 1: account name through balance — single line, no wrap */}
-            <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim">
+            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
               {isMobile && onBack && (
                 <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
                   <ArrowLeft className="h-5 w-5" />
@@ -375,7 +407,7 @@ export function PayeeDetails({
               </div>
             </div>
             {/* Part 2: date range, Add Note, print — single line, no wrap */}
-            <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
                   isRange
@@ -493,19 +525,14 @@ export function PayeeDetails({
         <div className="flex items-center justify-end space-x-2 py-2 px-4 border-t">
           <div className="flex-1 text-sm text-muted-foreground flex items-center gap-4">
             <span className="whitespace-nowrap">{displayTransactions.length} transaction(s).</span>
-            <div className="flex items-center space-x-2">
-              <Checkbox id="show-narration-party" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
-              <label htmlFor="show-narration-party" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
-            </div>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">
-                  <Columns3 className="h-4 w-4" />
-                  Columns
-                  <ChevronDown className="h-4 w-4 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-52 p-2">
+            <LedgerFooterCheckboxPill
+              id="show-narration-payee"
+              checked={showNarration}
+              onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
+              label="Show Narration"
+            />
+            <LedgerFooterColumnsMenu>
+                <DropdownMenuContent align="start" className="w-52 p-2">
                 {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
                   .filter((key) => key !== "status" || balanceMode === "bill_wise")
                   .map((key) => {
@@ -527,11 +554,21 @@ export function PayeeDetails({
                   );
                 })}
               </DropdownMenuContent>
-            </DropdownMenu>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <Checkbox id="show-notes-payee" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
-              <label htmlFor="show-notes-payee" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
-            </div>
+              </LedgerFooterColumnsMenu>
+              <LedgerFooterCheckboxPill
+                id="show-notes-payee"
+                checked={includeNotesInTable}
+                disabled={notesPreferenceLockedOnMobile}
+                onCheckedChange={(c) => setShowNotes(Boolean(c))}
+                label="Note"
+              />
+              <StatementCheckModeFooterControls
+                idPrefix="payee"
+                enabled={statementCheck.checkModeEnabled}
+                onEnabledChange={statementCheck.setCheckModeEnabled}
+                viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+                hiddenCount={statementCheck.hiddenCount}
+              />
           </div>
           <div className="flex items-center space-x-2">
             <TransactionTableSortDropdown
@@ -540,15 +577,16 @@ export function PayeeDetails({
               onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
               viewMode="statement"
             />
-            <p className="text-sm font-medium">Rows per page</p>
-            <Select
+            <LedgerFooterChromePill className="gap-2 px-2.5">
+              <span className="whitespace-nowrap text-sm font-medium">Rows</span>
+              <Select
               value={`${rowsPerPage}`}
               onValueChange={(value) => {
                 setRowsPerPage(Number(value) || 0);
                 setCurrentPage(1);
               }}
             >
-              <SelectTrigger className="h-8 w-[70px]">
+              <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
                 <SelectValue placeholder={`${rowsPerPage}`} />
               </SelectTrigger>
               <SelectContent side="top">
@@ -558,39 +596,30 @@ export function PayeeDetails({
                 <SelectItem value="0">All</SelectItem>
               </SelectContent>
             </Select>
+            </LedgerFooterChromePill>
           </div>
-          <div className="flex items-center space-x-2">
-            <p className="text-sm font-medium">
-              Page {currentPage} of {totalPages}
-            </p>
+          <div className="flex items-center gap-1.5">
+            <LedgerFooterTextPill>Page {currentPage} of {totalPages}</LedgerFooterTextPill>
             <div className="flex items-center space-x-1">
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(1)}
                 disabled={currentPage === 1}
               >
                 <ChevronsLeft className="h-4 w-4" />
               </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(currentPage - 1)}
                 disabled={currentPage === 1}
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(currentPage + 1)}
                 disabled={currentPage === totalPages}
               >
                 <ChevronRight className="h-4 w-4" />
               </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(totalPages)}
                 disabled={currentPage === totalPages}
               >

@@ -111,6 +111,12 @@ export async function removeLocalCompanyById(
   db.prepare(`DELETE FROM company_docs WHERE company_id = ?`).run(cid);
   db.prepare(`DELETE FROM company_users WHERE company_id = ?`).run(cid);
   db.prepare(`DELETE FROM sync_outbox WHERE company_id = ?`).run(cid);
+  try {
+    db.prepare(`DELETE FROM cloud_sync_outbox WHERE company_id = ?`).run(cid);
+    db.prepare(`DELETE FROM cloud_sync_meta WHERE company_id = ?`).run(cid);
+  } catch {
+    /* pre-v3 DB */
+  }
   db.prepare(`DELETE FROM companies WHERE id = ?`).run(cid);
 
   try {

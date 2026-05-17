@@ -49,11 +49,14 @@ export function EmbeddedDeviceLockGate() {
   const [showOptionalPinSetup, setShowOptionalPinSetup] = useState(false);
   /** APK unlock: backup PIN tab dikhane ke liye (default biometric-only). */
   const [showOptionalPinUnlock, setShowOptionalPinUnlock] = useState(false);
-  /** `sessionStorage` change par React dubara paint kare — unlock ke baad overlay hataane ke liye. */
+  /** `sessionStorage` / localStorage change par React dubara paint kare — unlock ke baad overlay hataane ke liye. */
   const [unlockBump, setUnlockBump] = useState(0);
+  /** Biometric success ke turant baad overlay hatao — async storage + auth `loading` flicker se pehle. */
+  const [unlockedNow, setUnlockedNow] = useState(false);
 
   const uid = user?.uid ?? "";
   const localSynthetic = uid.startsWith("local:");
+  const sessionUnlocked = unlockedNow || isEmbeddedSessionUnlocked();
   const needsGate = useMemo(() => {
     void unlockBump;
     return (
@@ -61,9 +64,9 @@ export function EmbeddedDeviceLockGate() {
       Boolean(user) &&
       !localSynthetic &&
       isEmbeddedDeviceLockShell() &&
-      (!hasEmbeddedLockConfigured(uid) || !isEmbeddedSessionUnlocked())
+      (!hasEmbeddedLockConfigured(uid) || !sessionUnlocked)
     );
-  }, [loading, user, localSynthetic, uid, unlockBump]);
+  }, [loading, user, localSynthetic, uid, unlockBump, sessionUnlocked]);
 
   const setupMode = !hasEmbeddedLockConfigured(uid);
   const bioEnabled = uid ? readBiometricUnlockEnabled(uid) : false;
@@ -87,37 +90,94 @@ export function EmbeddedDeviceLockGate() {
   }, [uid, localSynthetic]);
 
   const finishUnlock = useCallback(() => {
+    setUnlockedNow(true);
     markEmbeddedSessionUnlocked();
     setPin("");
     setPin2("");
     setUnlockBump((b) => b + 1);
   }, []);
 
+  /** Account / cold resume: pehle se unlock ho to overlay mat dikhao. */
+  useEffect(() => {
+    if (!uid || localSynthetic) {
+      setUnlockedNow(false);
+      return;
+    }
+    if (isEmbeddedSessionUnlocked()) {
+      setUnlockedNow(true);
+    }
+  }, [uid, localSynthetic]);
+
+  useEffect(() => {
+    if (!isApk || !uid || localSynthetic) return;
+    let remove: (() => void) | undefined;
+    void import("@capacitor/app").then(({ App }) => {
+      void App.addListener("resume", () => {
+        if (isEmbeddedSessionUnlocked()) {
+          setUnlockedNow(true);
+          setUnlockBump((b) => b + 1);
+        }
+      }).then((h) => {
+        remove = () => void h.remove();
+      });
+    });
+    return () => remove?.();
+  }, [isApk, uid, localSynthetic]);
+
+  const bioUnlockInFlightRef = useRef(false);
+
   const onUnlockBiometric = useCallback(async () => {
     if (!user) return;
+    if (bioUnlockInFlightRef.current) return;
     if (!readBiometricUnlockEnabled(user.uid)) {
       toast({ title: "Biometric off", description: "Use your backup PIN or reset app lock in Settings." });
       return;
     }
+    bioUnlockInFlightRef.current = true;
     setBusy(true);
     try {
-      const recovered = await tryNativeBiometricUnlockReadPin(user.uid);
-      if (!recovered) {
+      const bio = await tryNativeBiometricUnlockReadPin(user.uid);
+      // `bio.ok === false` — discriminated union narrow; `!bio.ok` se TS `reason` access reject karta hai.
+      if (bio.ok === false) {
+        if (bio.reason === "cancelled" || bio.reason === "busy") return;
+        if (bio.reason === "no_credentials" || bio.reason === "decrypt_failed") {
+          toast({
+            variant: "destructive",
+            title: "Biometric data missing",
+            description: "Reset app lock in Settings, then enable fingerprint again.",
+          });
+          return;
+        }
+        if (bio.reason === "user_mismatch") {
+          toast({
+            variant: "destructive",
+            title: "Wrong account",
+            description: "Biometric was saved for another user. Reset app lock in Settings.",
+          });
+          return;
+        }
         toast({ variant: "destructive", title: "Biometric failed", description: "Try backup PIN or try again." });
         return;
       }
-      const ok = await verifyEmbeddedPin(user.uid, recovered);
-      if (!ok) {
-        toast({ variant: "destructive", title: "Lock data mismatch", description: "Reset app lock in Settings." });
+      /* OS biometric pass = unlock; keystore PIN se local hash sync (purana hash mismatch par bhi gate hatao) */
+      try {
+        await saveEmbeddedPinHash(user.uid, bio.pin);
+      } catch {
+        toast({
+          variant: "destructive",
+          title: "Could not save lock",
+          description: "Free storage or reset app lock in Settings.",
+        });
         return;
       }
       finishUnlock();
     } finally {
       setBusy(false);
+      bioUnlockInFlightRef.current = false;
     }
   }, [user, toast, finishUnlock]);
 
-  /** APK unlock: gate khulte hi ek hi baar auto biometric — cancel par dubara button se. */
+  /** APK unlock: gate khulte hi ek hi baar auto biometric — WebView ready + double-prompt avoid. */
   const autoBioAttempted = useRef(false);
   useEffect(() => {
     if (!needsGate) {
@@ -126,7 +186,10 @@ export function EmbeddedDeviceLockGate() {
     }
     if (setupMode || !isApk || !bioEnabled || busy || !uid || autoBioAttempted.current) return;
     autoBioAttempted.current = true;
-    void onUnlockBiometric();
+    const t = window.setTimeout(() => {
+      void onUnlockBiometric();
+    }, 400);
+    return () => window.clearTimeout(t);
   }, [needsGate, setupMode, isApk, bioEnabled, busy, uid, onUnlockBiometric]);
 
   /** APK: biometric + andar hidden PIN hash; optional user PIN overwrite. */

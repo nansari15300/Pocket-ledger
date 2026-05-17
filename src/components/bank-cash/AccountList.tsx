@@ -6,11 +6,12 @@ import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/utils"
+import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { Landmark, Crown } from "lucide-react";
-import { Card } from "@/components/ui/card";
+import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -80,21 +81,16 @@ export function AccountList({
 
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background">
-      <ScrollArea className="min-h-0 min-w-0 flex-1">
-        <ul className="p-2 space-y-1">
+    <div className={masterListShellCn}>
+      <ScrollArea listChrome className="min-h-0 min-w-0 flex-1">
+        <ul className="pl-master-list-ul">
           <AnimatePresence mode="popLayout">
             {filteredAndSortedAccounts.map((account) => {
               const isSelected = selectedAccount?.id === account.id;
               const isSpecial = account.isSpecial;
               const href = getItemHref?.(account);
               const attachmentPreviewUrl = trimEntityFileUrlForPreview(account.fileUrl);
-              const cardClassName = cn(
-                "min-w-0 max-w-full overflow-hidden p-1.5 cursor-pointer border rounded-md transition-all duration-200",
-                isSelected
-                  ? "border-primary bg-secondary shadow-sm"
-                  : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30"
-              );
+              const cardClassName = masterListRowUnselectedCn(isSelected);
               const cardContent = (
                 <div className="pl-master-list-row">
                   <div className="pl-master-list-row-leading">
@@ -127,16 +123,16 @@ export function AccountList({
                       )}
                     </div>
                     <Tooltip>
-                      {/* asChild: truncate flex child ma kaam garcha */}
-                      <TooltipTrigger asChild>
-                        <span
-                          className={cn(
-                            "pl-master-list-row-name cursor-default",
-                            isSpecial && "text-amber-600"
-                          )}
-                        >
-                          {account.accountName}
-                        </span>
+                      {/* asChild hata — motion layout + span ref merge par Radix setRef loop */}
+                      <TooltipTrigger
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        className={cn(
+                          "pl-master-list-row-name cursor-default block w-full truncate border-0 bg-transparent p-0 text-left shadow-none",
+                          isSpecial && "text-amber-600"
+                        )}
+                      >
+                        {account.accountName}
                       </TooltipTrigger>
                       <TooltipContent>
                         <p>{account.accountName}</p>
@@ -171,12 +167,12 @@ export function AccountList({
                   {href ? (
                     // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                     <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
-                      <Card className={cardClassName}>{cardContent}</Card>
+                      <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
                     </Link>
                   ) : (
-                    <Card className={cardClassName} onClick={() => onSelectAccount(account)}>
+                    <MasterListRow selected={isSelected} className={cardClassName} onClick={() => onSelectAccount(account)}>
                       {cardContent}
-                    </Card>
+                    </MasterListRow>
                   )}
                 </motion.li>
               );

@@ -1,6 +1,9 @@
+import { appNavHref } from "@/lib/appNavHref";
+
 /**
  * Dashboard voucher summary card → Reports deep-link (`/reports?report=…&allVouchers=1`).
  * `voucherScope` Payment Out report me subset filter (Pay Salary vs baaki Payment Out).
+ * Static export (`trailingSlash`): `appNavHref` — bina slash ke `/reports?…` par SW/host full reload / 404 fallback ho sakta tha.
  */
 export function dashboardStatCardReportHref(statType: string): string | null {
   const q = new URLSearchParams();
@@ -48,9 +51,9 @@ export function dashboardStatCardReportHref(statType: string): string | null {
       q.set("report", "notes");
       break;
     case "production":
-      return "/production";
+      return appNavHref("/production");
     default:
       return null;
   }
-  return `/reports?${q.toString()}`;
+  return appNavHref(`/reports?${q.toString()}`);
 }

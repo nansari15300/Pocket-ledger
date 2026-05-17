@@ -14,7 +14,7 @@
 import type { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
-import { readPersistedModalParentHref } from "@/lib/modalUrlSync";
+import { persistLedgerModalParentFromBrowser, readPersistedModalParentHref } from "@/lib/modalUrlSync";
 import { plNavDbg } from "@/lib/plNavRedirectDebug";
 
 const SESSION_PROTECT_UNTIL_KEY = "pl_voucher_approve_protect_until";
@@ -99,20 +99,21 @@ export function isDashboardRedirectGuardActive(): boolean {
  */
 export function armDashboardRedirectGuard(
   router: AppRouterInstance,
-  options?: { durationMs?: number; isMobile?: boolean }
+  options?: { durationMs?: number; isMobile?: boolean; /** Offline→online: viewport skip + lamba window */ onlineResume?: boolean }
 ): void {
   if (typeof window === "undefined") return;
   const nativeApk = isCapacitorNativeApp();
   if (!isStaticAppBuild() && !nativeApk) return;
+  const onlineResume = options?.onlineResume === true;
   const narrowViewport =
     typeof window.matchMedia === "function" && window.matchMedia("(max-width: 767px)").matches;
   const explicit = options?.isMobile;
   // Tablet APK landscape: `useIsMobile` false + width >767 — pehle guard skip ho jata tha; native flag se sab APK par arm.
-  if (explicit === false && !nativeApk) {
+  if (!onlineResume && explicit === false && !nativeApk) {
     plNavDbg("dashboardGuard.armSkipped.viewportRule", { nativeApk, explicitMobile: explicit });
     return;
   }
-  if (!nativeApk && !narrowViewport && explicit !== true) {
+  if (!onlineResume && !nativeApk && !narrowViewport && explicit !== true) {
     plNavDbg("dashboardGuard.armSkipped.notNarrowExplicit", {
       narrowViewport,
       explicitMobile: explicit,
@@ -122,7 +123,7 @@ export function armDashboardRedirectGuard(
   }
 
   // APK par SQLite/outbox flush zyada slow ho sakta hai — thoda lamba window taaki late redirect bhi pakde
-  const defaultDurationMs = nativeApk ? 8000 : 5000;
+  const defaultDurationMs = onlineResume ? (nativeApk ? 20_000 : 14_000) : nativeApk ? 8000 : 5000;
 
   let snapshotHref = currentHrefSnapshot();
   let snapshotPath = normalizePath(snapshotHref.split("?")[0] || "/");
@@ -228,4 +229,15 @@ export function armDashboardRedirectGuard(
 /** Manually disarm — typically not needed; auto-cleanup expires after duration. */
 export function disarmDashboardRedirectGuard(): void {
   clearGuardInternal();
+}
+
+/**
+ * Offline→online: flush/outbox ke race me `/dashboard` ya `/company` silent push — current ledger URL lock + restore guard.
+ * Static APK/EXE + Capacitor; party/bank/reports par user wahi rahe, sync background me.
+ */
+export function armOnlineResumeRouteShield(router: AppRouterInstance): void {
+  if (typeof window === "undefined") return;
+  persistLedgerModalParentFromBrowser();
+  armDashboardRedirectGuard(router, { isMobile: true, onlineResume: true });
+  plNavDbg("onlineResumeRouteShield.armed", { href: currentHrefSnapshot().slice(0, 160) });
 }

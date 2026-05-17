@@ -23,6 +23,7 @@ import { CreateItemGroupDialog } from "@/components/items/CreateItemGroupDialog"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ItemGroupDetails } from "@/components/items/ItemGroupDetails";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { mlc, mlcListChromeRoot, mlcListChromeRootData } from "@/lib/mobileListChrome";
 import { PermissionButton } from "@/components/permission";
 import { useDate } from "@/hooks/useDate";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
@@ -431,20 +432,21 @@ function ItemsPageContent() {
   }
 
   const listView = (
-    <div className="flex flex-col h-full">
-      <div className="p-3 border-b flex items-center gap-2">
-        <div className="relative flex-1 min-w-0">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+    <div className={mlcListChromeRoot} {...mlcListChromeRootData}>
+      <div className={mlc.searchRow}>
+        <div className={mlc.searchWrap}>
+          <Search className={mlc.searchIcon} />
           <Input
             placeholder={activeView === "items" ? "Search items..." : "Search groups..."}
-            className="pl-9"
+            listChrome
+            listChromeSearch
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             autoComplete="off"
           />
         </div>
         {activeView === "items" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-          <PendingApprovalListFilterBadge
+          <PendingApprovalListFilterBadge compact
             count={totalPendingApprovalVoucherCount}
             pressed={showOnlyItemsWithPendingApproval}
             onToggle={() => setShowOnlyItemsWithPendingApproval((v) => !v)}
@@ -455,7 +457,7 @@ function ItemsPageContent() {
           />
         ) : null}
         {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-          <PendingApprovalListFilterBadge
+          <PendingApprovalListFilterBadge compact
             count={totalPendingApprovalVoucherCount}
             pressed={showOnlyItemGroupsWithPendingApproval}
             onToggle={() => setShowOnlyItemGroupsWithPendingApproval((v) => !v)}
@@ -467,7 +469,7 @@ function ItemsPageContent() {
         ) : null}
         {activeView === "items" ? (
           <CreateItemDialog onItemCreated={() => {}} isOpen={isCreateItemOpen} onOpenChange={setIsCreateItemOpen}>
-            <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateItemOpen(true)}>
+            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateItemOpen(true)}>
               + Add Item
             </PermissionButton>
           </CreateItemDialog>
@@ -478,7 +480,7 @@ function ItemsPageContent() {
             onOpenChange={setIsCreateGroupOpen}
             groups={processedItemGroups}
           >
-            <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateGroupOpen(true)}>
+            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
               + Add Group
             </PermissionButton>
           </CreateItemGroupDialog>
@@ -490,8 +492,8 @@ function ItemsPageContent() {
         </div>
       ) : activeView === "items" ? (
         <>
-          <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
-            <Package className="h-4 w-4" />
+          <div className={mlc.sectionLabelRow}>
+            <Package className={mlc.sectionIcon} />
             <span>Item ({filteredItemListCount})</span>
             <Select value={stockView} onValueChange={(v) => setStockView(v as StockView)}>
               <SelectTrigger className="w-[100px] h-7 ml-auto">
@@ -518,8 +520,8 @@ function ItemsPageContent() {
         </>
       ) : (
         <>
-          <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
-            <Users className="h-4 w-4" />
+          <div className={mlc.sectionLabelRow}>
+            <Users className={mlc.sectionIcon} />
             <span>Groups ({filteredGroupCount})</span>
           </div>
           <div className="flex-1 min-h-0 overflow-hidden">
@@ -594,13 +596,9 @@ function ItemsPageContent() {
       }
       tabs={
         <Tabs value={activeView} onValueChange={setActiveView} className="w-full">
-          <TabsList className="w-full">
-            <TabsTrigger value="items" className="flex-1">
-              Items
-            </TabsTrigger>
-            <TabsTrigger value="groups" className="flex-1">
-              Groups
-            </TabsTrigger>
+          <TabsList listChrome>
+            <TabsTrigger listChrome value="items" className="flex-1">Items</TabsTrigger>
+            <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
           </TabsList>
         </Tabs>
       }

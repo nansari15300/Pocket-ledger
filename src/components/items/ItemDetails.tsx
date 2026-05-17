@@ -1,11 +1,17 @@
-
+﻿
 "use client";
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useVouchers } from "@/hooks/useVouchers";
 import { TransactionsTable, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import { LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
+
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
+import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
+import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
+import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
 import {
   sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
@@ -44,6 +50,7 @@ import {
   Edit
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -63,6 +70,9 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { openPrintDirect } from "@/lib/printDirect";
 import { useCompany } from "@/hooks/useCompany";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
+import { useDateRangeTimestamps } from "@/hooks/useLedgerDetailDateRange";
+import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
+import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { Dialog, DialogHeader, DialogTitle, DialogContent, DialogDescription } from "@/components/ui/dialog";
 import { CreateNoteForm } from "@/components/vouchers/CreateNoteForm";
 import { EditItemDialog } from "./EditItemDialog";
@@ -160,7 +170,7 @@ export default function ItemDetails({
   transactions: any[];
 }) {
   const { formatDate, formatDateBS, formatCurrency: formatMoney, dateSystem, formatCurrencyForPrint } = useDate();
-  const { company } = useCompany(); 
+  const { company, companyId } = useCompany(); 
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useLocationSearchParams();
@@ -197,9 +207,18 @@ export default function ItemDetails({
   });
   const [selectedPartyIds, setSelectedPartyIds] = useState<string[]>(['all']);
 
+  const { fromMs: dateRangeFromMs, toMs: dateRangeToMs } = useDateRangeTimestamps(dateRange);
   useEffect(() => {
-    setTempDateRange(dateRange);
-  }, [dateRange]);
+    setTempDateRange((prev) => {
+      if (prev?.from?.getTime() === dateRangeFromMs && prev?.to?.getTime() === dateRangeToMs) return prev;
+      return dateRange;
+    });
+  }, [dateRangeFromMs, dateRangeToMs, dateRange]);
+  const { selectValue: rowsPerPageSelectValue, onSelectValueChange: handleRowsPerPageChange } =
+    useRowsPerPageSelectControl(rowsPerPage, setRowsPerPage, setCurrentPage, ROWS_PER_PAGE_OPTIONS_DEFAULT, "10");
+  const handleBsDateRangeChange = useCallback((range?: DateRange) => {
+    setDateRange(range);
+  }, []);
 
   // FIX: Robust item merging to ensure unitConversions are never lost
   // Use ref to track previous item to prevent unnecessary recalculations
@@ -379,7 +398,13 @@ export default function ItemDetails({
   const conversions = (currentItem?.unitConversions || []) as any[];
   const smallestUnit = conversions.length > 0 ? conversions[conversions.length - 1].toUnit : ((currentItem as any).openingBalanceUnit || '');
   const displayUnit = itemDisplayUnits && currentItem ? itemDisplayUnits[currentItem.id] || smallestUnit : smallestUnit;
-  
+  // Unit Select: value list me honi chahiye â€” warna Radix setRef loop (ScrollArea ke saath dikhta hai).
+  const displayUnitSelectValue = useMemo(() => {
+    if (!displayUnit) return unitOptions[0] ?? "";
+    if (unitOptions.includes(displayUnit)) return displayUnit;
+    return unitOptions[0] ?? displayUnit;
+  }, [displayUnit, unitOptions]);
+
   const isFilterActive = dateRange !== undefined || Object.values(filters).some((v) => v) || (!selectedPartyIds.includes('all') && selectedPartyIds.length > 0);
 
   const clearFilters = () => {
@@ -492,48 +517,22 @@ export default function ItemDetails({
       ),
     [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
-  const totalPages = rowsPerPage > 0 ? Math.max(1, Math.ceil(sortedTransactions.length / rowsPerPage)) : 1;
-  const paginatedTransactions = useMemo(() => {
-    if (rowsPerPage <= 0) return sortedTransactions;
-    const total = sortedTransactions.length;
-    const safePage = Math.min(Math.max(1, currentPage), totalPages);
-    const end = total - (safePage - 1) * rowsPerPage;
-    const start = Math.max(0, end - rowsPerPage);
-    return sortedTransactions.slice(start, Math.max(start, end));
-  }, [sortedTransactions, rowsPerPage, currentPage, totalPages]);
-  // Page-break dynamic opening: opening row ko current page start transaction ke hisab se sync karo.
-  const desktopPageLedgerStats = useMemo(() => {
-    const pageRows = (paginatedTransactions as any[]).filter((t: any) => !(t as any)?._spendWiseSpacer);
-    let openingForPage = openingBalanceForPeriod;
-    const firstTxn = pageRows[0] as any;
-    if (firstTxn?.id) {
-      const firstIdx = (sortedTransactions as any[]).findIndex((t: any) => t?.id === firstTxn.id);
-      if (firstIdx > 0) {
-        for (let i = firstIdx - 1; i >= 0; i--) {
-          const prev = (sortedTransactions as any[])[i] as any;
-          if (!prev || prev._spendWiseSpacer) continue;
-          const prevBal =
-            typeof prev.balance === "number"
-              ? prev.balance
-              : typeof prev.runningBalance === "number"
-                ? prev.runningBalance
-                : undefined;
-          if (typeof prevBal === "number" && !Number.isNaN(prevBal)) {
-            openingForPage = prevBal;
-          }
-          break;
-        }
-      }
-    }
-    const periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
-    const periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
-    return {
-      openingForPage,
-      periodDrForPage,
-      periodCrForPage,
-      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
-    };
-  }, [paginatedTransactions, sortedTransactions, openingBalanceForPeriod]);
+  // Statement check mode + desktop tail paging (PartyDetails jaisa)
+  const {
+    statementCheck,
+    desktopPaginationMeta: desktopPageLedgerStats,
+    paginatedTransactions,
+    totalPages,
+  } = useStatementLedgerCheckModePaging({
+    companyId: companyId ?? undefined,
+    context: "item",
+    contextId: currentItem?.id,
+    viewMode: balanceMode === "bill_wise" ? "bill_wise" : "statement",
+    searchFilteredTransactions: sortedTransactions,
+    rowsPerPage,
+    currentPage,
+    ledgerOpeningForRunning: openingBalanceForPeriod,
+  });
 
   const handlePrint = () => {
     if (!company || !currentItem) return;
@@ -665,8 +664,11 @@ export default function ItemDetails({
   useEffect(() => {
     const total = rowsPerPage > 0 ? Math.ceil(filteredMobileTransactions.length / rowsPerPage) : 1;
     const safeTotal = Math.max(1, total);
-    setCurrentPage((prev) => Math.min(Math.max(1, prev), safeTotal));
-  }, [dateRange, filteredMobileTransactions.length, rowsPerPage]);
+    setCurrentPage((prev) => {
+      const next = Math.min(Math.max(1, prev), safeTotal);
+      return next === prev ? prev : next;
+    });
+  }, [dateRangeFromMs, dateRangeToMs, filteredMobileTransactions.length, rowsPerPage]);
 
   const getOppositeLabel = (t: any) => {
     if (t.type === 'sale' || t.type === 'purchase') {
@@ -720,7 +722,7 @@ export default function ItemDetails({
                     <p className="font-bold text-sm truncate">{transaction.voucherNumber}{oppositeLabel ? ` - ${oppositeLabel}` : ''}</p>
                     <p className="text-xs text-muted-foreground truncate mt-0.5">{transaction.narration || "No narration"}</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      {displayDate()} • {formatVoucherEntryTimeLocal(transaction as Record<string, unknown>)}
+                      {displayDate()} â€¢ {formatVoucherEntryTimeLocal(transaction as Record<string, unknown>)}
                     </p>
                 </div>
                 <div className="text-right shrink-0 flex flex-col items-end gap-0.5 flex-shrink-0">
@@ -758,9 +760,10 @@ export default function ItemDetails({
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
       {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
       <div className="flex flex-col flex-shrink-0 border-b bg-background">
+        <MobileDetailSummaryCollapsible>
         {/* Row 2: Date range label + X icon - Party-style */}
-        <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0 bg-background">
-          <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
+        <div className="flex flex-shrink-0 items-center justify-center gap-1 border-b px-2 py-0.5 bg-background">
+          <span className="text-[11px] font-medium leading-tight text-muted-foreground">{dateRangeLabel}</span>
           {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
             <button
               type="button"
@@ -772,31 +775,29 @@ export default function ItemDetails({
             </button>
           )}
         </div>
-        <div className="px-3 py-2 border-b flex items-center justify-between gap-2 flex-shrink-0 bg-background">
-            <span className="text-sm font-medium text-muted-foreground flex-1">{balanceText}</span>
-            <div className="flex items-center gap-2">
-                <span className={cn("text-2xl font-bold", headerStockValue >= 0 ? "text-green-600" : "text-red-600")}>
-                    {/* FIX: Use formatQtyValue for Unit View to remove Rs. */}
-                    {stockView === 'qty' ? formatQtyValue(headerStockValue) : formatMoney(Math.abs(headerStockValue), { noSuffix: true })}
-                </span>
-                {stockView === 'qty' && unitOptions.length > 0 && setItemDisplayUnit && (
-                   <Select value={displayUnit} onValueChange={handleUnitChange}>
-                       <SelectTrigger className="h-8 w-fit gap-1 text-xs bg-muted/50 border border-transparent px-2 focus:ring-1 focus:ring-inset focus:ring-ring focus:ring-offset-0">
-                           <SelectValue />
-                       </SelectTrigger>
-                       <SelectContent>
-                           {unitOptions.map((u) => (
-                               <SelectItem key={u} value={u}>
-                                   {u}
-                               </SelectItem>
-                           ))}
-                       </SelectContent>
-                   </Select>
-               )}
-            </div>
+        {/* Balance â€” party jaisa center line (unit dropdown same row, h-8) */}
+        <div className="flex flex-shrink-0 items-center justify-center gap-2 border-b bg-background px-2 py-1">
+          <p className={cn("text-center text-lg font-bold leading-tight", headerStockValue >= 0 ? "text-green-600" : "text-red-600")}>
+            {balanceText}{" "}
+            {stockView === "qty" ? formatQtyValue(headerStockValue) : formatMoney(Math.abs(headerStockValue), { noSuffix: true })}
+          </p>
+          {stockView === "qty" && unitOptions.length > 0 && setItemDisplayUnit ? (
+            <Select value={displayUnitSelectValue} onValueChange={handleUnitChange}>
+              <SelectTrigger className="h-8 w-fit gap-1 border border-transparent bg-muted/50 px-2 text-xs focus:ring-1 focus:ring-inset focus:ring-ring focus:ring-offset-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {unitOptions.map((u) => (
+                  <SelectItem key={u} value={u}>
+                    {u}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
         </div>
-        <div className="p-2 border-b flex items-stretch gap-2 flex-shrink-0 bg-background">
-          <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
+        <div className="flex flex-shrink-0 items-stretch gap-1.5 border-b bg-background px-2 py-1">
+          <div className="h-8 min-w-0 flex-1 [&_button]:h-8 [&_button]:text-xs">
             <Combobox
               options={processedItems?.map(p => ({ value: p.id, label: p.name })) ?? []}
               value={currentItem?.id || ""}
@@ -815,16 +816,16 @@ export default function ItemDetails({
               onItemDeleted={() => onItemDeleted(currentItem!.id)}
               hasTransactions={processedTransactions.length > 0}
             >
-              <Button variant="outline" size="icon" className="h-9 w-8 flex-shrink-0">
-                <Edit className="h-4 w-4" />
+              <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
+                <Edit className="h-3.5 w-3.5" />
               </Button>
             </EditItemDialog>
           )}
-          <div className="flex-1 min-w-0 h-9 relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
+          <div className="relative h-8 min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-2 top-1/2 z-10 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   placeholder="Search transactions"
-                  className="pl-8 h-9 text-sm w-full min-w-0"
+                  className="h-8 w-full min-w-0 pl-7 text-xs"
                   value={mobileSearchTerm}
                   onChange={(e) => {
                     setMobileSearchTerm(e.target.value);
@@ -833,6 +834,7 @@ export default function ItemDetails({
                 />
             </div>
         </div>
+        </MobileDetailSummaryCollapsible>
       </div>
 
       {/* Transaction list - extends to footer line */}
@@ -982,10 +984,10 @@ export default function ItemDetails({
 
   const renderDesktopView = () => (
      <div className="h-full flex flex-col">
-      {/* Header: Part 1 (name→balance/unit) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
+      {/* Header: Part 1 (nameâ†’balance/unit) and Part 2 (dateâ†’print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
       <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-          <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim">
+          <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
             <div className="p-3 bg-muted rounded-full flex-shrink-0">
               <Package className="w-6 h-6 text-muted-foreground" />
             </div>
@@ -1007,7 +1009,7 @@ export default function ItemDetails({
                 {stockView === 'qty' ? formatQtyValue(headerStockValue) : formatMoney(Math.abs(headerStockValue), { noSuffix: true, noAnimation: true })}
               </span>
               {stockView === 'qty' && unitOptions.length > 0 && setItemDisplayUnit && (
-                <Select value={displayUnit} onValueChange={handleUnitChange}>
+                <Select value={displayUnitSelectValue} onValueChange={handleUnitChange}>
                   <SelectTrigger className="h-8 px-2 w-fit gap-1 text-xs bg-muted/50 border border-transparent flex-shrink-0 focus:ring-1 focus:ring-inset focus:ring-ring focus:ring-offset-0">
                     <SelectValue />
                   </SelectTrigger>
@@ -1022,12 +1024,12 @@ export default function ItemDetails({
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+          <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
             {(dateSystem === 'BS' || dateSystem === 'Both') && (
               <BsDatePicker
                 isRange
                 valueAD={dateRange}
-                onChangeAD={(range) => setDateRange(range as DateRange)}
+                onChangeAD={handleBsDateRangeChange}
                 transactionDates={transactionDates}
                 className="w-auto"
               />
@@ -1151,6 +1153,7 @@ export default function ItemDetails({
                     onRowClick={handleEditVoucher}
                     
                     isDateChange={isDateChange}
+                    {...statementCheck.tableProps}
                 />
             </div>
             <ScrollBar orientation="horizontal" />
@@ -1158,20 +1161,15 @@ export default function ItemDetails({
          {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
          <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-               <div className="flex items-center space-x-2 flex-shrink-0">
-                 <Checkbox id="show-narration-item" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
-                 <label htmlFor="show-narration-item" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
-               </div>
-               <DropdownMenu>
-                 <DropdownMenuTrigger asChild>
-                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">
-                     <Columns3 className="h-4 w-4" />
-                     Columns
-                     <ChevronDown className="h-4 w-4 opacity-50" />
-                   </Button>
-                 </DropdownMenuTrigger>
-                 <DropdownMenuContent align="start" className="w-52 p-2">
+             <div className="flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
+              <LedgerFooterCheckboxPill
+                id="show-narration-item"
+                checked={showNarration}
+                onCheckedChange={(checked) => (checked) => handleShowNarrationChange(Boolean(checked))}
+                label="Show Narration"
+              />
+               <LedgerFooterColumnsMenu>
+                <DropdownMenuContent align="start" className="w-52 p-2">
                   {(["date", "type", "voucherNo", "party", "user", "file", "dr", "cr", "runningBalance", "status"] as Array<TransactionColumnKey | "party">)
                     .filter((key) => key !== "status" || balanceMode === "bill_wise")
                     .map((key) => {
@@ -1215,72 +1213,67 @@ export default function ItemDetails({
                      );
                    })}
                  </DropdownMenuContent>
-               </DropdownMenu>
-               <div className="flex items-center gap-2 flex-shrink-0">
-                 <Checkbox id="show-notes-item" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
-                 <label htmlFor="show-notes-item" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
-               </div>
+              </LedgerFooterColumnsMenu>
+              <LedgerFooterCheckboxPill
+                id="show-notes-item"
+                checked={includeNotesInTable}
+                disabled={notesPreferenceLockedOnMobile}
+                onCheckedChange={(c) => setShowNotes(Boolean(c))}
+                label="Note"
+              />
+               <StatementCheckModeFooterControls
+                 idPrefix="item"
+                 enabled={statementCheck.checkModeEnabled}
+                 onEnabledChange={statementCheck.setCheckModeEnabled}
+                 viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+                 hiddenCount={statementCheck.hiddenCount}
+               />
              </div>
-             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+             <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
                <TransactionTableSortDropdown
                  sortBy={sortBy}
                  sortOrder={sortOrder}
                  onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
                  viewMode="statement"
                />
-               <p className="text-sm font-medium flex-shrink-0">
-                 Page {currentPage} of {totalPages}
-               </p>
-               <Button
-                 variant="outline"
-                 className="h-8 w-8 p-0"
+               <LedgerFooterTextPill>Page {currentPage} of {totalPages}</LedgerFooterTextPill>
+               <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                  onClick={() => setCurrentPage(totalPages)}
                  disabled={currentPage === totalPages}
                >
                  <ChevronsLeft className="h-4 w-4" />
                </Button>
-               <Button
-                 variant="outline"
-                 className="h-8 w-8 p-0"
+               <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                  onClick={() => setCurrentPage(currentPage + 1)}
                  disabled={currentPage === totalPages}
                >
                  <ChevronLeft className="h-4 w-4" />
                </Button>
-               <Select
-                 value={`${rowsPerPage}`}
-                 onValueChange={(value) => {
-                   setRowsPerPage(Number(value) || 0);
-                   setCurrentPage(1);
-                 }}
-               >
-                 <SelectTrigger className="h-8 w-[70px]">
-                   <SelectValue placeholder={`${rowsPerPage}`} />
+               <LedgerFooterChromePill className="px-1">
+                <Select value={rowsPerPageSelectValue} onValueChange={handleRowsPerPageChange}>
+                  <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
+                   <SelectValue placeholder={rowsPerPageSelectValue} />
                  </SelectTrigger>
                  <SelectContent side="top">
-                   {[10, 20, 30, 50].map((pageSize) => (
+                   {ROWS_PER_PAGE_OPTIONS_DEFAULT.map((pageSize) => (
                      <SelectItem key={pageSize} value={`${pageSize}`}>{pageSize}</SelectItem>
                    ))}
                    <SelectItem value="0">All</SelectItem>
                  </SelectContent>
                </Select>
-               <Button
-                 variant="outline"
-                 className="h-8 w-8 p-0"
+              </LedgerFooterChromePill><Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                  onClick={() => setCurrentPage(currentPage - 1)}
                  disabled={currentPage === 1}
                >
                  <ChevronRight className="h-4 w-4" />
                </Button>
-               <Button
-                 variant="outline"
-                 className="h-8 w-8 p-0"
+               <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                  onClick={() => setCurrentPage(1)}
                  disabled={currentPage === 1}
                >
                  <ChevronsRight className="h-4 w-4" />
                </Button>
-               <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {displayTransactions.length}</p>
+               <LedgerFooterTextPill>Total Trxn {displayTransactions.length}</LedgerFooterTextPill>
              </div>
            </div>
          </div>

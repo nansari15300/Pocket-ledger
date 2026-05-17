@@ -34,6 +34,22 @@ function Dialog(props: React.ComponentProps<typeof DialogPrimitive.Root>) {
 
 const DialogTrigger = DialogPrimitive.Trigger
 
+/**
+ * Parent `open`/`onOpenChange` se controlled dialog: trigger bahar rakho.
+ * `DialogTrigger asChild` + Button ref merge → "Maximum update depth" loop (party groups tab).
+ */
+function DialogControlledOpener({
+  controlled,
+  children,
+}: {
+  controlled: boolean;
+  children?: React.ReactNode;
+}) {
+  if (!children) return null;
+  if (controlled) return <>{children}</>;
+  return <DialogTrigger asChild>{children}</DialogTrigger>;
+}
+
 const DialogPortal = DialogPrimitive.Portal
 
 const DialogClose = DialogPrimitive.Close
@@ -164,6 +180,7 @@ DialogDescription.displayName = DialogPrimitive.Description.displayName
 
 export {
   Dialog,
+  DialogControlledOpener,
   DialogPortal,
   DialogOverlay,
   DialogClose,

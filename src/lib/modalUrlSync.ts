@@ -1,5 +1,6 @@
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isDashboardRedirectGuardActive } from "@/lib/protectFromUnwantedDashboardRedirect";
 
 /** Path compare: trailing slash ignore */
 function normalizePathSegment(p: string): string {
@@ -35,6 +36,15 @@ export function pathnameForModalRouterReplace(hookPathname: string): string {
   if (typeof window === "undefined") return hookPathname;
 
   const persistedLedger = readPersistedModalParentHref();
+  const hookSegEarly = normalizePathSegment(hookPathname || "/");
+  // Online resume guard: stale Next hook `/dashboard` ho to session ledger path prefer karo (modal close jump band).
+  if (
+    persistedLedger &&
+    isDashboardRedirectGuardActive() &&
+    (hookSegEarly === "/dashboard" || hookSegEarly === "/")
+  ) {
+    return persistedLedger.split("?")[0] || hookPathname;
+  }
   if (persistedLedger) {
     const persistedPath = normalizePathSegment(persistedLedger.split("?")[0] || "/");
     const hookSeg = normalizePathSegment(hookPathname || "/");

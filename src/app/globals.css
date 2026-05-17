@@ -36,6 +36,15 @@
   .pl-master-list-row-amount-xs {
     @apply justify-self-end text-right text-xs font-bold whitespace-nowrap tabular-nums;
   }
+  /* Master–detail list scroll: rows ke beech sirf 3px gap (pehle space-y-1 / p-2) */
+  .pl-master-list-ul {
+    @apply flex flex-col gap-[3px] p-1;
+  }
+  .pl-master-list-item {
+    @apply min-w-0 max-w-full overflow-hidden cursor-pointer rounded-md border p-1 transition-all duration-200;
+  }
+  /* Master–detail list: tabs/search/buttons compact — `data-pl-master-list-chrome` (ResponsiveMasterDetail + listView) */
+  /* Row 1/2: fallback — asli sizing `tabs.tsx` listChrome + `Input listChrome` + Button size=list */
   /* Sidebar / header / mobile dock: primary rang ki patli ribbon — dashboard body se visual separation */
   /* Purane Android System WebView: `hsl(var(--primary) / α)` ignore ho sakta hai — pseudo + opacity har version me ribbon dikhta hai */
   .app-chrome-top-ribbon {
@@ -263,88 +272,113 @@ body {
 
   .theme-pure-white { 
     --background: 0 0% 100%; 
-    --app-chrome: 214 32% 96%;
+    /* Light: sidebar + header bhi safed — gray chrome nahi */
+    --app-chrome: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
+    --border: 0 0% 0%;
+    --input: 0 0% 0%;
     --card: 0 0% 100%;
     --card-foreground: 222.2 84% 4.9%;
     --popover: 0 0% 100%;
     --popover-foreground: 222.2 84% 4.9%;
-    --sidebar-background: var(--app-chrome);
+    --muted: 0 0% 98%;
+    --sidebar-background: 0 0% 100%;
     --sidebar-foreground: 222.2 84% 4.9%;
+    --sidebar-border: 0 0% 0%;
+    --sidebar-accent: 0 0% 96%;
+    --header-bg: 0 0% 100%;
   }
   .theme-soft-green { 
     --background: 160 70% 95%; 
-    --app-chrome: 160 55% 90%;
+    /* Header/sidebar/page: ek hi Soft Green — alag dark chrome tone nahi */
+    --app-chrome: var(--background);
     --foreground: 95 35% 20%; 
     --card: var(--background);
     --card-foreground: var(--foreground);
     --popover: var(--background);
     --popover-foreground: var(--foreground);
-    --sidebar-background: var(--app-chrome);
+    --sidebar-background: var(--background);
     --sidebar-foreground: var(--foreground);
     --muted: 95 35% 85%;
+    --header-bg: var(--background);
+    --list-page-bg: var(--background);
   }
   .theme-dim-soft-green { 
-    --background: 140 200% 96.5%; 
-    --app-chrome: 140 45% 93%;
-    --foreground: 540 50% 25%; 
+    --background: 140 55% 94%; 
+    --app-chrome: var(--background);
+    --foreground: 140 40% 22%; 
     --card: var(--background);
     --card-foreground: var(--foreground);
     --popover: var(--background);
     --popover-foreground: var(--foreground);
-    --sidebar-background: var(--app-chrome);
+    --sidebar-background: var(--background);
     --sidebar-foreground: var(--foreground);
+    --muted: 140 35% 86%;
+    --header-bg: var(--background);
+    --list-page-bg: var(--background);
   }
   .theme-soft-blue { 
     --background: 197 71% 94%;
-    --app-chrome: 200 50% 90%;
+    --app-chrome: var(--background);
     --foreground: 210 90% 25%; 
     --card: var(--background);
     --card-foreground: var(--foreground);
     --popover: var(--background);
     --popover-foreground: var(--foreground);
-    --sidebar-background: var(--app-chrome);
+    --sidebar-background: var(--background);
     --sidebar-foreground: var(--foreground);
+    --muted: 210 50% 88%;
+    --header-bg: var(--background);
+    --list-page-bg: var(--background);
   }
   .theme-sky-blue { 
     --background: 197 71% 85%;
-    --app-chrome: 205 55% 80%;
-    --foreground: 159 89% 25%; 
+    --app-chrome: var(--background);
+    --foreground: 199 70% 22%; 
     --card: var(--background);
     --card-foreground: var(--foreground);
     --popover: var(--background);
     --popover-foreground: var(--foreground);
-    --sidebar-background: var(--app-chrome);
+    --sidebar-background: var(--background);
     --sidebar-foreground: var(--foreground);
+    --muted: 199 55% 82%;
+    --header-bg: var(--background);
+    --list-page-bg: var(--background);
   }
   .theme-soft-yellow { 
     --background: 48 100% 96%; 
-    --app-chrome: 48 85% 91%;
+    --app-chrome: var(--background);
     --foreground: 45 95% 25%; 
     --card: var(--background);
     --card-foreground: var(--foreground);
     --popover: var(--background);
     --popover-foreground: var(--foreground);
-    --sidebar-background: var(--app-chrome);
+    --sidebar-background: var(--background);
     --sidebar-foreground: var(--foreground);
+    --muted: 48 80% 88%;
+    --header-bg: var(--background);
+    --list-page-bg: var(--background);
   }
   .theme-soft-pink { 
     --background: 350 100% 94%; 
-    --app-chrome: 350 85% 89%;
+    --app-chrome: var(--background);
     --foreground: 350 80% 25%; 
     --card: var(--background);
     --card-foreground: var(--foreground);
     --popover: var(--background);
     --popover-foreground: var(--foreground);
-    --sidebar-background: var(--app-chrome);
+    --sidebar-background: var(--background);
     --sidebar-foreground: var(--foreground);
+    --muted: 350 75% 88%;
+    --header-bg: var(--background);
+    --list-page-bg: var(--background);
   }
 
   /* Colorfull: sab jagah same dim green background; sidebar bold nahi; buttons alag-alag single color; saari lines black 20% kam (dark grey) */
   .theme-colorfull {
     --background: 140 28% 94%;
-    /* Header/sidebar/dock: pehle wala sidebar tone — main list-page se ab bhi alag */
-    --app-chrome: 140 22% 88%;
+    /* Header/sidebar bhi wahi page green — alag chrome tone nahi */
+    --app-chrome: var(--background);
     --foreground: 140 30% 18%;
     --card: 140 22% 96%;
     --card-foreground: 140 30% 18%;
@@ -353,7 +387,7 @@ body {
     --muted: 140 20% 90%;
     --muted-foreground: 140 25% 40%;
     --border: 0 0% 20%;
-    --sidebar-background: var(--app-chrome);
+    --sidebar-background: var(--background);
     --sidebar-foreground: 140 35% 18%;
     --sidebar-primary: 140 50% 38%;
     --sidebar-primary-foreground: 0 0% 98%;
@@ -362,7 +396,7 @@ body {
     --sidebar-border: 0 0% 20%;
     --sidebar-ring: 140 50% 38%;
     --input: 0 0% 20%;
-    --header-bg: var(--app-chrome);
+    --header-bg: var(--background);
     --list-page-bg: 140 28% 94%;
     --details-header-bg: 140 28% 94%;
     --table-header-bg: 210 40% 88%;
@@ -382,6 +416,41 @@ body {
   .primary-soft-yellow { --primary: 45 95% 55%; --primary-foreground: 45 95% 20%; --ring: 45 95% 55%; }
   .primary-soft-pink { --primary: 350 80% 60%; --primary-foreground: 350 80% 95%; --ring: 350 80% 60%; }
   .primary-colorfull { --primary: 270 70% 50%; --primary-foreground: 0 0% 100%; --ring: 270 70% 50%; }
+
+  /* Pro: light gray page shell (ujla) + dashboard ribbons + black borders */
+  .theme-pro {
+    --background: 220 14% 98.5%;
+    --app-chrome: 220 14% 97%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 220 14% 99.5%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 220 14% 99.5%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 40%;
+    --border: 0 0% 0%;
+    --input: 0 0% 0%;
+  /* Pro: dim slate-blue — bright #3b82f6 buttons/tabs se softer */
+    --pl-pro-blue: 215 28% 44%;
+    --pl-pro-blue-hover: 215 28% 38%;
+    --ring: 215 28% 44%;
+    --sidebar-background: var(--app-chrome);
+    --sidebar-foreground: 222.2 84% 4.9%;
+    --sidebar-primary: 215 28% 44%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 14% 94%;
+    --sidebar-accent-foreground: 222.2 84% 4.9%;
+    --sidebar-border: 0 0% 0%;
+    --sidebar-ring: 215 28% 44%;
+    --header-bg: var(--app-chrome);
+    --list-page-bg: 220 14% 98.5%;
+    --details-header-bg: 220 14% 98.5%;
+    --table-header-bg: 220 14% 94%;
+    --table-header-fg: 0 0% 0%;
+    --row-odd-bg: 220 14% 99.5%;
+    --row-even-bg: 220 14% 97%;
+  }
+  .primary-pro { --primary: 215 28% 44%; --primary-foreground: 0 0% 100%; --ring: 215 28% 44%; }
 
   .dark {
     --background: 220 13% 10%;
@@ -440,11 +509,12 @@ body.theme-colorfull [data-theme-table="transactions"] table thead th {
 body.theme-colorfull [data-theme-table="transactions"] table thead th[data-theme-header="file"] {
   color: #000 !important;
 }
-body.theme-colorfull [data-theme-table="transactions"] table tbody tr:nth-child(odd) {
-  background: hsl(var(--row-odd-bg));
+/* Colorfull: stripe per transaction (main + narration same) — nth-child row se nahi */
+body.theme-colorfull [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+  background: hsl(var(--row-odd-bg)) !important;
 }
-body.theme-colorfull [data-theme-table="transactions"] table tbody tr:nth-child(even) {
-  background: hsl(var(--row-even-bg));
+body.theme-colorfull [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+  background: hsl(var(--row-even-bg)) !important;
 }
 body.theme-colorfull [data-theme-table="transactions"] table tbody td {
   color: #000 !important;
@@ -466,10 +536,24 @@ body.theme-colorfull [data-theme-table="transactions"] table tfoot td {
   color: #000 !important;
 }
 
-/* Opening balance row ke niche bold line – Statement aur Bill wise dono view */
-[data-theme-table="transactions"] table tbody tr[data-row="opening-balance"] td {
-  border-bottom-width: 2px !important;
+/* Opening balance block ke niche line — pehli transaction se pehle (dated / narration / billwise OB) */
+[data-theme-table="transactions"] tbody tr[data-row="opening-balance"] > td,
+[data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"] > td,
+[data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:not(:has(+ tr[data-row="opening-balance-narration"])) > td {
+  border-bottom-width: 1px !important;
   border-bottom-style: solid !important;
+  border-bottom-color: #000 !important;
+}
+/* Dated + narration dono hon to line sirf narration ke niche */
+[data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:has(+ tr[data-row="opening-balance-narration"]) > td {
+  border-bottom-width: 0 !important;
+}
+/* Spend-wise: OB ke baad gap row ho to bhi dated/narration ke niche line */
+[data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:has(+ tr[data-row="opening-balance-gap"]) > td,
+[data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"]:has(+ tr[data-row="opening-balance-gap"]) > td {
+  border-bottom-width: 1px !important;
+  border-bottom-style: solid !important;
+  border-bottom-color: #000 !important;
 }
 
 /* Colorfull: har action button alag single color (header + list/detail pages) */
@@ -580,6 +664,25 @@ body.theme-colorfull [data-theme-list="account-list"] [class*="rounded-md"].bord
 /* Tabs (Parties/Groups): dono active aur inactive button jaisa color */
 body.theme-colorfull main [role="tablist"] {
   background: hsl(140 20% 92%) !important;
+}
+/* List pages: colorfull — ribbon/pill borders height na badhayein */
+body.theme-colorfull main [data-pl-master-list-chrome] [role="tablist"] {
+  height: 1.5rem !important;
+  min-height: 1.5rem !important;
+  max-height: 1.5rem !important;
+  padding: 2px !important;
+}
+body.theme-colorfull main [data-pl-master-list-chrome] [role="tab"] {
+  height: 1.25rem !important;
+  min-height: 1.25rem !important;
+  max-height: 1.25rem !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  line-height: 1 !important;
+  box-sizing: border-box !important;
+}
+body.theme-colorfull main [data-pl-master-list-chrome] [role="tab"]:not([data-state="active"]) {
+  border-width: 1px !important;
 }
 body.theme-colorfull main [role="tab"] {
   font-weight: 600;
@@ -897,12 +1000,26 @@ body.theme-colorfull [data-theme-detail="edit"]:hover {
   .transaction-main-row td {
     padding-top: 1px !important;
     padding-bottom: 0 !important;
+    border-left: none !important;
+    border-right: none !important;
   }
 
   .narration-row td {
+    /* Transaction: column lines nahi; main row ke neeche line bhi nahi */
     border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
     padding-top: 1px !important;
     padding-bottom: 0 !important;
+  }
+  .transaction-main-row:has(+ .narration-row),
+  .transaction-main-row:has(+ .narration-row) > td {
+    border-bottom: none !important;
+  }
+  .transaction-main-row + .narration-row > td {
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
   }
 
   .fullscreen-active main {
@@ -1061,6 +1178,90 @@ button.day_selected.is-today.has-transactions {
   }
   .scrollbar-slim-dim::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--muted-foreground) / 0.35);
+  }
+
+  /*
+   * Master-detail list scroll: medium gray pill thumb (~10px) — screenshot jaisa (#a6a6a6).
+   * Track transparent; idle par halka fade, scroll par full.
+   */
+  .pl-master-list-scroll [data-radix-scroll-area-scrollbar],
+  [data-theme-list="account-list"] [data-radix-scroll-area-scrollbar],
+  [data-pl-master-list-chrome] [data-radix-scroll-area-scrollbar] {
+    width: 10px !important;
+    background: transparent !important;
+    border: none !important;
+    opacity: 1 !important;
+    transition: opacity 0.2s ease;
+  }
+  .pl-master-list-scroll [data-radix-scroll-area-scrollbar][data-state="hidden"],
+  [data-theme-list="account-list"] [data-radix-scroll-area-scrollbar][data-state="hidden"],
+  [data-pl-master-list-chrome] [data-radix-scroll-area-scrollbar][data-state="hidden"] {
+    opacity: 0.65 !important;
+  }
+  .pl-master-list-scroll [data-radix-scroll-area-scrollbar][data-state="visible"],
+  [data-theme-list="account-list"] [data-radix-scroll-area-scrollbar][data-state="visible"],
+  [data-pl-master-list-chrome] [data-radix-scroll-area-scrollbar][data-state="visible"] {
+    opacity: 1 !important;
+  }
+  .pl-master-list-scroll [data-radix-scroll-area-scrollbar][data-orientation="horizontal"],
+  [data-theme-list="account-list"] [data-radix-scroll-area-scrollbar][data-orientation="horizontal"],
+  [data-pl-master-list-chrome] [data-radix-scroll-area-scrollbar][data-orientation="horizontal"] {
+    height: 10px !important;
+  }
+  .pl-master-list-scroll [data-radix-scroll-area-thumb],
+  [data-theme-list="account-list"] [data-radix-scroll-area-thumb],
+  [data-pl-master-list-chrome] [data-radix-scroll-area-thumb] {
+    background: #a6a6a6 !important;
+    border: none !important;
+    border-radius: 9999px !important;
+    box-shadow: none !important;
+    min-height: 40px;
+  }
+  .pl-master-list-scroll [data-radix-scroll-area-thumb]:hover,
+  [data-theme-list="account-list"] [data-radix-scroll-area-thumb]:hover,
+  [data-pl-master-list-chrome] [data-radix-scroll-area-thumb]:hover {
+    background: #8f8f8f !important;
+  }
+  [data-theme-list="account-list"],
+  [data-theme-list="account-list"] .scrollbar-slim-dim,
+  [data-pl-master-list-chrome] .scrollbar-slim-dim,
+  .pl-master-list-scroll {
+    scrollbar-width: auto;
+    scrollbar-color: #a6a6a6 transparent;
+  }
+  [data-theme-list="account-list"]::-webkit-scrollbar,
+  [data-pl-master-list-chrome]::-webkit-scrollbar,
+  .pl-master-list-scroll::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  [data-theme-list="account-list"]::-webkit-scrollbar-thumb,
+  [data-pl-master-list-chrome]::-webkit-scrollbar-thumb,
+  .pl-master-list-scroll::-webkit-scrollbar-thumb {
+    background: #a6a6a6;
+    border-radius: 9999px;
+    border: none;
+    min-height: 40px;
+  }
+  [data-theme-list="account-list"]::-webkit-scrollbar-thumb:hover,
+  [data-pl-master-list-chrome]::-webkit-scrollbar-thumb:hover,
+  .pl-master-list-scroll::-webkit-scrollbar-thumb:hover {
+    background: #8f8f8f;
+  }
+  [data-theme-list="account-list"]::-webkit-scrollbar-track,
+  [data-pl-master-list-chrome]::-webkit-scrollbar-track,
+  .pl-master-list-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  body.theme-pro.dark [data-theme-list="account-list"] [data-radix-scroll-area-thumb],
+  body.theme-pro.dark [data-pl-master-list-chrome] [data-radix-scroll-area-thumb],
+  body.theme-pro.dark .pl-master-list-scroll [data-radix-scroll-area-thumb] {
+    background: #9ca3af !important;
+  }
+  body.theme-pro.dark [data-theme-list="account-list"] [data-radix-scroll-area-thumb]:hover,
+  body.theme-pro.dark [data-pl-master-list-chrome] [data-radix-scroll-area-thumb]:hover,
+  body.theme-pro.dark .pl-master-list-scroll [data-radix-scroll-area-thumb]:hover {
+    background: #b4b9c2 !important;
   }
 
   /*
@@ -1223,6 +1424,20 @@ button.day_selected.is-today.has-transactions {
   tfoot td {
     border-width: 3px !important;
     border-color: #000000 !important;
+  }
+  /* 4K: transaction table — vertical lines + main/narration gap same as normal */
+  [data-theme-table="transactions"] table th,
+  [data-theme-table="transactions"] table td {
+    border-left-width: 0 !important;
+    border-right-width: 0 !important;
+  }
+  [data-theme-table="transactions"] .transaction-main-row:has(+ .narration-row),
+  [data-theme-table="transactions"] .transaction-main-row:has(+ .narration-row) > td {
+    border-bottom-width: 0 !important;
+  }
+  [data-theme-table="transactions"] .transaction-main-row + .narration-row > td {
+    border-top-width: 0 !important;
+    border-bottom-width: 0 !important;
   }
   
   /* Input and form element borders */
@@ -2017,3 +2232,1139 @@ button.day_selected.is-today.has-transactions {
     border-width: 2px !important;
   }
 }
+
+/* Master–detail list: tabs/search — utilities ke baad force (Tailwind lib scan + listChrome props) */
+[data-pl-master-list-chrome] [data-pl-master-list-tabs][role="tablist"],
+[data-pl-master-list-chrome] [role="tablist"] {
+  display: flex !important;
+  height: 1.5rem !important;
+  min-height: 1.5rem !important;
+  max-height: 1.5rem !important;
+  padding: 2px !important;
+  gap: 2px !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+}
+[data-pl-master-list-chrome] [role="tablist"] [role="tab"] {
+  height: 1.25rem !important;
+  min-height: 1.25rem !important;
+  max-height: 1.25rem !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  line-height: 1 !important;
+  box-sizing: border-box !important;
+}
+[data-pl-master-list-chrome] .pl-mlc-search-row input,
+[data-pl-master-list-chrome] .pl-mlc-search-row button {
+  height: 1.75rem !important;
+  min-height: 1.75rem !important;
+  max-height: 1.75rem !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  box-sizing: border-box !important;
+}
+[data-pl-master-list-chrome] .pl-mlc-search-row input {
+  padding-left: 1.75rem !important;
+  padding-right: 0.5rem !important;
+}
+/* Pink pending count — search/+ Add row se upar na nikle */
+[data-pl-master-list-chrome] .pl-mlc-search-row .pl-mlc-pending-badge {
+  height: 1.75rem !important;
+  min-height: 1.75rem !important;
+  max-height: 1.75rem !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  line-height: 1 !important;
+  border-width: 1px !important;
+  box-sizing: border-box !important;
+}
+/* List voucher shortcuts (Add Salary, Pay Salary, Direct Income…) — search row jitni height */
+[data-pl-master-list-chrome] .pl-mlc-action-row button {
+  height: 1.75rem !important;
+  min-height: 1.75rem !important;
+  max-height: 1.75rem !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  font-size: 0.75rem !important;
+  line-height: 1 !important;
+  box-sizing: border-box !important;
+}
+
+/* Company Profile + Manage Sharing: inputs, dropdown, dates, tabs — black borders + gray fields */
+[data-pl-company-profile-chrome],
+body.theme-colorfull main [data-pl-company-profile-chrome],
+body.theme-pro [data-pl-company-profile-chrome] {
+  --border: 0 0% 0% !important;
+  --input: 0 0% 0% !important;
+  --ring: 0 0% 0% !important;
+}
+[data-pl-company-profile-chrome] input:not([type="checkbox"]):not([type="radio"]),
+[data-pl-company-profile-chrome] textarea,
+[data-pl-company-profile-chrome] select,
+body.theme-colorfull main [data-pl-company-profile-chrome] input:not([type="checkbox"]):not([type="radio"]),
+body.theme-colorfull main [data-pl-company-profile-chrome] textarea,
+body.theme-colorfull main [data-pl-company-profile-chrome] select,
+body.theme-pro [data-pl-company-profile-chrome] input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro [data-pl-company-profile-chrome] textarea,
+body.theme-pro [data-pl-company-profile-chrome] select {
+  border-color: #000 !important;
+  border-width: 1px !important;
+  /* User request: Company Profile fields gray background */
+  background-color: hsl(var(--muted) / 0.72) !important;
+}
+[data-pl-company-profile-chrome] button[role="combobox"],
+[data-pl-company-profile-chrome] button[data-theme-detail="date-range"],
+[data-pl-company-profile-chrome] button[class*="border"],
+body.theme-colorfull main [data-pl-company-profile-chrome] button[role="combobox"],
+body.theme-colorfull main [data-pl-company-profile-chrome] button[data-theme-detail="date-range"],
+body.theme-colorfull main [data-pl-company-profile-chrome] button[class*="border"],
+body.theme-pro [data-pl-company-profile-chrome] button[role="combobox"],
+body.theme-pro [data-pl-company-profile-chrome] button[data-theme-detail="date-range"],
+body.theme-pro [data-pl-company-profile-chrome] button[class*="border"] {
+  border-color: #000 !important;
+  border-width: 1px !important;
+  background-color: hsl(var(--muted) / 0.72) !important;
+}
+[data-pl-company-profile-chrome] [role="tablist"],
+[data-pl-company-profile-chrome] [role="tab"],
+body.theme-colorfull main [data-pl-company-profile-chrome] [role="tablist"],
+body.theme-colorfull main [data-pl-company-profile-chrome] [role="tab"],
+body.theme-pro [data-pl-company-profile-chrome] [role="tablist"],
+body.theme-pro [data-pl-company-profile-chrome] [role="tab"] {
+  border-color: #000 !important;
+  border-width: 1px !important;
+}
+/* Company Profile tabs: selected pill blue; list ke andar upar/neeche barabar inset */
+[data-pl-company-profile-chrome] [role="tablist"] {
+  display: grid !important;
+  align-items: stretch !important;
+  height: auto !important;
+  min-height: 2.75rem !important;
+  padding: 0.25rem !important;
+  gap: 0.25rem !important;
+}
+[data-pl-company-profile-chrome] [role="tab"] {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 100% !important;
+  min-height: 2.25rem !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  border-radius: 9999px !important;
+}
+[data-pl-company-profile-chrome] [role="tab"][data-state="active"],
+body.theme-colorfull main [data-pl-company-profile-chrome] [role="tab"][data-state="active"],
+body.theme-pro [data-pl-company-profile-chrome] [role="tab"][data-state="active"] {
+  background-color: hsl(var(--pl-pro-blue)) !important;
+  color: #fff !important;
+  box-shadow: none !important;
+}
+body.theme-pro [data-pl-company-profile-chrome] [role="tab"][data-state="active"]:hover {
+  background-color: hsl(var(--pl-pro-blue-hover)) !important;
+}
+[data-pl-company-profile-chrome] .border-dashed,
+body.theme-colorfull main [data-pl-company-profile-chrome] .border-dashed,
+body.theme-pro [data-pl-company-profile-chrome] .border-dashed {
+  border-color: #000 !important;
+}
+
+/* Settings list column shell — 1px normal (theme/4K `border-2`/`3px` override na kare) */
+.pl-settings-list-shell,
+body.theme-colorfull main .pl-settings-list-shell,
+body.theme-pro .pl-settings-list-shell {
+  border-width: 1px !important;
+  border-color: #000 !important;
+}
+
+/* ========== Pro theme: light gray shell (ujla) + colorful containers ========== */
+body.theme-pro {
+  background: hsl(220 14% 98.5%) !important;
+}
+body.theme-pro header {
+  background: hsl(220 14% 97%) !important;
+}
+body.theme-pro header.border-b {
+  background: hsl(220 14% 97%) !important;
+}
+/* Containers ke baahar: page shell light gray (andar wale Card/ribbon apna color rakhen) */
+body.theme-pro main {
+  background-color: hsl(220 14% 98.5%) !important;
+  background-image: none !important;
+}
+body.theme-pro main > div > div.border-b:first-of-type,
+body.theme-pro main > div.h-full.flex,
+body.theme-pro main > div.grid.min-h-0,
+body.theme-pro main > div > main,
+body.theme-pro main > div > main > .overflow-y-auto,
+body.theme-pro [data-pl-main-sidebar] {
+  background-color: hsl(220 14% 98.5%) !important;
+  background-image: none !important;
+}
+/* Settings list column = container (sky ribbon); beech ka gap gray rehta hai */
+body.theme-pro .pl-settings-list-shell {
+  background-color: #f0f9ff !important;
+  background-image: linear-gradient(90deg, rgba(224, 242, 254, 0.98) 0%, #ffffff 50%, rgba(207, 250, 254, 0.92) 100%) !important;
+}
+
+/* Pro: saare main forms — gray field + black border (Company Profile jaisa) */
+body.theme-pro main input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro main textarea,
+body.theme-pro main select,
+body.theme-pro main button[role="combobox"],
+body.theme-pro main button[data-theme-detail="date-range"] {
+  border-color: #000 !important;
+  border-width: 1px !important;
+  background-color: hsl(var(--muted) / 0.72) !important;
+}
+
+/* Pro: global Card shells — nested/settings/grid sab jagah dashboard ribbon; list rows `[data-pl-list-row]` exclude */
+body.theme-pro main .rounded-lg.bg-card:not([data-pl-list-row]),
+body.theme-pro main .rounded-lg.border.bg-card:not([data-pl-list-row]) {
+  border-color: #000 !important;
+  border-width: 1px !important;
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.98) 0%, #ffffff 50%, rgba(209, 250, 229, 0.92) 100%) !important;
+}
+body.theme-pro main .rounded-lg.bg-card .rounded-lg.bg-card,
+body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card {
+  background-color: #f0f9ff !important;
+  background-image: linear-gradient(90deg, rgba(224, 242, 254, 0.98) 0%, #ffffff 50%, rgba(207, 250, 254, 0.92) 100%) !important;
+}
+body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card {
+  background-color: #f5f3ff !important;
+  background-image: linear-gradient(90deg, rgba(245, 243, 255, 0.98) 0%, #ffffff 50%, rgba(250, 232, 255, 0.92) 100%) !important;
+}
+body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card {
+  background-color: #fffbeb !important;
+  background-image: linear-gradient(90deg, rgba(254, 252, 232, 0.98) 0%, #ffffff 50%, rgba(254, 243, 199, 0.92) 100%) !important;
+}
+body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card {
+  background-color: #fff1f2 !important;
+  background-image: linear-gradient(90deg, rgba(255, 241, 242, 0.98) 0%, #ffffff 50%, rgba(252, 231, 243, 0.92) 100%) !important;
+}
+body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card {
+  background-color: #f0fdfa !important;
+  background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.96) 0%, #ffffff 50%, rgba(204, 251, 241, 0.9) 100%) !important;
+}
+body.theme-pro main .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card .rounded-lg.border.bg-card {
+  background-color: #eef2ff !important;
+  background-image: linear-gradient(90deg, rgba(238, 242, 255, 0.98) 0%, #ffffff 50%, rgba(219, 234, 254, 0.92) 100%) !important;
+}
+/* Pro: grid ke sibling Cards/panels — Voucher Prefix (gap-8) + Number settings (gap-4) */
+body.theme-pro main .grid > .rounded-lg.bg-card:nth-child(7n + 1),
+body.theme-pro main .grid.gap-8 > .rounded-lg:nth-child(7n + 1),
+body.theme-pro main .grid > .rounded-lg.border.bg-card:nth-child(7n + 1) {
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.98) 0%, #ffffff 50%, rgba(209, 250, 229, 0.92) 100%) !important;
+}
+body.theme-pro main .grid > .rounded-lg.bg-card:nth-child(7n + 2),
+body.theme-pro main .grid.gap-8 > .rounded-lg:nth-child(7n + 2),
+body.theme-pro main .grid > .rounded-lg.border.bg-card:nth-child(7n + 2) {
+  background-color: #f0f9ff !important;
+  background-image: linear-gradient(90deg, rgba(224, 242, 254, 0.98) 0%, #ffffff 50%, rgba(207, 250, 254, 0.92) 100%) !important;
+}
+body.theme-pro main .grid > .rounded-lg.bg-card:nth-child(7n + 3),
+body.theme-pro main .grid.gap-8 > .rounded-lg:nth-child(7n + 3),
+body.theme-pro main .grid > .rounded-lg.border.bg-card:nth-child(7n + 3) {
+  background-color: #f5f3ff !important;
+  background-image: linear-gradient(90deg, rgba(245, 243, 255, 0.98) 0%, #ffffff 50%, rgba(250, 232, 255, 0.92) 100%) !important;
+}
+body.theme-pro main .grid > .rounded-lg.bg-card:nth-child(7n + 4),
+body.theme-pro main .grid.gap-8 > .rounded-lg:nth-child(7n + 4),
+body.theme-pro main .grid > .rounded-lg.border.bg-card:nth-child(7n + 4) {
+  background-color: #fffbeb !important;
+  background-image: linear-gradient(90deg, rgba(254, 252, 232, 0.98) 0%, #ffffff 50%, rgba(254, 243, 199, 0.92) 100%) !important;
+}
+body.theme-pro main .grid > .rounded-lg.bg-card:nth-child(7n + 5),
+body.theme-pro main .grid.gap-8 > .rounded-lg:nth-child(7n + 5),
+body.theme-pro main .grid > .rounded-lg.border.bg-card:nth-child(7n + 5) {
+  background-color: #fff1f2 !important;
+  background-image: linear-gradient(90deg, rgba(255, 241, 242, 0.98) 0%, #ffffff 50%, rgba(252, 231, 243, 0.92) 100%) !important;
+}
+body.theme-pro main .grid > .rounded-lg.bg-card:nth-child(7n + 6),
+body.theme-pro main .grid.gap-8 > .rounded-lg:nth-child(7n + 6),
+body.theme-pro main .grid > .rounded-lg.border.bg-card:nth-child(7n + 6) {
+  background-color: #f0fdfa !important;
+  background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.96) 0%, #ffffff 50%, rgba(204, 251, 241, 0.9) 100%) !important;
+}
+body.theme-pro main .grid > .rounded-lg.bg-card:nth-child(7n + 7),
+body.theme-pro main .grid.gap-8 > .rounded-lg:nth-child(7n + 7),
+body.theme-pro main .grid > .rounded-lg.border.bg-card:nth-child(7n + 7) {
+  background-color: #eef2ff !important;
+  background-image: linear-gradient(90deg, rgba(238, 242, 255, 0.98) 0%, #ffffff 50%, rgba(219, 234, 254, 0.92) 100%) !important;
+}
+/* Pro: space-y stacks — direct Card children bhi rotate (lists/reports) */
+body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:nth-child(7n + 1),
+body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:nth-child(7n + 1),
+body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:nth-child(7n + 1) {
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.98) 0%, #ffffff 50%, rgba(209, 250, 229, 0.92) 100%) !important;
+}
+body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:nth-child(7n + 2),
+body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:nth-child(7n + 2),
+body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:nth-child(7n + 2) {
+  background-color: #f0f9ff !important;
+  background-image: linear-gradient(90deg, rgba(224, 242, 254, 0.98) 0%, #ffffff 50%, rgba(207, 250, 254, 0.92) 100%) !important;
+}
+body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:nth-child(7n + 3),
+body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:nth-child(7n + 3),
+body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:nth-child(7n + 3) {
+  background-color: #f5f3ff !important;
+  background-image: linear-gradient(90deg, rgba(245, 243, 255, 0.98) 0%, #ffffff 50%, rgba(250, 232, 255, 0.92) 100%) !important;
+}
+body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:nth-child(7n + 4),
+body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:nth-child(7n + 4),
+body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:nth-child(7n + 4) {
+  background-color: #fffbeb !important;
+  background-image: linear-gradient(90deg, rgba(254, 252, 232, 0.98) 0%, #ffffff 50%, rgba(254, 243, 199, 0.92) 100%) !important;
+}
+body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:nth-child(7n + 5),
+body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:nth-child(7n + 5),
+body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:nth-child(7n + 5) {
+  background-color: #fff1f2 !important;
+  background-image: linear-gradient(90deg, rgba(255, 241, 242, 0.98) 0%, #ffffff 50%, rgba(252, 231, 243, 0.92) 100%) !important;
+}
+body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:nth-child(7n + 6),
+body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:nth-child(7n + 6),
+body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:nth-child(7n + 6) {
+  background-color: #f0fdfa !important;
+  background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.96) 0%, #ffffff 50%, rgba(204, 251, 241, 0.9) 100%) !important;
+}
+body.theme-pro main .space-y-8 > .rounded-lg.border.bg-card:nth-child(7n + 7),
+body.theme-pro main .space-y-6 > .rounded-lg.border.bg-card:nth-child(7n + 7),
+body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:nth-child(7n + 7) {
+  background-color: #eef2ff !important;
+  background-image: linear-gradient(90deg, rgba(238, 242, 255, 0.98) 0%, #ffffff 50%, rgba(219, 234, 254, 0.92) 100%) !important;
+}
+/* Pro: master-detail list rows — dashboard ribbon mat; pehle jaisa safed/gray border (Party/Bank/Staff Card rows) */
+body.theme-pro main [data-theme-list="account-list"] .rounded-lg.border.bg-card,
+body.theme-pro main .pl-master-list-ul .rounded-lg.border.bg-card {
+  border-color: rgb(209 213 219) !important;
+  border-width: 1.5px !important;
+  background-color: hsl(220 14% 99.5%) !important;
+  background-image: none !important;
+}
+body.theme-pro.dark main [data-theme-list="account-list"] .rounded-lg.border.bg-card,
+body.theme-pro.dark main .pl-master-list-ul .rounded-lg.border.bg-card {
+  border-color: rgb(75 85 99) !important;
+}
+body.theme-pro main [data-theme-list="account-list"] .rounded-lg.border.bg-card.border-primary,
+body.theme-pro main .pl-master-list-ul .rounded-lg.border.bg-card.border-primary,
+body.theme-pro main [data-pl-list-selected] {
+  border-color: rgb(251 146 60) !important;
+}
+body.theme-pro main [data-theme-list="account-list"] .rounded-lg.border.bg-card.bg-secondary,
+body.theme-pro main .pl-master-list-ul .rounded-lg.border.bg-card.bg-secondary,
+body.theme-pro main [data-pl-list-selected] {
+  background-color: rgb(255 247 237) !important;
+  background-image: none !important;
+}
+body.theme-pro.dark main [data-pl-list-selected] {
+  border-color: rgb(249 115 22) !important;
+  background-color: rgba(67, 20, 7, 0.4) !important;
+}
+/* Pro: header/sidebar chrome cards — dashboard tone (page shell gray rehta hai) */
+body.theme-pro header .pl-chrome-card,
+body.theme-pro [data-pl-main-sidebar] .pl-chrome-card {
+  border-color: #000 !important;
+  border-width: 1px !important;
+}
+body.theme-pro header .pl-chrome-tone-pink {
+  background-color: #fdf2f8 !important;
+  background-image: linear-gradient(92deg, rgba(253, 242, 248, 0.84) 0%, rgba(255, 255, 255, 0.96) 50%, rgba(253, 242, 248, 0.84) 100%) !important;
+}
+body.theme-pro [data-pl-main-sidebar] .pl-chrome-tone-emerald {
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(92deg, rgba(236, 253, 245, 0.82) 0%, rgba(255, 255, 255, 0.96) 50%, rgba(236, 253, 245, 0.82) 100%) !important;
+}
+
+/* Pro + Company Profile: outer shell gray; inner pink/green zones apni class se */
+body.theme-pro [data-pl-company-profile-chrome].rounded-lg.border.bg-card {
+  /* Outer shell light gray; andar pink/green zones apni class se colorful */
+  background: hsl(220 14% 98.5%) !important;
+  background-image: none !important;
+}
+body.theme-pro [data-pl-company-profile-chrome] .pl-chrome-tone-pink {
+  background-image: linear-gradient(92deg, rgba(253, 242, 248, 0.84) 0%, rgba(255, 255, 255, 0.96) 50%, rgba(253, 242, 248, 0.84) 100%) !important;
+}
+body.theme-pro [data-pl-company-profile-chrome] .pl-chrome-tone-emerald {
+  background-image: linear-gradient(92deg, rgba(236, 253, 245, 0.82) 0%, rgba(255, 255, 255, 0.96) 50%, rgba(236, 253, 245, 0.82) 100%) !important;
+}
+
+/* Pro: tabs — dim blue pill (Accounts/Groups, Company Profile, …) */
+body.theme-pro main [role="tablist"] {
+  background: hsl(var(--muted) / 0.8) !important;
+  border-color: #000 !important;
+}
+body.theme-pro main [role="tab"][data-state="active"] {
+  background-color: hsl(var(--pl-pro-blue)) !important;
+  color: #fff !important;
+  box-shadow: none !important;
+  border-color: #000 !important;
+}
+body.theme-pro main [role="tab"][data-state="active"]:hover {
+  background-color: hsl(var(--pl-pro-blue-hover)) !important;
+}
+
+/* Master–detail list PC: saari chrome rows +20% height + green active tab — Party/Tax/Bank/Staff/Items/Incomes */
+@media (min-width: 768px) {
+  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-page-header {
+    min-height: 2.7rem !important;
+    padding-top: 0.3rem !important;
+    padding-bottom: 0.3rem !important;
+    box-sizing: border-box !important;
+  }
+  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-tabs-row {
+    min-height: 2.1rem !important;
+    padding-top: 0.15rem !important;
+    padding-bottom: 0.15rem !important;
+    box-sizing: border-box !important;
+  }
+  [data-master-detail-layout] [data-pl-master-list-chrome] [data-pl-master-list-tabs][role="tablist"],
+  [data-master-detail-layout] [data-pl-master-list-chrome] [role="tablist"] {
+    height: 1.8rem !important;
+    min-height: 1.8rem !important;
+    max-height: 1.8rem !important;
+  }
+  [data-master-detail-layout] [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"],
+  [data-master-detail-layout] [data-pl-master-list-chrome] [role="tablist"] [role="tab"] {
+    height: 1.5rem !important;
+    min-height: 1.5rem !important;
+    max-height: 1.5rem !important;
+  }
+  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-search-row {
+    min-height: 2.5rem !important;
+    padding-top: 0.2rem !important;
+    padding-bottom: 0.2rem !important;
+    box-sizing: border-box !important;
+  }
+  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-search-row input,
+  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-search-row button {
+    height: 2.1rem !important;
+    min-height: 2.1rem !important;
+    max-height: 2.1rem !important;
+  }
+  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-search-row .pl-mlc-pending-badge {
+    height: 2.1rem !important;
+    min-height: 2.1rem !important;
+    max-height: 2.1rem !important;
+  }
+  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-search-row .pl-mlc-search-icon,
+  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-search-row svg.pl-mlc-search-icon {
+    height: 1rem !important;
+    width: 1rem !important;
+  }
+  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-section-label-row {
+    min-height: 1.8rem !important;
+    padding-top: 0.36rem !important;
+    padding-bottom: 0.36rem !important;
+    box-sizing: border-box !important;
+  }
+  [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-action-row button {
+    height: 2.1rem !important;
+    min-height: 2.1rem !important;
+    max-height: 2.1rem !important;
+  }
+  body.theme-pro main [data-master-detail-layout] [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"],
+  body.theme-colorfull main [data-master-detail-layout] [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"],
+  body.theme-pure-white main [data-master-detail-layout] [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"],
+  [data-master-detail-layout] [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"] {
+    background-color: hsl(142 48% 88%) !important;
+    background-image: none !important;
+    color: hsl(142 42% 26%) !important;
+    border: 1px solid hsl(142 38% 72%) !important;
+    box-shadow: none !important;
+  }
+  body.theme-pro main [data-master-detail-layout] [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"]:hover,
+  body.theme-colorfull main [data-master-detail-layout] [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"]:hover,
+  [data-master-detail-layout] [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"]:hover {
+    background-color: hsl(142 48% 84%) !important;
+    color: hsl(142 42% 22%) !important;
+  }
+}
+
+/* Mobile list pages: Pro — dashboard rose/pink (details page green rehta hai); baaki themes green tab */
+@media (max-width: 767px) {
+  /* Pro mobile: poora list shell — `pl-dashboard-ribbon-rose` / header pink jaisa */
+  body.theme-pro main [data-pl-master-list-chrome] {
+    background-color: #fff1f2 !important;
+    background-image: linear-gradient(
+      180deg,
+      rgba(255, 241, 242, 0.98) 0%,
+      rgba(255, 255, 255, 0.96) 14%,
+      #ffffff 100%
+    ) !important;
+  }
+  body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-page-header,
+  body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-tabs-row,
+  body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-search-row,
+  body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-section-label-row,
+  body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-action-row {
+    background-color: #fdf2f8 !important;
+    background-image: linear-gradient(
+      92deg,
+      rgba(253, 242, 248, 0.84) 0%,
+      rgba(255, 255, 255, 0.96) 50%,
+      rgba(253, 242, 248, 0.84) 100%
+    ) !important;
+    border-color: #fbcfe8 !important;
+  }
+  /* Pro blue tab rule hata ke dashboard pink pill — list chrome ke andar */
+  body.theme-pro main [data-pl-master-list-chrome] [role="tablist"] {
+    background-color: rgba(253, 242, 248, 0.95) !important;
+    border-color: #f9a8d4 !important;
+  }
+  body.theme-pro main [data-pl-master-list-chrome] [role="tab"][data-state="active"],
+  body.theme-pro main [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"] {
+    background-color: #fff1f2 !important;
+    background-image: linear-gradient(
+      90deg,
+      rgba(255, 241, 242, 0.98) 0%,
+      #ffffff 50%,
+      rgba(252, 231, 243, 0.92) 100%
+    ) !important;
+    color: #9d174d !important;
+    border: 1px solid #f472b6 !important;
+    box-shadow: none !important;
+  }
+  body.theme-pro main [data-pl-master-list-chrome] [role="tab"][data-state="active"]:hover,
+  body.theme-pro main [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"]:hover {
+    background-color: #fce7f3 !important;
+    color: #831843 !important;
+  }
+  body.theme-pro.dark main [data-pl-master-list-chrome] {
+    background-color: hsl(330 25% 10%) !important;
+    background-image: linear-gradient(180deg, hsl(330 28% 14%) 0%, hsl(330 20% 8%) 100%) !important;
+  }
+  body.theme-pro.dark main [data-pl-master-list-chrome] .pl-mlc-page-header,
+  body.theme-pro.dark main [data-pl-master-list-chrome] .pl-mlc-tabs-row,
+  body.theme-pro.dark main [data-pl-master-list-chrome] .pl-mlc-search-row,
+  body.theme-pro.dark main [data-pl-master-list-chrome] .pl-mlc-section-label-row,
+  body.theme-pro.dark main [data-pl-master-list-chrome] .pl-mlc-action-row {
+    background-color: hsl(330 30% 16%) !important;
+    background-image: none !important;
+    border-color: hsl(330 35% 28%) !important;
+  }
+  body.theme-pro.dark main [data-pl-master-list-chrome] [role="tablist"] {
+    background-color: hsl(330 28% 14%) !important;
+    border-color: hsl(330 35% 28%) !important;
+  }
+  body.theme-pro.dark main [data-pl-master-list-chrome] [role="tab"][data-state="active"] {
+    background-color: hsl(330 35% 22%) !important;
+    background-image: none !important;
+    color: hsl(330 80% 90%) !important;
+    border-color: hsl(330 45% 42%) !important;
+  }
+  /* Pro mobile list rows — gray/orange global rule override; dashboard rose cards */
+  body.theme-pro main [data-pl-master-list-chrome] [data-pl-list-row]:not([data-pl-list-selected]),
+  body.theme-pro main [data-pl-master-list-chrome] [data-theme-list="account-list"] [data-pl-list-row]:not([data-pl-list-selected]),
+  body.theme-pro main [data-pl-master-list-chrome] .pl-master-list-ul [data-pl-list-row]:not([data-pl-list-selected]) {
+    border-color: #fbcfe8 !important;
+    border-width: 1.5px !important;
+    background-color: #fff1f2 !important;
+    background-image: linear-gradient(
+      90deg,
+      rgba(255, 241, 242, 0.98) 0%,
+      #ffffff 50%,
+      rgba(252, 231, 243, 0.9) 100%
+    ) !important;
+  }
+  body.theme-pro main [data-pl-master-list-chrome] [data-pl-list-selected],
+  body.theme-pro main [data-pl-master-list-chrome] [data-theme-list="account-list"] [data-pl-list-selected],
+  body.theme-pro main [data-pl-master-list-chrome] .pl-master-list-ul [data-pl-list-selected] {
+    border-color: #ec4899 !important;
+    background-color: #fce7f3 !important;
+    background-image: linear-gradient(
+      90deg,
+      rgba(252, 231, 243, 0.98) 0%,
+      #ffffff 50%,
+      rgba(251, 207, 232, 0.92) 100%
+    ) !important;
+    box-shadow: 0 1px 2px 0 rgb(236 72 153 / 0.12) !important;
+  }
+  body.theme-pro.dark main [data-pl-master-list-chrome] [data-pl-list-row]:not([data-pl-list-selected]) {
+    border-color: hsl(330 35% 28%) !important;
+    background-color: hsl(330 28% 14%) !important;
+    background-image: none !important;
+  }
+  body.theme-pro.dark main [data-pl-master-list-chrome] [data-pl-list-selected] {
+    border-color: hsl(330 65% 52%) !important;
+    background-color: hsl(330 32% 20%) !important;
+    background-image: none !important;
+  }
+  body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-search-row input {
+    border-color: #f9a8d4 !important;
+    background-color: #fffbfc !important;
+  }
+  /* Pro mobile list: Dr balance pink (details page green) */
+  body.theme-pro main [data-pl-master-list-chrome] .text-green-600,
+  body.theme-pro main [data-pl-master-list-chrome] .text-green-700 {
+    color: #db2777 !important;
+  }
+  body.theme-pro.dark main [data-pl-master-list-chrome] .text-green-600,
+  body.theme-pro.dark main [data-pl-master-list-chrome] .text-green-700 {
+    color: #f472b6 !important;
+  }
+  body.theme-colorfull main [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"],
+  body.theme-pure-white main [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"],
+  [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"] {
+    background-color: hsl(142 48% 88%) !important;
+    background-image: none !important;
+    color: hsl(142 42% 26%) !important;
+    border: 1px solid hsl(142 38% 72%) !important;
+    box-shadow: none !important;
+  }
+  body.theme-colorfull main [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"]:hover,
+  [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"]:hover {
+    background-color: hsl(142 48% 84%) !important;
+    color: hsl(142 42% 22%) !important;
+  }
+}
+
+/* Pro: + Add / primary CTA — dim blue (bg-primary) */
+body.theme-pro main button.bg-primary:not(:disabled),
+body.theme-pro main a.bg-primary {
+  background-color: hsl(var(--pl-pro-blue)) !important;
+  color: #fff !important;
+}
+body.theme-pro main button.bg-primary:hover:not(:disabled),
+body.theme-pro main a.bg-primary:hover {
+  background-color: hsl(var(--pl-pro-blue-hover)) !important;
+}
+
+/* Pro: transaction table — readable rows on gray page */
+body.theme-pro [data-theme-table="transactions"] table thead tr {
+  background: hsl(var(--table-header-bg)) !important;
+  color: hsl(var(--table-header-fg)) !important;
+}
+/* Pro: gray/white per transaction block (main + narration match) */
+body.theme-pro [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+  background: hsl(var(--row-odd-bg)) !important;
+}
+body.theme-pro [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+  background: hsl(var(--row-even-bg)) !important;
+}
+
+/* ========== All themes: har container/box — sirf 1px black line ========== */
+body[class*="theme-"] main .rounded-lg.border,
+body[class*="theme-"] main .rounded-md.border,
+body[class*="theme-"] main .rounded-lg.border.bg-card,
+body[class*="theme-"] main .rounded-lg.border.bg-card.shadow-sm,
+body[class*="theme-"] [data-pl-main-sidebar] .rounded-md.border,
+body[class*="theme-"] [data-pl-main-sidebar] .rounded-lg.border,
+body[class*="theme-"] header .rounded-lg.border,
+body[class*="theme-"] header .rounded-full.border,
+body[class*="theme-"] .pl-chrome-card,
+body[class*="theme-"] .pl-settings-list-shell,
+body[class*="theme-"] main .border-2,
+body[class*="theme-"] [data-pl-main-sidebar] .border-2,
+body[class*="theme-"] header .border-2 {
+  border-width: 1px !important;
+  border-color: #000 !important;
+}
+
+body[class*="theme-"] main table,
+body[class*="theme-"] main table th,
+body[class*="theme-"] main table td,
+body[class*="theme-"] main table tr,
+body[class*="theme-"] [data-theme-table="transactions"] table,
+body[class*="theme-"] [data-theme-table="transactions"] table th,
+body[class*="theme-"] [data-theme-table="transactions"] table td {
+  border-color: #000 !important;
+}
+/* Transaction table — saari themes: column dividers (vertical) band */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr:not([data-pl-spend-wise-group]):not([data-pl-spend-wise-opening]) > td {
+  border-left-width: 0 !important;
+  border-right-width: 0 !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] thead th {
+  border-left-width: 0 !important;
+  border-right-width: 0 !important;
+}
+/* Main row ↔ narration ke beech horizontal line band; group ke baad sirf bottom line */
+body[class*="theme-"] [data-theme-table="transactions"] .transaction-main-row:has(+ .narration-row),
+body[class*="theme-"] [data-theme-table="transactions"] .transaction-main-row:has(+ .narration-row) > td {
+  border-bottom-width: 0 !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] .transaction-main-row + .narration-row:not([data-pl-spend-in-group-card]) > td {
+  border-top-width: 0 !important;
+  border-bottom-width: 0 !important;
+  border-left-width: 0 !important;
+  border-right-width: 0 !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] .transaction-main-row + .narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) {
+  border-top-width: 0 !important;
+  border-bottom-width: 1px !important;
+  border-bottom-color: #000 !important;
+}
+/* Spend-wise group card: main + narration beech koi line nahi */
+body[class*="theme-"] [data-pl-spend-group-card] .transaction-main-row:has(+ .narration-row[data-pl-spend-in-group-card]) > td {
+  border-bottom-width: 0 !important;
+}
+body[class*="theme-"] [data-pl-spend-group-card] .transaction-main-row + .narration-row[data-pl-spend-in-group-card] > td {
+  border-top-width: 0 !important;
+}
+body[class*="theme-"] [data-pl-spend-group-card] .transaction-main-row + .narration-row[data-pl-spend-in-group-card] {
+  border-top-width: 0 !important;
+  border-bottom-width: 0 !important;
+}
+/* Admin route: tbody tr par global border-bottom — spend-wise main↔narration par band */
+html.pl-admin-route [data-pl-spend-group-card] tbody tr.transaction-main-row:has(+ .narration-row),
+html.pl-admin-route [data-pl-spend-group-card] tbody tr.transaction-main-row + tr.narration-row[data-pl-spend-in-group-card] {
+  border-bottom-width: 0 !important;
+}
+html.pl-admin-route [data-theme-table="transactions"] tr[data-pl-spend-wise-group].transaction-main-row:has(+ .narration-row) {
+  border-bottom-width: 0 !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] .transaction-main-row:not(:has(+ .narration-row)) {
+  border-bottom-width: 1px !important;
+  border-bottom-color: #000 !important;
+}
+
+body[class*="theme-"] main hr {
+  border-width: 1px !important;
+  border-color: #000 !important;
+}
+
+body[class*="theme-"] main input:not([type="checkbox"]):not([type="radio"]),
+body[class*="theme-"] main textarea,
+body[class*="theme-"] main select,
+body[class*="theme-"] main button[role="combobox"],
+body[class*="theme-"] main button[data-theme-detail="date-range"] {
+  border-width: 1px !important;
+  border-color: #000 !important;
+}
+
+/* Light theme: koi fill color nahi — sirf white + 1px black lines (dashboard ribbons bhi white) */
+body.theme-pure-white,
+body.theme-pure-white main {
+  background: #ffffff !important;
+}
+/* Light: app sidebar + header — pink/emerald chrome hata ke pure white */
+body.theme-pure-white header,
+body.theme-pure-white header.border-b,
+body.theme-pure-white header .pl-chrome-card,
+body.theme-pure-white header .app-chrome-top-ribbon,
+body.theme-pure-white header [class*="pl-chrome-tone-"],
+body.theme-pure-white [data-pl-main-sidebar],
+body.theme-pure-white [data-pl-main-sidebar] .pl-chrome-card,
+body.theme-pure-white [data-pl-main-sidebar] .app-chrome-top-ribbon,
+body.theme-pure-white [data-pl-main-sidebar] [class*="pl-chrome-tone-"],
+body.theme-pure-white [data-pl-main-sidebar] .rounded-md.border,
+body.theme-pure-white .bg-sidebar,
+body.theme-pure-white .app-chrome-sidebar-ribbon,
+body.theme-pure-white .pl-settings-list-shell {
+  background-color: #ffffff !important;
+  background-image: none !important;
+  border-width: 1px !important;
+  border-color: #000 !important;
+}
+body.theme-pure-white .app-chrome-top-ribbon::before,
+body.theme-pure-white .app-chrome-sidebar-ribbon::before {
+  opacity: 0 !important;
+}
+/* Light: saare buttons white + 1px black (header odd/even blue/indigo band hatao) */
+body.theme-pure-white button,
+body.theme-pure-white [role="button"],
+body.theme-pure-white a[class*="rounded-full"].border {
+  background-color: #ffffff !important;
+  background-image: none !important;
+  color: #111827 !important;
+  border-width: 1px !important;
+  border-color: #000 !important;
+  box-shadow: none !important;
+}
+body.theme-pure-white button:hover,
+body.theme-pure-white [role="button"]:hover {
+  background-color: #f8fafc !important;
+  color: #111827 !important;
+}
+body.theme-pure-white button.bg-primary,
+body.theme-pure-white button.bg-destructive,
+body.theme-pure-white .bg-secondary {
+  background-color: #ffffff !important;
+  color: #111827 !important;
+}
+body.theme-pure-white [data-theme-btn] {
+  background-color: #ffffff !important;
+  color: #111827 !important;
+  border: 1px solid #000 !important;
+}
+body.theme-pure-white main .rounded-lg.border.bg-card,
+body.theme-pure-white main .rounded-lg.border.bg-card.shadow-sm,
+body.theme-pure-white main [class*="pl-dashboard-ribbon-"],
+body.theme-pure-white main .app-chrome-top-ribbon,
+body.theme-pure-white main [class*="pl-chrome-tone-"] {
+  background-color: #ffffff !important;
+  background-image: none !important;
+}
+body.theme-pure-white main input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pure-white main textarea,
+body.theme-pure-white main select,
+body.theme-pure-white main button[role="combobox"],
+body.theme-pure-white main button[data-theme-detail="date-range"] {
+  background-color: #ffffff !important;
+}
+body.theme-pure-white [data-theme-table="transactions"] table thead tr,
+body.theme-pure-white [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]) > td,
+body.theme-pure-white [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]) > td {
+  background: #ffffff !important;
+}
+
+/* Pro + Light alag; baaki themes: poori screen selected theme color */
+body:not(.theme-pro):not(.theme-pure-white),
+body:not(.theme-pro):not(.theme-pure-white) main,
+body:not(.theme-pro):not(.theme-pure-white) main > div.h-full,
+body:not(.theme-pro):not(.theme-pure-white) main > div.grid,
+body:not(.theme-pro):not(.theme-pure-white) main > div > main,
+body:not(.theme-pro):not(.theme-pure-white) main > div > main > .overflow-y-auto {
+  background-color: hsl(var(--background)) !important;
+  background-image: none !important;
+}
+/* Header/sidebar/footer: page jaisa hi --background (pl-chrome-tone-* emerald/pink gradient hatao) */
+body:not(.theme-pro):not(.theme-pure-white) header,
+body:not(.theme-pro):not(.theme-pure-white) header.border-b,
+body:not(.theme-pro):not(.theme-pure-white) header.bg-background,
+body:not(.theme-pro):not(.theme-pure-white) header .pl-chrome-card,
+body:not(.theme-pro):not(.theme-pure-white) header .app-chrome-top-ribbon,
+body:not(.theme-pro):not(.theme-pure-white) header [class*="pl-chrome-tone-"],
+body:not(.theme-pro):not(.theme-pure-white) [data-pl-main-sidebar],
+body:not(.theme-pro):not(.theme-pure-white) .bg-sidebar,
+body:not(.theme-pro):not(.theme-pure-white) .pl-settings-list-shell,
+body:not(.theme-pro):not(.theme-pure-white) .app-chrome-sidebar-ribbon,
+body:not(.theme-pro):not(.theme-pure-white) [data-pl-main-sidebar] .pl-chrome-card,
+body:not(.theme-pro):not(.theme-pure-white) [data-pl-main-sidebar] [class*="pl-chrome-tone-"],
+body:not(.theme-pro):not(.theme-pure-white) footer .pl-chrome-card,
+body:not(.theme-pro):not(.theme-pure-white) footer .app-chrome-top-ribbon,
+body:not(.theme-pro):not(.theme-pure-white) main .pl-chrome-card.app-chrome-top-ribbon {
+  background-color: hsl(var(--background)) !important;
+  background-image: none !important;
+}
+body:not(.theme-pro):not(.theme-pure-white) main .rounded-lg.border.bg-card,
+body:not(.theme-pro):not(.theme-pure-white) main .rounded-lg.border.bg-card.shadow-sm,
+body:not(.theme-pro):not(.theme-pure-white) main .rounded-md.border,
+body:not(.theme-pro):not(.theme-pure-white) main [class*="pl-dashboard-ribbon-"],
+body:not(.theme-pro):not(.theme-pure-white) main [class*="pl-chrome-tone-"],
+body:not(.theme-pro):not(.theme-pure-white).theme-colorfull main {
+  background-color: hsl(var(--card)) !important;
+  background-image: none !important;
+}
+body:not(.theme-pro):not(.theme-pure-white) main input:not([type="checkbox"]):not([type="radio"]),
+body:not(.theme-pro):not(.theme-pure-white) main textarea,
+body:not(.theme-pro):not(.theme-pure-white) main select,
+body:not(.theme-pro):not(.theme-pure-white) main button[role="combobox"],
+body:not(.theme-pro):not(.theme-pure-white) main button[data-theme-detail="date-range"] {
+  background-color: hsl(var(--muted) / 0.85) !important;
+}
+body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] table thead tr {
+  background: hsl(var(--muted)) !important;
+}
+/* Soft green etc.: transaction 0 = gray muted, 1 = white card — main+narration same data-txn-stripe */
+body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+  background: hsl(var(--muted) / 0.55) !important;
+}
+body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+  background: hsl(var(--card)) !important;
+}
+body:not(.theme-pro):not(.theme-pure-white) .app-chrome-top-ribbon::before,
+body:not(.theme-pro):not(.theme-pure-white) .app-chrome-sidebar-ribbon::before {
+  opacity: 0 !important;
+}
+body:not(.theme-pro):not(.theme-pure-white) .bg-background {
+  background-color: hsl(var(--background)) !important;
+}
+body:not(.theme-pro):not(.theme-pure-white) .bg-card {
+  background-color: hsl(var(--card)) !important;
+}
+body:not(.theme-pro):not(.theme-pure-white) .bg-muted {
+  background-color: hsl(var(--muted)) !important;
+}
+body:not(.theme-pro):not(.theme-pure-white) .bg-secondary {
+  background-color: hsl(var(--muted)) !important;
+}
+
+/* Pro: dashboard ribbon cards — pic 2 jaisa gradient + 1px black outline (main + settings + footer) */
+body.theme-pro [class*="pl-dashboard-ribbon-"],
+body.theme-pro .app-chrome-top-ribbon.border-2 {
+  border-width: 1px !important;
+  border-color: #000 !important;
+}
+body.theme-pro .pl-dashboard-ribbon-emerald {
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.98) 0%, #ffffff 50%, rgba(209, 250, 229, 0.92) 100%) !important;
+}
+body.theme-pro .pl-dashboard-ribbon-sky {
+  background-color: #f0f9ff !important;
+  background-image: linear-gradient(90deg, rgba(224, 242, 254, 0.98) 0%, #ffffff 50%, rgba(207, 250, 254, 0.92) 100%) !important;
+}
+body.theme-pro .pl-dashboard-ribbon-violet {
+  background-color: #f5f3ff !important;
+  background-image: linear-gradient(90deg, rgba(245, 243, 255, 0.98) 0%, #ffffff 50%, rgba(250, 232, 255, 0.92) 100%) !important;
+}
+body.theme-pro .pl-dashboard-ribbon-amber {
+  background-color: #fffbeb !important;
+  background-image: linear-gradient(90deg, rgba(254, 252, 232, 0.98) 0%, #ffffff 50%, rgba(254, 243, 199, 0.92) 100%) !important;
+}
+body.theme-pro .pl-dashboard-ribbon-rose {
+  background-color: #fff1f2 !important;
+  background-image: linear-gradient(90deg, rgba(255, 241, 242, 0.98) 0%, #ffffff 50%, rgba(252, 231, 243, 0.92) 100%) !important;
+}
+body.theme-pro .pl-dashboard-ribbon-teal {
+  background-color: #f0fdfa !important;
+  background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.96) 0%, #ffffff 50%, rgba(204, 251, 241, 0.9) 100%) !important;
+}
+body.theme-pro .pl-dashboard-ribbon-indigo {
+  background-color: #eef2ff !important;
+  background-image: linear-gradient(90deg, rgba(238, 242, 255, 0.98) 0%, #ffffff 50%, rgba(219, 234, 254, 0.92) 100%) !important;
+}
+
+/* Pro: master list row — ribbon off; selected alag (orange) taaki gray rule override na kare */
+body.theme-pro [data-pl-list-row]:not([data-pl-list-selected]),
+body.theme-pro main [data-theme-list="account-list"] [data-pl-list-row]:not([data-pl-list-selected]),
+body.theme-pro main .pl-master-list-ul [data-pl-list-row]:not([data-pl-list-selected]) {
+  background-color: hsl(var(--card)) !important;
+  background-image: none !important;
+  border-color: rgb(209 213 219) !important;
+  border-width: 1.5px !important;
+}
+body.theme-pro.dark [data-pl-list-row]:not([data-pl-list-selected]),
+body.theme-pro.dark main [data-theme-list="account-list"] [data-pl-list-row]:not([data-pl-list-selected]),
+body.theme-pro.dark main .pl-master-list-ul [data-pl-list-row]:not([data-pl-list-selected]) {
+  border-color: rgb(75 85 99) !important;
+}
+/* Selected account/party/group list row — orange border + peach bg (group-statement screenshot) */
+body.theme-pro [data-pl-list-selected],
+body.theme-pro main [data-theme-list="account-list"] [data-pl-list-selected],
+body.theme-pro main .pl-master-list-ul [data-pl-list-selected] {
+  border-color: rgb(251 146 60) !important;
+  border-width: 1.5px !important;
+  background-color: rgb(255 247 237) !important;
+  background-image: none !important;
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05) !important;
+}
+body.theme-pro.dark [data-pl-list-selected],
+body.theme-pro.dark main [data-theme-list="account-list"] [data-pl-list-selected],
+body.theme-pro.dark main .pl-master-list-ul [data-pl-list-selected] {
+  border-color: rgb(249 115 22) !important;
+  background-color: rgb(67 20 7 / 0.4) !important;
+  background-image: none !important;
+}
+
+/* ========== Spend-wise view: har theme — green/pink/blue group box + inflow green (pic 2/3) ========== */
+/* Theme stripe/black border rules spend-wise rows par override na karein */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-inflow] > td {
+  background-color: rgb(220 252 231) !important;
+}
+body.theme-pro.dark [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-inflow] > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-inflow] > td {
+  background-color: rgb(20 83 45 / 0.28) !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-outflow] > td {
+  background-color: rgb(249 250 251) !important;
+}
+body.theme-pro.dark [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-outflow] > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-outflow] > td {
+  background-color: rgb(17 24 39 / 0.22) !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-opening] > td {
+  background-color: rgb(239 246 255) !important;
+  border-style: solid !important;
+  border-color: rgb(59 130 246) !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-opening] > td:first-child {
+  border-left-width: 1px !important;
+  border-top-left-radius: 0.75rem;
+  border-bottom-left-radius: 0.75rem;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-opening] > td:last-child {
+  border-right-width: 1px !important;
+  border-top-right-radius: 0.75rem;
+  border-bottom-right-radius: 0.75rem;
+}
+/* Green group */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="green"] > td:first-child {
+  border-left-width: 1px !important;
+  border-left-color: rgb(34 197 94) !important;
+  border-left-style: solid !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="green"] > td:last-child {
+  border-right-width: 1px !important;
+  border-right-color: rgb(34 197 94) !important;
+  border-right-style: solid !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="green"][data-pl-spend-edge~="top"] > td {
+  border-top-width: 1px !important;
+  border-top-color: rgb(34 197 94) !important;
+  border-top-style: solid !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="green"][data-pl-spend-edge~="top"] > td:first-child {
+  border-top-left-radius: 0.75rem;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="green"][data-pl-spend-edge~="top"] > td:last-child {
+  border-top-right-radius: 0.75rem;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="green"][data-pl-spend-edge~="bottom"] > td {
+  border-bottom-width: 1px !important;
+  border-bottom-color: rgb(34 197 94) !important;
+  border-bottom-style: solid !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="green"][data-pl-spend-edge~="bottom"] > td:first-child {
+  border-bottom-left-radius: 0.75rem;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="green"][data-pl-spend-edge~="bottom"] > td:last-child {
+  border-bottom-right-radius: 0.75rem;
+}
+/* Pink group */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="pink"] > td:first-child {
+  border-left-width: 1px !important;
+  border-left-color: rgb(236 72 153) !important;
+  border-left-style: solid !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="pink"] > td:last-child {
+  border-right-width: 1px !important;
+  border-right-color: rgb(236 72 153) !important;
+  border-right-style: solid !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="pink"][data-pl-spend-edge~="top"] > td {
+  border-top-width: 1px !important;
+  border-top-color: rgb(236 72 153) !important;
+  border-top-style: solid !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="pink"][data-pl-spend-edge~="top"] > td:first-child {
+  border-top-left-radius: 0.75rem;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="pink"][data-pl-spend-edge~="top"] > td:last-child {
+  border-top-right-radius: 0.75rem;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="pink"][data-pl-spend-edge~="bottom"] > td {
+  border-bottom-width: 1px !important;
+  border-bottom-color: rgb(236 72 153) !important;
+  border-bottom-style: solid !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="pink"][data-pl-spend-edge~="bottom"] > td:first-child {
+  border-bottom-left-radius: 0.75rem;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="pink"][data-pl-spend-edge~="bottom"] > td:last-child {
+  border-bottom-right-radius: 0.75rem;
+}
+/* Blue group (linked PI / opening cluster) */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="blue"] > td:first-child {
+  border-left-width: 1px !important;
+  border-left-color: rgb(59 130 246) !important;
+  border-left-style: solid !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="blue"] > td:last-child {
+  border-right-width: 1px !important;
+  border-right-color: rgb(59 130 246) !important;
+  border-right-style: solid !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="blue"][data-pl-spend-edge~="top"] > td {
+  border-top-width: 1px !important;
+  border-top-color: rgb(59 130 246) !important;
+  border-top-style: solid !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="blue"][data-pl-spend-edge~="top"] > td:first-child {
+  border-top-left-radius: 0.75rem;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="blue"][data-pl-spend-edge~="top"] > td:last-child {
+  border-top-right-radius: 0.75rem;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="blue"][data-pl-spend-edge~="bottom"] > td {
+  border-bottom-width: 1px !important;
+  border-bottom-color: rgb(59 130 246) !important;
+  border-bottom-style: solid !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="blue"][data-pl-spend-edge~="bottom"] > td:first-child {
+  border-bottom-left-radius: 0.75rem;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="blue"][data-pl-spend-edge~="bottom"] > td:last-child {
+  border-bottom-right-radius: 0.75rem;
+}
+/* Selected ledger txn — orange box (main + narration); theme stripe/bg !important se upar */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td {
+  background-color: rgb(255 247 237 / 0.95) !important;
+  transition: none !important;
+}
+body.theme-pro.dark [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td,
+body.theme-pro.dark [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td {
+  background-color: rgb(67 20 7 / 0.35) !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td {
+  box-shadow: inset 0 2px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not(:has(+ .narration-row)) > td {
+  box-shadow: inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td:first-child {
+  box-shadow: inset 2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not(:has(+ .narration-row)) > td:first-child {
+  box-shadow: inset 2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td:last-child {
+  box-shadow: inset -2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not(:has(+ .narration-row)) > td:last-child {
+  box-shadow: inset -2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not(:has(+ .narration-row)) > td:first-child {
+  border-top-left-radius: 0.75rem !important;
+  border-bottom-left-radius: 0.75rem !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not(:has(+ .narration-row)) > td:last-child {
+  border-top-right-radius: 0.75rem !important;
+  border-bottom-right-radius: 0.75rem !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:has(+ .narration-row) > td:first-child {
+  border-top-left-radius: 0.75rem !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:has(+ .narration-row) > td:last-child {
+  border-top-right-radius: 0.75rem !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td {
+  box-shadow: inset 0 -2px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td:first-child {
+  box-shadow: inset 2px 0 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+  border-bottom-left-radius: 0.75rem !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td:last-child {
+  box-shadow: inset -2px 0 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+  border-bottom-right-radius: 0.75rem !important;
+}
+/* Spend-wise: main + narration ek pill — beech me koi line nahi */
+body[class*="theme-"] [data-theme-table="transactions"] tr[data-pl-spend-wise-group].transaction-main-row:has(+ .narration-row[data-pl-spend-wise-group]) > td {
+  border-bottom-width: 0 !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tr[data-pl-spend-wise-group].transaction-main-row + .narration-row[data-pl-spend-wise-group] > td {
+  border-top-width: 0 !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tr[data-pl-spend-wise-group].transaction-main-row + .narration-row[data-pl-spend-wise-group] {
+  border-top-width: 0 !important;
+  border-bottom-width: 0 !important;
+}
+/* Spend-wise group borders — bold (2px) */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="green"] > td:first-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="green"] > td:last-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="pink"] > td:first-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="pink"] > td:last-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="blue"] > td:first-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="blue"] > td:last-child {
+  border-left-width: 2px !important;
+  border-right-width: 2px !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="green"][data-pl-spend-edge~="top"] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="pink"][data-pl-spend-edge~="top"] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="blue"][data-pl-spend-edge~="top"] > td {
+  border-top-width: 2px !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="green"][data-pl-spend-edge~="bottom"] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="pink"][data-pl-spend-edge~="bottom"] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="blue"][data-pl-spend-edge~="bottom"] > td {
+  border-bottom-width: 2px !important;
+}
+

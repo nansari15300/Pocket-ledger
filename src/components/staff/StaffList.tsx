@@ -3,10 +3,11 @@
 
 import type { Staff } from "@/components/staff/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/utils"
+import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
-import { Card } from "@/components/ui/card";
+import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Briefcase } from "lucide-react";
 import React, { useMemo, useState } from "react";
@@ -87,21 +88,16 @@ export function StaffList({
 
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background">
-      <ScrollArea className="min-h-0 min-w-0 flex-1">
-        <ul className="p-2 space-y-1">
+    <div className={masterListShellCn}>
+      <ScrollArea listChrome className="min-h-0 min-w-0 flex-1">
+        <ul className="pl-master-list-ul">
           <AnimatePresence mode="popLayout">
             {filteredAndSortedStaff.map((staffMember) => {
               const isSelected = selectedStaff?.id === staffMember.id;
               const href = getItemHref?.(staffMember);
               /** List hover + avatar: stale `"null"` string par PDF spinner na kholo — `trimEntityFileUrlForPreview` */
               const attachmentPreviewUrl = trimEntityFileUrlForPreview(staffMember.fileUrl);
-              const cardClassName = cn(
-                "min-w-0 max-w-full overflow-hidden p-1.5 cursor-pointer border rounded-md transition-all duration-200",
-                isSelected
-                  ? "border-primary bg-secondary shadow-sm"
-                  : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30"
-              );
+              const cardClassName = masterListRowUnselectedCn(isSelected);
               const cardContent = (
                 <div className="pl-master-list-row">
                   <div className="pl-master-list-row-leading">
@@ -128,8 +124,13 @@ export function StaffList({
                       )}
                     </div>
                     <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="pl-master-list-row-name cursor-default">{staffMember.name}</span>
+                      {/* asChild hata — motion layout + span ref merge par Radix setRef loop */}
+                      <TooltipTrigger
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        className="pl-master-list-row-name cursor-default block w-full truncate border-0 bg-transparent p-0 text-left shadow-none"
+                      >
+                        {staffMember.name}
                       </TooltipTrigger>
                       <TooltipContent>
                         <p>{staffMember.name}</p>
@@ -159,12 +160,12 @@ export function StaffList({
                   {href ? (
                     // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                     <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
-                      <Card className={cardClassName}>{cardContent}</Card>
+                      <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
                     </Link>
                   ) : (
-                    <Card className={cardClassName} onClick={() => onSelectStaff(staffMember)}>
+                    <MasterListRow selected={isSelected} className={cardClassName} onClick={() => onSelectStaff(staffMember)}>
                       {cardContent}
-                    </Card>
+                    </MasterListRow>
                   )}
                 </motion.li>
               );

@@ -26,6 +26,7 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import {
   apkEmbeddedSqliteFirstWritesPreferred,
   isClientNavigatorOffline,
+  shouldAutoFlushOutboxAfterEnqueue,
 } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { mirrorCompanyDocToBrowserDb } from "@/lib/localCompanyDocMirror";
 import { getLocalCompanyById, type LocalCompanyDoc } from "@/lib/localCompanyStore";
@@ -237,8 +238,8 @@ export async function enqueueCompanyDocOutbox(
     `INSERT INTO sync_outbox (outbox_id, company_id, collection_name, doc_id, op, payload, created_at, client_write_id, nonce, payload_hash)
      VALUES (?,?,?,?,?,?,?,?,?,?)`
   ).run(outboxId, companyId, collectionName, docId, op, json, now, clientWriteId, nonce, payloadHash);
-  // Offline-first: flush hamesha background — `await` se Save / SQLite commit Firestore/Storage/idem stall na ho (permission-denied / slow upload pe "Saving…" lag).
-  if (typeof navigator !== "undefined" && navigator.onLine) {
+  // Offline-first: flush background — embedded offline par band taaki Firestore Write stream + "Saving…" na atke.
+  if (shouldAutoFlushOutboxAfterEnqueue()) {
     void flushVoucherOutbox().catch((e) => {
       console.warn("[localVoucherOutbox] background flush after enqueue failed", e);
     });

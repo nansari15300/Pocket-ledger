@@ -7,7 +7,7 @@ import type { TaxGroup } from "@/components/tax/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
-import { Card } from "@/components/ui/card";
+import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 import { useMemo, useState } from "react";
 import {
@@ -18,6 +18,7 @@ import { filterAndSortEntityGroups } from "@/lib/entityGroupListQuickFilter";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { isSystemParentGroup } from "@/lib/system-groups";
+import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 
 export function TaxGroupList({
   groups,
@@ -55,19 +56,14 @@ export function TaxGroupList({
 
   return (
     <TooltipProvider delayDuration={200}>
-    <div className="flex h-full min-h-0 min-w-0 w-full flex-col rounded-b-lg border-t-0 bg-background">
-      <ScrollArea className="min-h-0 min-w-0 flex-1">
-        <ul className="p-2 space-y-1">
+    <motion.div className={masterListShellCn}>
+      <ScrollArea listChrome className="min-h-0 min-w-0 flex-1">
+        <ul className="pl-master-list-ul">
           <AnimatePresence mode="popLayout">
             {filteredAndSortedGroups.map((group) => {
               const isSelected = selectedGroup?.id === group.id;
               const href = getItemHref?.(group);
-              const cardClassName = cn(
-                "w-full min-w-0 max-w-full overflow-hidden p-1.5 cursor-pointer border rounded-lg transition-colors duration-200",
-                isSelected
-                  ? "border-primary bg-secondary shadow-sm"
-                  : "border-gray-300 dark:border-gray-600 hover:border-primary/40 bg-card hover:bg-muted/30"
-              );
+              const cardClassName = masterListRowUnselectedCn(isSelected);
               const cardContent = (
                       <div className="pl-master-list-row">
                         <div className="pl-master-list-row-leading">
@@ -86,10 +82,13 @@ export function TaxGroupList({
                             )}
                           </div>
                           <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="pl-master-list-row-name-strong cursor-default">
-                                {group.name}
-                              </span>
+                            {/* asChild hata — motion layout + span ref merge par Radix setRef loop */}
+                            <TooltipTrigger
+                              type="button"
+                              onPointerDown={(e) => e.stopPropagation()}
+                              className="pl-master-list-row-name-strong cursor-default block w-full truncate border-0 bg-transparent p-0 text-left shadow-none"
+                            >
+                              {group.name}
                             </TooltipTrigger>
                             <TooltipContent>
                               <p>{group.name}</p>
@@ -100,15 +99,16 @@ export function TaxGroupList({
                           </Tooltip>
                         </div>
                         <Tooltip>
-                          <TooltipTrigger asChild>
-                            <p
-                              className={cn(
-                                "pl-master-list-row-amount-xs ml-1 rounded px-1",
-                                group.balance >= 0 ? "text-green-600" : "text-red-600"
-                              )}
-                            >
-                              {formatCurrency(group.balance, { showDrCr: true })}
-                            </p>
+                          {/* asChild hata — amount cell par ref loop avoid */}
+                          <TooltipTrigger
+                            type="button"
+                            onPointerDown={(e) => e.stopPropagation()}
+                            className={cn(
+                              "pl-master-list-row-amount-xs ml-1 rounded border-0 bg-transparent px-1 text-left shadow-none",
+                              group.balance >= 0 ? "text-green-600" : "text-red-600"
+                            )}
+                          >
+                            {formatCurrency(group.balance, { showDrCr: true })}
                           </TooltipTrigger>
                           <TooltipContent side="left">
                             <p className="font-medium">{formatCurrency(group.balance, { showDrCr: true })}</p>
@@ -127,12 +127,12 @@ export function TaxGroupList({
                     {href ? (
                     // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                     <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
-                      <Card className={cardClassName}>{cardContent}</Card>
+                      <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
                     </Link>
                   ) : (
-                    <Card className={cardClassName} onClick={() => onSelectGroup(group)}>
+                    <MasterListRow selected={isSelected} className={cardClassName} onClick={() => onSelectGroup(group)}>
                       {cardContent}
-                    </Card>
+                    </MasterListRow>
                   )}
                 </motion.li>
               );
@@ -146,7 +146,7 @@ export function TaxGroupList({
         </ul>
       </ScrollArea>
       <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
-    </div>
+    </motion.div>
     </TooltipProvider>
   );
 }

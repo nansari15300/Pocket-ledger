@@ -13,6 +13,8 @@ import { getStorage } from 'firebase/storage';
 import { setLogLevel } from 'firebase/app';
 import { detachCompanyPickerFirestoreListenersIfAny } from '@/lib/companyPickerFirestoreDetach';
 import { computeIsLocalOnlyMode } from '@/lib/dataSourceModeDefaults';
+import { isEmbeddedOfflinePreloadClient } from '@/lib/isEmbeddedOfflinePreloadClient';
+import { isClientNavigatorOffline } from '@/lib/apkOnlineFirestoreWritePolicy';
 import { clearEmbeddedWarmBootstrapFlags } from '@/lib/embeddedWarmBootstrapFlags';
 
 const firebaseConfig = {
@@ -241,6 +243,32 @@ async function syncFirestoreNetworkFromLocalConfigInner(): Promise<void> {
 
 export async function enqueueSyncFirestoreNetworkFromLocalConfig(): Promise<void> {
   await queueFirestoreNetworkOp(syncFirestoreNetworkFromLocalConfigInner);
+}
+
+/**
+ * APK/static/EXE: offline par Firestore Write/Listen streams band — SQLite/outbox only;
+ * online par dubara enable taaki `flushVoucherOutbox` / plan sync chal sake.
+ */
+export async function syncEmbeddedFirestoreTransportFromNavigator(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  if (!isEmbeddedOfflinePreloadClient()) return;
+  await queueFirestoreNetworkOp(async () => {
+    const offline = isClientNavigatorOffline();
+    try {
+      if (offline) {
+        await disableNetwork(firestore);
+        firestoreNetworkDisabledByApi = true;
+        return;
+      }
+      if (firestoreNetworkDisabledByApi) {
+        await enableNetwork(firestore);
+        await settleAfterFirestoreNetworkEnabled();
+      }
+      firestoreNetworkDisabledByApi = false;
+    } catch {
+      /* non-blocking */
+    }
+  });
 }
 
 /**

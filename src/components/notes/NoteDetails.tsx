@@ -7,6 +7,8 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Edit, FilePlus, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Filter, XCircle, Printer } from "lucide-react";
 import { TransactionsTable } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import { LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+
 import { sortTransactionsWithFiscalMergeForCompany, DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -225,22 +227,20 @@ export function NoteDetails({
             {/* Party ledger jaisa: (pehle rows) << < [page size] > >> (baad ki rows) + Total Trxn */}
             <p className="text-sm font-medium tabular-nums">({noteBeforeCount})</p>
             <div className="flex items-center space-x-1">
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(1)}
                 disabled={currentPage === 1}
               >
                 <ChevronsLeft className="h-4 w-4" />
               </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(currentPage - 1)}
                 disabled={currentPage === 1}
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
+              <LedgerFooterChromePill className="px-1">
+
               <Select
                 value={`${rowsPerPage}`}
                 onValueChange={(value) => {
@@ -248,7 +248,7 @@ export function NoteDetails({
                   setCurrentPage(1);
                 }}
               >
-                <SelectTrigger className="h-8 w-[70px]">
+                <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
                   <SelectValue placeholder={`${rowsPerPage}`} />
                 </SelectTrigger>
                 <SelectContent side="top">
@@ -258,17 +258,13 @@ export function NoteDetails({
                   <SelectItem value="0">All</SelectItem>
                 </SelectContent>
               </Select>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              </LedgerFooterChromePill><Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(currentPage + 1)}
                 disabled={currentPage === totalPages}
               >
                 <ChevronRight className="h-4 w-4" />
               </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(totalPages)}
                 disabled={currentPage === totalPages}
               >

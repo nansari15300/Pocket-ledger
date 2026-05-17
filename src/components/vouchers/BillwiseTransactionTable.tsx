@@ -489,6 +489,7 @@ export function BillwiseTransactionTable({
               displayTransactions.map((t: any, rowIndex: number) => (
                 <TransactionRow
                   key={t.id}
+                  txnStripeIndex={rowIndex}
                   transaction={t}
                   fullRowColSpan={fullRowColSpan}
                   animateLayout={true}

@@ -341,6 +341,8 @@ export type UpsertCompanyBrowserOptions = {
   force?: boolean;
   /** Firestore mirror/restore: skip paid-expiry read-only gate (server snapshot or import = trusted read). */
   skipPlanMutationGate?: boolean;
+  /** Remote Drive/Dropbox apply — dubara cloud_sync_outbox mat banao */
+  skipCloudSyncEnqueue?: boolean;
 };
 
 /** Before restore: clear old cached rows to avoid stale voucher merges */
@@ -414,6 +416,18 @@ export async function upsertCompanyDocInBrowserDb(
          updatedAt = excluded.updatedAt`
     ).run(companyId, collectionName, docId, json, now);
     await upsertVoucherProjection(companyId, collectionName, docId, data);
+    // Local-company Drive/Dropbox delta queue (Firestore `sync_outbox` se alag)
+    if (options?.skipCloudSyncEnqueue !== true) {
+      const { maybeEnqueueLocalCloudSyncFromWrite } = await import("@/lib/localCloudSync/enqueueFromWrite");
+      const { inferCloudSyncActionFromPayload } = await import("@/lib/localCloudSync/conflict");
+      void maybeEnqueueLocalCloudSyncFromWrite({
+        companyId,
+        collectionName,
+        docId,
+        data,
+        operation: inferCloudSyncActionFromPayload(data),
+      });
+    }
     // Single-write paths: bump UI; Firestore snapshot batches pass notify false (React already has fresh state).
     if (shouldNotify) notifyBrowserDbCollectionUpdated(companyId, collectionName);
   } catch (e) {

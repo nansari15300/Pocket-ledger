@@ -1,4 +1,4 @@
-
+﻿
 "use client";
 
 import * as React from "react";
@@ -87,9 +87,16 @@ import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
+import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import { LedgerFooterCheckboxPill, LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
+import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
+import { useStatementCheckMode } from "@/hooks/useStatementCheckMode";
+
+
 import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
   sortTransactionsWithFiscalMergeForCompany,
@@ -622,15 +629,39 @@ export function AccountDetails({
     );
   }, [displayTransactions, spendWiseView, sortBy, sortOrder, openingBalanceForPeriod, company]);
 
+  // Check mode: hide/mark rows; statement view par running balance dubara (spend-wise par filter only)
+  const [statementKeyboardNav, setStatementKeyboardNav] = useState<
+    ReadonlyArray<{ id?: string; _rowKey?: string }>
+  >([]);
+  const statementCheck = useStatementCheckMode({
+    companyId: companyId ?? undefined,
+    context: "account",
+    contextId: account?.id,
+    viewMode: spendWiseView ? "bill_wise" : "statement",
+    orderedTransactions: sortedTransactions,
+    keyboardNavTransactions: statementKeyboardNav,
+  });
+  const ledgerSortedTransactions = useMemo(() => {
+    const filtered = statementCheck.filterTransactions([...sortedTransactions]);
+    if (!statementCheck.checkModeActive || spendWiseView) return filtered;
+    return recomputeRunningBalanceTopToBottom(filtered, openingBalanceForPeriod);
+  }, [
+    sortedTransactions,
+    statementCheck.filterTransactions,
+    statementCheck.checkModeActive,
+    spendWiseView,
+    openingBalanceForPeriod,
+  ]);
+
   const displayTransactionCount = useMemo(
-    () => sortedTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length,
-    [sortedTransactions]
+    () => ledgerSortedTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length,
+    [ledgerSortedTransactions]
   );
 
   /** One row per block in statement; spend-wise: groups + spacers (used for search + pagination). */
   const displayBlocks = useMemo(
-    () => buildSpendWiseDisplayBlocks(sortedTransactions, spendWiseView),
-    [sortedTransactions, spendWiseView]
+    () => buildSpendWiseDisplayBlocks(ledgerSortedTransactions, spendWiseView),
+    [ledgerSortedTransactions, spendWiseView]
   );
 
   // Tail-window: statement = last N blocks first; spend-wise = packFlatListByDataLineBudgetFromEnd (Party/bank pager jaisa).
@@ -638,7 +669,7 @@ export function AccountDetails({
     if (rowsPerPage <= 0) {
       return {
         totalPages: 1,
-        paginatedTransactions: sortedTransactions,
+        paginatedTransactions: ledgerSortedTransactions,
         desktopLedgerSliceFlatStart: 0,
       };
     }
@@ -659,7 +690,7 @@ export function AccountDetails({
         desktopLedgerSliceFlatStart: flatStart,
       };
     }
-    const full = sortedTransactions as any[];
+    const full = ledgerSortedTransactions as any[];
     const pageRanges = packFlatListByDataLineBudgetFromEnd(full, rowsPerPage);
     if (pageRanges.length === 0) {
       return { totalPages: 1, paginatedTransactions: [] as any[], desktopLedgerSliceFlatStart: 0 };
@@ -680,10 +711,10 @@ export function AccountDetails({
     let openingForPage = openingBalanceForPeriod;
     const firstTxn = pageRows[0] as any;
     if (firstTxn?.id) {
-      const firstIdx = (sortedTransactions as any[]).findIndex((t: any) => t?.id === firstTxn.id);
+      const firstIdx = (ledgerSortedTransactions as any[]).findIndex((t: any) => t?.id === firstTxn.id);
       if (firstIdx > 0) {
         for (let i = firstIdx - 1; i >= 0; i--) {
-          const prev = (sortedTransactions as any[])[i] as any;
+          const prev = (ledgerSortedTransactions as any[])[i] as any;
           if (!prev || prev._spendWiseSpacer) continue;
           const prevBal =
             typeof prev.balance === "number"
@@ -698,15 +729,17 @@ export function AccountDetails({
         }
       }
     }
-    const periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
-    const periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
-    return {
-      openingForPage,
-      periodDrForPage,
-      periodCrForPage,
-      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
-    };
-  }, [paginatedTransactions, sortedTransactions, openingBalanceForPeriod]);
+    let periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+    let periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+    let closingForPage = openingForPage + periodDrForPage - periodCrForPage;
+    const adjusted = statementCheck.adjustPeriodTotals(pageRows, openingForPage);
+    if (adjusted) {
+      periodDrForPage = adjusted.periodDrForPage;
+      periodCrForPage = adjusted.periodCrForPage;
+      closingForPage = adjusted.closingForPage;
+    }
+    return { openingForPage, periodDrForPage, periodCrForPage, closingForPage };
+  }, [paginatedTransactions, ledgerSortedTransactions, openingBalanceForPeriod, statementCheck.adjustPeriodTotals]);
 
   const isFilterActive =
     dateRange !== undefined || Object.values(filters).some((v) => v);
@@ -1164,6 +1197,8 @@ export function AccountDetails({
           ) : null}
         </div>
       )}
+      {/* Mobile: date/balance/search — footer chevron se collapse (group pages jaisa) */}
+      <MobileDetailSummaryCollapsible>
       {/* Last 10 Txns / date range label */}
       <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
         <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
@@ -1253,6 +1288,7 @@ export function AccountDetails({
           </div>
         </div>
       </div>
+      </MobileDetailSummaryCollapsible>
       {/* Transaction list - fills to footer line; inner pb-24 so last row scrolls above fixed footer */}
       {/* scroll-touch + inline style for APK/WebView touch scroll */}
       <div
@@ -1428,7 +1464,7 @@ export function AccountDetails({
         {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
         <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim">
+            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
               <EntityFileAttachmentHover fileUrl={accountHeaderAttachmentUrl} triggerClassName="inline-flex shrink-0 rounded-full">
                 <ResolvedEntityAvatar
                   className="h-12 w-12 text-lg flex-shrink-0 border"
@@ -1474,7 +1510,7 @@ export function AccountDetails({
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
                   isRange
@@ -1577,6 +1613,7 @@ export function AccountDetails({
               transactions={paginatedTransactions}
               context="account"
               contextId={account.id}
+              {...statementCheck.tableProps}
               forceBalanceMode="statement"
               openingBalance={showMaskedBalance ? 0 : desktopPageLedgerStats.openingForPage}
               booksOpeningBalance={showMaskedBalance ? undefined : masterAccountOpening}
@@ -1626,19 +1663,14 @@ export function AccountDetails({
         {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
         <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <div className="flex items-center space-x-2 flex-shrink-0">
-                <Checkbox id="show-narration-account" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
-                <label htmlFor="show-narration-account" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
-              </div>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">
-                    <Columns3 className="h-4 w-4" />
-                    Columns
-                    <ChevronDown className="h-4 w-4 opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
+            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
+              <LedgerFooterCheckboxPill
+                id="show-narration-account"
+                checked={showNarration}
+                onCheckedChange={(checked) => (checked) => handleShowNarrationChange(Boolean(checked))}
+                label="Show Narration"
+              />
+              <LedgerFooterColumnsMenu>
                 <DropdownMenuContent align="start" className="w-52 p-2">
                   {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
                     .filter((key) => key !== "status")
@@ -1659,17 +1691,29 @@ export function AccountDetails({
                       </DropdownMenuItem>
                     ))}
                 </DropdownMenuContent>
-              </DropdownMenu>
+              </LedgerFooterColumnsMenu>
               {!spendWiseView && (
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <Checkbox id="show-notes-account" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
-                  <label htmlFor="show-notes-account" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
-                </div>
+                <LedgerFooterCheckboxPill
+                  id="show-notes-account"
+                  checked={includeNotesInTable}
+                  disabled={notesPreferenceLockedOnMobile}
+                  onCheckedChange={(c) => setShowNotes(Boolean(c))}
+                  label="Note"
+                />
+              )}
+              {!spendWiseView && (
+                <StatementCheckModeFooterControls
+                idPrefix="account"
+                enabled={statementCheck.checkModeEnabled}
+                onEnabledChange={statementCheck.setCheckModeEnabled}
+                viewMode={"statement"}
+                hiddenCount={statementCheck.hiddenCount}
+              />
               )}
               {spendWiseView && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0 min-w-0">
+                    <Button variant="chromePill" size="sm" className="h-8 min-w-0 shrink-0 gap-1">
                       {/* Keep trigger text concise while supporting multi-select blink modes. */}
                       <span className="truncate">
                         {spendWiseBlinkMode.length === 0
@@ -1724,7 +1768,7 @@ export function AccountDetails({
               )}
               {spendWiseView && <SpendWiseBlinkInfoDialog open={blinkInfoOpen} onOpenChange={setBlinkInfoOpen} />}
             </div>
-            <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               <TransactionTableSortDropdown
                 sortBy={sortBy}
                 sortOrder={sortOrder}
@@ -1732,25 +1776,21 @@ export function AccountDetails({
                 viewMode={spendWiseView ? "spend_wise" : "statement"}
               />
               {/* Tail paging: page 1 = naya chunk (PartyDetails jaisa). */}
-              <p className="text-sm font-medium flex-shrink-0">
-                Page {currentPage} of {totalPages}
-              </p>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <LedgerFooterTextPill>Page {currentPage} of {totalPages}</LedgerFooterTextPill>
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(totalPages)}
                 disabled={currentPage === totalPages}
               >
                 <ChevronsLeft className="h-4 w-4" />
               </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(currentPage + 1)}
                 disabled={currentPage === totalPages}
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
+              <LedgerFooterChromePill className="px-1">
+
               <Select
                 value={`${rowsPerPage}`}
                 onValueChange={(value) => {
@@ -1758,7 +1798,7 @@ export function AccountDetails({
                   setCurrentPage(1);
                 }}
               >
-                <SelectTrigger className="h-8 w-[70px]">
+                <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
                   <SelectValue placeholder={`${rowsPerPage}`} />
                 </SelectTrigger>
                 <SelectContent side="top">
@@ -1768,23 +1808,19 @@ export function AccountDetails({
                   <SelectItem value="0">All</SelectItem>
                 </SelectContent>
               </Select>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              </LedgerFooterChromePill><Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(currentPage - 1)}
                 disabled={currentPage === 1}
               >
                 <ChevronRight className="h-4 w-4" />
               </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(1)}
                 disabled={currentPage === 1}
               >
                 <ChevronsRight className="h-4 w-4" />
               </Button>
-              <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {displayTransactionCount}</p>
+              <LedgerFooterTextPill>Total Trxn {displayTransactionCount}</LedgerFooterTextPill>
             </div>
           </div>
         </div>

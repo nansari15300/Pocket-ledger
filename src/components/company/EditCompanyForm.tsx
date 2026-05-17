@@ -67,7 +67,6 @@ import { useVouchers } from "@/hooks/useVouchers";
 import Link from "next/link";
 import { Tooltip, TooltipProvider, TooltipContent } from "../ui/tooltip";
 import { Skeleton } from "../ui/skeleton";
-import { Card, CardContent } from "../ui/card";
 import {
   Dialog,
   DialogContent,
@@ -78,6 +77,7 @@ import {
 } from "@/components/ui/dialog";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { LocalCompanyCloudSyncSettings } from "@/components/company/LocalCompanyCloudSyncSettings";
 import { generateEncryptServerBackupSaltBase64, setBackupEncryptionSessionFromLogin } from "@/lib/serverBackupEncryption";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { flushBrowserDbToIndexedDB } from "@/lib/localSqlite";
@@ -819,8 +819,7 @@ export function EditCompanyForm() {
   }
 
   return (
-    <Card>
-    <CardContent className="p-6">
+    <div className="min-w-0">
         <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
             <div className="grid grid-cols-2 gap-4">
@@ -1003,10 +1002,10 @@ export function EditCompanyForm() {
             </div>
             
             {isLocalOnlyMode() && (
-            <div className="space-y-4 rounded-md border border-sky-200 bg-sky-50/40 p-3 dark:border-sky-900/40 dark:bg-sky-950/20">
+            <div className="space-y-4 rounded-md border border-black bg-muted/25 p-3 dark:border-black dark:bg-muted/15">
                 {/* Admin + optional server-backup encryption (same login username/password drives crypto session). */}
                 <FormItem>
-                  <div className="flex items-center justify-between rounded-md border p-3">
+                  <div className="flex items-center justify-between rounded-md border border-black p-3">
                     <div>
                       <FormLabel>Encrypt company (server backup)</FormLabel>
                       <FormDescription>
@@ -1092,9 +1091,9 @@ export function EditCompanyForm() {
             )}
 
             {showAddUserCard && (
-            <div className="space-y-4 rounded-md border border-emerald-200 bg-emerald-50/40 p-3 dark:border-emerald-900/40 dark:bg-emerald-950/20">
+            <div className="space-y-4 rounded-md border border-black bg-muted/25 p-3 dark:border-black dark:bg-muted/15">
               <FormItem>
-                <div className="flex items-center justify-between rounded-md border p-3">
+                <div className="flex items-center justify-between rounded-md border border-black p-3">
                   <div>
                     <FormLabel>Add Company User</FormLabel>
                     <FormDescription>
@@ -1132,7 +1131,7 @@ export function EditCompanyForm() {
               )}
 
               {addCompanyUserEnabled && deviceLocalCoForUi && queuedCompanyUsers.length > 0 && (
-                <div className="rounded-md border p-3">
+                <div className="rounded-md border border-black p-3">
                   <p className="text-xs font-medium text-muted-foreground mb-2">Queued Users ({queuedCompanyUsers.length})</p>
                   <div className="space-y-1">
                     {queuedCompanyUsers.map((u, index) => (
@@ -1305,7 +1304,7 @@ export function EditCompanyForm() {
             )}
 
             {isLocalOnlyMode() && existingLocalUsers.length > 0 && (
-              <div className="rounded-md border p-3">
+              <div className="rounded-md border border-black p-3">
                 {/* List ke saath Edit/Remove: turant SQLite update (Save Changes zaroori nahi). */}
                 <p className="text-sm font-medium mb-2">Existing Company Users ({existingLocalUsers.length})</p>
                 <p className="text-xs text-muted-foreground mb-2">
@@ -1316,7 +1315,7 @@ export function EditCompanyForm() {
                   {existingLocalUsers.map((u, i) => (
                     <div
                       key={`${u.id || u.username || "user"}-${i}`}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded border bg-muted/30 px-2 py-1.5 text-xs"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded border border-black bg-muted/30 px-2 py-1.5 text-xs"
                     >
                       <span className="text-muted-foreground">
                         {(u.displayName || u.username || "User")} ({u.username || "no-username"})
@@ -1387,6 +1386,10 @@ export function EditCompanyForm() {
                 )}
               />
             </div>
+
+            {company?.id && deviceLocalCoForUi ? (
+              <LocalCompanyCloudSyncSettings companyId={company.id} company={company} />
+            ) : null}
             
             {company?.password && (
                 <>
@@ -1581,7 +1584,6 @@ export function EditCompanyForm() {
                 }}
             />
         )}
-      </CardContent>
-    </Card>
+    </div>
   );
 }

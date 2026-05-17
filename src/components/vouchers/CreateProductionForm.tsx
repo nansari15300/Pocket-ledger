@@ -25,7 +25,11 @@ import { saveVoucher, isVoucherLimitError, patchVoucherFields, voucherRecycleBin
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { appendLocalOnlyVoucherFilesToUrls, shouldStageNewVoucherFilesAsLocalPending } from "@/lib/voucherLocalAttachmentUpload";
+import {
+  appendLocalOnlyVoucherFilesToUrls,
+  shouldDeferStorageIncrementUntilPendingUpload,
+  shouldStageNewVoucherFilesAsLocalPending,
+} from "@/lib/voucherLocalAttachmentUpload";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError } from "@/lib/permissions/enforcePermission";
 import { firestore } from "@/lib/firebase";
@@ -587,10 +591,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             });
           existingFileUrls = merged;
           if (preGen) preGeneratedVoucherId = preGen;
-          try {
-            await incrementCompanyStorage(companyId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
-          } catch {
-            /* offline */
+          if (!shouldDeferStorageIncrementUntilPendingUpload()) {
+            try {
+              await incrementCompanyStorage(companyId, {
+                attachmentsBytes: totalNewBytes,
+                storageBytes: totalNewBytes,
+              });
+            } catch {
+              /* offline */
+            }
           }
         } else {
           const filePromises = newFilesToUpload.map(async (file) => {

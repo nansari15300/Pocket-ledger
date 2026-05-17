@@ -14,7 +14,8 @@ export function readCssMmAsPx(mm: number): number {
   document.documentElement.appendChild(probe);
   const w = probe.getBoundingClientRect().width;
   document.documentElement.removeChild(probe);
-  return Math.max(20, Math.round(w));
+  // Chhota mm (4–5) allowed — pehle min 20 tha to narrow edge kabhi apply hi nahi hota tha
+  return Math.max(8, Math.round(w));
 }
 
 export type EdgeSwipeDocumentOptions = {
@@ -32,7 +33,7 @@ export type EdgeSwipeDocumentOptions = {
 /**
  * `document` capture — andar `stopPropagation` wale controls ke baad bhi edge swipe mile
  * (jaise `/company` jahan `main` par handler hi nahi).
- * Header / sidebar-trigger: left ~10mm par `preventDefault` se hamburger tap kill na ho — `touchComposedPathIncludesHeaderOrSafeZone`.
+ * Header / mobile back row: left edge `preventDefault` + menu swipe in zone na ho — back tap chale.
  */
 function touchComposedPathIncludesHeaderOrSafeZone(e: TouchEvent): boolean {
   const path =
@@ -41,6 +42,7 @@ function touchComposedPathIncludesHeaderOrSafeZone(e: TouchEvent): boolean {
     if (!(n instanceof Element)) continue;
     if (n.closest("header")) return true;
     if (n.closest("[data-pl-no-edge-swipe-capture]")) return true;
+    if (n.closest("[data-pl-mobile-back-row]")) return true;
   }
   return false;
 }

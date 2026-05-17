@@ -1,4 +1,4 @@
-
+﻿
 
 "use client";
 
@@ -90,6 +90,11 @@ import { EntityAlarmPopup } from "@/components/messages/EntityAlarmPopup";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type Context, type VisibleColumns, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import { LedgerFooterCheckboxPill, LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
+import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
+import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
+
 import { useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
 import {
   sortTransactionsWithFiscalMergeForCompany,
@@ -127,6 +132,7 @@ import { NotificationBell } from "../vouchers/NotificationBell";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { getLocalAuthUser } from "@/lib/localApiClient";
+import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
@@ -609,58 +615,22 @@ export function PartyDetails({
     });
   }, [sortedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, mergedUserNames, mobileSearchNames, party.id]);
 
-  // Tail-window paging: page 1 = list ke ant (latest txn) — MobileTransactionsPager + useStatementReportMobilePaging jaisa; PC/mobile ek hi slice.
-  const totalPages = rowsPerPage > 0 ? Math.max(1, Math.ceil(searchFilteredTransactions.length / rowsPerPage)) : 1;
-  const desktopPaginationMeta = useMemo(() => {
-    const list = searchFilteredTransactions;
-    const total = list.length;
-    if (rowsPerPage <= 0) {
-      const pageDr = list.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
-      const pageCr = list.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
-      return {
-        pageTransactions: list,
-        beforeCount: 0,
-        afterCount: 0,
-        sliceStart: 0,
-        openingForPage: ledgerOpeningForRunning,
-        periodDrForPage: pageDr,
-        periodCrForPage: pageCr,
-        closingForPage: ledgerOpeningForRunning + pageDr - pageCr,
-      };
-    }
-    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
-    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
-    const end = total - (safePage - 1) * rowsPerPage;
-    const start = Math.max(0, end - rowsPerPage);
-    const pageTransactions = list.slice(start, Math.max(start, end));
-    const previousTx = start > 0 ? list[start - 1] : null;
-    const previousRunningBalance =
-      previousTx != null
-        ? (typeof previousTx.balance === "number"
-            ? previousTx.balance
-            : typeof previousTx.runningBalance === "number"
-              ? previousTx.runningBalance
-              : undefined)
-        : undefined;
-    // Page change par opening row ko us page ke first transaction se just pehle wale running balance par set karo.
-    const openingForPage =
-      typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)
-        ? previousRunningBalance
-        : ledgerOpeningForRunning;
-    const periodDrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
-    const periodCrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
-    return {
-      pageTransactions,
-      beforeCount: start,
-      afterCount: Math.max(0, total - end),
-      sliceStart: start,
-      openingForPage,
-      periodDrForPage,
-      periodCrForPage,
-      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
-    };
-  }, [searchFilteredTransactions, rowsPerPage, currentPage, ledgerOpeningForRunning]);
-  const paginatedTransactions = desktopPaginationMeta.pageTransactions;
+  // Statement check mode + tail paging (PC footer Check mode + hidden-row totals)
+  const {
+    statementCheck,
+    desktopPaginationMeta,
+    paginatedTransactions,
+    totalPages,
+  } = useStatementLedgerCheckModePaging({
+    companyId,
+    context: "party",
+    contextId: party.id,
+    viewMode: balanceMode === "bill_wise" ? "bill_wise" : "statement",
+    searchFilteredTransactions,
+    rowsPerPage,
+    currentPage,
+    ledgerOpeningForRunning,
+  });
 
   /** Tail window: `before` = purane txn (kam index) abhi slice me nahi; `after` = naye (zyada index) hidden — MobileTransactionsPager ke count */
   const mobilePagerEdgeCounts = useMemo(() => {
@@ -706,10 +676,8 @@ export function PartyDetails({
 
   // Keep page in valid range when list size/page-size changes.
   useEffect(() => {
-    const total = rowsPerPage > 0 ? Math.ceil(searchFilteredTransactions.length / rowsPerPage) : 1;
-    const safeTotal = Math.max(1, total);
-    setCurrentPage((prev) => Math.min(Math.max(1, prev), safeTotal));
-  }, [dateRange, searchFilteredTransactions.length, rowsPerPage]);
+    setCurrentPage((prev) => Math.min(Math.max(1, prev), totalPages));
+  }, [dateRange, totalPages]);
 
   const buildDateRangeText = () => {
     if (!company) return;
@@ -856,6 +824,8 @@ export function PartyDetails({
               </span>
             </div>
           ) : null}
+          {/* Mobile: date/balance/search — footer chevron se collapse (group pages jaisa) */}
+          <MobileDetailSummaryCollapsible>
           {/* Row 2 (center): Date range - compact; no filter = "Last 10 Txns", else date range; cross to reset when filter is on */}
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
             <span className="text-xs font-medium text-muted-foreground">{!dateRange || (dateRange.from == null && dateRange.to == null) ? "All Time" : dateRangeLabel}</span>
@@ -920,6 +890,7 @@ export function PartyDetails({
               </div>
             </div>
           </div>
+          </MobileDetailSummaryCollapsible>
           {/* Transaction list - extends to footer line; scroll-touch + inline style for APK/WebView touch scroll */}
           <div
             className="flex-1 min-h-0 overflow-auto scroll-touch"
@@ -970,6 +941,7 @@ export function PartyDetails({
               onStatusFilterAll={handleStatusFilterAll}
               onStatusFilterChange={handleStatusFilterChange}
               statusFilterIdPrefix="party"
+              {...statementCheck.tableProps}
             />
             </div>
           </div>
@@ -1201,7 +1173,7 @@ export function PartyDetails({
         <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             {/* Part 1: account name through balance — single line, no wrap */}
-            <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim">
+            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
               {isMobile && onBack && (
                 <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
                   <ArrowLeft className="h-5 w-5" />
@@ -1240,7 +1212,7 @@ export function PartyDetails({
               </div>
             </div>
             {/* Part 2: date range, Add Note, print — single line, no wrap; on small screens this row is below */}
-            <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <BsDatePicker
@@ -1410,25 +1382,21 @@ export function PartyDetails({
               onStatusFilterAll={handleStatusFilterAll}
               onStatusFilterChange={handleStatusFilterChange}
               statusFilterIdPrefix="party"
+              {...statementCheck.tableProps}
             />
           </div>
         </div>
         {/* Footer: fixed at bottom of details pane (screen anusar) */}
         <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim flex-shrink-0 mt-auto bg-background">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <div className="flex items-center space-x-2 flex-shrink-0">
-                <Checkbox id="show-narration-party" checked={showNarration} onCheckedChange={(checked: boolean) => handleShowNarrationChange(Boolean(checked))} />
-                <label htmlFor="show-narration-party" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
-              </div>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">
-                    <Columns3 className="h-4 w-4" />
-                    Columns
-                    <ChevronDown className="h-4 w-4 opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
+            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
+              <LedgerFooterCheckboxPill
+                id="show-narration-party"
+                checked={showNarration}
+                onCheckedChange={(checked) => (checked: boolean) => handleShowNarrationChange(Boolean(checked))}
+                label="Show Narration"
+              />
+              <LedgerFooterColumnsMenu>
                 <DropdownMenuContent align="start" className="w-52 p-2">
                   {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
                     .filter((key) => key !== "status" || balanceMode === "bill_wise")
@@ -1455,13 +1423,23 @@ export function PartyDetails({
                     );
                   })}
                 </DropdownMenuContent>
-              </DropdownMenu>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <Checkbox id="show-notes-party" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
-                <label htmlFor="show-notes-party" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
-              </div>
+              </LedgerFooterColumnsMenu>
+              <LedgerFooterCheckboxPill
+                id="show-notes-party"
+                checked={includeNotesInTable}
+                disabled={notesPreferenceLockedOnMobile}
+                onCheckedChange={(c) => setShowNotes(Boolean(c))}
+                label="Note"
+              />
+              <StatementCheckModeFooterControls
+                idPrefix="party"
+                enabled={statementCheck.checkModeEnabled}
+                onEnabledChange={statementCheck.setCheckModeEnabled}
+                viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+                hiddenCount={statementCheck.hiddenCount}
+              />
             </div>
-            <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               <TransactionTableSortDropdown
                 sortBy={sortBy}
                 sortOrder={sortOrder}
@@ -1472,25 +1450,21 @@ export function PartyDetails({
                 viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
               />
               {/* Tail paging: page 1 = latest; chevrons (<< oldest page #, < older chunk, > newer, >> newest page 1) */}
-              <p className="text-sm font-medium flex-shrink-0">
-                Page {currentPage} of {totalPages}
-              </p>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <LedgerFooterTextPill>Page {currentPage} of {totalPages}</LedgerFooterTextPill>
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(totalPages)}
                 disabled={currentPage === totalPages}
               >
                 <ChevronsLeft className="h-4 w-4" />
               </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(currentPage + 1)}
                 disabled={currentPage === totalPages}
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
+              <LedgerFooterChromePill className="px-1">
+
               <Select
                 value={`${rowsPerPage}`}
                 onValueChange={(value) => {
@@ -1498,7 +1472,7 @@ export function PartyDetails({
                   setCurrentPage(1);
                 }}
               >
-                <SelectTrigger className="h-8 w-[70px]">
+                <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
                   <SelectValue placeholder={`${rowsPerPage}`} />
                 </SelectTrigger>
                 <SelectContent side="top">
@@ -1508,23 +1482,19 @@ export function PartyDetails({
                   <SelectItem value="0">All</SelectItem>
                 </SelectContent>
               </Select>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              </LedgerFooterChromePill><Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(currentPage - 1)}
                 disabled={currentPage === 1}
               >
                 <ChevronRight className="h-4 w-4" />
               </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(1)}
                 disabled={currentPage === 1}
               >
                 <ChevronsRight className="h-4 w-4" />
               </Button>
-              <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {statusFilteredTransactions.length}</p>
+              <LedgerFooterTextPill>Total Trxn {statusFilteredTransactions.length}</LedgerFooterTextPill>
             </div>
           </div>
         </div>

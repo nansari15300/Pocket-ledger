@@ -79,6 +79,11 @@ import { useCompany } from "@/hooks/useCompany";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { LedgerFooterCheckboxPill, LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
+import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
+import { useStatementCheckMode } from "@/hooks/useStatementCheckMode";
+
 import { useTransactionVisibleColumns, COLUMN_LABELS } from "../vouchers/transactionColumnVisibility";
 import {
   DropdownMenu,
@@ -90,6 +95,7 @@ import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Checkbox } from "../ui/checkbox";
 import { useTransactions } from "@/hooks/use-transactions";
+import { recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRouter } from "next/navigation";
@@ -233,14 +239,36 @@ export function AccountDetails({
     setFilters({});
   };
 
+  const [statementKeyboardNav, setStatementKeyboardNav] = useState<
+    ReadonlyArray<{ id?: string; _rowKey?: string }>
+  >([]);
+  const statementCheck = useStatementCheckMode({
+    companyId,
+    context: "account",
+    contextId: account?.id,
+    viewMode: "statement",
+    orderedTransactions: processedTransactions,
+    keyboardNavTransactions: statementKeyboardNav,
+  });
+  const ledgerListForDisplay = useMemo(() => {
+    const filtered = statementCheck.filterTransactions([...processedTransactions]);
+    if (!statementCheck.checkModeActive) return filtered;
+    return recomputeRunningBalanceTopToBottom(filtered, openingBalanceForPeriod);
+  }, [
+    processedTransactions,
+    statementCheck.filterTransactions,
+    statementCheck.checkModeActive,
+    openingBalanceForPeriod,
+  ]);
+
   const totalPages =
-    rowsPerPage > 0 ? Math.ceil(processedTransactions.length / rowsPerPage) : 1;
+    rowsPerPage > 0 ? Math.ceil(ledgerListForDisplay.length / rowsPerPage) : 1;
 
   /** Oldest-first pages: page1 = shuru wale txn (1–10) Book OB; page2+ Dated. rowsPerPage=0 = sab ek page. */
   const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
 
   const ledgerPagination = useMemo(() => {
-    const list = processedTransactions as any[];
+    const list = ledgerListForDisplay as any[];
     const total = list.length;
     if (rowsPerPage <= 0) {
       const periodDrForPage = list.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
@@ -271,16 +299,17 @@ export function AccountDetails({
       typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)
         ? previousRunningBalance
         : openingBalanceForPeriod;
-    const periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
-    const periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
-    return {
-      pageRows,
-      openingForPage,
-      periodDrForPage,
-      periodCrForPage,
-      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
-    };
-  }, [processedTransactions, rowsPerPage, currentPage, openingBalanceForPeriod]);
+    let periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+    let periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+    let closingForPage = openingForPage + periodDrForPage - periodCrForPage;
+    const adjusted = statementCheck.adjustPeriodTotals(pageRows, openingForPage);
+    if (adjusted) {
+      periodDrForPage = adjusted.periodDrForPage;
+      periodCrForPage = adjusted.periodCrForPage;
+      closingForPage = adjusted.closingForPage;
+    }
+    return { pageRows, openingForPage, periodDrForPage, periodCrForPage, closingForPage };
+  }, [ledgerListForDisplay, rowsPerPage, currentPage, openingBalanceForPeriod, statementCheck.adjustPeriodTotals]);
 
   const paginatedTransactions = ledgerPagination.pageRows;
   const ledgerPageStats = {
@@ -290,6 +319,10 @@ export function AccountDetails({
     closingForPage: ledgerPagination.closingForPage,
   };
 
+
+  useEffect(() => {
+    setStatementKeyboardNav(paginatedTransactions ?? []);
+  }, [paginatedTransactions]);
   /** Page2+ Dated date = pichle page ki last txn (#10 on page2); page1+filter = range-from. */
   const ledgerOpeningPeriodStartDate = useMemo(() => {
     const list = processedTransactions as any[];
@@ -787,7 +820,7 @@ export function AccountDetails({
         {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
         <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim">
+            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
               <EntityFileAttachmentHover
                 fileUrl={trimEntityFileUrlForPreview(account.fileUrl)}
                 triggerClassName="inline-flex shrink-0 rounded-full"
@@ -821,7 +854,7 @@ export function AccountDetails({
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
                   isRange
@@ -924,27 +957,23 @@ export function AccountDetails({
               periodDr={ledgerPageStats.periodDrForPage}
               periodCr={ledgerPageStats.periodCrForPage}
               closingBalance={ledgerPageStats.closingForPage}
-            />
+            
+              {...statementCheck.tableProps}/>
           </div>
           <ScrollBar orientation="horizontal" />
         </ScrollArea>
         {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
         <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
+            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
               <span className="whitespace-nowrap flex-shrink-0">{processedTransactions.length} transaction(s).</span>
-              <div className="flex items-center space-x-2 flex-shrink-0">
-                <Checkbox id="show-narration-account" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
-                <label htmlFor="show-narration-account" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
-              </div>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">
-                    <Columns3 className="h-4 w-4" />
-                    Columns
-                    <ChevronDown className="h-4 w-4 opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
+              <LedgerFooterCheckboxPill
+                id="show-narration-account"
+                checked={showNarration}
+                onCheckedChange={(checked) => (checked) => handleShowNarrationChange(Boolean(checked))}
+                label="Show Narration"
+              />
+              <LedgerFooterColumnsMenu>
                 <DropdownMenuContent align="start" className="w-52 p-2">
                   {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[]).map((key) => (
                     <DropdownMenuItem
@@ -963,28 +992,31 @@ export function AccountDetails({
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
-              </DropdownMenu>
+              </LedgerFooterColumnsMenu>
+              <StatementCheckModeFooterControls
+                idPrefix="income-expense-account"
+                enabled={statementCheck.checkModeEnabled}
+                onEnabledChange={statementCheck.setCheckModeEnabled}
+                viewMode="statement"
+                hiddenCount={statementCheck.hiddenCount}
+              />
             </div>
-            <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
-              <p className="text-sm font-medium flex-shrink-0">
-                Page {currentPage} of {totalPages}
-              </p>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <LedgerFooterTextPill>Page {currentPage} of {totalPages}</LedgerFooterTextPill>
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(1)}
                 disabled={currentPage === 1}
               >
                 <ChevronsLeft className="h-4 w-4" />
               </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(currentPage - 1)}
                 disabled={currentPage === 1}
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
+              <LedgerFooterChromePill className="px-1">
+
               <Select
                 value={`${rowsPerPage}`}
                 onValueChange={(value) => {
@@ -992,7 +1024,7 @@ export function AccountDetails({
                   setCurrentPage(1);
                 }}
               >
-                <SelectTrigger className="h-8 w-[70px]">
+                <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
                   <SelectValue placeholder={`${rowsPerPage}`} />
                 </SelectTrigger>
                 <SelectContent side="top">
@@ -1002,17 +1034,13 @@ export function AccountDetails({
                   <SelectItem value="0">All</SelectItem>
                 </SelectContent>
               </Select>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              </LedgerFooterChromePill><Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(currentPage + 1)}
                 disabled={currentPage === totalPages}
               >
                 <ChevronRight className="h-4 w-4" />
               </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(totalPages)}
                 disabled={currentPage === totalPages}
               >

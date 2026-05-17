@@ -39,7 +39,7 @@ import { PermissionButton } from "@/components/permission";
 import { assertCan, PermissionDeniedError } from "@/lib/permissions/enforcePermission";
 import { decryptData, encryptData } from "@/lib/encryption";
 import Link from "next/link";
-import { getGoogleDriveAuthUrl } from "@/lib/drive-actions";
+import { getGoogleDriveAuthUrl } from "@/lib/driveAuthClient";
 import { ToastAction } from "../ui/toast";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { flushBrowserDbToIndexedDB } from "@/lib/localSqlite";

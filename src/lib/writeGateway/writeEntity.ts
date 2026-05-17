@@ -9,6 +9,7 @@ import { addDoc, collection, deleteDoc, doc, setDoc, updateDoc } from "@/lib/wri
 import { firestore } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import {
   deleteCompanyDocFromBrowserDb,
@@ -52,7 +53,8 @@ async function shouldWriteLocalLedgerFirst(localCompanyId: string): Promise<bool
   // Purana "Server writes" toggle hata — `shouldForceFirestoreWritesOnStaticOrApk` ab hamesha false; `saveVoucher` / masters isi gate se align.
   if (shouldForceFirestoreWritesOnStaticOrApk()) return false;
   const reg = await getLocalCompanyById(localCompanyId, { includeDeleted: true });
-  // Static bundle: company ledger seedha Firestore mat likho — SQLite + outbox hi sync bridge (web cloud unchanged).
+  // APK/static/EXE: company ledger seedha Firestore mat — SQLite + outbox hi sync bridge (web cloud unchanged).
+  if (isEmbeddedOfflinePreloadClient()) return !!reg;
   if (isStaticAppBuild()) return !!reg;
   if (!isLocalOnlyMode()) return false;
   return canSyncCompanyToServer(localCompanyId);

@@ -56,6 +56,7 @@ import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
+import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 
 // Summary card outside page so it only re-renders when amount/title/color change (data change), not on parent re-renders (e.g. userNames)
 const ReportSummaryCard = React.memo(function ReportSummaryCard({ title, amount, color }: { title: string; amount: number; color: string }) {
@@ -483,7 +484,8 @@ export default function DesktopPartyStatementPage() {
                       </div>
                     ) : null}
                  </div>
-                 {/* Row 2: centered "All Time" / date range — Party Details sub-row jaisa */}
+                 {/* Mobile: date + party/group filters — collapse FAB se hide/show */}
+                 <MobileDetailSummaryCollapsible className="gap-2">
                  <div className="flex justify-center items-center gap-2">
                     <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
                     {hasDateFilter && (
@@ -531,6 +533,7 @@ export default function DesktopPartyStatementPage() {
                         />
                     </div>
                  </div>
+                 </MobileDetailSummaryCollapsible>
             </header>
 
             {/* Date range drawer (opened from footer Date button) */}
@@ -615,11 +618,13 @@ export default function DesktopPartyStatementPage() {
                      </div>
                  ) : (
                     <>
+                        <MobileDetailSummaryCollapsible>
                         <div className="flex flex-nowrap gap-2 pt-0.5 pb-3 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
                             {summaryCards.map(card => (
                                 <ReportSummaryCard key={card.title} title={card.title} amount={card.amount} color={card.color} />
                             ))}
                         </div>
+                        </MobileDetailSummaryCollapsible>
 
                         <div className="flex flex-1 min-h-0 flex-col -mx-4 md:mx-0">
                         <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:px-0" data-floating-button-scroll>

@@ -33,8 +33,12 @@ import { useState, useEffect, useMemo } from "react";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { cn } from "@/lib/utils";
+import { useTheme } from "@/hooks/useTheme";
+import { PRO_THEME_CLASS, proDashboardRibbonClass } from "@/lib/proTheme";
 import {
   SETTINGS_LEDGER_CARD as VS_CARD_BORDER,
+  SETTINGS_LEDGER_PANEL as VS_LEDGER_PANEL,
+  SETTINGS_LEDGER_ADD_PREFIX_BTN as VS_ADD_PREFIX_BTN,
   SETTINGS_LEDGER_BORDER_B as VS_BORDER_B,
   SETTINGS_LEDGER_BORDER_T as VS_BORDER_T,
   SETTINGS_LEDGER_BORDER_L as VS_BORDER_L,
@@ -218,6 +222,8 @@ export function VoucherSettings() {
   const { company, companyId, loading: companyLoading, triggerSync, reloadLocalCompanyRegistry } = useCompany();
   const { user } = useAuth();
   const { toast } = useToast();
+  const { theme } = useTheme();
+  const isProTheme = theme === PRO_THEME_CLASS;
   const isCompanyOwner = !!company && (company.ownerId === user?.uid || (user?.email && company.ownerEmail === user.email));
   const [isLoading, setIsLoading] = useState(false);
   const [planHistoryLimit, setPlanHistoryLimit] = useState<number>(10);
@@ -472,7 +478,7 @@ export function VoucherSettings() {
   }
 
   return (
-    <Card className={VS_CARD_BORDER}>
+    <Card className={cn(VS_CARD_BORDER, isProTheme && proDashboardRibbonClass(0))}>
       {/* Title block ke neeche patli black rule — content se visual split (ledger section lines jaisa). */}
       <CardHeader className={cn(VS_BORDER_B)}>
         <CardTitle>Voucher Settings</CardTitle>
@@ -496,10 +502,10 @@ export function VoucherSettings() {
                     Customize the prefixes for your voucher numbers. You can add multiple prefixes for each type.
                 </CardDescription>
                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                    {Object.keys(defaultPrefixes).map((keyStr) => {
+                    {Object.keys(defaultPrefixes).map((keyStr, prefixIndex) => {
                         const key = keyStr as keyof VoucherPrefixValues;
                         return (
-                        <div key={key} className={cn("space-y-2 rounded-lg p-3", VS_CARD_BORDER)}>
+                        <div key={key} className={cn("space-y-2", VS_LEDGER_PANEL, isProTheme && proDashboardRibbonClass(prefixIndex))}>
                                 <FormLabel>{prefixLabels[key]}</FormLabel>
                                 {key === "contra" && (
                                   <FormDescription className="text-xs mt-0.5">Used for both Contra Out (from account) and Contra In (to account). e.g. CNTR → CNTR Out - 001, CNTR In - 001.</FormDescription>
@@ -511,7 +517,13 @@ export function VoucherSettings() {
                                     onChange={(e) => setNewPrefixValues(prev => ({...prev, [key]: e.target.value}))}
                                     placeholder="Add new prefix"
                                 />
-                                <Button type="button" size="icon" onClick={() => handleAddPrefix(key)}>
+                                <Button
+                                    type="button"
+                                    size="icon"
+                                    variant="outline"
+                                    className={VS_ADD_PREFIX_BTN}
+                                    onClick={() => handleAddPrefix(key)}
+                                >
                                     <PlusCircle className="h-4 w-4" />
                                 </Button>
                             </div>
@@ -1010,12 +1022,12 @@ export function VoucherSettings() {
                 </Button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {Object.keys(prefixLabels).map((key) => {
+                {Object.keys(prefixLabels).map((key, voucherIndex) => {
                    const voucherKey = key as keyof VoucherPrefixValues;
                    const canEditRate = voucherKey === 'sale' || voucherKey === 'purchase';
                    if (voucherKey === 'contra') {
                      return (
-                       <Card key={voucherKey} className={cn("p-4 md:col-span-2", VS_CARD_BORDER)}>
+                       <Card key={voucherKey} className={cn("p-4 md:col-span-2", VS_CARD_BORDER, isProTheme && proDashboardRibbonClass(voucherIndex))}>
                          <CardTitle className="text-base mb-1">Contra Entry (In & Out)</CardTitle>
                          <CardDescription className="mb-4 text-xs">One set of settings for both Contra In and Contra Out. Changing any switch applies to both.</CardDescription>
                          {/* PC: Contra In left, Contra Out right; mobile: stacked */}
@@ -1075,7 +1087,7 @@ export function VoucherSettings() {
                      );
                    }
                    return (
-                      <Card key={voucherKey} className={cn("p-4", VS_CARD_BORDER)}>
+                      <Card key={voucherKey} className={cn("p-4", VS_CARD_BORDER, isProTheme && proDashboardRibbonClass(voucherIndex))}>
                          <CardTitle className="text-base mb-4">{prefixLabels[voucherKey]}</CardTitle>
                          <div className="space-y-4">
                            <FormField

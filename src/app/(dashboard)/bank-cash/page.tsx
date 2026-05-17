@@ -20,6 +20,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { mlc, mlcListChromeRoot, mlcListChromeRootData } from "@/lib/mobileListChrome";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams, useParams } from "next/navigation";
 import { AccountList } from "@/components/bank-cash/AccountList";
@@ -334,7 +335,7 @@ function BankCashPageContent() {
   }, [activeView, processedAccounts, processedAccountGroups, can]);
 
 
-  const handleSelect = (item: Account | AccountGroup) => {
+  const handleSelect = useCallback((item: Account | AccountGroup) => {
     if (useQueryNav) {
         // Static export ke liye query params – /bank-cash/[id] path refresh/redirect de sakta hai
         const path = 'accountName' in item ? `/bank-cash?selected=${item.id}` : `/bank-cash?view=groups&selected=${item.id}`;
@@ -342,7 +343,17 @@ function BankCashPageContent() {
     } else {
         setSelected(item);
     }
-  };
+  }, [useQueryNav, router, setSelected]);
+
+  /** Stable href — har render naya inline fn list ko re-mount kara ref loop */
+  const getAccountItemHref = useCallback(
+    (a: Account) => `/bank-cash?selected=${a.id}`,
+    []
+  );
+  const getGroupItemHref = useCallback(
+    (g: AccountGroup) => `/bank-cash?view=groups&selected=${g.id}`,
+    []
+  );
   
   const accountsForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
@@ -394,15 +405,15 @@ function BankCashPageContent() {
   }
   
   const listView = (
-    <div className="flex flex-col h-full">
-      <div className="p-3 border-b flex items-center gap-2">
+    <div className={mlcListChromeRoot} {...mlcListChromeRootData}>
+      <div className={mlc.searchRow}>
         {/* `min-w-0`: flex row me search shrink ho sake; badge Add ke beech party/staff page jaisa */}
-        <div className="relative flex-1 min-w-0">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder={activeView === 'accounts' ? 'Search accounts...' : 'Search groups...'} className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
+        <div className={mlc.searchWrap}>
+          <Search className={mlc.searchIcon} />
+          <Input placeholder={activeView === 'accounts' ? 'Search accounts...' : 'Search groups...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
         </div>
         {activeView === "accounts" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-          <PendingApprovalListFilterBadge
+          <PendingApprovalListFilterBadge compact
             count={totalPendingApprovalVoucherCount}
             pressed={showOnlyAccountsWithPendingApproval}
             onToggle={() => setShowOnlyAccountsWithPendingApproval((v) => !v)}
@@ -413,7 +424,7 @@ function BankCashPageContent() {
           />
         ) : null}
         {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-          <PendingApprovalListFilterBadge
+          <PendingApprovalListFilterBadge compact
             count={totalPendingApprovalVoucherCount}
             pressed={showOnlyGroupsWithPendingApproval}
             onToggle={() => setShowOnlyGroupsWithPendingApproval((v) => !v)}
@@ -425,13 +436,13 @@ function BankCashPageContent() {
         ) : null}
         {activeView === "accounts" ? (
           <CreateBankAccountDialog onAccountCreated={(id) => handleSelect({ id, accountName: "" } as Account)} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
-            <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateAccountOpen(true)}>
+            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateAccountOpen(true)}>
               + Add Account
             </PermissionButton>
           </CreateBankAccountDialog>
         ) : (
           <CreateAccountGroupDialog onGroupCreated={(id) => handleSelect({ id, name: "" } as AccountGroup)} groups={processedAccountGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
-            <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateGroupOpen(true)}>
+            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
               + Add Group
             </PermissionButton>
           </CreateAccountGroupDialog>
@@ -439,22 +450,22 @@ function BankCashPageContent() {
       </div>
        {activeView === 'accounts' ? (
             <>
-              <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
-                <Landmark className="h-4 w-4" />
+              <div className={mlc.sectionLabelRow}>
+                <Landmark className={mlc.sectionIcon} />
                 <span>Accounts ({filteredAccountListCount})</span>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
-                <AccountList accounts={accountsForAccountList} onSelectAccount={handleSelect as any} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByAccountId} getItemHref={useQueryNav ? (a) => `/bank-cash?selected=${a.id}` : undefined} />
+                <AccountList accounts={accountsForAccountList} onSelectAccount={handleSelect as any} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByAccountId} getItemHref={useQueryNav ? getAccountItemHref : undefined} />
               </div>
             </>
         ) : (
             <>
-              <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
-                <Landmark className="h-4 w-4" />
+              <div className={mlc.sectionLabelRow}>
+                <Landmark className={mlc.sectionIcon} />
                 <span>Groups ({filteredGroupCount})</span>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
-                <AccountGroupList groups={processedAccountGroupsForList} onSelectGroup={handleSelect as any} selectedGroup={selectedGroup} searchTerm={searchTerm} pendingApprovalByGroupId={pendingApprovalByAccountGroupId} getItemHref={useQueryNav ? (g) => `/bank-cash?view=groups&selected=${g.id}` : undefined} />
+                <AccountGroupList groups={processedAccountGroupsForList} onSelectGroup={handleSelect as any} selectedGroup={selectedGroup} searchTerm={searchTerm} pendingApprovalByGroupId={pendingApprovalByAccountGroupId} getItemHref={useQueryNav ? getGroupItemHref : undefined} />
               </div>
             </>
         )}
@@ -509,9 +520,9 @@ function BankCashPageContent() {
       }
       tabs={
         <Tabs value={activeView} onValueChange={setActiveView} className="w-full">
-          <TabsList className="w-full">
-            <TabsTrigger value="accounts" className="flex-1">Accounts</TabsTrigger>
-            <TabsTrigger value="groups" className="flex-1">Groups</TabsTrigger>
+          <TabsList listChrome>
+            <TabsTrigger listChrome value="accounts" className="flex-1">Accounts</TabsTrigger>
+            <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
           </TabsList>
         </Tabs>
       }

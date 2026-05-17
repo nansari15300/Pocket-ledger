@@ -60,14 +60,19 @@ type PanSession = {
 };
 
 /** Hydration-safe nahi: useLayoutEffect se pehle paint tak false — coarse pointer / touch par tap-toggle (hover enter/leave mobile par turant band ho jata tha) */
+function detectTapInteractionMode(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    window.matchMedia("(pointer: coarse)").matches ||
+    ("ontouchstart" in window && navigator.maxTouchPoints > 0)
+  );
+}
+
 export function useTapInteractionMode(): boolean {
-  const [tap, setTap] = React.useState(false);
+  /* Pehle render par hi sahi mode — warna mobile par 2s hold + chip hide ho sakta tha */
+  const [tap, setTap] = React.useState(detectTapInteractionMode);
   React.useLayoutEffect(() => {
-    setTap(
-      typeof window !== "undefined" &&
-        (window.matchMedia("(pointer: coarse)").matches ||
-          ("ontouchstart" in window && navigator.maxTouchPoints > 0))
-    );
+    setTap(detectTapInteractionMode());
   }, []);
   return tap;
 }
@@ -100,11 +105,12 @@ export function AttachmentHoverPortal({
   triggerClassName,
   onPreviewDoubleClick,
 }: AttachmentHoverPortalProps) {
-  const { enabled: globalHoverPreviewEnabled } = useFileHoverPreview();
-  const effectiveDisabled = disabled || !globalHoverPreviewEnabled;
+  const { mode: globalPreviewMode } = useFileHoverPreview();
+  const effectiveDisabled = disabled || globalPreviewMode === "off";
   const useTapMode = useTapInteractionMode();
-  // Touch ya desktop (global ON + `openOnHover`): hover band — click/tap se modal + backdrop (`useTapMode` jaisa UX).
-  const clickOrTapOpenMode = useTapMode || (!effectiveDisabled && openOnHover);
+  // `click`: desktop par click/tap modal; `hover`: pointer enter; touch hamesha click.
+  const clickOrTapOpenMode =
+    useTapMode || (globalPreviewMode === "click" && !effectiveDisabled && openOnHover);
   const [open, setOpen] = React.useState(false);
   const [zoom, setZoom] = React.useState(1);
   /** Neeche Window / Width / Height — `window` default */

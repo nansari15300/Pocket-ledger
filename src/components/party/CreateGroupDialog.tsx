@@ -71,6 +71,8 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
 
   const isOpen = parentIsOpen !== undefined ? parentIsOpen : internalIsOpen;
   const setOpen = parentOnOpenChange !== undefined ? parentOnOpenChange : setInternalIsOpen;
+  /** Parent `isOpen` pass = controlled — trigger bahar; DialogTrigger asChild ref loop avoid */
+  const isDialogControlled = parentIsOpen !== undefined;
   // Dialog close ko single helper se chalao so controlled/uncontrolled dono mode mein blur overlay na atke.
   const closeDialog = () => setOpen(false);
 
@@ -254,8 +256,12 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
     }
   }
   return (
-    <Dialog open={isOpen} onOpenChange={setOpen}>
-      {children && <DialogTrigger asChild>{children}</DialogTrigger>}
+    <>
+      {isDialogControlled && children}
+      <Dialog open={isOpen} onOpenChange={setOpen}>
+      {!isDialogControlled && children && (
+        <DialogTrigger asChild>{children}</DialogTrigger>
+      )}
       {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreatePartyDialog / CreateBankAccountDialog. */}
       <DialogContent className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 py-4 sm:max-h-none sm:w-full sm:max-w-md sm:grid sm:flex-none sm:px-6">
         <DialogHeader>
@@ -332,5 +338,6 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
         </div>
       </DialogContent>
     </Dialog>
+    </>
   );
 }

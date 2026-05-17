@@ -12,8 +12,8 @@ import { normalizePlanIdForClient } from "@/config/plans";
 import { verifyPlanEntitlementJws } from "@/lib/security/planEntitlementJwtVerify";
 import { getOrCreateClientDeviceId } from "@/lib/security/deviceIdentity";
 
-/** ~7 min — interval timer ab useCompany me bandh (sirf calendar-day + online + manual); constant legacy docs ke liye. */
-export const PLAN_SERVER_SYNC_INTERVAL_MS = 7 * 60 * 1000;
+/** Online par har 5 min authoritative plan sync — `useCompany` setInterval. */
+export const PLAN_SERVER_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 
 const DAILY_AUTH_PLAN_SYNC_YMD_KEY = (uid: string) =>
   `pocket-ledger:dailyAuthoritativePlanSyncYmd:${uid.trim()}`;

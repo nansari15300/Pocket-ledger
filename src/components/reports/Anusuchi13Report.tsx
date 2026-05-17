@@ -15,6 +15,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { mdc, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
 
 const ONE_LAC = 100_000;
 const REPORT_MEMORY_KEY = "reportAnusuchi13State";
@@ -107,9 +108,9 @@ export function Anusuchi13Report() {
     if (selectedParty) {
       return (
         <div className="flex flex-col h-full min-h-0 overflow-hidden">
-          <div className="p-2 border-b flex-shrink-0 flex items-center gap-2">
-            <Button variant="ghost" size="icon" onClick={() => setSelectedParty(null)}>
-              <ArrowLeft className="h-5 w-5" />
+          <div className={mdc.reportBackRow} {...mdcNoEdgeSwipeCapture}>
+            <Button variant="ghost" size="icon" className={mdc.reportBackBtn} onClick={() => setSelectedParty(null)}>
+              <ArrowLeft className="h-3 w-3" />
             </Button>
             <span className="font-semibold truncate">{selectedParty.name}</span>
           </div>
@@ -170,9 +171,7 @@ export function Anusuchi13Report() {
                   <Card
                     className={cn(
                       "p-2 cursor-pointer border transition-colors",
-                      isSelected
-                        ? "border-primary bg-secondary"
-                        : "hover:border-primary/50"
+                      !isSelected && "hover:border-orange-300/80 hover:bg-orange-50/30"
                     )}
                     onClick={() => handleSelectParty(party)}
                   >
@@ -234,9 +233,7 @@ export function Anusuchi13Report() {
                     <Card
                       className={cn(
                         "p-2 cursor-pointer border transition-colors",
-                        isSelected
-                          ? "border-primary bg-secondary"
-                          : "hover:border-primary/50"
+                        !isSelected && "hover:border-orange-300/80 hover:bg-orange-50/30"
                       )}
                       onClick={() => handleSelectParty(party)}
                     >

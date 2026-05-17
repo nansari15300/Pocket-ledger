@@ -22,6 +22,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { Button } from "@/components/ui/button";
 import { useSearchParams } from "next/navigation";
 import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
+import { mdc, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
 import {
   voucherCountsAsDashboardPaySalary,
   voucherCountsAsDashboardPaymentOutExcludingPaySalary,
@@ -348,9 +349,9 @@ export function PaymentOutReportDetail() {
       return (
         <>
           <div className="flex flex-col h-full min-h-0 overflow-hidden">
-            <div className="p-2 border-b flex-shrink-0 flex items-center gap-2">
-              <Button variant="ghost" size="icon" onClick={() => { setSelectedPayee(null); setShowAllCompanyVouchers(false); }}>
-                <ArrowLeft className="h-5 w-5" />
+            <div className={mdc.reportBackRow} {...mdcNoEdgeSwipeCapture}>
+              <Button variant="ghost" size="icon" className={mdc.reportBackBtn} onClick={() => { setSelectedPayee(null); setShowAllCompanyVouchers(false); }}>
+                <ArrowLeft className="h-3 w-3" />
               </Button>
               <span className="font-semibold truncate">{currentEntity.name}</span>
             </div>

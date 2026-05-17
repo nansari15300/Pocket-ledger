@@ -52,7 +52,11 @@ import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVouch
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { appendLocalOnlyVoucherFilesToUrls, shouldStageNewVoucherFilesAsLocalPending } from "@/lib/voucherLocalAttachmentUpload";
+import {
+  appendLocalOnlyVoucherFilesToUrls,
+  shouldDeferStorageIncrementUntilPendingUpload,
+  shouldStageNewVoucherFilesAsLocalPending,
+} from "@/lib/voucherLocalAttachmentUpload";
 import { toast as sonnerToast } from "sonner";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -565,10 +569,15 @@ export function CreateNoteForm({
               });
             fileUrls = merged;
             if (preGen) preGeneratedVoucherId = preGen;
-            try {
-              await incrementCompanyStorage(companyId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
-            } catch {
-              /* offline */
+            if (!shouldDeferStorageIncrementUntilPendingUpload()) {
+              try {
+                await incrementCompanyStorage(companyId, {
+                  attachmentsBytes: totalNewBytes,
+                  storageBytes: totalNewBytes,
+                });
+              } catch {
+                /* offline */
+              }
             }
           } else {
             for (const file of toUpload) {

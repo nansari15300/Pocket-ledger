@@ -26,6 +26,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import usePermissions from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
+import { txnSelectedMainRowCn, txnSelectedNarrationRowCn } from "@/lib/listSelectionChrome";
 import { getAllocationTotal } from "@/lib/payment-allocation-utils";
 import type { Item } from "@/components/items/types";
 import { motion } from "framer-motion";
@@ -166,6 +167,70 @@ const getDisplayType = (t: any) => {
   if (t.type === "journal" && t.subType === "add_salary") return "Add Salary";
   return t.type.replace(/_/g, " ");
 };
+
+/** Type column pill: row amount Dr → green, Cr → red (`note` alag — neutral rehta hai). */
+export type TxnDrCrSide = "dr" | "cr";
+
+export function resolveTxnDrCrSide(debit: number, credit: number, signedBalance?: number): TxnDrCrSide | null {
+  const dr = Number(debit) || 0;
+  const cr = Number(credit) || 0;
+  if (dr > 0 && cr <= 0) return "dr";
+  if (cr > 0 && dr <= 0) return "cr";
+  if (dr > 0 && cr > 0) return dr >= cr ? "dr" : "cr";
+  if (typeof signedBalance === "number" && signedBalance !== 0) {
+    return signedBalance >= 0 ? "dr" : "cr";
+  }
+  return null;
+}
+
+/** Voucher row se Dr/Cr side — spend-wise linked amount bhi debit/credit columns jaisa. */
+export function resolveTxnDrCrSideFromTransaction(
+  t: any,
+  opts?: { spendWiseLinkedAmount?: number }
+): TxnDrCrSide | null {
+  if (!t || t.type === "note") return null;
+  let debit = toLedgerAmount(t.debit);
+  let credit = toLedgerAmount(t.credit);
+  const linked = opts?.spendWiseLinkedAmount;
+  if (typeof linked === "number" && linked > 0) {
+    const isOutflow =
+      t.type === "payment_out" ||
+      t.type === "direct_expense" ||
+      Number(t.credit) > 0;
+    if (isOutflow) {
+      debit = 0;
+      credit = linked;
+    } else {
+      debit = linked;
+      credit = 0;
+    }
+  }
+  const bal =
+    typeof t.balance === "number"
+      ? t.balance
+      : typeof t.runningBalance === "number"
+        ? t.runningBalance
+        : undefined;
+  return resolveTxnDrCrSide(debit, credit, bal);
+}
+
+/** Type pill classes — Dr green / Cr red; `null` = default outline. */
+export function voucherTypePillClassName(side: TxnDrCrSide | null): string {
+  const base = "inline-flex h-6 items-center rounded-xl px-2.5 font-medium";
+  if (side === "dr") {
+    return cn(
+      base,
+      "border-green-600/50 bg-green-50 text-green-700 dark:bg-green-950/40 dark:text-green-300 dark:border-green-600/40"
+    );
+  }
+  if (side === "cr") {
+    return cn(
+      base,
+      "border-red-600/50 bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300 dark:border-red-600/40"
+    );
+  }
+  return base;
+}
 
 /** Note voucher: Firestore par entityName + entityId — Daybook Accounts column ke liye */
 export const getNoteLinkedEntityLabel = (t: any, names: Record<string, string> = {}) => {
@@ -708,6 +773,14 @@ export const TransactionRow = React.memo(
     fullRowColSpan,
     /** Recent search: daybook rows me visible text highlight (mobile/table dono). */
     textSearchHighlight,
+    /** List index: main + narration dono rows ko same gray/white stripe (nth-child odd/even se alag nahi). */
+    txnStripeIndex,
+    /** Check mode: keyboard focus row (scroll-into-view) */
+    isCheckModeFocused = false,
+    /** Check mode: Space mark — green full-row border (main + narration) */
+    isCheckModeMarked = false,
+    /** Spend-wise group shell ke andar: sirf outer card border — row par alag pill mat banao */
+    spendWiseInGroupCard = false,
   }: any) => {
     // Merge fiscal mode: FY ke beech full-width divider — amounts / row actions nahi.
     if (transaction.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
@@ -742,20 +815,21 @@ export const TransactionRow = React.memo(
       typeof (transaction as any)._spendWisePageShowBottomEdge === "boolean"
         ? (transaction as any)._spendWisePageShowBottomEdge
         : isSpendWiseGroupLast;
-    const spendWiseBorderFirst = effSpendTop && hasSpendWiseColor && cn(
-      "[&>td]:border-t [&>td]:border-b-0 [&>td]:border-solid",
+    const useRowSpendBorders = hasSpendWiseColor && !spendWiseInGroupCard;
+    const spendWiseBorderFirst = useRowSpendBorders && effSpendTop && cn(
+      "[&>td]:border-t-2 [&>td]:border-b-0 [&>td]:border-solid",
       swColor === "green" && "[&>td]:border-t-green-500 [&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
       swColor === "pink" && "[&>td]:border-t-pink-500 [&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
       swColor === "blue" && "[&>td]:border-t-blue-500 [&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
-      "[&>td:first-child]:border-l [&>td:last-child]:border-r",
+      "[&>td:first-child]:border-l-2 [&>td:last-child]:border-r-2",
       "[&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden"
     );
-    const spendWiseBorderMid = !effSpendTop && !effSpendBottom && isSpendWiseInGroup && hasSpendWiseColor && cn(
+    const spendWiseBorderMid = useRowSpendBorders && !effSpendTop && !effSpendBottom && isSpendWiseInGroup && cn(
       "[&>td]:border-t-0 [&>td]:border-b-0 [&>td]:border-solid",
       swColor === "green" && "[&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
       swColor === "pink" && "[&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
       swColor === "blue" && "[&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
-      "[&>td:first-child]:border-l [&>td:last-child]:border-r"
+      "[&>td:first-child]:border-l-2 [&>td:last-child]:border-r-2"
     );
     const showCol = (key: string) => visibleColumns == null || visibleColumns[key] !== false;
     const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
@@ -890,7 +964,14 @@ export const TransactionRow = React.memo(
           ))}
         {showCol("type") && (
           <TableCell className={cn("align-middle", ensureMinGaps && "min-w-[75px] px-[5px]")}>
-            <Badge variant="outline" className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium">
+            <Badge
+              variant="outline"
+              className={voucherTypePillClassName(
+                isNote || transaction.type === "note"
+                  ? null
+                  : resolveTxnDrCrSide(debit, credit, balance)
+              )}
+            >
               {hl(getDisplayType(transaction))}
             </Badge>
           </TableCell>
@@ -1128,22 +1209,22 @@ export const TransactionRow = React.memo(
     const showNarrationRow =
       showNarration &&
       (narrationText || (showCol("status") && !hideStatusColumn && statusDetailText));
-    const spendWiseBorderLast = effSpendBottom && !showNarrationRow && hasSpendWiseColor && cn(
-      "[&>td]:border-b [&>td]:border-solid [&>td]:pb-1",
+    const spendWiseBorderLast = useRowSpendBorders && effSpendBottom && !showNarrationRow && cn(
+      "[&>td]:border-b-2 [&>td]:border-solid [&>td]:pb-1",
       !effSpendTop && "[&>td]:border-t-0",
       swColor === "green" && "[&>td]:border-b-green-500 [&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
       swColor === "pink" && "[&>td]:border-b-pink-500 [&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
       swColor === "blue" && "[&>td]:border-b-blue-500 [&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
-      "[&>td:first-child]:border-l [&>td:last-child]:border-r",
+      "[&>td:first-child]:border-l-2 [&>td:last-child]:border-r-2",
       "[&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-br-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden"
     );
-    const spendWiseBorderLastNarr = effSpendBottom && showNarrationRow && hasSpendWiseColor && cn(
+    const spendWiseBorderLastNarr = useRowSpendBorders && effSpendBottom && showNarrationRow && cn(
       "[&>td]:border-b-0 [&>td]:border-solid",
       !effSpendTop && "[&>td]:border-t-0",
       swColor === "green" && "[&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
       swColor === "pink" && "[&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
       swColor === "blue" && "[&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
-      "[&>td:first-child]:border-l [&>td:last-child]:border-r"
+      "[&>td:first-child]:border-l-2 [&>td:last-child]:border-r-2"
     );
     // Keep narration row width identical to data rows in every mode; status/running/actions are rendered as separate cells.
     const narrationColSpan = colsThroughCredit;
@@ -1191,6 +1272,42 @@ export const TransactionRow = React.memo(
     const rowExitTransition = isRowAnimationEnabled && animateLayout
       ? { transition: { duration: rowAnimationDuration, ease: "easeInOut" as const } }
       : { transition: { duration: 0 } };
+    const txnStripeMod =
+      typeof txnStripeIndex === "number" ? txnStripeIndex % 2 : null;
+    const txnStripeAttr = txnStripeMod !== null ? String(txnStripeMod) : undefined;
+    /* Spend-wise / pending / selected par apna rang — sirf normal rows par gray-white alternate */
+    const txnStripeBgClass =
+      txnStripeMod === null || isSelected || isCheckModeMarked || (highlightPendingApproval && isPendingApproval) || hasSpendWiseColor
+        ? ""
+        : txnStripeMod === 0
+          ? "[&>td]:!bg-muted/50"
+          : "[&>td]:!bg-card";
+    /* Check mode: marked = green box; selected = orange box (list selection jaisa) — mark par orange na overlap. */
+    const txnRowSelectedChrome = isSelected && !isCheckModeMarked;
+    const checkMarkMainBorder = isCheckModeMarked
+      ? cn(
+          "[&>td]:!transition-none [&>td]:bg-green-50/70 dark:[&>td]:bg-green-950/30 [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden",
+          "[&>td]:[box-shadow:inset_0_2px_0_0_#16a34a]",
+          !showNarrationRow && "[&>td]:[box-shadow:inset_0_2px_0_0_#16a34a,inset_0_-2px_0_0_#16a34a]",
+          "[&>td:first-child]:[box-shadow:inset_2px_0_0_0_#16a34a,inset_0_2px_0_0_#16a34a]",
+          !showNarrationRow &&
+            "[&>td:first-child]:[box-shadow:inset_2px_0_0_0_#16a34a,inset_0_2px_0_0_#16a34a,inset_0_-2px_0_0_#16a34a]",
+          "[&>td:last-child]:[box-shadow:inset_-2px_0_0_0_#16a34a,inset_0_2px_0_0_#16a34a]",
+          !showNarrationRow &&
+            "[&>td:last-child]:[box-shadow:inset_-2px_0_0_0_#16a34a,inset_0_2px_0_0_#16a34a,inset_0_-2px_0_0_#16a34a]",
+          !showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-tr-xl [&>td:last-child]:rounded-br-xl",
+          showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl"
+        )
+      : "";
+    const checkMarkNarrBorder = isCheckModeMarked
+      ? "[&>td]:!transition-none [&>td]:bg-green-50/70 dark:[&>td]:bg-green-950/30 [&>td]:[box-shadow:inset_0_-2px_0_0_#16a34a] [&>td:first-child]:[box-shadow:inset_2px_0_0_0_#16a34a,inset_0_-2px_0_0_#16a34a] [&>td:last-child]:[box-shadow:inset_-2px_0_0_0_#16a34a,inset_0_-2px_0_0_#16a34a] [&>td:first-child]:rounded-bl-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:rounded-br-xl [&>td:last-child]:overflow-hidden"
+      : "";
+    /* Spend-wise: theme CSS ko group color / inflow-outflow tint batane ke liye data attrs */
+    const spendWiseEdgeAttr = hasSpendWiseColor
+      ? [effSpendTop ? "top" : "", effSpendBottom ? "bottom" : "", !effSpendTop && !effSpendBottom && isSpendWiseInGroup ? "mid" : ""]
+          .filter(Boolean)
+          .join(" ") || undefined
+      : undefined;
     const MainRow = (
       <motion.tr
         layout={animateLayout ? "position" : false}
@@ -1204,13 +1321,31 @@ export const TransactionRow = React.memo(
         style={isRowAnimationEnabled && animateLayout ? { isolation: "isolate", willChange: "transform" } : undefined}
         onClick={() => onRowSelect?.(transaction)}
         onDoubleClick={() => onRowClick?.(transaction)}
+        data-txn-stripe={txnStripeAttr}
+        /* globals.css [data-pl-txn-selected] — theme stripe/bg par orange box dikhe */
+        data-pl-txn-selected={txnRowSelectedChrome ? "" : undefined}
+        data-check-focus={isCheckModeFocused ? "true" : undefined}
+        data-pl-spend-wise-group={useRowSpendBorders ? swColor : undefined}
+        data-pl-spend-edge={useRowSpendBorders ? spendWiseEdgeAttr : undefined}
+        data-pl-spend-in-group-card={spendWiseInGroupCard ? "" : undefined}
+        data-pl-spend-wise-inflow={isSpendWiseInflowRow ? "" : undefined}
+        data-pl-spend-wise-outflow={
+          isSpendWiseOutflowRow || spendWiseGroupStandaloneOutflow ? "" : undefined
+        }
         className={cn(
           "transaction-main-row min-h-[28px] cursor-pointer",
+          txnStripeBgClass,
+          checkMarkMainBorder,
           isSpendWiseChild && "pl-6 text-sm [&>td]:py-1",
           isSpendWiseChild && !isSelected && !isSpendWiseInflowRow && !isSpendWiseOutflowRow && !spendWiseChildNeedsIndent && "bg-muted/20 [&>td]:bg-muted/20",
           isSpendWiseInflowRow && !isSelected && "bg-green-100 dark:bg-green-900/30 [&>td]:bg-green-100 [&>td]:dark:bg-green-900/30 hover:bg-green-200 [&>td]:hover:bg-green-200 [&>td]:dark:hover:bg-green-900/40",
           (isSpendWiseOutflowRow || (context === "group" && isSpendWiseChild && !isSpendWiseInflowRow) || spendWiseGroupStandaloneOutflow) && !isSelected && "bg-gray-50 dark:bg-gray-900/20 [&>td]:bg-gray-50 [&>td]:dark:bg-gray-900/20 [&>td]:text-xs",
           spendWiseMainInset,
+          /* Group card: doosre voucher ke upar separator; main↔narration ke beech line nahi */
+          spendWiseInGroupCard &&
+            !isSpendWiseGroupFirst &&
+            "[&>td]:border-t [&>td]:border-solid [&>td]:border-black/15",
+          spendWiseInGroupCard && showNarrationRow && "[&>td]:border-b-0",
           spendWiseBorderFirst,
           spendWiseBorderLast,
           spendWiseBorderLastNarr,
@@ -1223,19 +1358,7 @@ export const TransactionRow = React.memo(
           /* Spend-wise group: green/gray pe bhi unapproved dikhe — tint override + ring */
           isPendingApproval && !isSelected && inSpendWiseGroup &&
             "[&>td]:!bg-pink-100/90 dark:[&>td]:!bg-pink-950/45 [&>td]:hover:!bg-pink-200/95 dark:hover:[&>td]:!bg-pink-950/55 ring-2 ring-inset ring-pink-500/45 dark:ring-pink-400/35",
-          isSelected &&
-            "[&>td]:!transition-none [&>td]:bg-primary/10 [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden",
-          isSelected &&
-            "[&>td]:[box-shadow:inset_0_2px_0_0_hsl(var(--primary))]",
-          isSelected && !showNarrationRow && "[&>td]:[box-shadow:inset_0_2px_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))]",
-          isSelected &&
-            "[&>td:first-child]:[box-shadow:inset_2px_0_0_0_hsl(var(--primary)),inset_0_2px_0_0_hsl(var(--primary))]",
-          isSelected && !showNarrationRow && "[&>td:first-child]:[box-shadow:inset_2px_0_0_0_hsl(var(--primary)),inset_0_2px_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))]",
-          isSelected &&
-            "[&>td:last-child]:[box-shadow:inset_-2px_0_0_0_hsl(var(--primary)),inset_0_2px_0_0_hsl(var(--primary))]",
-          isSelected && !showNarrationRow && "[&>td:last-child]:[box-shadow:inset_-2px_0_0_0_hsl(var(--primary)),inset_0_2px_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))]",
-          isSelected && !showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-tr-xl [&>td:last-child]:rounded-br-xl",
-          isSelected && showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl",
+          txnRowSelectedChrome && txnSelectedMainRowCn(showNarrationRow),
           // Spend-wise blink: animation on Dr/Cr/Balance text only (see shouldAnimateSpendWiseAmountText), not on tr/border.
           // Keep transaction row compact when narration is visible (override default TableCell p-1).
           showNarrationRow && "[&>td]:pt-0.5 [&>td]:pb-0",
@@ -1246,8 +1369,9 @@ export const TransactionRow = React.memo(
             : (isSpendWiseGroupFirst || isSpendWiseChild || isSpendWiseGroupLast)
               ? "border-b-0"
               : "border-b",
-          // Main transaction row divider: force pure black so unapproved pink rows never look white.
-          "border-black"
+          // Spend-wise pill: main↔narration ke beech line mat; statement rows par black divider.
+          !inSpendWiseGroup && "border-black",
+          inSpendWiseGroup && showNarrationRow && "[&>td]:border-b-0"
         )}
       >
         {mainRowContent}
@@ -1277,33 +1401,40 @@ export const TransactionRow = React.memo(
         tabIndex={-1}
         onClick={() => onRowSelect?.(transaction)}
         onDoubleClick={() => onRowClick?.(transaction)}
+        data-txn-stripe={txnStripeAttr}
+        data-pl-txn-selected={txnRowSelectedChrome ? "" : undefined}
+        data-pl-spend-wise-group={useRowSpendBorders ? swColor : undefined}
+        data-pl-spend-edge={useRowSpendBorders ? spendWiseEdgeAttr : undefined}
+        data-pl-spend-in-group-card={spendWiseInGroupCard ? "" : undefined}
+        data-pl-spend-wise-inflow={isSpendWiseInflowRow ? "" : undefined}
+        data-pl-spend-wise-outflow={
+          isSpendWiseOutflowRow || spendWiseGroupStandaloneOutflow ? "" : undefined
+        }
         className={cn(
-          "narration-row border-b cursor-pointer",
-          // Narration sub-row divider: keep pure black across normal + unapproved states.
-          "border-black [&>td]:border-black",
+          "narration-row cursor-pointer",
+          !spendWiseInGroupCard && "border-b",
+          txnStripeBgClass,
+          checkMarkNarrBorder,
+          !inSpendWiseGroup && "border-black [&>td]:border-black",
           isBillWise && "-mt-1.5",
           spendWiseNarrInset,
-          effSpendBottom && cn(
-            "[&>td]:border-b [&>td]:border-t-0 [&>td]:border-solid [&>td]:pb-0.5",
+          /* Group card: narration par upar ki line mat (txn + narration ek block) */
+          spendWiseInGroupCard && "[&>td]:border-t-0 [&>td]:border-b-0",
+          effSpendBottom && !spendWiseInGroupCard && cn(
+            "[&>td]:border-b-2 [&>td]:border-t-0 [&>td]:border-solid [&>td]:pb-0.5",
             swColor === "green" && "[&>td]:border-b-green-500 [&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
             swColor === "pink" && "[&>td]:border-b-pink-500 [&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
             swColor === "blue" && "[&>td]:border-b-blue-500 [&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
-            "[&>td:first-child]:border-l [&>td:last-child]:border-r",
+            "[&>td:first-child]:border-l-2 [&>td:last-child]:border-r-2",
             "[&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-br-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden"
           ),
-          !effSpendBottom && hasSpendWiseColor && cn(
-            "[&>td]:border-t-0 [&>td]:border-b-0 [&>td]:border-solid",
-            swColor === "green" && "[&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
-            swColor === "pink" && "[&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
-            swColor === "blue" && "[&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
-            "[&>td:first-child]:border-l [&>td:last-child]:border-r"
-          ),
+          /* Side borders sirf main row par — narration par dubara mat (beech line hat jati hai) */
           isPendingApproval && !isSelected && !inSpendWiseGroup &&
             "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50",
           isPendingApproval && !isSelected && inSpendWiseGroup &&
             "[&>td]:!bg-pink-100/90 dark:[&>td]:!bg-pink-950/45 [&>td]:hover:!bg-pink-200/95 ring-2 ring-inset ring-pink-500/40 dark:ring-pink-400/30",
-          isSelected
-            ? "[&>td]:!transition-none [&>td]:bg-primary/10 [&>td]:[box-shadow:inset_0_-2px_0_0_hsl(var(--primary))] [&>td:first-child]:[box-shadow:inset_2px_0_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))] [&>td:last-child]:[box-shadow:inset_-2px_0_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))] [&>td:first-child]:rounded-bl-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:rounded-br-xl [&>td:last-child]:overflow-hidden"
+          txnRowSelectedChrome
+            ? txnSelectedNarrationRowCn()
             : isSpendWiseChild && !isSpendWiseInflowRow && !isSpendWiseOutflowRow && !spendWiseChildNeedsIndent && "bg-muted/20 [&>td]:bg-muted/20",
           isSpendWiseInflowRow && !isSelected && "bg-green-100 dark:bg-green-900/30 [&>td]:bg-green-100 [&>td]:dark:bg-green-900/30 hover:bg-green-200 [&>td]:hover:bg-green-200 [&>td]:dark:hover:bg-green-900/40",
           (isSpendWiseOutflowRow || (context === "group" && isSpendWiseChild && !isSpendWiseInflowRow) || spendWiseGroupStandaloneOutflow) && !isSelected && "bg-gray-50 dark:bg-gray-900/20 [&>td]:bg-gray-50 [&>td]:dark:bg-gray-900/20 [&>td]:text-xs",

@@ -9,6 +9,12 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Columns3, Search } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import { LedgerFooterCheckboxPill, LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
+import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
+import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
+
+
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
   sortTransactionsWithFiscalMergeForCompany,
@@ -35,6 +41,7 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
+import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { EditExpenseGroupDialog } from "@/components/expenses/EditExpenseGroupDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
@@ -110,7 +117,7 @@ export function ExpenseGroupDetails({
   onBack?: () => void;
 }) {
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
-  const { company } = useCompany();
+  const { company, companyId } = useCompany();
   const { processedExpenseAccounts, vouchers, journalAccountNames } = useVouchers();
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();
@@ -393,43 +400,23 @@ export function ExpenseGroupDetails({
       ),
     [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
-  const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / rowsPerPage));
-  const paginatedTransactions = useMemo(() => {
-    if (rowsPerPage <= 0) return sortedTransactions;
-    const total = sortedTransactions.length;
-    const safePage = Math.min(Math.max(1, currentPage), totalPages);
-    const end = total - (safePage - 1) * rowsPerPage;
-    const start = Math.max(0, end - rowsPerPage);
-    return sortedTransactions.slice(start, Math.max(start, end));
-  }, [sortedTransactions, rowsPerPage, currentPage, totalPages]);
-  // Page-break dynamic opening: current page ke first transaction se opening derive karo.
-  const desktopPageLedgerStats = useMemo(() => {
-    const pageRows = paginatedTransactions as any[];
-    let openingForPage = openingBalanceForPeriod;
-    const firstTxn = pageRows[0];
-    const firstIdx =
-      firstTxn != null ? (sortedTransactions as any[]).findIndex((t: any) => t === firstTxn) : -1;
-    const previousTx = firstIdx > 0 ? (sortedTransactions as any[])[firstIdx - 1] : null;
-    const previousRunningBalance =
-      previousTx != null
-        ? (typeof previousTx.balance === "number"
-            ? previousTx.balance
-            : typeof previousTx.runningBalance === "number"
-              ? previousTx.runningBalance
-              : undefined)
-        : undefined;
-    if (typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)) {
-      openingForPage = previousRunningBalance;
-    }
-    const periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
-    const periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
-    return {
-      openingForPage,
-      periodDrForPage,
-      periodCrForPage,
-      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
-    };
-  }, [paginatedTransactions, sortedTransactions, openingBalanceForPeriod]);
+  // Statement check mode + desktop tail paging (PC footer Check mode pill)
+  const {
+    statementCheck,
+    desktopPaginationMeta,
+    paginatedTransactions,
+    totalPages,
+  } = useStatementLedgerCheckModePaging({
+    companyId,
+    context: "group",
+    contextId: group?.id,
+    viewMode: balanceMode === "bill_wise" ? "bill_wise" : "statement",
+    searchFilteredTransactions: sortedTransactions,
+    rowsPerPage,
+    currentPage,
+    ledgerOpeningForRunning: openingBalanceForPeriod,
+  });
+
   
   const handleOpenNoteDialog = (accountId?: string) => {
     if (accountsInGroup.length === 1) {
@@ -492,6 +479,8 @@ export function ExpenseGroupDetails({
       <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden w-full">
           {/* Mobile: scroll + pager above fixed footer */}
+          {/* Mobile: date/balance/search — footer chevron se collapse */}
+          <MobileDetailSummaryCollapsible>
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
             <span className="text-xs font-medium text-muted-foreground">
               {!dateRange || (dateRange.from == null && dateRange.to == null)
@@ -558,6 +547,7 @@ export function ExpenseGroupDetails({
               </div>
             </div>
           </div>
+          </MobileDetailSummaryCollapsible>
           <div className="flex min-h-0 flex-1 flex-col">
             <div
               className="min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-touch touch-pan-y"
@@ -568,7 +558,7 @@ export function ExpenseGroupDetails({
               transactions={mobileTransactionsToShow}
               context="group"
               contextId={group.id}
-              openingBalance={desktopPageLedgerStats.openingForPage}
+              openingBalance={desktopPaginationMeta.openingForPage}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceDate={(group as any).openingBalanceDate}
@@ -581,11 +571,12 @@ export function ExpenseGroupDetails({
               setFilters={setFilters}
               activeFilter={activeFilter}
               setActiveFilter={setActiveFilter}
-              periodDr={desktopPageLedgerStats.periodDrForPage}
-              periodCr={desktopPageLedgerStats.periodCrForPage}
-              closingBalance={desktopPageLedgerStats.closingForPage}
+              periodDr={desktopPaginationMeta.periodDrForPage}
+              periodCr={desktopPaginationMeta.periodCrForPage}
+              closingBalance={desktopPaginationMeta.closingForPage}
               scrollOnlyTransactions
-            />
+            
+              {...statementCheck.tableProps}/>
             </div>
             </div>
             <MobileTransactionsPager
@@ -768,7 +759,7 @@ export function ExpenseGroupDetails({
         {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
         <div className="flex-shrink-0 border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim">
+            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
               {onBack && (
                 <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
                   <ArrowLeft className="h-5 w-5" />
@@ -799,7 +790,7 @@ export function ExpenseGroupDetails({
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
                   isRange
@@ -915,7 +906,7 @@ export function ExpenseGroupDetails({
               contextId={group.id}
               showNarration={showNarration}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
-              openingBalance={desktopPageLedgerStats.openingForPage}
+              openingBalance={desktopPaginationMeta.openingForPage}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceDate={(group as any).openingBalanceDate}
@@ -925,9 +916,9 @@ export function ExpenseGroupDetails({
               setFilters={setFilters}
               activeFilter={activeFilter}
               setActiveFilter={setActiveFilter}
-              periodDr={desktopPageLedgerStats.periodDrForPage}
-              periodCr={desktopPageLedgerStats.periodCrForPage}
-              closingBalance={desktopPageLedgerStats.closingForPage}
+              periodDr={desktopPaginationMeta.periodDrForPage}
+              periodCr={desktopPaginationMeta.periodCrForPage}
+              closingBalance={desktopPaginationMeta.closingForPage}
             />
             {paginatedTransactions.length === 0 && (
               <div className="text-center py-8 text-muted-foreground">
@@ -940,19 +931,14 @@ export function ExpenseGroupDetails({
         {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
         <div className="flex-shrink-0 border-t py-2 px-4 overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <div className="flex items-center space-x-2 flex-shrink-0">
-                <Checkbox id="show-narration-expense-group" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
-                <label htmlFor="show-narration-expense-group" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
-              </div>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">
-                    <Columns3 className="h-4 w-4" />
-                    Columns
-                    <ChevronDown className="h-4 w-4 opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
+            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
+              <LedgerFooterCheckboxPill
+                id="show-narration-expense-group"
+                checked={showNarration}
+                onCheckedChange={(checked) => (checked) => handleShowNarrationChange(Boolean(checked))}
+                label="Show Narration"
+              />
+              <LedgerFooterColumnsMenu>
                 <DropdownMenuContent align="start" className="w-52 p-2">
                   {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
                     .filter((key) => key !== "status" || balanceMode === "bill_wise")
@@ -979,38 +965,44 @@ export function ExpenseGroupDetails({
                     );
                   })}
                 </DropdownMenuContent>
-              </DropdownMenu>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <Checkbox id="show-notes-expense-group" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
-                <label htmlFor="show-notes-expense-group" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
-              </div>
+              </LedgerFooterColumnsMenu>
+              <LedgerFooterCheckboxPill
+                id="show-notes-expense-group"
+                checked={includeNotesInTable}
+                disabled={notesPreferenceLockedOnMobile}
+                onCheckedChange={(c) => setShowNotes(Boolean(c))}
+                label="Note"
+              />
+              <StatementCheckModeFooterControls
+                idPrefix="expense-group"
+                enabled={statementCheck.checkModeEnabled}
+                onEnabledChange={statementCheck.setCheckModeEnabled}
+                viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+                hiddenCount={statementCheck.hiddenCount}
+              />
             </div>
-            <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               <TransactionTableSortDropdown
                 sortBy={sortBy}
                 sortOrder={sortOrder}
                 onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
                 viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
               />
-              <p className="text-sm font-medium flex-shrink-0">
-                Page {currentPage} of {totalPages}
-              </p>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <LedgerFooterTextPill>Page {currentPage} of {totalPages}</LedgerFooterTextPill>
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(totalPages)}
                 disabled={currentPage === totalPages}
               >
                 <ChevronsLeft className="h-4 w-4" />
               </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(currentPage + 1)}
                 disabled={currentPage === totalPages}
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
+              <LedgerFooterChromePill className="px-1">
+
               <Select
                 value={`${rowsPerPage}`}
                 onValueChange={(value) => {
@@ -1018,7 +1010,7 @@ export function ExpenseGroupDetails({
                   setCurrentPage(1);
                 }}
               >
-                <SelectTrigger className="h-8 w-[70px]">
+                <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
                   <SelectValue placeholder={`${rowsPerPage}`} />
                 </SelectTrigger>
                 <SelectContent side="top">
@@ -1029,23 +1021,19 @@ export function ExpenseGroupDetails({
                   ))}
                 </SelectContent>
               </Select>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              </LedgerFooterChromePill><Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(currentPage - 1)}
                 disabled={currentPage === 1}
               >
                 <ChevronRight className="h-4 w-4" />
               </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
+              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
                 onClick={() => setCurrentPage(1)}
                 disabled={currentPage === 1}
               >
                 <ChevronsRight className="h-4 w-4" />
               </Button>
-              <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {displayTransactions.length}</p>
+              <LedgerFooterTextPill>Total Trxn {displayTransactions.length}</LedgerFooterTextPill>
             </div>
           </div>
         </div>

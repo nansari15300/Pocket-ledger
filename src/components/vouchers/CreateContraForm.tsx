@@ -32,7 +32,11 @@ import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { appendLocalOnlyVoucherFilesToUrls, shouldStageNewVoucherFilesAsLocalPending } from "@/lib/voucherLocalAttachmentUpload";
+import {
+  appendLocalOnlyVoucherFilesToUrls,
+  shouldDeferStorageIncrementUntilPendingUpload,
+  shouldStageNewVoucherFilesAsLocalPending,
+} from "@/lib/voucherLocalAttachmentUpload";
 import { toast as sonnerToast } from "sonner";
 import BsDatePicker from "../ui/BsDatePicker";
 import { Combobox } from "@/components/ui/combobox";
@@ -986,10 +990,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             });
           submissionData.fileUrls = merged;
           if (preGen) preGeneratedVoucherId = preGen;
-          try {
-            await incrementCompanyStorage(companyId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
-          } catch {
-            /* offline */
+          if (!shouldDeferStorageIncrementUntilPendingUpload()) {
+            try {
+              await incrementCompanyStorage(companyId, {
+                attachmentsBytes: totalNewBytes,
+                storageBytes: totalNewBytes,
+              });
+            } catch {
+              /* offline */
+            }
           }
         } else {
           for (const file of newFilesToUpload) {

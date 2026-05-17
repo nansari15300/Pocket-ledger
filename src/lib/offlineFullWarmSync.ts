@@ -200,6 +200,8 @@ export async function runOfflineFullWarmSync(options: {
   signal?: AbortSignal;
   /** Startup responsiveness mode: keep attachment prefetch off unless explicitly enabled. */
   includeAttachmentPrefetch?: boolean;
+  /** Account-wide warm: har company ke baad bootstrap flag mat lagao — sirf poori queue ke baad. */
+  skipWarmBootstrapFlag?: boolean;
   /** Pehli-login loading rows — har subcollection / har attachment attempt */
   onProgress?: (e: OfflineFullWarmProgressEvent) => void;
 }): Promise<OfflineFullWarmSyncResult | null> {
@@ -209,6 +211,7 @@ export async function runOfflineFullWarmSync(options: {
     signal,
     onProgress,
     includeAttachmentPrefetch = false,
+    skipWarmBootstrapFlag = false,
   } = options;
   if (typeof navigator !== "undefined" && !navigator.onLine) return null;
   if (!localCompanyId?.trim()) return null;
@@ -317,11 +320,13 @@ export async function runOfflineFullWarmSync(options: {
     /* ignore */
   }
 
-  // APK/EXE: agli cold start par idle `getIdToken`/plan-sync attachment race kam kare — sirf tab jab Firebase session maujood ho
-  try {
-    markEmbeddedFullWarmSucceeded(auth.currentUser?.uid ?? null);
-  } catch {
-    /* ignore */
+  // APK/EXE: agli cold start par idle `getIdToken`/plan-sync attachment race kam kare — account-wide warm me ek baar end par lagta hai
+  if (!skipWarmBootstrapFlag) {
+    try {
+      markEmbeddedFullWarmSucceeded(auth.currentUser?.uid ?? null);
+    } catch {
+      /* ignore */
+    }
   }
 
   return result;

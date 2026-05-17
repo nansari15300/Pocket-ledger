@@ -84,7 +84,7 @@ export function UserList({ users, selectedUser, onSelectUser }: UserListProps) {
 
     return (
         <ScrollArea className="h-[calc(100vh-22rem)] border rounded-lg">
-            <div className="p-2 space-y-1">
+            <div className="pl-master-list-ul">
                 {users.map(user => (
                    <UserCard 
                         key={user.id}

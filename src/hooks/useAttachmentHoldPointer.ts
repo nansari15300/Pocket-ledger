@@ -2,21 +2,26 @@
 
 import { useCallback, useRef } from "react";
 
-const DEFAULT_HOLD_MS = 2000;
-const DEFAULT_MOVE_CANCEL_PX = 14;
+export const ATTACHMENT_HOLD_MS_MOBILE = 1000;
+export const ATTACHMENT_HOLD_MS_DESKTOP = 2000;
+const DEFAULT_HOLD_MS = ATTACHMENT_HOLD_MS_DESKTOP;
+const MOVE_CANCEL_PX_DESKTOP = 14;
+/** Touch par thodi finger hilti hai — timer jaldi cancel na ho */
+const MOVE_CANCEL_PX_TOUCH = 36;
 
 /**
- * ~2s press-hold; chhota drag se cancel; hold ke baad aane wala synthetic click suppress.
+ * Press-hold; chhota drag se cancel; hold ke baad aane wala synthetic click suppress.
  */
 export function useAttachmentHoldPointer(opts: {
   holdMs?: number;
   moveCancelPx?: number;
   disabled?: boolean;
-  onHoldComplete: () => void | Promise<void>;
+  onHoldComplete?: () => void | Promise<void>;
 }) {
-  const { holdMs = DEFAULT_HOLD_MS, moveCancelPx = DEFAULT_MOVE_CANCEL_PX, disabled, onHoldComplete } = opts;
+  const { holdMs = DEFAULT_HOLD_MS, moveCancelPx, disabled, onHoldComplete } = opts;
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const startRef = useRef<{ x: number; y: number } | null>(null);
+  const startRef = useRef<{ x: number; y: number; pointerType: string } | null>(null);
+  const holdFiredRef = useRef(false);
   const suppressClickRef = useRef(false);
 
   const clearTimer = useCallback(() => {
@@ -28,13 +33,14 @@ export function useAttachmentHoldPointer(opts: {
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      if (disabled) return;
+      if (disabled || !onHoldComplete) return;
       if (e.button !== 0) return;
-      startRef.current = { x: e.clientX, y: e.clientY };
+      holdFiredRef.current = false;
+      startRef.current = { x: e.clientX, y: e.clientY, pointerType: e.pointerType };
       clearTimer();
       timerRef.current = setTimeout(async () => {
         timerRef.current = null;
-        startRef.current = null;
+        holdFiredRef.current = true;
         try {
           await onHoldComplete();
         } catch (err) {
@@ -49,9 +55,12 @@ export function useAttachmentHoldPointer(opts: {
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (!startRef.current || timerRef.current === null) return;
+      const isTouch = startRef.current.pointerType === "touch" || e.pointerType === "touch";
+      const cancelPx =
+        moveCancelPx ?? (isTouch ? MOVE_CANCEL_PX_TOUCH : MOVE_CANCEL_PX_DESKTOP);
       const dx = e.clientX - startRef.current.x;
       const dy = e.clientY - startRef.current.y;
-      if (dx * dx + dy * dy > moveCancelPx * moveCancelPx) {
+      if (dx * dx + dy * dy > cancelPx * cancelPx) {
         clearTimer();
         startRef.current = null;
       }
@@ -60,9 +69,19 @@ export function useAttachmentHoldPointer(opts: {
   );
 
   const endPointer = useCallback(() => {
-    clearTimer();
+    if (!holdFiredRef.current) clearTimer();
     startRef.current = null;
   }, [clearTimer]);
+
+  /** Touch: `pointerleave` se hold mat todo — child/img par false leave aata hai */
+  const onPointerLeave = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.pointerType === "touch" || startRef.current?.pointerType === "touch") return;
+      if (!holdFiredRef.current) clearTimer();
+      startRef.current = null;
+    },
+    [clearTimer]
+  );
 
   const onClickCapture = useCallback((e: React.MouseEvent) => {
     if (suppressClickRef.current) {
@@ -77,7 +96,7 @@ export function useAttachmentHoldPointer(opts: {
     onPointerMove,
     onPointerUp: endPointer,
     onPointerCancel: endPointer,
-    onPointerLeave: endPointer,
+    onPointerLeave,
     onClickCapture,
   };
 }

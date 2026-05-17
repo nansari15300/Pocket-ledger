@@ -84,3 +84,11 @@ export async function shouldStageNewVoucherFilesAsLocalPending(companyId: string
   if (isClientNavigatorOffline()) return true;
   return apkCloudCompanyUsesSqliteFirstWrites(String(companyId || "").trim());
 }
+
+/**
+ * `local:` + IndexedDB stage: usage counter `syncPendingFiles` / hydrate upload par —
+ * save ke waqt `incrementCompanyStorage` await se "Saving…" mat atkao.
+ */
+export function shouldDeferStorageIncrementUntilPendingUpload(): boolean {
+  return voucherNewAttachmentsAlwaysStageAsLocalPending();
+}

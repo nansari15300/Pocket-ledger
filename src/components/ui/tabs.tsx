@@ -7,14 +7,22 @@ import { cn } from "@/lib/utils"
 
 const Tabs = TabsPrimitive.Root
 
+/** Master–detail list pages (Party, Bank, Staff…) — ribbon/pill default h-10 se ~40% chhota */
+type TabsListProps = React.ComponentPropsWithoutRef<typeof TabsPrimitive.List> & {
+  listChrome?: boolean
+}
+
 const TabsList = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.List>,
-  React.ComponentPropsWithoutRef<typeof TabsPrimitive.List>
->(({ className, ...props }, ref) => (
+  TabsListProps
+>(({ className, listChrome, ...props }, ref) => (
   <TabsPrimitive.List
     ref={ref}
+    data-pl-master-list-tabs={listChrome ? "" : undefined}
     className={cn(
-      "inline-flex h-10 items-center justify-center rounded-md bg-muted p-1 text-muted-foreground",
+      listChrome
+        ? "flex h-6 min-h-6 max-h-6 w-full items-center gap-0.5 rounded-sm bg-muted p-0.5 text-muted-foreground"
+        : "inline-flex h-10 items-center justify-center rounded-md bg-muted p-1 text-muted-foreground",
       className
     )}
     {...props}
@@ -22,14 +30,20 @@ const TabsList = React.forwardRef<
 ))
 TabsList.displayName = TabsPrimitive.List.displayName
 
+type TabsTriggerProps = React.ComponentPropsWithoutRef<typeof TabsPrimitive.Trigger> & {
+  listChrome?: boolean
+}
+
 const TabsTrigger = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.Trigger>,
-  React.ComponentPropsWithoutRef<typeof TabsPrimitive.Trigger>
->(({ className, ...props }, ref) => (
+  TabsTriggerProps
+>(({ className, listChrome, ...props }, ref) => (
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
+      listChrome
+        ? "flex h-5 min-h-5 max-h-5 flex-1 items-center justify-center whitespace-nowrap rounded-sm px-2 py-0 text-xs font-medium leading-none ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-none"
+        : "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
       className
     )}
     {...props}

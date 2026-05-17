@@ -39,14 +39,15 @@ import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 const SETTINGS_NAV_INSET_X = "px-[4px]";
 
 /** Settings nav column — dashboard-jaisa halka sky fill + baen ribbon; device cards se grid gap 5px (page grid). */
+/** Settings nav shell — normal 1px black border (pehle `border-2` moti dikhti thi) */
 const SETTINGS_LIST_SHELL =
-  "app-chrome-sidebar-ribbon w-full min-w-0 rounded-lg border-2 border-sky-300/65 pl-dashboard-ribbon-sky overflow-hidden shadow-sm dark:border-sky-800/45";
-/** Header ↔ items split — row dividers ke saath same weight (list / sheet / desktop aside). */
+  "app-chrome-sidebar-ribbon pl-settings-list-shell w-full min-w-0 rounded-lg border border-black pl-dashboard-ribbon-sky overflow-hidden shadow-sm dark:border-black";
+/** Header ↔ items split — 1px divider */
 const SETTINGS_LIST_HEADER_RULE =
-  "border-b-[1.5px] border-gray-300 dark:border-gray-600";
-/** Mobile detail: footer bar (pehle top par thi) — neeche `border-t` divider */
+  "border-b border-black dark:border-black";
+/** Mobile detail: footer bar — 1px divider */
 const SETTINGS_MOBILE_DETAIL_FOOTER_RULE =
-  "border-t-[1.5px] border-gray-300 bg-background dark:border-gray-600";
+  "border-t border-black bg-background dark:border-black";
 
 /** Daen kinara ~10mm — document capture; company/share/voucher… sab detail par list sheet swipe */
 const SETTINGS_LIST_SHEET_RIGHT_EDGE_OPTS: EdgeSwipeDocumentOptions = { edgeWidthMm: 10 };
@@ -60,10 +61,10 @@ function settingsNavRowClass(isActive: boolean, isDanger?: boolean) {
     "min-w-0 max-w-full w-full overflow-hidden py-2 px-3 cursor-pointer border rounded-md transition-all duration-200",
     "flex items-center gap-3 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
     isActive
-      ? "border-primary bg-secondary shadow-sm font-medium"
-      : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30",
+      ? "border-black bg-secondary shadow-sm font-medium"
+      : "border-black hover:bg-muted/30",
     isDanger && !isActive && "text-destructive hover:text-destructive",
-    isDanger && isActive && "text-destructive border-destructive/60"
+    isDanger && isActive && "text-destructive border-black"
   );
 }
 

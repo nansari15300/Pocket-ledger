@@ -49,7 +49,7 @@ export function CompanyList({ groupedCompanies, selectedCompany, onSelectCompany
               </div>
             </CardHeader>
 
-            <CardContent className="p-2 space-y-1">
+            <CardContent className="pl-master-list-ul">
               {group.companies.map((company) => (
                 <Card
                   key={company.id}

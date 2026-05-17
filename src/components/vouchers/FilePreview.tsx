@@ -36,10 +36,15 @@ import { useVoucherAttachmentFallback } from "@/contexts/VoucherAttachmentFallba
 import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
-import { useAttachmentHoldPointer } from "@/hooks/useAttachmentHoldPointer";
+import {
+  useAttachmentHoldPointer,
+  ATTACHMENT_HOLD_MS_MOBILE,
+  ATTACHMENT_HOLD_MS_DESKTOP,
+} from "@/hooks/useAttachmentHoldPointer";
 import {
   buildHoldPayloadFromPreviewSource,
   writeAttachmentHoldClipboard,
+  refreshAttachmentHoldSessionBackup,
 } from "@/lib/attachmentHoldClipboard";
 import { toast as sonnerToast } from "sonner";
 
@@ -310,8 +315,12 @@ export function FilePreview({
     return undefined;
   }, [file, storagePath]);
 
-  const layoutW = previewBox?.width ?? size;
-  const layoutH = previewBox?.height ?? size;
+  /** Voucher attach grid: parent `h-16`/`h-24` + `w-full` — inline 96px style mat lagao (Add box chhota na dikhe) */
+  const fillsParentAttachSlot = Boolean(
+    className && /\bw-full\b/.test(className) && /\bh-(?:16|24)\b/.test(className)
+  );
+  const layoutW = fillsParentAttachSlot ? size : previewBox?.width ?? size;
+  const layoutH = fillsParentAttachSlot ? size : previewBox?.height ?? size;
   const layoutMaxEdge = Math.max(layoutW, layoutH);
 
   // Sirf content fingerprints — naya array/object ref (parent tick / interval) par preview `useEffect` na chale, blob revoke flash na ho.
@@ -1148,6 +1157,10 @@ export function FilePreview({
     !disabled &&
     ((typeof file === "string" && String(file).trim().length > 0) || file instanceof File);
 
+  /** Touch vs mouse — mobile par hold se Copy chip, desktop par hover + optional 2s hold copy */
+  const tapInteractionMode = useTapInteractionMode();
+  const [mobileCopyRevealed, setMobileCopyRevealed] = useState(false);
+
   /** Long-press + desktop hover par Copy button — ek hi payload/toast path; HTTPS ho to clipboard me link + session me PL paste. */
   const runHoldCopyNow = useCallback(async () => {
     const payload = buildHoldPayloadFromPreviewSource({
@@ -1161,18 +1174,25 @@ export function FilePreview({
       viewFileInfo.url && /^https?:\/\//i.test(String(viewFileInfo.url)) ? String(viewFileInfo.url) : undefined;
     const clipboardDisplayUrl = httpsFromProp ?? httpsFromResolved;
     const ok = await writeAttachmentHoldClipboard(payload, { clipboardDisplayUrl });
+    refreshAttachmentHoldSessionBackup(payload);
     sonnerToast.success(ok ? "Copied" : "Saved for paste in this tab", {
       description: ok
         ? clipboardDisplayUrl
           ? "Download link on clipboard; Paste on empty slot still uses attachment copy (session backup)."
-          : "Use Paste on empty slot or ~2s hold there to add a new copy."
+          : "Use Paste on empty slot or ~1s hold there to add a new copy."
         : "Clipboard blocked — try Paste on empty slot (uses last copy in this tab).",
     });
+    setMobileCopyRevealed(false);
   }, [file, resolvedStoragePath, viewFileInfo.url]);
 
   const copyAttachmentHold = useAttachmentHoldPointer({
     disabled: !canHoldCopyAttachment,
-    onHoldComplete: runHoldCopyNow,
+    holdMs: tapInteractionMode ? ATTACHMENT_HOLD_MS_MOBILE : ATTACHMENT_HOLD_MS_DESKTOP,
+    onHoldComplete: tapInteractionMode
+      ? () => {
+          setMobileCopyRevealed(true);
+        }
+      : runHoldCopyNow,
   });
 
   const openAttachmentFromFileInfo = useCallback(() => {
@@ -1208,6 +1228,8 @@ export function FilePreview({
 
   const handlePreviewClick = (e: React.MouseEvent) => {
     if (children || disabled) return;
+    /* Mobile: Copy chip khula ho to short tap se file open na ho — sirf Copy dabayein */
+    if (tapInteractionMode && mobileCopyRevealed) return;
     e.preventDefault();
     e.stopPropagation();
     openAttachmentFromFileInfo();
@@ -1220,9 +1242,6 @@ export function FilePreview({
     Boolean(viewFileInfo.url) &&
     !viewIsLoading &&
     (viewFileInfo.type === "image" || viewFileInfo.type === "pdf");
-
-  /** Touch: portal tap-toggle; desktop fine pointer: hover-zoom sirf jab `enableHoverFullPreview` on ho */
-  const tapInteractionMode = useTapInteractionMode();
 
   const ThumbnailContent = () => {
     if (viewIsLoading || (viewFileInfo.type === "pdf" && isPdfLoading && !pdfThumbnail)) {
@@ -1304,14 +1323,28 @@ export function FilePreview({
     
   const showSpinner = isCompressingProp || viewIsLoading;
 
+  /** Hold handlers thumbnail par — touch target; browser long-press menu band */
+  const thumbHoldHandlers = canHoldCopyAttachment
+    ? {
+        onPointerDown: copyAttachmentHold.onPointerDown,
+        onPointerMove: copyAttachmentHold.onPointerMove,
+        onPointerUp: copyAttachmentHold.onPointerUp,
+        onPointerCancel: copyAttachmentHold.onPointerCancel,
+        onPointerLeave: copyAttachmentHold.onPointerLeave,
+        onClickCapture: copyAttachmentHold.onClickCapture,
+        onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+      }
+    : {};
+
   // Thumbnail box: hover tooltip ke andar bhi yahi layout (preview + badge + compression strip)
   const borderedPreview = (
     <div
       className={cn(
-        "relative w-full h-full border rounded-lg overflow-hidden bg-background shadow-sm flex items-center justify-center",
+        "relative w-full h-full border rounded-lg overflow-hidden bg-background shadow-sm flex items-center justify-center touch-manipulation",
         disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
       )}
       onClick={children || disabled ? undefined : handlePreviewClick}
+      {...thumbHoldHandlers}
     >
       <ThumbnailContent />
 
@@ -1339,9 +1372,9 @@ export function FilePreview({
     </div>
   );
 
-  /** PC hover par Copy — parent `pointer-events-none` taaki thumbnail click = open file (toolbar sirf buttons par hit). */
-  const finePointerCopyBar = canHoldCopyAttachment ? (
-    <div className="pointer-events-none absolute inset-0 z-[60] hidden items-start justify-center gap-1 bg-transparent pt-0.5 opacity-0 transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:opacity-100">
+  /** PC hover par Copy — mobile par `tapInteractionMode` se alag chip */
+  const finePointerCopyBar = canHoldCopyAttachment && !tapInteractionMode ? (
+    <div className="pointer-events-none absolute inset-0 z-[60] flex items-start justify-center gap-1 bg-transparent pt-0.5 opacity-0 transition-opacity group-hover:opacity-100">
       <Button
         type="button"
         variant="secondary"
@@ -1359,6 +1392,28 @@ export function FilePreview({
       </Button>
     </div>
   ) : null;
+
+  /** Mobile: ~1s hold ke baad Copy chip; click se copy (PC hover jaisa) */
+  const mobileCopyBar =
+    canHoldCopyAttachment && tapInteractionMode && mobileCopyRevealed ? (
+      <div className="pointer-events-none absolute inset-0 z-[60] flex items-start justify-center gap-1 bg-transparent pt-0.5">
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="pointer-events-auto h-7 gap-0.5 px-2 text-[10px] font-semibold shadow-md"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            void runHoldCopyNow();
+          }}
+        >
+          <Copy className="h-3 w-3 shrink-0" aria-hidden />
+          Copy
+        </Button>
+      </div>
+    ) : null;
 
   // Hover popup: PDF ke liye nested FilePreview mat chalao — dubara fetch + chhota timeout; wahi raster thumb bara dikhao
   const hoverPanel =
@@ -1422,13 +1477,9 @@ export function FilePreview({
   return (
     <div
       className={cn("relative group h-full w-full", className)}
-      style={{ width: `${layoutW}px`, height: `${layoutH}px` }}
-      onPointerDown={copyAttachmentHold.onPointerDown}
-      onPointerMove={copyAttachmentHold.onPointerMove}
-      onPointerUp={copyAttachmentHold.onPointerUp}
-      onPointerCancel={copyAttachmentHold.onPointerCancel}
-      onPointerLeave={copyAttachmentHold.onPointerLeave}
-      onClickCapture={copyAttachmentHold.onClickCapture}
+      style={
+        fillsParentAttachSlot ? undefined : { width: `${layoutW}px`, height: `${layoutH}px` }
+      }
     >
       {onRemove && (
         <button
@@ -1468,12 +1519,14 @@ export function FilePreview({
           <div className="relative h-full w-full min-h-0 min-w-0">
             {borderedPreview}
             {finePointerCopyBar}
+            {mobileCopyBar}
           </div>
         </AttachmentHoverPortal>
       ) : (
         <div className="relative h-full w-full min-h-0 min-w-0">
           {borderedPreview}
           {finePointerCopyBar}
+          {mobileCopyBar}
         </div>
       )}
     </div>

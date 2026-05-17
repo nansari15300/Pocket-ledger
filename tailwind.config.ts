@@ -24,10 +24,18 @@ export default {
     'border-indigo-300/70', 'from-indigo-50', 'to-blue-100/70', 'dark:from-indigo-950/25', 'dark:to-blue-900/20',
     // Common gradient middle/ dark background tone.
     'via-white', 'dark:via-card',
+    // Switch knob motion — voucher settings + header file preview
+    'animate-file-hover-switch-on',
+    'animate-file-hover-switch-off',
+    'animate-file-hover-switch-to-hover',
+    'animate-file-hover-switch-to-click',
+    'animate-file-hover-switch-to-hover-from-end',
+    'animate-file-hover-switch-to-off-from-mid',
   ],
   content: [
     './src/pages/**/*.{js,ts,jsx,tsx,mdx}',
     './src/components/**/*.{js,ts,jsx,tsx,mdx}',
+    './src/lib/**/*.{js,ts,jsx,tsx}',
     './src/app/**/*.{js,ts,jsx,tsx,mdx}',
     // No Tailwind in route handlers; scanning avoids Windows EBUSY if api/ is locked (dev + build-static)
     '!./src/app/api/**',
@@ -128,13 +136,39 @@ export default {
           '45%': { left: '3px', width: 'calc(100% - 6px)' },
           '100%': { left: '3px', width: '32px' },
         },
+        /* Header File preview 3-step — voucher Switch jaisa stretch, beech positions */
+        'file-hover-switch-to-hover': {
+          '0%': { left: '3px', width: '32px' },
+          '45%': { left: '3px', width: 'calc(50% - 3px)' },
+          '100%': { left: 'calc(50% - 16px)', width: '32px' },
+        },
+        /* Beech ↔ side: sirf apne segment tak stretch — poora left/right jump nahi */
+        'file-hover-switch-to-click': {
+          '0%': { left: 'calc(50% - 16px)', width: '32px' },
+          '45%': { left: 'calc(50% - 16px)', width: 'calc(50% - 3px)' },
+          '100%': { left: 'calc(100% - 35px)', width: '32px' },
+        },
+        'file-hover-switch-to-hover-from-end': {
+          '0%': { left: 'calc(100% - 35px)', width: '32px' },
+          '45%': { left: 'calc(50% - 16px)', width: 'calc(50% - 3px)' },
+          '100%': { left: 'calc(50% - 16px)', width: '32px' },
+        },
+        'file-hover-switch-to-off-from-mid': {
+          '0%': { left: 'calc(50% - 16px)', width: '32px' },
+          '45%': { left: '3px', width: 'calc(50% - 3px)' },
+          '100%': { left: '3px', width: '32px' },
+        },
       },
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
-        // Header GlobalFileHoverPreviewSwitch — 400ms motion (ANIM_MS se match)
+        // Voucher Settings Switch + header File preview — 400ms motion (switchMotion.SWITCH_ANIM_MS)
         'file-hover-switch-on': 'file-hover-switch-on 400ms linear forwards',
         'file-hover-switch-off': 'file-hover-switch-off 400ms linear forwards',
+        'file-hover-switch-to-hover': 'file-hover-switch-to-hover 400ms linear forwards',
+        'file-hover-switch-to-click': 'file-hover-switch-to-click 400ms linear forwards',
+        'file-hover-switch-to-hover-from-end': 'file-hover-switch-to-hover-from-end 400ms linear forwards',
+        'file-hover-switch-to-off-from-mid': 'file-hover-switch-to-off-from-mid 400ms linear forwards',
       },
     },
   },

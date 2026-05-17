@@ -3,15 +3,18 @@
 import * as React from "react"
 
 import { cn } from "@/lib/utils"
+import {
+  SWITCH_ANIM_MS as ANIM_MS,
+  SWITCH_KNOB_W_PX as KNOB_W_PX,
+  SWITCH_KNOB_PAD_PX as KNOB_PAD_PX,
+  SWITCH_KNOB_LEFT_ON as KNOB_LEFT_ON,
+  SWITCH_KNOB_LEFT_OFF as KNOB_LEFT_OFF,
+  SWITCH_TRACK_H_PX,
+  switchKnobMotionClass,
+} from "@/lib/switchMotion"
 
-/** Header se align; user: track height + knob length dono ~25% kam — keyframes `tailwind.config` se sync */
-const ANIM_MS = 400
-const TRACK_H_PX = Math.round(36 * 0.7 * 0.75)
 /** Auto voucher strip / header pills: Switch track ke saath same pixel height align karne ke liye export. */
-export const SWITCH_TRACK_HEIGHT_PX = TRACK_H_PX
-const KNOB_W_PX = Math.round(54 * 0.8 * 0.75)
-const KNOB_PAD_PX = 3
-const KNOB_LEFT_ON = `calc(100% - ${KNOB_W_PX + KNOB_PAD_PX}px)`
+export const SWITCH_TRACK_HEIGHT_PX = SWITCH_TRACK_H_PX
 
 export type SwitchProps = Omit<
   React.ComponentPropsWithoutRef<"button">,
@@ -130,7 +133,7 @@ const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(
           "dark:border-neutral-500 dark:bg-neutral-700/70 dark:data-[state=checked]:border-green-700 dark:data-[state=checked]:bg-green-900/40",
           className
         )}
-        style={{ height: TRACK_H_PX }}
+        style={{ height: SWITCH_TRACK_H_PX }}
         onClick={handleClick}
         {...rest}
       >
@@ -141,13 +144,13 @@ const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(
             motion === null && !checked && "bg-neutral-500 dark:bg-neutral-400",
             // Knob ON: same green family as track (dim, not neon).
             motion === null && checked && "bg-green-400",
-            motion === "to-on" && "animate-file-hover-switch-on bg-green-400",
-            motion === "to-off" && "animate-file-hover-switch-off bg-neutral-500 dark:bg-neutral-400"
+            motion === "to-on" && cn(switchKnobMotionClass("file-hover-switch-on"), "bg-green-400"),
+            motion === "to-off" && cn(switchKnobMotionClass("file-hover-switch-off"), "bg-neutral-500 dark:bg-neutral-400")
           )}
           style={
             motion === null
               ? {
-                  left: !checked ? `${KNOB_PAD_PX}px` : KNOB_LEFT_ON,
+                  left: !checked ? KNOB_LEFT_OFF : KNOB_LEFT_ON,
                   width: KNOB_W_PX,
                 }
               : undefined
