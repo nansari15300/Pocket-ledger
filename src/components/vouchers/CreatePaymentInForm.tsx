@@ -284,6 +284,11 @@ export function CreatePaymentInForm({
   const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
   /** Naye party save ke turant baad parties sync se pehle stale-master effect `partyId` na wipe kare (Copy-to-voucher / Create Party). */
   const pendingPartyIdUntilInPartiesListRef = useRef<string | null>(null);
+  /** Bank/cash create ke baad `processedAccounts` listener se pehle — false "Master no longer exists" avoid. */
+  const pendingAccountIdUntilInAccountsListRef = useRef<string | null>(null);
+  const pendingStaffIdUntilInStaffListRef = useRef<string | null>(null);
+  const pendingTaxIdUntilInTaxesListRef = useRef<string | null>(null);
+  const pendingIncomeAccountIdUntilInListRef = useRef<string | null>(null);
   const [isCreateStaffOpen, setIsCreateStaffOpen] = useState(false);
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [isCreateExpenseAccountOpen, setIsCreateExpenseAccountOpen] = useState(false);
@@ -539,23 +544,31 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
     const sid = String(staffId || "").trim();
     if (sid && !processedStaff.some((s: any) => s.id === sid)) {
-      missing.push("staff");
-      form.setValue("staffId", "");
+      if (pendingStaffIdUntilInStaffListRef.current !== sid) {
+        missing.push("staff");
+        form.setValue("staffId", "");
+      }
     }
     const tid = String(taxAccountId || "").trim();
     if (tid && !processedTaxes.some((t: any) => t.id === tid)) {
-      missing.push("tax");
-      form.setValue("taxAccountId", "");
+      if (pendingTaxIdUntilInTaxesListRef.current !== tid) {
+        missing.push("tax");
+        form.setValue("taxAccountId", "");
+      }
     }
     const aid = String(accountId || "").trim();
     if (aid && !processedAccounts.some((a: any) => a.id === aid)) {
-      missing.push("bank/cash account");
-      form.setValue("accountId", "");
+      if (pendingAccountIdUntilInAccountsListRef.current !== aid) {
+        missing.push("bank/cash account");
+        form.setValue("accountId", "");
+      }
     }
     const iid = String(incomeAccountId || "").trim();
     if (payeeType === "income" && iid && !expenseAccounts.some((e: any) => e.id === iid)) {
-      missing.push("income ledger");
-      form.setValue("incomeAccountId", "");
+      if (pendingIncomeAccountIdUntilInListRef.current !== iid) {
+        missing.push("income ledger");
+        form.setValue("incomeAccountId", "");
+      }
     }
     if (missing.length > 0) {
       toast({
@@ -598,6 +611,70 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       pendingPartyIdUntilInPartiesListRef.current = null;
     }
   }, [partyId]);
+
+  useEffect(() => {
+    const pend = pendingAccountIdUntilInAccountsListRef.current;
+    if (!pend) return;
+    if (processedAccounts.some((a: any) => a.id === pend)) {
+      pendingAccountIdUntilInAccountsListRef.current = null;
+    }
+  }, [processedAccounts]);
+
+  useEffect(() => {
+    const pend = pendingAccountIdUntilInAccountsListRef.current;
+    const aid = String(accountId || "").trim();
+    if (pend && aid && aid !== pend) {
+      pendingAccountIdUntilInAccountsListRef.current = null;
+    }
+  }, [accountId]);
+
+  useEffect(() => {
+    const pend = pendingStaffIdUntilInStaffListRef.current;
+    if (!pend) return;
+    if (processedStaff.some((s: any) => s.id === pend)) {
+      pendingStaffIdUntilInStaffListRef.current = null;
+    }
+  }, [processedStaff]);
+
+  useEffect(() => {
+    const pend = pendingStaffIdUntilInStaffListRef.current;
+    const sid = String(staffId || "").trim();
+    if (pend && sid && sid !== pend) {
+      pendingStaffIdUntilInStaffListRef.current = null;
+    }
+  }, [staffId]);
+
+  useEffect(() => {
+    const pend = pendingTaxIdUntilInTaxesListRef.current;
+    if (!pend) return;
+    if (processedTaxes.some((t: any) => t.id === pend)) {
+      pendingTaxIdUntilInTaxesListRef.current = null;
+    }
+  }, [processedTaxes]);
+
+  useEffect(() => {
+    const pend = pendingTaxIdUntilInTaxesListRef.current;
+    const tid = String(taxAccountId || "").trim();
+    if (pend && tid && tid !== pend) {
+      pendingTaxIdUntilInTaxesListRef.current = null;
+    }
+  }, [taxAccountId]);
+
+  useEffect(() => {
+    const pend = pendingIncomeAccountIdUntilInListRef.current;
+    if (!pend) return;
+    if (expenseAccounts.some((e: any) => e.id === pend)) {
+      pendingIncomeAccountIdUntilInListRef.current = null;
+    }
+  }, [expenseAccounts]);
+
+  useEffect(() => {
+    const pend = pendingIncomeAccountIdUntilInListRef.current;
+    const iid = String(incomeAccountId || "").trim();
+    if (pend && iid && iid !== pend) {
+      pendingIncomeAccountIdUntilInListRef.current = null;
+    }
+  }, [incomeAccountId]);
 
   const showCopyBankFromSource = useMemo(() => {
     if (!copyDraftMasterHelpersEnabled) return false;
@@ -3019,11 +3096,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         isOpen={isCreatePartyOpen}
         onOpenChange={setIsCreatePartyOpen}
       />
-      <CreateStaffDialog onStaffCreated={(id) => { setIsCreateStaffOpen(false); form.setValue("staffId", id); void onRefreshCopyMismatch?.(); }} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen} groups={[]}>
+      <CreateStaffDialog
+        onStaffCreated={(id) => {
+          pendingStaffIdUntilInStaffListRef.current = id;
+          setIsCreateStaffOpen(false);
+          form.setValue("staffId", id);
+          void onRefreshCopyMismatch?.();
+        }}
+        isOpen={isCreateStaffOpen}
+        onOpenChange={setIsCreateStaffOpen}
+        groups={[]}
+      >
         <div/>
       </CreateStaffDialog>
        <CreateBankAccountDialog 
         onAccountCreated={(id) => {
+            pendingAccountIdUntilInAccountsListRef.current = id;
             setIsCreateAccountOpen(false);
             form.setValue("accountId", id);
             setCopyAccountCreateHint("");
@@ -3042,6 +3130,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             if (!open) setCopyAccountCreateHint("");
           }}
           onExpenseAccountCreated={(id) => {
+            pendingIncomeAccountIdUntilInListRef.current = id;
             setIsCreateExpenseAccountOpen(false);
             form.setValue("incomeAccountId", id);
             setCopyAccountCreateHint("");
@@ -3051,6 +3140,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         </CreateExpenseAccountDialog>
        <CreateTaxDialog 
         onTaxCreated={(id) => {
+            pendingTaxIdUntilInTaxesListRef.current = id;
             setIsCreateTaxOpen(false);
             form.setValue("taxAccountId", id);
             void onRefreshCopyMismatch?.();

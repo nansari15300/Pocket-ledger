@@ -23,6 +23,7 @@ import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage
 import { storage } from "@/lib/firebase";
 import { compressFile } from "@/lib/compression";
 import { FilePreview } from "../vouchers/FilePreview";
+import { CompanyInterCompanyAcNoField } from "@/components/inter-company/CompanyInterCompanyAcNoField";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -855,7 +856,7 @@ export function EditCompanyForm() {
     <div className="min-w-0">
         <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <FormField
                 control={form.control}
                 name="name"
@@ -869,6 +870,7 @@ export function EditCompanyForm() {
                     </FormItem>
                 )}
                 />
+                <CompanyInterCompanyAcNoField mode="edit" />
                 <FormField
                 control={form.control}
                 name="pan"
@@ -903,7 +905,7 @@ export function EditCompanyForm() {
                 name="phone"
                 render={({ field }: any) => (
                     <FormItem>
-                    <FormLabel>Phone No.</FormLabel>
+                    <FormLabel>Mobile No.</FormLabel>
                     <FormControl>
                         <Input placeholder="Company phone number" {...field} />
                     </FormControl>

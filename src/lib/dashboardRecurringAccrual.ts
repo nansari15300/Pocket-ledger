@@ -36,6 +36,8 @@ export function voucherTypeDefaultDrCr(type: string): { dr: number; cr: number }
   const t = String(type || "").trim();
   if (["sale", "payment_in", "direct_income", "note", "production"].includes(t)) return { dr: 0, cr: 1 };
   if (["purchase", "payment_out", "direct_expense", "add_salary", "salary"].includes(t)) return { dr: 1, cr: 0 };
+  // Inter Company — entity ledger par role se Dr/Cr; yahan generic placeholder
+  if (t === "inter_company") return { dr: 0, cr: 0 };
   return { dr: 0, cr: 0 };
 }
 

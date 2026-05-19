@@ -27,6 +27,12 @@ import {
   OPENING_BALANCE_VOUCHER_ID,
 } from "@/lib/payment-allocation-utils";
 import { isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay } from "@/lib/ledgerUserColumnDisplay";
+import {
+  getInterCompanyLedgerAmounts,
+  interCompanyKindForContext,
+  interCompanyVoucherTouchesEntity,
+} from "@/lib/interCompany/interCompanyLedgerAmounts";
+import { interCompanyVoucherViewerSide } from "@/lib/interCompany/interCompanyVoucherHydrate";
 
 
 type EntityWithItems = { id: string; items: (Item | Staff | Account | ExpenseAccount | Party)[], openingBalance?: number, [key: string]: any };
@@ -62,6 +68,17 @@ const getParticularsText = (t: any, names: Record<string, string> = {}) => {
     }
     else if (t.type === 'note') {
         particulars.push(`Note for: ${getNoteLinkedEntityLabel(t, names)}`);
+    }
+    else if (t.type === 'inter_company') {
+        const side = interCompanyVoucherViewerSide(t);
+        const dir = side === 'source' ? 'Out' : side === 'target' ? 'In' : '';
+        const peerLabel =
+            side === 'source'
+                ? String(t.targetEntityLabel || getName(t.targetEntityId) || '—')
+                : side === 'target'
+                  ? String(t.sourceEntityLabel || getName(t.sourceEntityId) || '—')
+                  : '—';
+        particulars.push(`Inter Company${dir ? ` (${dir})` : ''}: ${peerLabel}`);
     }
     
     return particulars.join(', ');
@@ -402,6 +419,22 @@ export const getTransactionAmounts = (
                         if (["payment_in", "direct_income", "sale"].includes(transaction.type)) debit += amount;
                         if (["payment_out", "direct_expense", "purchase"].includes(transaction.type)) credit += amount;
                     }
+                    else if (transaction.type === "inter_company") {
+                        for (const memberId of memberIdsInGroup) {
+                            const mid = String(memberId);
+                            const partyIc = interCompanyKindForContext("party");
+                            const bankIc = interCompanyKindForContext("account");
+                            if (partyIc && interCompanyVoucherTouchesEntity(transaction, mid, partyIc)) {
+                                const ic = getInterCompanyLedgerAmounts(transaction, "party", mid, amount);
+                                debit += ic.debit;
+                                credit += ic.credit;
+                            } else if (bankIc && interCompanyVoucherTouchesEntity(transaction, mid, bankIc)) {
+                                const ic = getInterCompanyLedgerAmounts(transaction, "account", mid, amount);
+                                debit += ic.debit;
+                                credit += ic.credit;
+                            }
+                        }
+                    }
                 }
             }
             
@@ -485,6 +518,10 @@ export const getTransactionAmounts = (
           credit = amount; // Money coming in = Credit
         } else if (['purchase', 'payment_out', 'direct_expense'].includes(transaction.type)) {
           debit = amount; // Money going out = Debit
+        } else if (transaction.type === 'inter_company') {
+          const side = interCompanyVoucherViewerSide(transaction);
+          if (side === 'source') debit = amount;
+          else if (side === 'target') credit = amount;
         }
         break;
         
@@ -501,6 +538,20 @@ export const getTransactionAmounts = (
     default:
         if (typeof transaction.debit === "number") debit = transaction.debit;
         if (typeof transaction.credit === "number") credit = transaction.credit;
+  }
+
+  // Inter Company — entity ledger (party/bank/staff/tax/expense); zero filter se bachne ke liye Dr/Cr set
+  if (transaction.type === "inter_company" && entity?.id) {
+    const ic = getInterCompanyLedgerAmounts(
+      transaction,
+      context,
+      String(entity.id),
+      amount
+    );
+    if (ic.touched) {
+      debit = ic.debit;
+      credit = ic.credit;
+    }
   }
 
   return { debit, credit, quantity, taxableAmount };
@@ -526,6 +577,15 @@ export const getStaffTransactionAmounts = (transaction: any, staffIds: string[],
   const amount = Number(transaction.amount || transaction.total || 0);
 
   if (transaction.type === "note") return { debit, credit, taxRate, taxableAmount, taxAmount, quantity };
+
+  if (transaction.type === "inter_company" && transaction.staffId && staffIds.includes(transaction.staffId)) {
+    const ic = getInterCompanyLedgerAmounts(transaction, "staff", transaction.staffId, amount);
+    if (ic.touched) {
+      debit = ic.debit;
+      credit = ic.credit;
+      return { debit, credit, taxRate, taxableAmount, taxAmount, quantity };
+    }
+  }
 
   if (transaction.taxAccountId) {
     const tax = processedTaxes.find(t => t.id === transaction.taxAccountId);
@@ -607,6 +667,16 @@ export const getTaxTransactionAmounts = (transaction: any, taxAccountId: string,
     if (tax) taxRate = tax.rate || 0;
 
     if (transaction.type === "note") return { debit, credit, taxableAmount, taxAmount, taxRate, quantity };
+
+    if (transaction.type === "inter_company") {
+        const ic = getInterCompanyLedgerAmounts(transaction, "tax", taxAccountId, Number(transaction.amount || transaction.total || 0));
+        if (ic.touched) {
+            debit = ic.debit;
+            credit = ic.credit;
+            taxAmount = debit || credit;
+            return { debit, credit, taxableAmount, taxAmount, taxRate, quantity };
+        }
+    }
     
     if (transaction.type === 'payment_out' && transaction.taxAccountId === taxAccountId) {
         debit += transaction.amount || 0;
@@ -1162,6 +1232,7 @@ export function useTransactions(
             const currentId = String(entityIdForLinks);
             if (context === 'party') {
                 if (String((v as any)?.partyId ?? '') === currentId) return true;
+                if ((v as any)?.type === 'inter_company' && interCompanyVoucherTouchesEntity(v, currentId, 'party')) return true;
                 if ((v as any)?.type === 'contra' && ((v as any).fromAccountId === currentId || (v as any).toAccountId === currentId))
                   return true;
                 if ((v as any)?.type === 'journal' && Array.isArray((v as any)?.entries))
@@ -1170,6 +1241,7 @@ export function useTransactions(
             }
             if (context === 'staff') {
                 if (String((v as any)?.staffId ?? '') === currentId) return true;
+                if ((v as any)?.type === 'inter_company' && interCompanyVoucherTouchesEntity(v, currentId, 'staff')) return true;
                 if ((v as any)?.type === 'journal' && Array.isArray((v as any)?.entries))
                     return (v as any).entries.some((e: any) => String(e?.accountId ?? '') === currentId);
                 return false;
@@ -1177,6 +1249,7 @@ export function useTransactions(
             if (context === 'account') {
                 return (
                     String((v as any)?.accountId ?? '') === currentId ||
+                    ((v as any)?.type === 'inter_company' && interCompanyVoucherTouchesEntity(v, currentId, 'bank')) ||
                     String((v as any)?.fromAccountId ?? '') === currentId ||
                     String((v as any)?.toAccountId ?? '') === currentId ||
                     String((v as any)?.bankAccountId ?? '') === currentId ||
@@ -1286,6 +1359,25 @@ export function useTransactions(
                 // Bill-wise: payment_in / payment_out - Settled when remaining 0. getPaymentInRemaining already includes t.allocations (journal link bilateral sync ke baad bhi).
                 if (isBillWiseContext && (t.type === 'payment_in' || t.type === 'payment_out' || t.type === 'direct_income' || t.type === 'direct_expense')) {
                     let remaining = t.type === 'payment_in' || t.type === 'direct_income' ? getPaymentInRemaining(t) : getPaymentOutRemaining(t);
+                    const hasAllocations = ((t.allocations as { voucherId: string; amount: number }[] | undefined) || []).length > 0;
+                    if (remaining <= 0) {
+                        paymentStatus = 'paid';
+                        isOverdue = false;
+                        outstanding = 0;
+                    } else if (hasAllocations) {
+                        paymentStatus = 'partially_paid';
+                        outstanding = remaining;
+                    } else {
+                        paymentStatus = 'unpaid';
+                        outstanding = remaining;
+                    }
+                }
+                // Inter Company — bill-wise: Payment Out (Dr) / Payment In (Cr) jaisa per-row outstanding + Paid/Unpaid/Settled
+                if (isBillWiseContext && t.type === 'inter_company') {
+                    const icDebit = Number(amounts.debit) || 0;
+                    const icCredit = Number(amounts.credit) || 0;
+                    const remaining =
+                        icDebit > 0 ? getPaymentOutRemaining(t) : icCredit > 0 ? getPaymentInRemaining(t) : 0;
                     const hasAllocations = ((t.allocations as { voucherId: string; amount: number }[] | undefined) || []).length > 0;
                     if (remaining <= 0) {
                         paymentStatus = 'paid';

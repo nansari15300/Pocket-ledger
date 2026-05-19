@@ -20,6 +20,7 @@ import {
   ShoppingCart,
   ArrowRight,
   ArrowLeft,
+  ArrowLeftRight,
   FileDigit,
   Smartphone,
   LogOut,
@@ -435,6 +436,7 @@ function HeaderActions() {
   const [openSale, setOpenSale] = useState(false);
   const [openPurchase, setOpenPurchase] = useState(false);
   const [openPaymentIn, setOpenPaymentIn] = useState(false);
+  const [openInterCompany, setOpenInterCompany] = useState(false);
   const [openPaymentOut, setOpenPaymentOut] = useState(false);
   const [openJournal, setOpenJournal] = useState(false);
   const [openSalary, setOpenSalary] = useState(false);
@@ -466,6 +468,25 @@ function HeaderActions() {
       <AddVoucherDialog defaultTab="payment_in" voucher={undefined} isOpen={openPaymentIn} onOpenChange={setOpenPaymentIn}>
         <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} onClick={() => setOpenPaymentIn(true)} data-theme-btn="payment-in">
           <ArrowRight className="mr-1 h-4 w-4" /> Payment In
+        </PermissionButton>
+      </AddVoucherDialog>
+
+      {/* Inter Company — Payment In / Out ke beech; voucher dialog inter_company tab */}
+      <AddVoucherDialog
+        defaultTab="inter_company"
+        voucher={undefined}
+        isOpen={openInterCompany}
+        onOpenChange={setOpenInterCompany}
+      >
+        <PermissionButton
+          permission="create_records"
+          variant="chromePill"
+          size="sm"
+          className={buttonClass}
+          onClick={() => setOpenInterCompany(true)}
+          data-theme-btn="inter-company"
+        >
+          <ArrowLeftRight className="mr-1 h-4 w-4" /> Inter Company
         </PermissionButton>
       </AddVoucherDialog>
 
@@ -1248,26 +1269,17 @@ function UserProfileButton() {
 }
 
 
+/** Date header: Nepal = BS/AD/Both + format settings; other countries = format settings only. */
 function DateSystemSwitcher() {
   const { dateSystem, setDateSystem } = useDate();
-  const { isMobile, forcedViewMode, setForcedMode } = useMobileView();
+  const { isMobile } = useMobileView();
   const { company } = useCompany();
   const [dateFormatDialogOpen, setDateFormatDialogOpen] = React.useState(false);
-  
-  // Hide date system switcher if country is not Nepal
-  if (company?.country && company.country !== "Nepal") {
-    return null;
-  }
 
-  const handleMobileClick = () => {
-    setForcedMode('mobile');
-  };
+  const isNepal = !company?.country || company.country === "Nepal";
+  const triggerLabel = isNepal ? dateSystem : "Date";
 
-  const handlePCClick = () => {
-    setForcedMode('pc');
-  };
-
-  const dateMenuContent = (
+  const dateMenuContent = isNepal ? (
     <>
       <DropdownMenuItem onSelect={() => setDateSystem("BS")}>Bikram Samvat (BS)</DropdownMenuItem>
       <DropdownMenuItem onSelect={() => setDateSystem("AD")}>Anno Domini (AD)</DropdownMenuItem>
@@ -1278,49 +1290,55 @@ function DateSystemSwitcher() {
         Setting
       </DropdownMenuItem>
     </>
+  ) : (
+    <DropdownMenuItem onSelect={() => setDateFormatDialogOpen(true)}>
+      <Settings className="mr-2 h-4 w-4" />
+      Date format settings
+    </DropdownMenuItem>
   );
 
-  // Date + BS/AD + PC/Mobile toggle (phone par bhi — PC view sirf icon se)
   return (
-    <div className="flex items-center gap-2 flex-shrink-0">
+    <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="sm" className={cn("whitespace-nowrap h-9", isMobile && "px-3")} data-theme-header="date-selector">
             {!isMobile && <CalendarDays className="mr-2 h-4 w-4" />}
-            <span>{dateSystem}</span>
-            {/* User request: date trigger par chevron hata — menu ab bhi Dropdown se khulta hai. */}
+            <span>{triggerLabel}</span>
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent>
-          {dateMenuContent}
-        </DropdownMenuContent>
+        <DropdownMenuContent>{dateMenuContent}</DropdownMenuContent>
       </DropdownMenu>
       <DateFormatSettingsDialog open={dateFormatDialogOpen} onOpenChange={setDateFormatDialogOpen} />
-      {/* Web + APK: PC Chrome jaisa 768 default + ye icon se force mobile/pc (`use-mobile`). */}
-      {forcedViewMode === "mobile" ? (
-        <Button
-          variant="outline"
-          size="icon"
-          title="Switch to PC View"
-          onClick={handlePCClick}
-          className="h-9 w-9"
-          data-theme-header="view-toggle"
-        >
-          <Monitor className="h-4 w-4" />
-        </Button>
-      ) : (
-        <Button
-          variant="outline"
-          size="icon"
-          title="Switch to Mobile View"
-          onClick={handleMobileClick}
-          className="h-9 w-9"
-          data-theme-header="view-toggle"
-        >
-          <Smartphone className="h-4 w-4" />
-        </Button>
-      )}
-    </div>
+    </>
+  );
+}
+
+/** PC/Mobile view toggle — har country; date switcher se alag. */
+function HeaderViewModeToggle() {
+  const { forcedViewMode, setForcedMode } = useMobileView();
+
+  return forcedViewMode === "mobile" ? (
+    <Button
+      variant="outline"
+      size="icon"
+      title="Switch to PC View"
+      onClick={() => setForcedMode("pc")}
+      className="h-9 w-9 flex-shrink-0"
+      data-theme-header="view-toggle"
+    >
+      <Monitor className="h-4 w-4" />
+    </Button>
+  ) : (
+    <Button
+      variant="outline"
+      size="icon"
+      title="Switch to Mobile View"
+      onClick={() => setForcedMode("mobile")}
+      className="h-9 w-9 flex-shrink-0"
+      data-theme-header="view-toggle"
+    >
+      <Smartphone className="h-4 w-4" />
+    </Button>
   );
 }
 
@@ -1641,6 +1659,7 @@ export function DesktopAppHeader() {
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <DateSystemSwitcher />
+                <HeaderViewModeToggle />
                 <MobileReportButtonsOnly />
                 <AddNewButtonOnReportPage />
               </div>
@@ -1685,6 +1704,7 @@ export function DesktopAppHeader() {
                 onCompanyCreated={onCompanyCreated}
               />
               <DateSystemSwitcher />
+              <HeaderViewModeToggle />
             </div>
 
             {!(isElectronDesk && quickActionsCollapsed) ? <HeaderActions /> : null}

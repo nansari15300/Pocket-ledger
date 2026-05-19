@@ -37,6 +37,7 @@ import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import usePermissions from "@/hooks/usePermissions";
 import Link from "next/link";
 import type { Staff, StaffGroup } from "@/components/staff/types";
+import { MasterFormNameAcNoRow, MasterMobileNoField, masterFormTwoColClass } from "@/components/inter-company/MasterFormLayout";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Combobox } from "../ui/combobox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
@@ -560,21 +561,28 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           <div className={masterEntityDialogFormWrapperClassName}>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:pr-2">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <FormField
-                    control={form.control}
-                    name="name"
-                    render={({ field }: any) => (
+            <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:pr-2">
+              <div className={masterFormTwoColClass}>
+                <MasterFormNameAcNoRow
+                  entityKind="staff"
+                  entityId={staff.id}
+                  mode="edit"
+                  nameField={
+                    <FormField
+                      control={form.control}
+                      name="name"
+                      render={({ field }: any) => (
                         <FormItem>
-                        <FormLabel>Full Name</FormLabel>
-                        <FormControl>
+                          <FormLabel>Full Name</FormLabel>
+                          <FormControl>
                             <Input placeholder="e.g., Jane Doe" {...field} />
-                        </FormControl>
-                        <FormMessage />
+                          </FormControl>
+                          <FormMessage />
                         </FormItem>
-                    )}
+                      )}
                     />
+                  }
+                />
                 <FormField
                   control={form.control}
                   name="groupId"
@@ -618,19 +626,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
                     </FormItem>
                   )}
                 />
-                <FormField
-                  control={form.control}
-                  name="phone"
-                  render={({ field }: any) => (
-                    <FormItem>
-                      <FormLabel>Phone Number</FormLabel>
-                      <FormControl>
-                        <Input placeholder="Enter phone number" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                <MasterMobileNoField control={form.control} />
                    <FormItem>
                       <FormLabel>Salary</FormLabel>
                       <div className="flex gap-2">

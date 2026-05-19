@@ -11,6 +11,12 @@ import { doc, setDoc, collection, serverTimestamp, onSnapshot, query, Timestamp 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import {
+  MasterFormNameAcNoRow,
+  MasterFormTwoColGrid,
+  MasterMobileNoField,
+} from "@/components/inter-company/MasterFormLayout";
+import { interCompanyAcNoForNewEntity } from "@/lib/interCompany/interCompanyAccountNo";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -78,6 +84,7 @@ function createLocalEntityId(prefix: string): string {
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Account name must be at least 2 characters." }),
+  phone: z.string().optional(),
   groupId: z.string().min(1, "A group is required."),
   openingBalance: z.coerce.number(),
   openingBalanceDate: z.date().optional(),
@@ -417,9 +424,11 @@ export function CreateExpenseAccountDialog({
           avatarFile: avatarToUpload?.file ?? null,
           documentFiles,
         });
+        const interCompanyAccountNo = await interCompanyAcNoForNewEntity("expense");
         const payload = {
           id: createdId,
           name: values.name.trim(),
+          phone: values.phone?.trim() || null,
           groupId: resolvedGroupId || getUngroupedGroupId("expense"),
           openingBalance: values.openingBalance || 0,
           openingBalanceDate: values.openingBalanceDate || null,
@@ -428,6 +437,7 @@ export function CreateExpenseAccountDialog({
           companyId,
           createdAt: new Date().toISOString(),
           isDeleted: false,
+          interCompanyAccountNo,
           fileUrl: stagedLocal.fileUrl ?? null,
           ...(stagedLocal.documentFileUrls.length ? { documentFileUrls: stagedLocal.documentFileUrls } : {}),
         };
@@ -512,8 +522,10 @@ export function CreateExpenseAccountDialog({
         documentFiles,
       });
 
+      const interCompanyAccountNo = await interCompanyAcNoForNewEntity("expense");
       await setDoc(accRef, {
         name: values.name.trim(),
+        phone: values.phone?.trim() || null,
         groupId: resolvedGroupId || getUngroupedGroupId("expense"),
         openingBalance: values.openingBalance || 0,
         openingBalanceDate: values.openingBalanceDate || null,
@@ -522,6 +534,7 @@ export function CreateExpenseAccountDialog({
         companyId,
         createdAt: serverTimestamp(),
         isDeleted: false,
+        interCompanyAccountNo,
         fileUrl: staged.fileUrl,
         ...(staged.documentFileUrls.length ? { documentFileUrls: staged.documentFileUrls } : {}),
       });
@@ -583,6 +596,7 @@ export function CreateExpenseAccountDialog({
               ? "Income"
               : "Expense");
           const localId = createLocalEntityId("expense_account");
+          const interCompanyAccountNo = await interCompanyAcNoForNewEntity("expense");
           const stagedCatch = await stageEntityAvatarAndDocuments({
             companyId,
             collectionSeg: "expense_accounts",
@@ -594,6 +608,7 @@ export function CreateExpenseAccountDialog({
           const payload: Record<string, unknown> = {
             id: localId,
             name: v.name.trim(),
+            phone: v.phone?.trim() || null,
             groupId: resolvedGroupId || getUngroupedGroupId("expense"),
             openingBalance: v.openingBalance || 0,
             openingBalanceDate: v.openingBalanceDate || null,
@@ -602,6 +617,7 @@ export function CreateExpenseAccountDialog({
             companyId,
             createdAt: Timestamp.now(),
             isDeleted: false,
+            interCompanyAccountNo,
             fileUrl: stagedCatch.fileUrl ?? null,
             ...(stagedCatch.documentFileUrls.length ? { documentFileUrls: stagedCatch.documentFileUrls } : {}),
           };
@@ -712,20 +728,28 @@ export function CreateExpenseAccountDialog({
         <div className={masterEntityDialogFormWrapperClassName}>
         <Form {...form}>
           <form onSubmit={handleFormSubmit} className="flex min-h-0 flex-1 flex-col">
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:pr-2">
-            <FormField
-              control={form.control}
-              name="name"
-              render={({ field }: any) => (
-                <FormItem>
-                  <FormLabel>Account Name</FormLabel>
-                  <FormControl>
-                    <Input placeholder="e.g., Salary Expense" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
+            <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:pr-2">
+            <MasterFormNameAcNoRow
+              entityKind="expense"
+              mode="create"
+              nameField={
+                <FormField
+                  control={form.control}
+                  name="name"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Account Name</FormLabel>
+                      <FormControl>
+                        <Input placeholder="e.g., Salary Expense" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              }
             />
+            <MasterFormTwoColGrid>
+              <MasterMobileNoField control={form.control} />
             <FormField
               control={form.control}
               name="groupId"
@@ -752,7 +776,8 @@ export function CreateExpenseAccountDialog({
                 </FormItem>
               )}
             />
-             <div className="grid grid-cols-2 gap-4">
+            </MasterFormTwoColGrid>
+             <MasterFormTwoColGrid>
                 <FormField
                   control={form.control}
                   name="openingBalance"
@@ -799,7 +824,7 @@ export function CreateExpenseAccountDialog({
                     </FormItem>
                   )}
                 />
-              </div>
+              </MasterFormTwoColGrid>
             <EntityProfilePhotoBlock
               file={avatarToUpload?.file ?? null}
               onPickClick={() => avatarInputRef.current?.click()}

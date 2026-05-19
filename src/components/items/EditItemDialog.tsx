@@ -908,7 +908,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
             <DialogDescription>Update the details for {item.name}.</DialogDescription>
           </DialogHeader>
           <div className={masterEntityDialogFormWrapperClassName}>
-          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <div className="pl-master-form-scroll min-h-0 flex-1 overflow-y-auto pr-1">
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-4">
                 <Tabs value={itemType} onValueChange={(v) => form.setValue('type', v as "item" | "service")}>

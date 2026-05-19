@@ -34,7 +34,9 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { format, startOfDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import * as XLSX from "xlsx";
+import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -66,11 +68,13 @@ import { MobileTransactionsPager } from "@/components/vouchers/MobileTransaction
 import { EditTaxDialog } from "./EditTaxDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
-import { LedgerFooterCheckboxPill, LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
-
+import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
@@ -143,6 +147,8 @@ interface TaxDetailsProps {
   journalAccountNames?: Record<string, string>;
   onBack?: () => void;
   context?: string;
+  mobileFooterVariant?: "ledger" | "report";
+  mobileReportStickyTitle?: string;
 }
 
 export function TaxDetails({
@@ -159,6 +165,8 @@ export function TaxDetails({
   journalAccountNames: journalAccountNamesProp,
   onBack,
   context,
+  mobileFooterVariant = "ledger",
+  mobileReportStickyTitle,
 }: TaxDetailsProps) {
   const { company, companyId } = useCompany();
   const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
@@ -188,7 +196,7 @@ export function TaxDetails({
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
-  const { balanceMode } = useBalanceMode();
+  const { balanceMode, setBalanceMode } = useBalanceMode();
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -321,6 +329,18 @@ export function TaxDetails({
     setFilters({});
   };
 
+  const {
+    unapprovedOnly,
+    toggleUnapprovedOnly,
+    filterByUnapprovedOnly,
+    onDateRangeChangeWithUnapprovedReset,
+  } = useLedgerUnapprovedOnlyFilter({
+    onDateRangeChange,
+    setCurrentPage,
+    setFilters,
+    setActiveFilter,
+  });
+
   useEffect(() => {
     const savedState = sessionStorage.getItem("showNarration");
     setShowNarration(savedState !== "false");
@@ -360,10 +380,16 @@ export function TaxDetails({
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
-        sortTransactionsWithFiscalMergeForCompany(statusFilteredTransactions, sortBy, sortOrder, undefined, company),
+        sortTransactionsWithFiscalMergeForCompany(
+          filterByUnapprovedOnly(statusFilteredTransactions),
+          sortBy,
+          sortOrder,
+          undefined,
+          company
+        ),
         openingBalanceForPeriod
       ),
-    [statusFilteredTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
+    [statusFilteredTransactions, filterByUnapprovedOnly, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
 
   const searchFilteredTransactions = useMemo(() => {
@@ -516,11 +542,83 @@ export function TaxDetails({
     }
   };
 
+  const reportStickyTitle = mobileReportStickyTitle ?? (context === "payment-out" ? "Payment Out" : "Report");
+
+  const handleExcelLedger = useCallback(() => {
+    const rows = searchFilteredTransactions.map((t: Record<string, unknown>) => {
+      const dRaw = (t as { date?: { toDate?: () => Date } }).date;
+      const d = dRaw?.toDate ? dRaw.toDate() : new Date((t as { date?: unknown }).date as string | number | Date);
+      return {
+        "Date (BS)": formatDateBS(d),
+        "Date (AD)": formatDate(d),
+        "Voucher No.": (t as { voucherNumber?: string }).voucherNumber,
+        Narration: String((t as { narration?: string }).narration || ""),
+        Debit: Number((t as { debit?: number }).debit) || 0,
+        Credit: Number((t as { credit?: number }).credit) || 0,
+        Balance: `${Math.abs(Number((t as { balance?: number }).balance) || 0).toFixed(2)} ${((t as { balance?: number }).balance ?? 0) >= 0 ? "Dr" : "Cr"}`,
+      };
+    });
+    const summaryRows = [
+      {
+        "Date (BS)": "Opening Balance",
+        Balance: `${Math.abs(openingBalanceForPeriod).toFixed(2)} ${openingBalanceForPeriod >= 0 ? "Dr" : "Cr"}`,
+      },
+      { "Date (BS)": "Total", Debit: periodDr, Credit: periodCr },
+      {
+        "Date (BS)": "Closing Balance",
+        Balance: `${Math.abs(closingBalance).toFixed(2)} ${closingBalance >= 0 ? "Dr" : "Cr"}`,
+      },
+    ];
+    const worksheet = XLSX.utils.json_to_sheet([...rows, {}, ...summaryRows] as Record<string, unknown>[]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Ledger");
+    const safeName = (tax?.name || "tax").replace(/[/\\?%*:|"<>]/g, "-");
+    XLSX.writeFile(workbook, `${safeName}_ledger.xlsx`);
+  }, [
+    searchFilteredTransactions,
+    formatDate,
+    formatDateBS,
+    openingBalanceForPeriod,
+    periodDr,
+    periodCr,
+    closingBalance,
+    tax?.name,
+  ]);
+
   if (isMobile) {
+    const isReportMobileChrome = mobileFooterVariant === "report";
+    const hideReportTaxPicker = isReportMobileChrome && context === "payment-out";
+
     return (
       <>
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
-          {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
+          {isReportMobileChrome && onBack ? (
+            <header className="sticky top-0 z-10 flex-shrink-0 border-b bg-white p-3 dark:bg-card">
+              <div className="flex min-w-0 items-center gap-2">
+                <Button variant="ghost" size="icon" className="h-8 w-8 flex-shrink-0" onClick={onBack} aria-label="Back">
+                  <ArrowLeft className="h-4 w-4" />
+                </Button>
+                <div className="flex min-w-0 flex-1 items-center gap-1">
+                  <h1 className="shrink-0 text-base font-bold text-muted-foreground">{reportStickyTitle}</h1>
+                  <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>·</span>
+                  <span
+                    className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
+                    title={tax.name}
+                  >
+                    {tax.name}
+                  </span>
+                </div>
+                <span
+                  className={cn(
+                    "shrink-0 text-sm font-bold whitespace-nowrap",
+                    closingBalance >= 0 ? "text-green-600" : "text-red-600"
+                  )}
+                >
+                  {formatCurrency(closingBalance, { showDrCr: true })}
+                </span>
+              </div>
+            </header>
+          ) : null}
           {/* Mobile: date/balance/search — footer chevron se collapse (group pages jaisa) */}
           <MobileDetailSummaryCollapsible>
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
@@ -549,7 +647,7 @@ export function TaxDetails({
           </div>
           <div className="p-2 border-b flex-shrink-0">
             <div className="flex items-stretch gap-2">
-              {allTaxes && allTaxes.length > 0 && (
+              {!hideReportTaxPicker && allTaxes && allTaxes.length > 0 && (
                 <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
                   <Combobox
                     options={taxDropdownOptions}
@@ -592,7 +690,7 @@ export function TaxDetails({
             className="flex-1 min-h-0 overflow-auto scroll-touch"
             style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
           >
-            <div className="pb-24">
+            <div className={isReportMobileChrome ? "pb-2" : "pb-24"}>
             <TransactionsTable
               transactions={mobileTransactions}
               context="tax"
@@ -645,6 +743,20 @@ export function TaxDetails({
             edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
           />
         </div>
+        {isReportMobileChrome ? (
+          <ReportMobileLedgerFooter
+            onPrint={handlePrint}
+            onExcel={handleExcelLedger}
+            onDateOpen={() => {
+              openingModalRef.current = true;
+              setIsCalendarOpen(true);
+              openModalInUrl();
+            }}
+            balanceMode={balanceMode}
+            onBalanceModeToggle={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
+            showChart={false}
+          />
+        ) : (
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
           <Button className="flex-1 h-6 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("payment_in"); openModalInUrl(); }}>
             Receive
@@ -745,6 +857,82 @@ export function TaxDetails({
             </DrawerContent>
           </Drawer>
         </div>
+        )}
+        {isReportMobileChrome ? (
+          <Drawer
+            open={isCalendarOpen}
+            onOpenChange={(open: boolean) => {
+              if (open) {
+                openingModalRef.current = true;
+                openModalInUrl();
+              }
+              setIsCalendarOpen(open);
+              if (!open) closeModalInUrl();
+            }}
+          >
+            <DrawerContent>
+              <DrawerHeader className="p-4 text-left">
+                <DrawerTitle>Select Date Range</DrawerTitle>
+                <DrawerDescription>Select a date range for the transaction list.</DrawerDescription>
+              </DrawerHeader>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
+                {(dateSystem === "BS" || dateSystem === "Both") && (
+                  <NepaliCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          onDateRangeChange(r);
+                          setIsCalendarOpen(false);
+                        }}
+                      />
+                    }
+                    onSelect={handleNepaliSelect}
+                    valueAD={dateRange}
+                    isRange={true}
+                    numberOfMonths={calendarMonths}
+                  />
+                )}
+                {(dateSystem === "AD" || dateSystem === "Both") && (
+                  <div className="flex-1 w-full min-w-0">
+                    <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            onDateRangeChange(r);
+                            setIsCalendarOpen(false);
+                          }}
+                        />
+                      }
+                      valueAD={dateRange}
+                      isRange
+                      numberOfMonths={calendarMonths}
+                      transactionDates={transactionDates}
+                      onSelect={(adDate) => {
+                        const range = dateRange;
+                        if (!range?.from || (range.from && range.to)) {
+                          onDateRangeChange({ from: adDate, to: undefined });
+                        } else if (adDate < range.from) {
+                          onDateRangeChange({ from: adDate, to: range.from });
+                          setIsCalendarOpen(false);
+                        } else {
+                          onDateRangeChange({ from: range.from, to: adDate });
+                          setIsCalendarOpen(false);
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+              <DrawerFooter className="p-4 pt-2">
+                <DrawerClose asChild>
+                  <Button variant="outline">Close</Button>
+                </DrawerClose>
+              </DrawerFooter>
+            </DrawerContent>
+          </Drawer>
+        ) : null}
         <Dialog
           open={isNoteOpen}
           onOpenChange={(open: boolean) => {
@@ -826,11 +1014,12 @@ export function TaxDetails({
               </div>
             </div>
             <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
                   isRange
                   valueAD={dateRange}
-                  onChangeAD={(range) => onDateRangeChange(range as DateRange | undefined)}
+                  onChangeAD={(range) => onDateRangeChangeWithUnapprovedReset(range as DateRange | undefined)}
                   transactionDates={transactionDates}
                   className="w-auto"
                 />
@@ -865,7 +1054,7 @@ export function TaxDetails({
                           country={company?.country}
                           onApply={(r) => {
                             setTempDateRange(r);
-                            onDateRangeChange(r);
+                            onDateRangeChangeWithUnapprovedReset(r);
                             setIsDesktopCalendarOpen(false);
                           }}
                         />
@@ -881,12 +1070,12 @@ export function TaxDetails({
                         } else if (adDate < range.from) {
                           const next = { from: adDate, to: range.from };
                           setTempDateRange(next);
-                          onDateRangeChange(next);
+                          onDateRangeChangeWithUnapprovedReset(next);
                           setIsDesktopCalendarOpen(false);
                         } else {
                           const next = { from: range.from, to: adDate };
                           setTempDateRange(next);
-                          onDateRangeChange(next);
+                          onDateRangeChangeWithUnapprovedReset(next);
                           setIsDesktopCalendarOpen(false);
                         }
                       }}
@@ -958,16 +1147,17 @@ export function TaxDetails({
                   setActiveFilter={setActiveFilter}
                   isTaxContext={isTaxContext ?? true}
                   scrollOnlyTransactions
+                  highlightPendingApproval
                 />
             {paginatedTransactions.length === 0 && (
               <div className="text-center py-8 text-muted-foreground">No transactions found for this tax ledger in the selected period.</div>
             )}
           </div>
         </div>
-        {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
+        {/* Footer — global PC shell LedgerDesktopFooter */}
+        <LedgerDesktopFooter
+          left={
+            <>
               <LedgerFooterCheckboxPill
                 id="show-narration-tax"
                 checked={showNarration}
@@ -1016,63 +1206,28 @@ export function TaxDetails({
                 viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
                 hiddenCount={statementCheck.hiddenCount}
               />
-            </div>
-            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
-              <TransactionTableSortDropdown
-                sortBy={sortBy}
-                sortOrder={sortOrder}
-                onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
-                viewMode="statement"
-              />
-              <LedgerFooterTextPill>({desktopPaginationMeta.beforeCount})</LedgerFooterTextPill>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(totalPages)}
-                disabled={currentPage === totalPages}
-              >
-                <ChevronsLeft className="h-4 w-4" />
-              </Button>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(currentPage + 1)}
-                disabled={currentPage === totalPages}
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <LedgerFooterChromePill className="px-1">
-
-              <Select
-                value={`${rowsPerPage}`}
-                onValueChange={(value) => {
-                  setRowsPerPage(Number(value) || 0);
-                  setCurrentPage(1);
-                }}
-              >
-                <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
-                  <SelectValue placeholder={`${rowsPerPage}`} />
-                </SelectTrigger>
-                <SelectContent side="top">
-                  {[10, 20, 30, 50].map((pageSize) => (
-                    <SelectItem key={pageSize} value={`${pageSize}`}>{pageSize}</SelectItem>
-                  ))}
-                  <SelectItem value="0">All</SelectItem>
-                </SelectContent>
-              </Select>
-              </LedgerFooterChromePill><Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(currentPage - 1)}
-                disabled={currentPage === 1}
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(1)}
-                disabled={currentPage === 1}
-              >
-                <ChevronsRight className="h-4 w-4" />
-              </Button>
-              <LedgerFooterTextPill>({desktopPaginationMeta.afterCount})</LedgerFooterTextPill>
-              <LedgerFooterTextPill>Total Trxn {searchFilteredTransactions.length}</LedgerFooterTextPill>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          onSortChange={(by, order) => {
+            setSortBy(by);
+            setSortOrder(order);
+          }}
+          viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+          currentPage={currentPage}
+          totalPages={totalPages}
+          setCurrentPage={setCurrentPage}
+          rowsPerPageSelectValue={`${rowsPerPage}`}
+          onRowsPerPageChange={(value) => {
+            setRowsPerPage(Number(value) || 0);
+            setCurrentPage(1);
+          }}
+          rowsPerPageOptions={[10, 20, 30, 50]}
+          beforeCount={desktopPaginationMeta.beforeCount}
+          afterCount={desktopPaginationMeta.afterCount}
+          totalCount={searchFilteredTransactions.length}
+        />
       </div>
       </div>
       <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>

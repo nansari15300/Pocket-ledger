@@ -18,6 +18,8 @@ export function RecurringVoucherAutoRunner() {
   useEffect(() => {
     if (!companyId?.trim() || !company || !user?.uid) return;
     if (!can("create_records")) return;
+    // Manage Sharing → Recurring Auto Voucher → trigger on app open (+ company run scope).
+    if (!can("trigger_recurring_auto_on_app_open")) return;
     if (inFlightRef.current) return;
 
     const bsNow = adToBs(new Date());
@@ -29,11 +31,16 @@ export function RecurringVoucherAutoRunner() {
     void (async () => {
       try {
         // App-open runner: ek session/month me same user-company ke liye single pass run karo.
-        await generateDueRecurringVouchersOnAppOpen(companyId, company, {
-          uid: user.uid,
-          email: user.email ?? null,
-          displayName: user.displayName ?? null,
-        });
+        await generateDueRecurringVouchersOnAppOpen(
+          companyId,
+          company,
+          {
+            uid: user.uid,
+            email: user.email ?? null,
+            displayName: user.displayName ?? null,
+          },
+          { hasTriggerPermission: true },
+        );
         if (typeof window !== "undefined") sessionStorage.setItem(dedupeKey, "1");
       } catch (error) {
         console.error("[RecurringVoucherAutoRunner] failed", error);

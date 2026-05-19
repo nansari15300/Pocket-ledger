@@ -40,6 +40,8 @@ import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Calendar } from "@/components/ui/calendar";
 import { compressFile } from "@/lib/compression";
+import { MasterFormNameAcNoRow, MasterMobileNoField, MasterFormTwoColGrid } from "@/components/inter-company/MasterFormLayout";
+import { interCompanyAcNoForNewEntity } from "@/lib/interCompany/interCompanyAccountNo";
 import {
   MAX_IMAGE_BYTES_BEFORE_COMPRESS,
   MAX_IMAGE_MB_BEFORE_COMPRESS,
@@ -583,6 +585,7 @@ export function CreatePartyForm({
         documentFiles: documentFilesSnap,
       });
 
+      const interCompanyAccountNo = await interCompanyAcNoForNewEntity("party");
       await setDoc(partyRef, {
         name: values.name,
         address: values.address,
@@ -598,6 +601,7 @@ export function CreatePartyForm({
         balance: values.openingBalance,
         isDeleted: false,
         createdAt: serverTimestamp(),
+        interCompanyAccountNo,
         fileUrl: staged.fileUrl,
         ...(staged.documentFileUrls.length ? { documentFileUrls: staged.documentFileUrls } : {}),
       });
@@ -651,6 +655,7 @@ export function CreatePartyForm({
             documentFiles: documentFilesSnap,
           });
           const nowTs = Timestamp.now();
+          const interCompanyAccountNo = await interCompanyAcNoForNewEntity("party");
           const payload: Record<string, unknown> = {
             id: localId,
             name: values.name,
@@ -667,6 +672,7 @@ export function CreatePartyForm({
             balance: values.openingBalance,
             isDeleted: false,
             createdAt: nowTs,
+            interCompanyAccountNo,
             fileUrl: stagedCatch.fileUrl ?? null,
             ...(stagedCatch.documentFileUrls.length
               ? { documentFileUrls: stagedCatch.documentFileUrls }
@@ -735,63 +741,72 @@ export function CreatePartyForm({
         onSubmit={(e) => handleFormSubmit(e)}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto py-1 pr-1">
-        <FormField
-          control={form.control}
-          name="name"
-          render={({ field }: any) => (
-            <FormItem>
-              <FormLabel>Party Name</FormLabel>
-              <FormControl>
-                <Input placeholder="e.g., John Doe" {...field} />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
+        <div className="pl-master-form-scroll min-h-0 flex-1 space-y-6 overflow-y-auto py-1 pr-1">
+        <MasterFormNameAcNoRow
+          entityKind="party"
+          mode="create"
+          nameField={
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field }: any) => (
+                <FormItem>
+                  <FormLabel>Party Name</FormLabel>
+                  <FormControl>
+                    <Input placeholder="e.g., John Doe" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          }
         />
         
-        <FormField
+        {/* Group | PAN — ek row, barabar width */}
+        <MasterFormTwoColGrid>
+          <FormField
             control={form.control}
             name="groupId"
             render={({ field }: any) => (
-                <FormItem>
+              <FormItem>
                 <FormLabel>Group</FormLabel>
                 <Combobox
-                    options={partyGroupOptions}
-                    value={field.value}
-                    onChange={(val, newName) => {
-                        if (val === 'add-new') {
-                            setIsCreateGroupOpen(true);
-                            setTimeout(() => {
-                                document.dispatchEvent(new CustomEvent('prefill-create-group-name', { detail: newName }));
-                            }, 100);
-                        } else {
-                            field.onChange(val === "none" ? "" : val);
-                        }
-                    }}
-                    placeholder="Select a group"
-                    addNewLabel="+ Add New Group"
-                    />
+                  options={partyGroupOptions}
+                  value={field.value}
+                  onChange={(val, newName) => {
+                    if (val === "add-new") {
+                      setIsCreateGroupOpen(true);
+                      setTimeout(() => {
+                        document.dispatchEvent(new CustomEvent("prefill-create-group-name", { detail: newName }));
+                      }, 100);
+                    } else {
+                      field.onChange(val === "none" ? "" : val);
+                    }
+                  }}
+                  placeholder="Select a group"
+                  addNewLabel="+ Add New Group"
+                />
                 <FormMessage />
-                </FormItem>
+              </FormItem>
             )}
-        />
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          />
           <FormField
             control={form.control}
-            name="phone"
+            name="pan"
             render={({ field }: any) => (
               <FormItem>
-                <FormLabel>Phone No.</FormLabel>
+                <FormLabel>PAN/VAT No.</FormLabel>
                 <FormControl>
-                  <Input placeholder="Party phone number" {...field} />
+                  <Input placeholder="Party's PAN/VAT" {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
             )}
           />
+        </MasterFormTwoColGrid>
 
+        <MasterFormTwoColGrid>
+          <MasterMobileNoField control={form.control} />
           <FormField
             control={form.control}
             name="email"
@@ -805,7 +820,7 @@ export function CreatePartyForm({
               </FormItem>
             )}
           />
-        </div>
+        </MasterFormTwoColGrid>
 
         <FormField
           control={form.control}
@@ -821,21 +836,8 @@ export function CreatePartyForm({
           )}
         />
         
-         {/* PAN / OB / date — File tick hata (docs neeche section me) */}
-         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <FormField
-            control={form.control}
-            name="pan"
-            render={({ field }: any) => (
-              <FormItem className="sm:col-span-2 lg:col-span-1">
-                <FormLabel>PAN/VAT No.</FormLabel>
-                <FormControl>
-                  <Input placeholder="Party's PAN/VAT" {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+         {/* Opening balance | As on date — ek row, barabar size */}
+         <MasterFormTwoColGrid>
             <FormField
               control={form.control}
               name="openingBalance"
@@ -853,7 +855,7 @@ export function CreatePartyForm({
                 control={form.control}
                 name="openingBalanceDate"
                 render={({ field }: any) => (
-                  <FormItem className="flex flex-col pt-2 lg:pt-0">
+                  <FormItem className="flex flex-col">
                     <FormLabel>As on Date</FormLabel>
                       <div className={cn("grid", dateSystem === 'Both' && "grid-cols-1 sm:grid-cols-2 gap-2")}>
                           {(dateSystem === 'BS' || dateSystem === 'Both') && (
@@ -882,7 +884,7 @@ export function CreatePartyForm({
                   </FormItem>
                 )}
               />
-          </div>
+        </MasterFormTwoColGrid>
 
         <Separator />
         

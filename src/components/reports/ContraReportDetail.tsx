@@ -148,7 +148,7 @@ export function ContraReportDetail() {
               setShowAllCompanyVouchers(false);
             }}
             mobileFooterVariant="report"
-            mobileReportStickyTitle="Contra"
+            mobileReportStickyTitle={showAllCompanyVouchers ? "All Contra" : "Contra"}
           />
           </div>
         </div>

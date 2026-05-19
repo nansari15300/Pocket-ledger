@@ -157,13 +157,7 @@ export function SaleReportDetail() {
     if (currentParty) {
       return (
         <div className="flex flex-col h-full min-h-0 overflow-hidden">
-          <div className={mdc.reportBackRow} {...mdcNoEdgeSwipeCapture}>
-            <Button variant="ghost" size="icon" className={mdc.reportBackBtn} onClick={() => { setSelectedParty(null); setShowAllCompanyVouchers(false); }}>
-              <ArrowLeft className="h-3 w-3" />
-            </Button>
-            <span className="truncate text-sm font-semibold">{currentParty.name}</span>
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <PartyDetails
               party={currentParty}
               transactions={currentTransactions}
@@ -175,6 +169,9 @@ export function SaleReportDetail() {
               isAllVouchersView={showAllCompanyVouchers}
               userNames={userNames}
               context="sale"
+              mobileFooterVariant="report"
+              mobileReportStickyTitle="Sales"
+              onBack={() => { setSelectedParty(null); setShowAllCompanyVouchers(false); }}
             />
           </div>
         </div>

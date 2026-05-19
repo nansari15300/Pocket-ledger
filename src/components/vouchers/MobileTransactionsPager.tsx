@@ -17,8 +17,10 @@ type Props = {
   onPageChange: (nextPage: number) => void;
   onRowsPerPageChange: (nextRowsPerPage: number) => void;
   className?: string;
-  /** Left of Prev / left of Next — parent decides meaning (party ledger latest-first = newer pool left, older pool right). */
+  /** `before` / `after` = txn count beside Prev / Next; enable jab count > 0. */
   edgeCounts?: { before: number; after: number };
+  /** Party ledger: page 1 = latest (tail). Notes list: page 1 = oldest (head). */
+  pagingMode?: "newest-first" | "oldest-first";
   /** Bank statement: "Showing / Trxn Of total" line hata — sirf page-size select + Prev/Next (count clutter avoid). */
   trimSummary?: boolean;
 };
@@ -34,11 +36,36 @@ export function MobileTransactionsPager({
   className,
   edgeCounts,
   trimSummary = false,
+  pagingMode = "newest-first",
 }: Props) {
   const isMobile = useIsMobile();
   const { registerPagerFabHost, unregisterPagerFabHost } = useMobileDetailSummaryCollapsed();
   const totalPages = Math.max(1, rowsPerPage > 0 ? Math.ceil(totalItems / rowsPerPage) : 1);
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
+  const useEdgePoolNav = edgeCounts != null && rowsPerPage > 0;
+  const isNewestFirst = pagingMode === "newest-first";
+  // Enable/disable: jis side count > 0, us button active (user expectation).
+  const prevDisabled = useEdgePoolNav ? edgeCounts.before <= 0 : safePage <= 1;
+  const nextDisabled = useEdgePoolNav ? edgeCounts.after <= 0 : safePage >= totalPages;
+  const goPrevPage = () => {
+    if (!useEdgePoolNav) {
+      onPageChange(Math.max(1, safePage - 1));
+      return;
+    }
+    // newest-first: Prev → purane (page+1); oldest-first: Prev → pehle pages (page−1)
+    onPageChange(
+      isNewestFirst ? Math.min(totalPages, safePage + 1) : Math.max(1, safePage - 1)
+    );
+  };
+  const goNextPage = () => {
+    if (!useEdgePoolNav) {
+      onPageChange(Math.min(totalPages, safePage + 1));
+      return;
+    }
+    onPageChange(
+      isNewestFirst ? Math.max(1, safePage - 1) : Math.min(totalPages, safePage + 1)
+    );
+  };
 
   useEffect(() => {
     if (!isMobile) return;
@@ -51,7 +78,7 @@ export function MobileTransactionsPager({
       {/* Summary FAB — pagination bar ke bilkul upar, right side */}
       {isMobile ? (
         <div
-          className="pointer-events-none absolute bottom-full right-2 z-[60] mb-1 flex justify-end"
+          className="pointer-events-none absolute bottom-full right-2 z-40 mb-1 flex justify-end"
           {...mdcNoEdgeSwipeCapture}
         >
           <div className="pointer-events-auto">
@@ -68,17 +95,16 @@ export function MobileTransactionsPager({
                 variant="default"
                 size="sm"
                 className="h-5 shrink-0 px-1.5 text-[10px] font-bold bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-200 disabled:text-gray-500"
-                // Page − 1 — party ledger me latest-first: yahi «naye» taraf
-                onClick={() => onPageChange(Math.max(1, safePage - 1))}
-                disabled={safePage <= 1}
+                onClick={goPrevPage}
+                disabled={prevDisabled}
               >
                 Prev
               </Button>
               {edgeCounts != null && rowsPerPage > 0 ? (
                 <span
                   className="min-w-[1.25rem] shrink-0 text-center text-[10px] font-bold tabular-nums text-muted-foreground"
-                  title="Count beside Prev (parent slice)"
-                  aria-label={`${edgeCounts.before} transactions beside Prev`}
+                  title="Transactions available via Prev"
+                  aria-label={`${edgeCounts.before} transactions via Prev`}
                 >
                   {edgeCounts.before}
                 </span>
@@ -123,8 +149,8 @@ export function MobileTransactionsPager({
               {edgeCounts != null && rowsPerPage > 0 ? (
                 <span
                   className="min-w-[1.25rem] shrink-0 text-center text-[10px] font-bold tabular-nums text-muted-foreground"
-                  title="Count beside Next (parent slice)"
-                  aria-label={`${edgeCounts.after} transactions beside Next`}
+                  title="Transactions available via Next"
+                  aria-label={`${edgeCounts.after} transactions via Next`}
                 >
                   {edgeCounts.after}
                 </span>
@@ -134,9 +160,8 @@ export function MobileTransactionsPager({
                 variant="default"
                 size="sm"
                 className="h-5 shrink-0 px-1.5 text-[10px] font-bold bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-200 disabled:text-gray-500"
-                // Page + 1 — party latest-first: «purane» chunk
-                onClick={() => onPageChange(Math.min(totalPages, safePage + 1))}
-                disabled={safePage >= totalPages}
+                onClick={goNextPage}
+                disabled={nextDisabled}
               >
                 Next
               </Button>

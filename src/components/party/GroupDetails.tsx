@@ -34,12 +34,14 @@ import {
 import { TransactionsTable, type VisibleColumns, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
-import { LedgerFooterPaginationBar } from "@/components/vouchers/LedgerFooterPaginationBar";
+import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
 
 import { useShowNotes } from "../vouchers/transactionColumnVisibility";
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
-import { LedgerFooterCheckboxPill, ledgerFooterRowCn } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
+import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import {
   sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
@@ -173,8 +175,8 @@ function filterByStatus(txns: any[], statusFilter: StatusFilter): any[] {
   if (!anySelected) return txns;
   return txns.filter((t) => {
     if (t.type === "note") return true; // Notes have no payment status; always show
-    // Journal/Contra are non-bill-wise rows; keep visible in group ledger regardless of payment-status filter.
-    if (t.type === "journal" || t.type === "contra") return true;
+    // Journal/Contra/Inter Company — bill-wise status nahi; filter se hide na hon
+    if (t.type === "journal" || t.type === "contra" || t.type === "inter_company") return true;
     if (statusFilter.paid && t.paymentStatus === "paid") return true;
     if (statusFilter.unpaid && t.paymentStatus === "unpaid") return true;
     if (statusFilter.partial && t.paymentStatus === "partially_paid") return true;
@@ -610,6 +612,19 @@ export function GroupDetails({
     setFilters({});
   };
 
+
+  const {
+    unapprovedOnly,
+    toggleUnapprovedOnly,
+    filterByUnapprovedOnly,
+    onDateRangeChangeWithUnapprovedReset,
+  } = useLedgerUnapprovedOnlyFilter({
+    onDateRangeChange,
+    setCurrentPage,
+    setFilters,
+    setActiveFilter,
+  });
+
   const handleEditVoucher = (voucher: any) => {
     openingModalRef.current = true;
     setSelectedVoucher(voucher);
@@ -772,10 +787,11 @@ export function GroupDetails({
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
-        sortTransactionsWithFiscalMergeForCompany(statusFilteredTransactions, sortBy, sortOrder, undefined, company),
+        sortTransactionsWithFiscalMergeForCompany(
+          filterByUnapprovedOnly(statusFilteredTransactions), sortBy, sortOrder, undefined, company),
         openingBalanceForPeriod
       ),
-    [statusFilteredTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
+    [statusFilteredTransactions, filterByUnapprovedOnly, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
 
   // Statement check mode + desktop tail paging (PartyDetails jaisa)
@@ -1393,6 +1409,7 @@ export function GroupDetails({
           </div>
           {/* Part 2: date range, Add Note, print â€” single line, no wrap; on small screens this row is below */}
           <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
             {(dateSystem === "BS" || dateSystem === "Both") && (
               <div className="flex items-center gap-1 flex-shrink-0">
                 <BsDatePicker
@@ -1601,15 +1618,10 @@ export function GroupDetails({
           )}
         </div>
       </div>
-      {/* Footer — PartyDetails jaisa: same pill height + gap; parent pagination pill */}
-      <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim flex-shrink-0 mt-auto bg-background">
-        <div className={cn("flex min-w-max flex-col gap-y-2 sm:flex-row sm:items-center", ledgerFooterRowCn)}>
-          <div
-            className={cn(
-              ledgerFooterRowCn,
-              "min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground"
-            )}
-          >
+      {/* Footer — global PC shell LedgerDesktopFooter */}
+      <LedgerDesktopFooter
+        left={
+          <>
               <LedgerFooterCheckboxPill
                 id="show-narration-party-group"
                 checked={showNarration}
@@ -1658,26 +1670,24 @@ export function GroupDetails({
               viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
               hiddenCount={statementCheck.hiddenCount}
             />
-          </div>
-            <LedgerFooterPaginationBar
-              sortBy={sortBy}
-              sortOrder={sortOrder}
-              onSortChange={(by, order) => {
-                setSortBy(by);
-                setSortOrder(order);
-              }}
-              viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
-              currentPage={currentPage}
-              totalPages={totalPages}
-              setCurrentPage={setCurrentPage}
-              rowsPerPageSelectValue={rowsPerPageSelectValue}
-              onRowsPerPageChange={handleRowsPerPageChange}
-              beforeCount={desktopPaginationMeta.beforeCount}
-              afterCount={desktopPaginationMeta.afterCount}
-              totalCount={statusFilteredTransactions.length}
-            />
-        </div>
-      </div>
+          </>
+        }
+        sortBy={sortBy}
+        sortOrder={sortOrder}
+        onSortChange={(by, order) => {
+          setSortBy(by);
+          setSortOrder(order);
+        }}
+        viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+        currentPage={currentPage}
+        totalPages={totalPages}
+        setCurrentPage={setCurrentPage}
+        rowsPerPageSelectValue={rowsPerPageSelectValue}
+        onRowsPerPageChange={handleRowsPerPageChange}
+        beforeCount={desktopPaginationMeta.beforeCount}
+        afterCount={desktopPaginationMeta.afterCount}
+        totalCount={statusFilteredTransactions.length}
+      />
     </div>
   );
 

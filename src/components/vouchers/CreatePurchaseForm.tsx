@@ -151,6 +151,8 @@ const formSchema = z.object({
   lineItems: z.array(lineItemSchema).min(1, "Please add at least one item."),
   narration: z.string().optional(),
   dueDate: z.date().optional().nullable(),
+  /** Overdue page Important filter — Due Date ke niche tick */
+  overdueImportant: z.boolean().optional().default(false),
   subTotal: z.coerce.number(),
   totalPurchasePrice: z.coerce.number().optional(),
   discount: z.coerce.number().min(0).optional(),
@@ -223,6 +225,7 @@ function getInitialFormValues(voucher?: any): PurchaseFormValues {
       voucherNumber: "",
       narration: "",
       dueDate: undefined,
+      overdueImportant: false,
       lineItems: [
         {
           type: "item",
@@ -262,6 +265,7 @@ function getInitialFormValues(voucher?: any): PurchaseFormValues {
     // Backup/local cache can store date as plain `{ seconds, nanoseconds }`, so avoid `new Date(object)`.
     date: parseFirestoreDateFieldToJsDate(voucher.date) ?? startOfDay(new Date()),
     dueDate: dueDate ?? undefined,
+    overdueImportant: voucher.overdueImportant === true,
     discount: voucher.discount || 0,
     tax: voucher.tax || 0,
     files: voucher.fileUrls ? voucher.fileUrls.map((url: string) => ({ file: null, preview: url })) : [],
@@ -2838,7 +2842,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       />
                     </div>
                   )}
-                  <div className={cn("px-[2px] pt-2", (dateSystem === 'BS' || dateSystem === 'Both') && "flex gap-1")}>
+                  {/* Mobile: Due Date + Important ek column — date jaisi pill row */}
+                  <div className="flex flex-col gap-2 px-[2px] pt-2">
+                  <div className={cn((dateSystem === 'BS' || dateSystem === 'Both') && "flex gap-1")}>
                     <FormField
                       control={form.control}
                       name="dueDate"
@@ -2885,6 +2891,31 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             )}
                           </div>
                           <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                    <FormField
+                      control={form.control}
+                      name="overdueImportant"
+                      render={({ field }: any) => (
+                        <FormItem className="w-full">
+                          {/* Due Date jaisi pill — Important text pill ke andar */}
+                          <div className="flex h-9 w-full items-center gap-2 rounded-md border border-input bg-muted/85 px-3">
+                            <FormControl>
+                              <Checkbox
+                                id="create-purchase-overdue-important-mobile"
+                                checked={!!field.value}
+                                onCheckedChange={field.onChange}
+                              />
+                            </FormControl>
+                            <FormLabel
+                              htmlFor="create-purchase-overdue-important-mobile"
+                              className="cursor-pointer text-sm font-normal leading-none"
+                            >
+                              Important
+                            </FormLabel>
+                          </div>
                         </FormItem>
                       )}
                     />
@@ -3099,6 +3130,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           </FormItem>
                         )}
                       />
+                      {/* PC: Due Date column — date ke niche Important tick (overdue filter) */}
+                      <div className="flex min-w-0 flex-col gap-2 md:w-[180px] md:max-w-[240px]">
                       {showApprovalCheckbox && (
                         <FormField
                           control={form.control}
@@ -3117,7 +3150,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         control={form.control}
                         name="dueDate"
                         render={({ field }: any) => (
-                          <FormItem className={cn("md:w-[180px]", dateSystem === 'Both' && "md:w-auto flex-1 min-w-[160px]")}>
+                          <FormItem className={cn("w-full", dateSystem === 'Both' && "min-w-[160px]")}>
                             <FormLabel>Due Date</FormLabel>
                             <div className={cn("flex gap-1", dateSystem === 'Both' && "gap-2")}>
                               {(dateSystem === 'BS' || dateSystem === 'Both') && (
@@ -3161,6 +3194,31 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           </FormItem>
                         )}
                       />
+                      <FormField
+                        control={form.control}
+                        name="overdueImportant"
+                        render={({ field }: any) => (
+                          <FormItem className="w-full">
+                            {/* Due Date jaisi pill — Important text pill ke andar */}
+                            <div className="flex h-9 w-full items-center gap-2 rounded-md border border-input bg-muted/85 px-3">
+                              <FormControl>
+                                <Checkbox
+                                  id="create-purchase-overdue-important-desktop"
+                                  checked={!!field.value}
+                                  onCheckedChange={field.onChange}
+                                />
+                              </FormControl>
+                              <FormLabel
+                                htmlFor="create-purchase-overdue-important-desktop"
+                                className="cursor-pointer font-normal leading-none"
+                              >
+                                Important
+                              </FormLabel>
+                            </div>
+                          </FormItem>
+                        )}
+                      />
+                    </div>
                     </div>
                     </div>
                     <div className="rounded-lg border border-indigo-300/80 bg-indigo-50 p-3">

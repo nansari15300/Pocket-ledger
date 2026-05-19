@@ -13,8 +13,10 @@ import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode, use
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
-import { LedgerFooterPaginationBar } from "@/components/vouchers/LedgerFooterPaginationBar";
+import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
+import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import {
   sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
@@ -524,15 +526,28 @@ export function AccountGroupDetails({
     return result;
   }, [spendWiseView, baseTransactions, vouchers, accountIdsInGroup, openingBalanceForPeriod]);
 
+  const {
+    unapprovedOnly,
+    toggleUnapprovedOnly,
+    filterByUnapprovedOnly,
+    onDateRangeChangeWithUnapprovedReset,
+  } = useLedgerUnapprovedOnlyFilter({
+    onDateRangeChange,
+    setCurrentPage,
+    setFilters,
+    setActiveFilter,
+  });
+
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(() => {
-    if (spendWiseView) return displayTransactions;
+    const rows = filterByUnapprovedOnly(displayTransactions);
+    if (spendWiseView) return rows;
     return recomputeRunningBalanceTopToBottom(
-      sortTransactionsWithFiscalMergeForCompany(displayTransactions, sortBy, sortOrder, undefined, company),
+      sortTransactionsWithFiscalMergeForCompany(rows, sortBy, sortOrder, undefined, company),
       openingBalanceForPeriod
     );
-  }, [displayTransactions, spendWiseView, sortBy, sortOrder, openingBalanceForPeriod, company]);
+  }, [displayTransactions, filterByUnapprovedOnly, spendWiseView, sortBy, sortOrder, openingBalanceForPeriod, company]);
 
   const displayTransactionCount = useMemo(
     () => sortedTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length,
@@ -628,13 +643,27 @@ export function AccountGroupDetails({
     }
     const periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
     const periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+    const closingForPage = openingForPage + periodDrForPage - periodCrForPage;
+    // LedgerDesktopFooter tail counts — statementCheck desktopPaginationMeta jaisa
+    const pageRowsCount = pageRows.length;
+    const beforeCount = desktopLedgerSliceFlatStart;
+    const afterCount = Math.max(0, displayTransactionCount - beforeCount - pageRowsCount);
     return {
       openingForPage,
       periodDrForPage,
       periodCrForPage,
-      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
+      closingForPage,
+      beforeCount,
+      afterCount,
     };
-  }, [paginatedTransactions, sortedTransactions, openingBalanceForPeriod, spendWiseView]);
+  }, [
+    paginatedTransactions,
+    sortedTransactions,
+    openingBalanceForPeriod,
+    spendWiseView,
+    desktopLedgerSliceFlatStart,
+    displayTransactionCount,
+  ]);
 
   const desktopPageLedgerStats = spendWiseView
     ? spendWiseDesktopPageLedgerStats
@@ -1482,6 +1511,7 @@ export function AccountGroupDetails({
               </div>
             </div>
             <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
                   isRange
@@ -1657,10 +1687,10 @@ export function AccountGroupDetails({
             )}
           </div>
         </div>
-        {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
+        {/* Footer — global PC shell LedgerDesktopFooter */}
+        <LedgerDesktopFooter
+          left={
+            <>
               <LedgerFooterCheckboxPill
                 id="show-narration-account-group"
                 checked={showNarration}
@@ -1764,24 +1794,24 @@ export function AccountGroupDetails({
                 </DropdownMenu>
               )}
               {spendWiseView && <SpendWiseBlinkInfoDialog open={blinkInfoOpen} onOpenChange={setBlinkInfoOpen} />}
-            </div>
-            <LedgerFooterPaginationBar
-              sortBy={sortBy}
-              sortOrder={sortOrder}
-              onSortChange={(by, order) => {
-                setSortBy(by);
-                setSortOrder(order);
-              }}
-              viewMode={spendWiseView ? "spend_wise" : "statement"}
-              currentPage={currentPage}
-              totalPages={totalPages}
-              setCurrentPage={setCurrentPage}
-              rowsPerPageSelectValue={rowsPerPageSelectValue}
-              onRowsPerPageChange={handleRowsPerPageChange}
-              totalCount={displayTransactionCount}
-            />
-          </div>
-        </div>
+            </>
+          }
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          onSortChange={(by, order) => {
+            setSortBy(by);
+            setSortOrder(order);
+          }}
+          viewMode={spendWiseView ? "spend_wise" : "statement"}
+          currentPage={currentPage}
+          totalPages={totalPages}
+          setCurrentPage={setCurrentPage}
+          rowsPerPageSelectValue={rowsPerPageSelectValue}
+          onRowsPerPageChange={handleRowsPerPageChange}
+          beforeCount={desktopPageLedgerStats.beforeCount}
+          afterCount={desktopPageLedgerStats.afterCount}
+          totalCount={displayTransactionCount}
+        />
       </div>
      <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>
         <DialogContent className="h-[95vh] w-full max-w-3xl flex flex-col">

@@ -272,7 +272,9 @@ export function RecurringAutoSummaryCard({
   } = useVouchers();
   const { formatCurrency } = useDate();
 
-  const canToggleRecurring = can("configure_company_settings");
+  // Sirf `view_recurring_auto_summary` — configure alag hai (switch ke liye); OR se card bypass mat ho.
+  const canViewRecurringCard = can("view_recurring_auto_summary");
+  const canToggleRecurring = can("configure_recurring_auto_company");
   const [savingToggle, setSavingToggle] = React.useState(false);
 
   const partyNameById = React.useMemo(() => {
@@ -339,7 +341,6 @@ export function RecurringAutoSummaryCard({
   const lineOpenHandler = onOpenBodyVoucher ? handleLineOpenVoucher : undefined;
 
   const inGrid = layout === "gridCell";
-  const dedicatedTab = placement === "summary";
 
   const onRecurringToggle = React.useCallback(
     async (checked: boolean) => {
@@ -348,7 +349,7 @@ export function RecurringAutoSummaryCard({
         return;
       }
       if (!canToggleRecurring) {
-        toast.error("You need “Configure Company Settings” permission to change this.");
+        toast.error("You need “Configure company recurring auto” permission (Manage Sharing → Recurring Auto Voucher).");
         return;
       }
       setSavingToggle(true);
@@ -388,19 +389,18 @@ export function RecurringAutoSummaryCard({
 
   // Net accrued: inflow (Dr) − outflow (Cr); >0 = zyada andar aane wala hissa
   const balanceAccruedNetInDr = agg.totalAccruedDr - agg.totalAccruedCr;
-  const showShell = agg.loading || agg.firestoreEnabledCount > 0;
-
   const hasResolvedRows = agg.templateRows.length > 0;
   const waitingForVouchers = !agg.loading && agg.firestoreEnabledCount > 0 && !hasResolvedRows;
   const emptySchedules = !agg.loading && agg.firestoreEnabledCount === 0 && recurringCompanyEnabled;
+  // Footer: kitne journal Auto Monthly schedules active (resolved list ya Firestore count).
+  const triggeringCount = hasResolvedRows ? agg.templateRows.length : agg.firestoreEnabledCount;
+  const triggeringLabel =
+    triggeringCount === 1 ? "1 voucher triggering" : `${triggeringCount} vouchers triggering`;
 
   const fmt = (n: number) => formatCurrency(n, { showDrCr: false, noAnimation: true });
 
-  // Purana behaviour: All tab + feature OFF + grid me slot — phir bhi card dikhao (switch se ON)
-  const hideEntireCard =
-    !inGrid && !dedicatedTab && !recurringCompanyEnabled && !showShell;
-
-  if (hideEntireCard) return null;
+  // View permission ke bina dashboard card bilkul mat dikhao (configure-only users → Voucher Settings).
+  if (!canViewRecurringCard) return null;
 
   // `min-w-min` + parent grid `minmax(min-content,1fr)` — lamba amount cut/wrap na ho, column width badhe
   const gridOuterClass = cn(
@@ -492,17 +492,20 @@ export function RecurringAutoSummaryCard({
 
         {recurringCompanyEnabled && !emptySchedules && (
           <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
-            {waitingForVouchers ? (
-              <span className="text-xs text-muted-foreground">Details — available after vouchers sync.</span>
-            ) : (
-              <div className="pt-2 text-right">
+            <div className="flex min-w-0 items-center justify-between gap-2 pt-2">
+              <span className="min-w-0 truncate text-xs font-medium text-muted-foreground" title="Active Auto Monthly journal schedules">
+                {agg.loading ? "…" : triggeringLabel}
+              </span>
+              {waitingForVouchers ? (
+                <span className="shrink-0 text-xs text-muted-foreground">Details after sync</span>
+              ) : (
                 <DialogTrigger asChild>
-                  <Button variant="link" size="sm" className="h-auto p-0 text-rose-700">
+                  <Button variant="link" size="sm" className="h-auto shrink-0 p-0 text-rose-700">
                     View details
                   </Button>
                 </DialogTrigger>
-              </div>
-            )}
+              )}
+            </div>
             <DialogContent
               hideCloseButton
               className={cn(

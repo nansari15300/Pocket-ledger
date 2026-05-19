@@ -35,7 +35,21 @@ export type Permission =
   /** Header Copy ledger — doosri company ka party ledger */
   | "copy_ledger_cross_company"
   /** Split-books FY mode: allow dated entries before company fiscalYearStart */
-  | "edit_prior_fiscal_year_split_books";
+  | "edit_prior_fiscal_year_split_books"
+  /** Dashboard “Auto recurring” summary card (read accrued / schedules). */
+  | "view_recurring_auto_summary"
+  /** Company master toggle + run scope (Voucher Settings / dashboard card). */
+  | "configure_recurring_auto_company"
+  /** Journal voucher: Auto Monthly strip (read-only without add/edit). */
+  | "view_recurring_voucher_controls"
+  /** Turn Auto Monthly ON on a journal voucher. */
+  | "add_recurring_auto_monthly"
+  /** Schedule day, rate bump, nested settings dialog. */
+  | "edit_recurring_auto_monthly"
+  /** Generate now / missed-period Create & batch picker. */
+  | "generate_recurring_voucher_now"
+  /** Month-end auto-create when app opens (with company run scope). */
+  | "trigger_recurring_auto_on_app_open";
 
 export type PermissionInfo = {
   key: Permission;
@@ -115,6 +129,18 @@ export const PermissionGroups: PermissionGroup[] = [
         title: "Fiscal period",
         permissions: [
             { key: "edit_prior_fiscal_year_split_books", label: "Edit vouchers before current fiscal year (split books mode)" },
+        ],
+    },
+    {
+        title: "Recurring Auto Voucher",
+        permissions: [
+            { key: "view_recurring_auto_summary", label: "View recurring auto summary (dashboard card)" },
+            { key: "configure_recurring_auto_company", label: "Configure company recurring auto (enable + run scope)" },
+            { key: "view_recurring_voucher_controls", label: "View Auto Monthly on journal vouchers" },
+            { key: "add_recurring_auto_monthly", label: "Turn on Auto Monthly on vouchers" },
+            { key: "edit_recurring_auto_monthly", label: "Edit Auto Monthly settings (schedule & rates)" },
+            { key: "generate_recurring_voucher_now", label: "Generate recurring voucher now" },
+            { key: "trigger_recurring_auto_on_app_open", label: "Trigger month-end auto generation on app open" },
         ],
     },
 ];

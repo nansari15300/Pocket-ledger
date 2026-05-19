@@ -22,10 +22,8 @@ import type { Item } from "@/components/items/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { ArrowLeft } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { useSearchParams } from "next/navigation";
-import { mdc, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
+import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
 
 type NotedEntity = {
     id: string;
@@ -265,64 +263,52 @@ export function NotesReportDetail() {
     if (entityForDetails) {
       return (
         <div className="flex flex-col h-full min-h-0 overflow-hidden">
-          <div className={mdc.reportBackRow} {...mdcNoEdgeSwipeCapture}>
-            <Button variant="ghost" size="icon" className={mdc.reportBackBtn} onClick={() => { setSelectedEntity(null); setShowAllNotes(false); }}>
-              <ArrowLeft className="h-3 w-3" />
-            </Button>
-            <span className="font-semibold truncate">{entityForDetails.name}</span>
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <NoteDetails
               entity={entityForDetails}
               transactions={currentTransactions}
               userNames={userNames}
               onShowAll={() => setShowAllNotes(true)}
               isAllVouchersView={showAllNotes}
+              mobileFooterVariant="report"
+              mobileReportStickyTitle={showAllNotes ? "All Notes" : "Notes"}
+              onBack={() => {
+                setSelectedEntity(null);
+                setShowAllNotes(false);
+              }}
             />
           </div>
         </div>
       );
     }
     return (
-      <div className="flex flex-col h-full min-h-0 overflow-hidden">
-        <div className="p-4 border-b space-y-3 flex-shrink-0">
-          <h2 className="text-lg font-bold font-headline">Notes</h2>
+      <ReportRegisterMobileListChrome
+        title="Notes"
+        actionSlot={
           <AddVoucherDialog onVoucherCreated={() => {}} defaultTab="note">
             <PermissionButton permission="create_records" className="w-full">
               <PlusCircle className="mr-2 h-4 w-4" />
               Add Note
             </PermissionButton>
           </AddVoucherDialog>
-          <Card className="p-3 text-center">
-            <p className="text-xs text-muted-foreground">Total Notes</p>
-            <p className="text-xl font-bold text-green-600">
-              {totalNotes}
-            </p>
-          </Card>
-        </div>
-        <div className="p-3 border-b flex-shrink-0">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search accounts..."
-              className="pl-9"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </div>
-        <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
-          <h3 className="text-sm font-semibold">Note accounts ({filteredEntities.length})</h3>
-        </div>
-        <div className="flex-1 min-h-0 overflow-hidden">
-          <NotedEntityList
-            entities={filteredEntities}
-            onSelectEntity={handleSelectEntity}
-            selectedEntity={selectedEntity}
-            searchTerm={searchTerm}
-          />
-        </div>
-      </div>
+        }
+        summary={{
+          label: "Total Notes",
+          amountText: String(totalNotes),
+          amountClassName: "text-green-600",
+        }}
+        searchPlaceholder="Search accounts..."
+        searchValue={searchTerm}
+        onSearchChange={setSearchTerm}
+        listSectionTitle={`Note accounts (${filteredEntities.length})`}
+      >
+        <NotedEntityList
+          entities={filteredEntities}
+          onSelectEntity={handleSelectEntity}
+          selectedEntity={selectedEntity}
+          searchTerm={searchTerm}
+        />
+      </ReportRegisterMobileListChrome>
     );
   }
 

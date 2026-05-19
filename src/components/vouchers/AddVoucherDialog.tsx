@@ -41,6 +41,7 @@ import { CreateJournalForm } from "./CreateJournalForm";
 import { CreateNoteForm } from "./CreateNoteForm";
 import { SalaryForm } from "./SalaryForm";
 import { CreateProductionForm } from "./CreateProductionForm";
+import { InterCompanyVoucherForm } from "@/components/inter-company/InterCompanyVoucherForm";
 import { useCompany, CompanyContext } from "@/hooks/useCompany";
 import usePermissions from "@/hooks/usePermissions";
 import { useVouchers, VoucherProvider } from "@/hooks/useVouchers";
@@ -81,7 +82,6 @@ import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRed
 import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
 import { plNavDbg, plNavDbgIdHint } from "@/lib/plNavRedirectDebug";
 import {
-  canManageVoucherRecurringAutoEditors,
   clearRecurringTemplateForVoucher,
   computeRecurringAccrualPeriodStartMs,
   effectiveScheduleBsDay,
@@ -100,6 +100,12 @@ import {
   type RecurringRateAdjustMode,
   type RecurringVoucherTemplate,
 } from "@/lib/recurringVouchers";
+import {
+  canEditRecurringAutoMonthly,
+  canGenerateRecurringVoucherNow,
+  canTurnOnRecurringAutoMonthlyOnSave,
+  canViewRecurringVoucherControls,
+} from "@/lib/recurringAutoPermissions";
 
 /** Recurring save: % / fixed ke liye Firestore me number; none / khaali input => null. */
 function recurringRatePayload(mode: RecurringRateAdjustMode, raw: string): number | null {
@@ -180,13 +186,22 @@ function recurringYearlyBaseAnchorForSave(
   return d.toISOString();
 }
 
-type VoucherType = "sale" | "purchase" | "payment_in" | "payment_out" | "contra" | "direct_income" | "direct_expense" | "journal" | "note" | "add_salary" | "production";
+type VoucherType = "sale" | "purchase" | "payment_in" | "payment_out" | "inter_company" | "contra" | "direct_income" | "direct_expense" | "journal" | "note" | "add_salary" | "production";
+
+/** Tab strip labels — inter_company ko readable title */
+const VOUCHER_TAB_LABELS: Partial<Record<VoucherType, string>> = {
+  inter_company: "Inter Company",
+};
+function voucherTabLabel(key: VoucherType): string {
+  return VOUCHER_TAB_LABELS[key] ?? key.replace(/_/g, " ");
+}
 
 const formMap: Record<VoucherType, React.ComponentType<any>> = {
   sale: CreateSaleForm,
   purchase: CreatePurchaseForm,
   payment_in: CreatePaymentInForm,
   payment_out: CreatePaymentOutForm,
+  inter_company: InterCompanyVoucherForm,
   contra: CreateContraForm,
   direct_income: CreatePaymentInForm,
   direct_expense: CreatePaymentOutForm,
@@ -198,7 +213,7 @@ const formMap: Record<VoucherType, React.ComponentType<any>> = {
 
 // Tab order: Contra left of Journal
 const TAB_ORDER: VoucherType[] = [
-  "sale", "purchase", "payment_in", "payment_out", "direct_income", "direct_expense",
+  "sale", "purchase", "payment_in", "payment_out", "inter_company", "direct_income", "direct_expense",
   "contra", "journal", "note", "add_salary", "production",
 ];
 
@@ -300,6 +315,8 @@ function getRestrictedEnabledTabs(
   isEditing: boolean,
   restrictSalePurchaseForCopyDraft?: boolean
 ): VoucherType[] | null {
+  // Inter Company: alag voucher — tab switch / copy-to remap meaningful nahi
+  if (activeTab === "inter_company") return ["inter_company"];
   if ((CASHFLOW_QUARTET as readonly string[]).includes(activeTab)) {
     return [...CASHFLOW_QUARTET];
   }
@@ -354,6 +371,7 @@ const DEFAULT_PREFIX_LABELS: Record<string, string> = {
   add_salary: "ADD-SAL-",
   pay_salary: "PAY-SAL-",
   production: "PROD-",
+  inter_company: "IC-",
 };
 
 function getPrefixKeyFromVoucher(v: Record<string, any>): string {
@@ -840,6 +858,8 @@ function VoucherDialogContent({
   copySaveTargetCompanyId,
   /** Multi-company account: create/edit/copy sab par header company dropdown. */
   showHeaderCompanySelector,
+  /** Inter Company edit: ribbon par company naam read-only (dropdown band). */
+  headerCompanyReadOnlyLabel,
   copyMismatchCategories,
   onCopyMissingCategory,
   copyMasterDraftRequest,
@@ -883,6 +903,7 @@ function VoucherDialogContent({
   onActiveTabChange?: (tab: VoucherType) => void;
   /** `true` jab account me 1 se zyada company — header company dropdown dikhane ke liye. */
   showHeaderCompanySelector?: boolean;
+  headerCompanyReadOnlyLabel?: string;
   /** Legacy prop: parent ab hamesha `false` bhejta — Auto switch sirf main voucher Save se commit hota hai. */
   recurringVoucherSaveBlocked?: boolean;
   /** Toggle vs Firestore template mismatch — form pristine par bhi Save (e.g. ON→OFF). */
@@ -1033,7 +1054,7 @@ function VoucherDialogContent({
               {/* Mobile voucher-type button: full-width ke bajay text-length fit rakho taaki chip jaisa dikhe. */}
               <SelectTrigger className="h-9 w-fit min-w-[7.5rem] max-w-[70vw] rounded-full border-emerald-500 bg-emerald-100 text-emerald-900 text-sm font-semibold shadow-sm px-3">
                 <SelectValue>
-                  {activeTab.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                  {voucherTabLabel(activeTab).replace(/\b\w/g, (l) => l.toUpperCase())}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
@@ -1054,14 +1075,21 @@ function VoucherDialogContent({
                             : "border-emerald-300 bg-emerald-100 text-emerald-900 font-medium"
                       )}
                     >
-                      {key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                      {voucherTabLabel(key).replace(/\b\w/g, (l) => l.toUpperCase())}
                     </SelectItem>
                   );
                 })}
               </SelectContent>
             </Select>
-            {/* Company header: multi-company create/edit/copy — target company scope (sidebar copy-draft par change nahi). */}
-            {showHeaderCompanySelector && (
+            {/* Company header: multi-company create/edit/copy — Inter Company edit par read-only naam. */}
+            {headerCompanyReadOnlyLabel ? (
+              <span
+                className="h-9 inline-flex min-w-0 max-w-[70vw] flex-1 shrink items-center truncate rounded-full border border-emerald-300/80 bg-emerald-50 px-3 text-sm font-medium text-emerald-950 dark:bg-emerald-950/40 dark:text-emerald-100"
+                title={headerCompanyReadOnlyLabel}
+              >
+                {headerCompanyReadOnlyLabel}
+              </span>
+            ) : showHeaderCompanySelector ? (
             <Select value={targetCompanyId || ""} onValueChange={(v) => onTargetCompanyChange?.(v)}>
               {/* Company selector: mobile par item-section jaisa soft green tone for visual consistency. */}
               <SelectTrigger className="h-9 flex-1 min-w-0 rounded-full border-emerald-300/80 bg-emerald-50 text-sm">
@@ -1075,7 +1103,7 @@ function VoucherDialogContent({
                 ))}
               </SelectContent>
             </Select>
-            )}
+            ) : null}
             {/* Mobile: date selector — desktop par sirf purple ribbon (tab strip duplicate hata diya). */}
             <VoucherDialogDateSystemSwitcher className="ml-auto" />
           </div>
@@ -1105,7 +1133,7 @@ function VoucherDialogContent({
                         : "border-emerald-300 bg-emerald-100 text-emerald-900 data-[state=active]:rounded-full data-[state=active]:border-emerald-600 data-[state=active]:font-semibold data-[state=active]:shadow-sm data-[state=inactive]:rounded-md"
                     )}
                   >
-                    {key.replace(/_/g, ' ')}
+                    {voucherTabLabel(key)}
                   </TabsTrigger>
                 );
               })}
@@ -1126,6 +1154,7 @@ function VoucherDialogContent({
             <ActiveForm 
               key={keyForForm} 
               voucher={initialVoucherData} 
+              inDialog={activeTab === "inter_company"}
               onVoucherAction={onVoucherAction}
               onOpenHistory={onOpenHistory}
               showHistoryButton={showHistoryButton}
@@ -1207,12 +1236,11 @@ export function AddVoucherDialog(props: any) {
   const { vouchers } = useVouchers();
   const isMobile = useIsMobile();
   const isDesktop = !isMobile;
-  // Company “Who can use Auto Monthly on vouchers” + role `configure_company_settings` — strip / template / Generate now.
-  const canConfigureCompany = can("configure_company_settings");
-  const canUseVoucherAutoMonthlyEditors = useMemo(
-    () => canConfigureCompany && canManageVoucherRecurringAutoEditors(company, user?.uid, user?.email),
-    [canConfigureCompany, company, user?.uid, user?.email],
-  );
+  // Manage Sharing → Recurring Auto Voucher (Voucher Settings user list hata di).
+  const canViewRecurringOnVoucher = useMemo(() => canViewRecurringVoucherControls(can), [can]);
+  const canEditRecurringOnVoucher = useMemo(() => canEditRecurringAutoMonthly(can), [can]);
+  const canAddRecurringOnVoucher = useMemo(() => can("add_recurring_auto_monthly"), [can]);
+  const canGenerateRecurringOnVoucher = useMemo(() => canGenerateRecurringVoucherNow(can), [can]);
   // Static export: FAB + party/bank *desktop* ledger par modal khulte hi URL session me — save/approve/dashboard-guard ko restore anchor mile
   useEffect(() => {
     if (!isOpen || !isStaticAppBuild()) return;
@@ -1255,6 +1283,11 @@ export function AddVoucherDialog(props: any) {
   const [effectiveHasLinksFromForm, setEffectiveHasLinksFromForm] = useState<boolean | null>(null);
   // Recurring toggle: new + edit voucher dono flow me common dialog-level control rakho.
   const [autoMonthlyEnabled, setAutoMonthlyEnabled] = useState(false);
+  /** ON = add; OFF = edit — `autoMonthlyEnabled` ke baad; alag permission enforce. */
+  const canToggleAutoMonthlySwitch = useMemo(
+    () => (autoMonthlyEnabled ? canEditRecurringOnVoucher : canAddRecurringOnVoucher),
+    [autoMonthlyEnabled, canEditRecurringOnVoucher, canAddRecurringOnVoucher],
+  );
   const [autoMonthlyHydrating, setAutoMonthlyHydrating] = useState(false);
   // BS month day 1–31 ya 32 = us mahine ka aakhiri din; rate adjust template save ke saath jata hai.
   const [autoMonthlyScheduleBsDay, setAutoMonthlyScheduleBsDay] = useState(32);
@@ -1304,7 +1337,12 @@ export function AddVoucherDialog(props: any) {
   const [voucherFormActiveTab, setVoucherFormActiveTab] = useState<VoucherType>("sale");
   /** Auto recurring UI + Firestore: inner form ka current tab journal ho tab hi. */
   const showVoucherAutoRecurringUi = voucherFormActiveTab === "journal";
-  const recurringEditorsEffective = canUseVoucherAutoMonthlyEditors && showVoucherAutoRecurringUi;
+  /** Inter Company saved voucher — edit read-only; Copy To band */
+  const copyToDisabledForInterCompany =
+    !!voucher?.id && String((voucher as { type?: string })?.type || voucherFormActiveTab) === "inter_company";
+  const recurringEditorsEffective = canViewRecurringOnVoucher && showVoucherAutoRecurringUi;
+  /** Switch / dirty: view strip alag; toggle ON/OFF alag permission. */
+  const recurringVoucherControlsEditable = recurringEditorsEffective && canToggleAutoMonthlySwitch;
   /** Strip pills / countdown: permission + journal tab + switch ON teeno */
   const recurringStripActive = recurringEditorsEffective && autoMonthlyEnabled;
   /**
@@ -1322,6 +1360,26 @@ export function AddVoucherDialog(props: any) {
 
   /** Create / edit / copy: header company dropdown jab account me 1 se zyada company ho. */
   const showHeaderCompanySelector = allCompanies.length > 1;
+
+  /** Inter Company saved voucher edit — ribbon par current company naam read-only. */
+  const interCompanyRibbonCompanyReadOnly = useMemo(() => {
+    if (!copyToDisabledForInterCompany) return undefined;
+    const cid = String(editCompanyId?.trim() || ctxCompanyId || companyId || "").trim();
+    const c =
+      allCompanies.find((x) => x.id === cid) ?? (company?.id === cid ? company : null);
+    const name = String(c?.name ?? company?.name ?? "").trim();
+    return name || undefined;
+  }, [
+    copyToDisabledForInterCompany,
+    editCompanyId,
+    ctxCompanyId,
+    companyId,
+    allCompanies,
+    company,
+  ]);
+
+  const showLedgerHeaderCompanyDropdown =
+    showHeaderCompanySelector && !interCompanyRibbonCompanyReadOnly;
 
   /** Header company Select: copy-draft = sirf targetCompanyId; APK shell = global setCompanyId + storage pin. */
   const handleLedgerHeaderCompanyChange = useCallback(
@@ -1623,6 +1681,13 @@ export function AddVoucherDialog(props: any) {
   useEffect(() => {
     if (!isOpen) return;
     const syncCopyButtonHostInActionRow = () => {
+      if (copyToDisabledForInterCompany) {
+        const staleHost = copyButtonHostRef.current;
+        if (staleHost?.isConnected) staleHost.remove();
+        copyButtonHostRef.current = null;
+        setCopyButtonMountNode(null);
+        return;
+      }
       const frame = dialogFrameRef.current;
       if (!frame) return;
       const applyMobileButtonDistribution = (container: HTMLElement) => {
@@ -1740,7 +1805,7 @@ export function AddVoucherDialog(props: any) {
       copyButtonHostRef.current = null;
       setCopyButtonMountNode(null);
     };
-  }, [isOpen, isMobile, voucher?.id, copyButtonLabel, postCopyNewFormSeed]);
+  }, [isOpen, isMobile, voucher?.id, copyButtonLabel, postCopyNewFormSeed, copyToDisabledForInterCompany]);
 
   // Draggable & resizable (desktop only)
   const [dialogPosition, setDialogPosition] = useState({ x: 0, y: 0 });
@@ -2686,14 +2751,22 @@ export function AddVoucherDialog(props: any) {
       onOpenChange?.(false);
     }
 
-    /** Auto Monthly / recurring — background; sale/purchase save par dialog pehle band ho chuka hota hai. */
-    if (status === "saved" && companyId && canUseVoucherAutoMonthlyEditors) {
+    /** Auto Monthly / recurring — har action apni permission; view-only se Firestore mat likho. */
+    if (status === "saved" && companyId) {
       const savedVoucherIdForRecurring = String(newId || voucher?.id || "").trim();
       if (savedVoucherIdForRecurring) {
         void (async () => {
           const sourceType = String(voucher?.type || defaultVoucherData?.type || "journal");
           const isJournalSaved = sourceType === "journal";
           if (autoMonthlyEnabled && isJournalSaved) {
+            if (
+              !canTurnOnRecurringAutoMonthlyOnSave(
+                can,
+                committedAutoMonthlyEnabled === true || recurringTemplateSnapshot?.enabled === true,
+              )
+            ) {
+              return;
+            }
             try {
               await setRecurringTemplateForVoucher(companyId, {
                 sourceVoucherId: savedVoucherIdForRecurring,
@@ -2729,6 +2802,7 @@ export function AddVoucherDialog(props: any) {
                 | undefined;
               if (
                 rsRec?.enabled === true &&
+                canGenerateRecurringOnVoucher &&
                 !apkOfflineViewOnly &&
                 user?.uid &&
                 !isSaveAndNew &&
@@ -2768,7 +2842,8 @@ export function AddVoucherDialog(props: any) {
             } catch (recErr) {
               toast.error(recErr instanceof Error ? recErr.message : "Auto Monthly save failed.");
             }
-          } else if (!autoMonthlyEnabled) {
+          } else if (!autoMonthlyEnabled && isJournalSaved) {
+            if (!canEditRecurringOnVoucher) return;
             try {
               if (!preferLocalLedgerReads() && !apkEmbeddedSqliteFirstWritesPreferred()) {
                 await clearRecurringTemplateForVoucher(companyId, savedVoucherIdForRecurring);
@@ -2814,7 +2889,11 @@ export function AddVoucherDialog(props: any) {
     apkLedgerPinsShellCompanyContext,
     setCompanyId,
     refreshRecurringTemplateMeta,
-    canUseVoucherAutoMonthlyEditors,
+    canAddRecurringOnVoucher,
+    canEditRecurringOnVoucher,
+    canGenerateRecurringOnVoucher,
+    committedAutoMonthlyEnabled,
+    recurringTemplateSnapshot?.enabled,
     apkOfflineViewOnly,
   ]);
 
@@ -2823,6 +2902,10 @@ export function AddVoucherDialog(props: any) {
    * Header switch / template ON-OFF yahan commit nahi — woh sirf voucher dialog ke Save par (`handleAction` + `setRecurringTemplateForVoucher`).
    */
   const persistRecurringScheduleRateOnly = useCallback(async (): Promise<boolean> => {
+    if (!canEditRecurringOnVoucher) {
+      toast.error("You need “Edit Auto Monthly settings” permission.");
+      return false;
+    }
     const vid = String(voucher?.id || "").trim();
     if (!companyId?.trim() || !vid) {
       toast.error("Save the voucher first, then configure Auto Monthly.");
@@ -2889,10 +2972,11 @@ export function AddVoucherDialog(props: any) {
     user?.displayName,
     user?.email,
     customUser?.displayName,
+    canEditRecurringOnVoucher,
   ]);
 
   const handleSaveRecurringSettingsClick = useCallback(async () => {
-    if (!canUseVoucherAutoMonthlyEditors) return;
+    if (!canEditRecurringOnVoucher) return;
     if (!showVoucherAutoRecurringUi) return;
     setSavingRecurringSettings(true);
     try {
@@ -2937,7 +3021,7 @@ export function AddVoucherDialog(props: any) {
       setSavingRecurringSettings(false);
     }
   }, [
-    canUseVoucherAutoMonthlyEditors,
+    canEditRecurringOnVoucher,
     showVoucherAutoRecurringUi,
     persistRecurringScheduleRateOnly,
     committedAutoMonthlyEnabled,
@@ -2950,8 +3034,8 @@ export function AddVoucherDialog(props: any) {
 
   /** Generate now: 1 missing = seedha create; 2+ = tick list popup (hover tooltip nahi). */
   const handleGenerateRecurringNowClick = useCallback(async () => {
-    if (!canUseVoucherAutoMonthlyEditors) {
-      toast.error("Your account is not allowed to run Auto Monthly on vouchers (company settings).");
+    if (!canGenerateRecurringOnVoucher) {
+      toast.error("You need “Generate recurring voucher now” permission (Manage Sharing → Recurring Auto Voucher).");
       return;
     }
     if (!showVoucherAutoRecurringUi) {
@@ -3025,7 +3109,7 @@ export function AddVoucherDialog(props: any) {
       setGeneratingRecurringNow(false);
     }
   }, [
-    canUseVoucherAutoMonthlyEditors,
+    canGenerateRecurringOnVoucher,
     showVoucherAutoRecurringUi,
     apkOfflineViewOnly,
     companyId,
@@ -3100,8 +3184,8 @@ export function AddVoucherDialog(props: any) {
 
   /** Past-due row: Skip = period `suppressedPeriodKeys` me — sirf upcoming auto; Create = `generateRecurringVoucherNow` (same target). */
   const handleSkipMissedRecurringClick = useCallback(async () => {
-    if (!canUseVoucherAutoMonthlyEditors) {
-      toast.error("Your account is not allowed to change Auto Monthly on vouchers (company settings).");
+    if (!canEditRecurringOnVoucher) {
+      toast.error("You need “Edit Auto Monthly settings” permission (Manage Sharing → Recurring Auto Voucher).");
       return;
     }
     if (!showVoucherAutoRecurringUi) {
@@ -3131,7 +3215,7 @@ export function AddVoucherDialog(props: any) {
       setSkippingMissedRecurring(false);
     }
   }, [
-    canUseVoucherAutoMonthlyEditors,
+    canEditRecurringOnVoucher,
     showVoucherAutoRecurringUi,
     apkOfflineViewOnly,
     companyId,
@@ -3183,7 +3267,14 @@ export function AddVoucherDialog(props: any) {
                   </div>
                   <div className="flex shrink-0 flex-row items-center justify-end justify-self-end self-center gap-[10px]">
                     <VoucherDialogDateSystemSwitcher />
-                    {showHeaderCompanySelector && (
+                    {interCompanyRibbonCompanyReadOnly ? (
+                      <span
+                        className="h-9 inline-flex max-w-[22vw] shrink items-center truncate rounded-full border border-emerald-300/80 bg-emerald-50 px-3 text-sm font-medium text-emerald-950 dark:bg-emerald-950/40 dark:text-emerald-100"
+                        title={interCompanyRibbonCompanyReadOnly}
+                      >
+                        {interCompanyRibbonCompanyReadOnly}
+                      </span>
+                    ) : showLedgerHeaderCompanyDropdown ? (
                       <Select value={targetCompanyId || ""} onValueChange={handleLedgerHeaderCompanyChange}>
                         <SelectTrigger className="h-9 min-w-[9rem] w-auto max-w-[22vw] shrink rounded-full border-emerald-300/80 bg-emerald-50">
                           <SelectValue placeholder="Company" />
@@ -3196,7 +3287,7 @@ export function AddVoucherDialog(props: any) {
                           ))}
                         </SelectContent>
                       </Select>
-                    )}
+                    ) : null}
                     <DialogClose className="rounded-sm opacity-70 hover:opacity-100 transition-opacity focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none shrink-0">
                       <X className="h-4 w-4" />
                       <span className="sr-only">Close</span>
@@ -3218,7 +3309,14 @@ export function AddVoucherDialog(props: any) {
                   </div>
                   <div className="ml-auto flex shrink-0 items-center gap-[10px]">
                     <VoucherDialogDateSystemSwitcher />
-                    {showHeaderCompanySelector && (
+                    {interCompanyRibbonCompanyReadOnly ? (
+                      <span
+                        className="h-9 inline-flex max-w-[22vw] shrink items-center truncate rounded-full border border-emerald-300/80 bg-emerald-50 px-3 text-sm font-medium text-emerald-950 dark:bg-emerald-950/40 dark:text-emerald-100"
+                        title={interCompanyRibbonCompanyReadOnly}
+                      >
+                        {interCompanyRibbonCompanyReadOnly}
+                      </span>
+                    ) : showLedgerHeaderCompanyDropdown ? (
                       <Select value={targetCompanyId || ""} onValueChange={handleLedgerHeaderCompanyChange}>
                         <SelectTrigger className="h-9 min-w-[9rem] w-auto max-w-[22vw] shrink rounded-full border-emerald-300/80 bg-emerald-50">
                           <SelectValue placeholder="Company" />
@@ -3231,7 +3329,7 @@ export function AddVoucherDialog(props: any) {
                           ))}
                         </SelectContent>
                       </Select>
-                    )}
+                    ) : null}
                     <DialogClose className="rounded-sm opacity-70 hover:opacity-100 transition-opacity focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none shrink-0">
                       <X className="h-4 w-4" />
                       <span className="sr-only">Close</span>
@@ -3297,7 +3395,7 @@ export function AddVoucherDialog(props: any) {
                       width: SWITCH_TRACK_HEIGHT_PX,
                     }}
                     className="rounded-full border-indigo-400/90 bg-white/90 p-0 text-indigo-900 shadow-sm hover:bg-white"
-                    disabled={autoMonthlyHydrating || !autoMonthlyEnabled}
+                    disabled={autoMonthlyHydrating || !autoMonthlyEnabled || !canEditRecurringOnVoucher}
                     onClick={() => setRecurringSettingsOpen(true)}
                     aria-label="Auto monthly settings"
                   >
@@ -3368,7 +3466,7 @@ export function AddVoucherDialog(props: any) {
                     autoMonthlyHydrating ||
                     !voucher?.id ||
                     !user?.uid ||
-                    !recurringEditorsEffective ||
+                    !canGenerateRecurringOnVoucher ||
                     apkOfflineViewOnly ||
                     editingDisabled ||
                     historyBlocksEdit
@@ -3395,7 +3493,7 @@ export function AddVoucherDialog(props: any) {
                     skippingMissedRecurring ||
                     autoMonthlyHydrating ||
                     !voucher?.id ||
-                    !recurringEditorsEffective ||
+                    !canEditRecurringOnVoucher ||
                     apkOfflineViewOnly ||
                     editingDisabled ||
                     historyBlocksEdit
@@ -3436,7 +3534,7 @@ export function AddVoucherDialog(props: any) {
                   <Select
                     value={String(autoMonthlyScheduleBsDay)}
                     onValueChange={(v) => setAutoMonthlyScheduleBsDay(parseInt(v, 10) || 32)}
-                    disabled={autoMonthlyHydrating}
+                    disabled={autoMonthlyHydrating || !canEditRecurringOnVoucher}
                   >
                     <SelectTrigger
                       style={{ height: SWITCH_TRACK_HEIGHT_PX, minHeight: SWITCH_TRACK_HEIGHT_PX }}
@@ -3512,7 +3610,7 @@ export function AddVoucherDialog(props: any) {
                   variant="outline"
                   style={{ height: SWITCH_TRACK_HEIGHT_PX, minHeight: SWITCH_TRACK_HEIGHT_PX }}
                   className="border-indigo-300 bg-white px-2 py-0 text-[11px] leading-none text-indigo-900 hover:bg-indigo-100"
-                  disabled={autoMonthlyHydrating || !autoMonthlyEnabled}
+                  disabled={autoMonthlyHydrating || !autoMonthlyEnabled || !canEditRecurringOnVoucher}
                   onClick={() => setRecurringSettingsOpen(true)}
                 >
                   Settings
@@ -3522,7 +3620,7 @@ export function AddVoucherDialog(props: any) {
               <Switch
                 checked={autoMonthlyEnabled}
                 onCheckedChange={setAutoMonthlyEnabled}
-                disabled={autoMonthlyHydrating || !recurringEditorsEffective}
+                disabled={autoMonthlyHydrating || !recurringEditorsEffective || !canToggleAutoMonthlySwitch}
               />
             </div>
           </div>
@@ -3567,11 +3665,11 @@ export function AddVoucherDialog(props: any) {
   /** Auto switch Settings modal se commit nahi — sirf main voucher Save; forms ko block karne ki zaroorat nahi. */
   const recurringVoucherSaveBlocked = false;
   const recurringVoucherAuxiliaryDirty = useMemo(() => {
-    if (!recurringEditorsEffective) return false;
+    if (!recurringVoucherControlsEditable) return false;
     if (!String(voucher?.id || "").trim()) return false;
     if (committedAutoMonthlyEnabled === null) return false;
     return autoMonthlyEnabled !== committedAutoMonthlyEnabled;
-  }, [recurringEditorsEffective, voucher?.id, committedAutoMonthlyEnabled, autoMonthlyEnabled]);
+  }, [recurringVoucherControlsEditable, voucher?.id, committedAutoMonthlyEnabled, autoMonthlyEnabled]);
 
   const voucherDialogFormTree = (
     <VoucherAttachmentFallbackContext.Provider value={voucherAttachmentFallbackValue}>
@@ -3604,7 +3702,8 @@ export function AddVoucherDialog(props: any) {
           onTargetCompanyChange={handleLedgerHeaderCompanyChange}
           formInstanceKey={copyDraftSeedVersion}
           // Multi-company: create / edit / copy sab par header company dropdown.
-          showHeaderCompanySelector={showHeaderCompanySelector}
+          showHeaderCompanySelector={showLedgerHeaderCompanyDropdown}
+          headerCompanyReadOnlyLabel={interCompanyRibbonCompanyReadOnly}
           copySaveTargetCompanyId={postCopyNewFormSeed ? (targetCompanyId || undefined) : undefined}
           copyMismatchCategories={postCopyNewFormSeed ? copyMismatchCategories : undefined}
           // Party/staff/tax/item/account sab: pehle prefilled Create dialog — direct Firestore clone nahi (user save se pehle edit mile).
@@ -3757,7 +3856,7 @@ export function AddVoucherDialog(props: any) {
           </div>
         </DialogContent>
       )}
-      {copyButtonMountNode && !forceViewOnly &&
+      {copyButtonMountNode && !forceViewOnly && !copyToDisabledForInterCompany &&
         createPortal(
           <Button
             type="button"
@@ -3769,6 +3868,7 @@ export function AddVoucherDialog(props: any) {
               BTN_SAVE_CLASS
             )}
             disabled={isCopyingToCompany || !targetCompanyId || apkOfflineViewOnly}
+            title="Copy to another company"
             onClick={async () => {
               if (apkOfflineViewOnly) {
                 toast.warning("Offline — view only.");
@@ -4082,7 +4182,7 @@ export function AddVoucherDialog(props: any) {
                 autoMonthlyHydrating ||
                 !voucher?.id ||
                 !user?.uid ||
-                !recurringEditorsEffective
+                !canGenerateRecurringOnVoucher
               }
               onClick={() => void handleGenerateRecurringNowClick()}
             >
@@ -4098,7 +4198,7 @@ export function AddVoucherDialog(props: any) {
             <Button
               type="button"
               disabled={
-                savingRecurringSettings || autoMonthlyHydrating || !voucher?.id || !recurringEditorsEffective
+                savingRecurringSettings || autoMonthlyHydrating || !voucher?.id || !canEditRecurringOnVoucher
               }
               onClick={() => void handleSaveRecurringSettingsClick()}
             >
@@ -4241,7 +4341,7 @@ export function AddVoucherDialog(props: any) {
             </Button>
             <Button
               type="button"
-              disabled={generatingRecurringNow || !recurringEditorsEffective}
+              disabled={generatingRecurringNow || !canGenerateRecurringOnVoucher}
               onClick={() => void handleRecurringGeneratePickerConfirm()}
             >
               {generatingRecurringNow ? (

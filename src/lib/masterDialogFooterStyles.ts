@@ -1,7 +1,9 @@
 import { cn } from "@/lib/utils";
+import { masterDialogFooterChromeClassName } from "@/lib/masterFormPillChrome";
 
 /** Masters + items dialogs: Cancel | beechn action | Save — flex-col-reverse takraane par `!flex-row` */
 export const MASTER_DIALOG_FOOTER_ROW_CLASS = cn(
+  masterDialogFooterChromeClassName,
   "mt-0 flex w-full !flex-row flex-nowrap shrink-0 items-center gap-2 border-t border-border/80 bg-background/95 py-3"
 );
 

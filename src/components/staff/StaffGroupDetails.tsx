@@ -4,12 +4,15 @@ import * as React from "react";
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { Button } from "@/components/ui/button";
 import { LedgerViewModePills } from "@/components/ui/LedgerViewModePills";
-import { Edit, Printer, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, ChevronDown, Columns3, Search } from "lucide-react";
+import { Edit, Printer, Calendar as CalendarIcon, FilePlus, XCircle, MoreVertical, ArrowLeft, ChevronDown, Columns3, Search } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
-import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
-import { LedgerFooterCheckboxPill, LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
+import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
+import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
 
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
@@ -204,6 +207,19 @@ export function StaffGroupDetails({
     setFilters({});
   };
 
+
+  const {
+    unapprovedOnly,
+    toggleUnapprovedOnly,
+    filterByUnapprovedOnly,
+    onDateRangeChangeWithUnapprovedReset,
+  } = useLedgerUnapprovedOnlyFilter({
+    onDateRangeChange,
+    setCurrentPage,
+    setFilters,
+    setActiveFilter,
+  });
+
   const handleEditVoucher = (voucher: any) => {
     openingModalRef.current = true;
     setSelectedVoucher(voucher);
@@ -360,10 +376,11 @@ export function StaffGroupDetails({
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
-        sortTransactionsWithFiscalMergeForCompany(displayTransactions, sortBy, sortOrder, undefined, company),
+        sortTransactionsWithFiscalMergeForCompany(
+          filterByUnapprovedOnly(displayTransactions), sortBy, sortOrder, undefined, company),
         openingBalanceForPeriod
       ),
-    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
+    [displayTransactions, filterByUnapprovedOnly, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
 
   const filteredMobileTransactions = useMemo(() => {
@@ -862,6 +879,7 @@ export function StaffGroupDetails({
               </div>
             </div>
             <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
                   isRange
@@ -1027,19 +1045,16 @@ export function StaffGroupDetails({
             )}
           </div>
         </div>
-        <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <div className="flex items-center space-x-2 flex-shrink-0">
-                <Checkbox
-                  id="show-narration-staff-group"
-                  checked={showNarration}
-                  onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
-                />
-                <label htmlFor="show-narration-staff-group" className="text-sm font-medium leading-none whitespace-nowrap">
-                  Show Narration
-                </label>
-              </div>
+        {/* Footer — global PC shell LedgerDesktopFooter */}
+        <LedgerDesktopFooter
+          left={
+            <>
+              <LedgerFooterCheckboxPill
+                id="show-narration-staff-group"
+                checked={showNarration}
+                onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
+                label="Show Narration"
+              />
               <LedgerFooterColumnsMenu>
                 <DropdownMenuContent align="start" className="w-52 p-2">
                   {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
@@ -1088,46 +1103,24 @@ export function StaffGroupDetails({
                 viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
                 hiddenCount={statementCheck.hiddenCount}
               />
-            </div>
-            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
-              <TransactionTableSortDropdown
-                sortBy={sortBy}
-                sortOrder={sortOrder}
-                onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
-                viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
-              />
-              <LedgerFooterTextPill>({desktopPageLedgerStats.beforeCount})</LedgerFooterTextPill>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages}>
-                <ChevronsLeft className="h-4 w-4" />
-              </Button>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0" onClick={() => setCurrentPage(currentPage + 1)} disabled={currentPage === totalPages}>
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <LedgerFooterChromePill className="px-1">
-                <Select value={rowsPerPageSelectValue} onValueChange={handleRowsPerPageChange}>
-                  <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
-                  <SelectValue placeholder={rowsPerPageSelectValue} />
-                </SelectTrigger>
-                <SelectContent side="top">
-                  {ROWS_PER_PAGE_OPTIONS_DEFAULT.map((pageSize) => (
-                    <SelectItem key={pageSize} value={`${pageSize}`}>
-                      {pageSize}
-                    </SelectItem>
-                  ))}
-                  <SelectItem value="0">All</SelectItem>
-                </SelectContent>
-              </Select>
-              </LedgerFooterChromePill><Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0" onClick={() => setCurrentPage(currentPage - 1)} disabled={currentPage === 1}>
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0" onClick={() => setCurrentPage(1)} disabled={currentPage === 1}>
-                <ChevronsRight className="h-4 w-4" />
-              </Button>
-              <LedgerFooterTextPill>({desktopPageLedgerStats.afterCount})</LedgerFooterTextPill>
-              <LedgerFooterTextPill>Total Trxn {displayTransactions.length}</LedgerFooterTextPill>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          onSortChange={(by, order) => {
+            setSortBy(by);
+            setSortOrder(order);
+          }}
+          viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+          currentPage={currentPage}
+          totalPages={totalPages}
+          setCurrentPage={setCurrentPage}
+          rowsPerPageSelectValue={rowsPerPageSelectValue}
+          onRowsPerPageChange={handleRowsPerPageChange}
+          beforeCount={desktopPageLedgerStats.beforeCount}
+          afterCount={desktopPageLedgerStats.afterCount}
+          totalCount={displayTransactions.length}
+        />
       </div>
       <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>
         <DialogContent className="h-[95vh] w-full max-w-3xl flex flex-col">

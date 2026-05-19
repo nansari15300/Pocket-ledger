@@ -17,22 +17,35 @@ import {
   TableFooter,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { sortTransactionsWithFiscalMergeForCompany, DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
 import { Checkbox } from "@/components/ui/checkbox";
-import { AlertCircle, Filter, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, MoreVertical, Pencil, ChevronDown, Columns3, Printer, History } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { AlertCircle, Filter, MoreVertical, Pencil, Printer, History } from "lucide-react";
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { txnSelectedMainRowCn, txnSelectedNarrationRowCn, txnTableIconBtnCn } from "@/lib/listSelectionChrome";
+import {
+  matchesOverdueImportanceFilter,
+  readOverdueImportanceFilter,
+  writeOverdueImportanceFilter,
+  type OverdueImportanceFilter,
+} from "@/lib/overdueImportanceFilter";
+import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
+import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
+import {
+  ROWS_PER_PAGE_OPTIONS_DEFAULT,
+  rowsPerPageSelectValue,
+} from "@/lib/rowsPerPageSelect";
 import { useCompany } from "@/hooks/useCompany";
 import usePermissions from "@/hooks/usePermissions";
 import { openPrintDirect } from "@/lib/printDirect";
@@ -78,6 +91,8 @@ export type OverdueTransactionRow = {
   dueDate?: any;
   isOverdue: boolean;
   paymentStatus: string;
+  /** Sale/Purchase form: Due Date ke niche tick — Important filter ke liye */
+  overdueImportant?: boolean;
   userId?: string;
   userName?: string;
   narration?: string;
@@ -111,12 +126,17 @@ const resolveUserName = (t: OverdueTransactionRow, userNames: Record<string, str
 
 export function OverdueAccountView({
   overdueTransactions,
+  importanceFilter: importanceFilterProp,
+  onImportanceFilterChange,
   onEditVoucher,
   onHistoryVoucher,
   onAddLink,
   userNames = {},
 }: {
   overdueTransactions: OverdueTransactionRow[];
+  /** Parent se control ho to mobile/desktop filter sync rahe */
+  importanceFilter?: OverdueImportanceFilter;
+  onImportanceFilterChange?: (filter: OverdueImportanceFilter) => void;
   onEditVoucher?: (row: OverdueTransactionRow) => void;
   onHistoryVoucher?: (row: OverdueTransactionRow) => void;
   onAddLink?: (row: OverdueTransactionRow) => void;
@@ -132,6 +152,10 @@ export function OverdueAccountView({
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
+  const [internalImportanceFilter, setInternalImportanceFilter] = useState<OverdueImportanceFilter>(() =>
+    readOverdueImportanceFilter()
+  );
+  const importanceFilter = importanceFilterProp ?? internalImportanceFilter;
   const [showNarration, setShowNarration] = useState(() => {
     if (typeof window === "undefined") return true;
     try {
@@ -141,7 +165,21 @@ export function OverdueAccountView({
     }
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  /** Main + narration hover ek block — globals.css [data-pl-txn-hovered] (normal ledger jaisa) */
+  const [hoveredTxnId, setHoveredTxnId] = useState<string | null>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
+
+  const clearOverduePairHoverUnlessMovingTo = useCallback(
+    (txnId: string, e: React.MouseEvent, siblingDomId: string) => {
+      const rel = e.relatedTarget;
+      if (rel instanceof Node) {
+        const sibling = document.getElementById(siblingDomId);
+        if (sibling?.contains(rel)) return;
+      }
+      setHoveredTxnId((cur) => (cur === txnId ? null : cur));
+    },
+    []
+  );
   const [visibleColumns, setVisibleColumns] = useState<OverdueVisibleColumns>(() => {
     if (typeof window === "undefined") return DEFAULT_OVERDUE_VISIBLE;
     try {
@@ -167,8 +205,17 @@ export function OverdueAccountView({
     sessionStorage.setItem("showNarration", String(checked));
   };
 
+  const handleImportanceFilterChange = (next: OverdueImportanceFilter) => {
+    if (onImportanceFilterChange) onImportanceFilterChange(next);
+    else {
+      setInternalImportanceFilter(next);
+      writeOverdueImportanceFilter(next);
+    }
+    setCurrentPage(1);
+  };
+
   const filteredRows = useMemo(() => {
-    let list = overdueTransactions;
+    let list = overdueTransactions.filter((t) => matchesOverdueImportanceFilter(t, importanceFilter));
     const typeVal = (filters.type || "").toLowerCase();
     if (typeVal === "sale" || typeVal === "purchase") {
       list = list.filter((t) => t.type === typeVal);
@@ -193,7 +240,7 @@ export function OverdueAccountView({
       });
     }
     return list;
-  }, [overdueTransactions, filters, userNames]);
+  }, [overdueTransactions, importanceFilter, filters, userNames]);
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
@@ -202,12 +249,30 @@ export function OverdueAccountView({
     [filteredRows, sortBy, sortOrder, company]
   );
 
-  const totalPages = rowsPerPage <= 0 ? 1 : Math.max(1, Math.ceil(sortedRows.length / rowsPerPage));
-  const paginatedRows = useMemo(() => {
-    if (rowsPerPage <= 0) return sortedRows;
-    const start = (currentPage - 1) * rowsPerPage;
-    return sortedRows.slice(start, start + rowsPerPage);
+  // Tail paging — page 1 = latest overdue (Party ledger / global footer jaisa)
+  const overduePaging = useMemo(() => {
+    const total = sortedRows.length;
+    const totalPagesLocal = rowsPerPage > 0 ? Math.max(1, Math.ceil(total / rowsPerPage)) : 1;
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    if (rowsPerPage <= 0) {
+      return { totalPages: 1, pageRows: sortedRows, beforeCount: 0, afterCount: 0 };
+    }
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return {
+      totalPages: totalPagesLocal,
+      pageRows: sortedRows.slice(start, end),
+      beforeCount: start,
+      afterCount: Math.max(0, total - end),
+    };
   }, [sortedRows, currentPage, rowsPerPage]);
+
+  const totalPages = overduePaging.totalPages;
+  const paginatedRows = overduePaging.pageRows;
+
+  useEffect(() => {
+    setCurrentPage((p) => Math.min(Math.max(1, p), totalPages));
+  }, [totalPages]);
 
   useEffect(() => {
     if (selectedId && !paginatedRows.some((t) => t.id === selectedId)) setSelectedId(null);
@@ -251,12 +316,13 @@ export function OverdueAccountView({
     const isFiltered = !!(filters[key] ?? "").trim();
     return (
       <TableHead className={cn("p-0", isNumeric && "text-right")} style={minWidthPx != null ? { minWidth: `${minWidthPx}px` } : undefined}>
-        <div className={cn("flex items-center gap-1 font-semibold px-2 py-2 whitespace-nowrap", isFiltered && "text-primary", isNumeric ? "justify-end" : "justify-start")}>
+        {/* Header style — TransactionsTable jaisa (black bar + filter icons) */}
+        <div className={cn("flex items-center gap-1 whitespace-nowrap px-2 py-3 font-bold", isFiltered ? "text-red-600" : "text-black", isNumeric ? "justify-end" : "justify-start")}>
           <span>{label}</span>
-          <Popover open={activeFilter === key} onOpenChange={(open) => setActiveFilter(open ? key : null)}>
+          <Popover modal open={activeFilter === key} onOpenChange={(open) => setActiveFilter(open ? key : null)}>
             <PopoverTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0">
-                <Filter className={cn("h-4 w-4", isFiltered && "text-primary")} />
+              <Button variant="ghost" size="icon" data-pl-txn-icon-btn="" className={cn(txnTableIconBtnCn, "h-6 w-6 shrink-0")}>
+                <Filter className={cn("h-4 w-4", isFiltered && "text-red-600")} />
               </Button>
             </PopoverTrigger>
             <PopoverContent className="p-2 w-48" align="start" onOpenAutoFocus={(e) => e.preventDefault()} onCloseAutoFocus={(e) => e.preventDefault()}>
@@ -284,6 +350,7 @@ export function OverdueAccountView({
 
   const totalDebit = sortedRows.reduce((s, t) => s + (t.debit || 0), 0);
   const totalCredit = sortedRows.reduce((s, t) => s + (t.credit || 0), 0);
+  const netBalance = totalDebit - totalCredit;
 
   const runPrintDirect = async () => {
     if (!company) {
@@ -323,34 +390,75 @@ export function OverdueAccountView({
 
 
   return (
-    <div className="flex flex-col h-full min-h-0">
-      <Card className="flex flex-col flex-1 min-h-0 border-0 shadow-none rounded-none">
-        <CardHeader className="flex-shrink-0 pb-2">
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="h-10 w-10 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
-                <AlertCircle className="h-5 w-5 text-amber-600 dark:text-amber-500" />
-              </div>
-              <div className="min-w-0">
-                <CardTitle className="text-lg truncate">Overdue Vouchers</CardTitle>
-                <CardDescription>
-                  All overdue vouchers across parties
-                </CardDescription>
-              </div>
+    <div className="flex h-full min-h-full flex-col overflow-hidden">
+      {/* Header: Party Details jaisa — title, balance, print */}
+      <div className="flex-shrink-0 border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
+        <div className="flex min-w-max flex-col gap-y-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto scrollbar-slim-dim">
+            <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+              <AlertCircle className="h-6 w-6 text-amber-600 dark:text-amber-500" />
             </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <span className={cn("font-semibold", totalDebit - totalCredit >= 0 ? "text-green-600" : "text-red-600")}>
-                {formatCurrency(totalDebit - totalCredit, { showDrCr: true })}
-              </span>
-              <Button variant="outline" size="icon" className="h-10 w-10 flex-shrink-0" onClick={() => runPrintDirect()} title="Print">
-                <Printer className="h-4 w-4" />
-              </Button>
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <div className="flex min-w-0 flex-nowrap items-center gap-2">
+                <h2 className="truncate text-xl font-semibold">Overdue Vouchers</h2>
+                <div
+                  className={cn(
+                    "flex-shrink-0 whitespace-nowrap text-lg font-bold",
+                    masterDetailBalanceToneClass(netBalance)
+                  )}
+                >
+                  {formatCurrency(netBalance, { showDrCr: true })}
+                </div>
+              </div>
+              <p className="text-sm text-muted-foreground">All overdue vouchers across parties</p>
             </div>
           </div>
-        </CardHeader>
+          <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim">
+            {/* Important ke baayein: All / Important / Normal — overdueImportant tick filter */}
+            <Button
+              type="button"
+              variant={importanceFilter === "all" ? "default" : "outline"}
+              size="sm"
+              className="h-9 flex-shrink-0"
+              onClick={() => handleImportanceFilterChange("all")}
+            >
+              All
+            </Button>
+            <Button
+              type="button"
+              variant={importanceFilter === "important" ? "default" : "outline"}
+              size="sm"
+              className="h-9 flex-shrink-0"
+              onClick={() => handleImportanceFilterChange("important")}
+            >
+              Important
+            </Button>
+            <Button
+              type="button"
+              variant={importanceFilter === "normal" ? "default" : "outline"}
+              size="sm"
+              className="h-9 flex-shrink-0"
+              onClick={() => handleImportanceFilterChange("normal")}
+            >
+              Normal
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-10 w-10 flex-shrink-0"
+              onClick={() => runPrintDirect()}
+              title="Print"
+              data-theme-detail="print"
+            >
+              <Printer className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      </div>
+      <Card className="flex min-h-0 flex-1 flex-col border-0 shadow-none rounded-none">
         {/* scroll-touch + inline style for APK/WebView touch scroll */}
         <CardContent
-          className="flex-1 min-h-0 overflow-auto scroll-touch p-0"
+          className="flex-1 min-h-0 overflow-auto scroll-touch p-0 py-4"
           style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
         >
           <div
@@ -358,37 +466,44 @@ export function OverdueAccountView({
             tabIndex={0}
             role="grid"
             aria-label="Overdue vouchers"
-            className="outline-none focus:outline-none min-h-0 overflow-x-auto scrollbar-slim-dim w-full min-w-0"
+            data-theme-table="transactions"
+            className="outline-none focus:outline-none min-h-0 w-full min-w-0 overflow-x-auto border-b-2 border-border scrollbar-slim-dim"
             onKeyDown={handleTableKeyDown}
             onClick={() => tableContainerRef.current?.focus()}
           >
-          <Table className="table-auto w-full min-w-0">
+          <Table className="table-auto w-full min-w-0 border-b-2 border-border">
             <TableHeader>
-              <TableRow className="bg-muted/50">
-                {visibleColumns.date && <TableHead className="font-semibold pl-3 pr-2 py-2 whitespace-nowrap" style={{ minWidth: OVERDUE_HEADER_MIN_PX.date }}>Date</TableHead>}
+              <TableRow className="border-b-4 border-black hover:bg-transparent">
+                {visibleColumns.date && <TableHead className="p-0 pl-3 pr-2 font-bold whitespace-nowrap" style={{ minWidth: OVERDUE_HEADER_MIN_PX.date }}><div className="px-2 py-3 font-bold text-black">Date</div></TableHead>}
                 {visibleColumns.type && renderHeaderWithFilter("type", "Type", false, OVERDUE_HEADER_MIN_PX.type)}
                 {visibleColumns.voucherNo && renderHeaderWithFilter("voucherNumber", "Voucher No.", false, OVERDUE_HEADER_MIN_PX.voucherNo)}
                 {visibleColumns.party && renderHeaderWithFilter("party", "Accounts", false, OVERDUE_HEADER_MIN_PX.party)}
                 {visibleColumns.user && renderHeaderWithFilter("user", "User", false, OVERDUE_HEADER_MIN_PX.user)}
-                {visibleColumns.debit && <TableHead className="text-right font-semibold px-2 py-2 whitespace-nowrap" style={{ minWidth: OVERDUE_HEADER_MIN_PX.debit }}>Debit</TableHead>}
-                {visibleColumns.credit && <TableHead className="text-right font-semibold px-2 py-2 whitespace-nowrap" style={{ minWidth: OVERDUE_HEADER_MIN_PX.credit }}>Credit</TableHead>}
-                {visibleColumns.status && <TableHead className="text-center font-semibold px-2 py-2 whitespace-nowrap" style={{ minWidth: OVERDUE_HEADER_MIN_PX.status }}>Status</TableHead>}
-                {visibleColumns.netBalance && <TableHead className="text-right font-semibold px-2 py-2 whitespace-nowrap" style={{ minWidth: OVERDUE_HEADER_MIN_PX.netBalance }}>Net Balance</TableHead>}
+                {visibleColumns.debit && <TableHead className="p-0 text-right whitespace-nowrap" style={{ minWidth: OVERDUE_HEADER_MIN_PX.debit }}><div className="px-2 py-3 font-bold text-black">Debit</div></TableHead>}
+                {visibleColumns.credit && <TableHead className="p-0 text-right whitespace-nowrap" style={{ minWidth: OVERDUE_HEADER_MIN_PX.credit }}><div className="px-2 py-3 font-bold text-black">Credit</div></TableHead>}
+                {visibleColumns.status && <TableHead className="p-0 text-center whitespace-nowrap" style={{ minWidth: OVERDUE_HEADER_MIN_PX.status }}><div className="px-2 py-3 font-bold text-black">Status</div></TableHead>}
+                {visibleColumns.netBalance && <TableHead className="p-0 text-right whitespace-nowrap" style={{ minWidth: OVERDUE_HEADER_MIN_PX.netBalance }}><div className="px-2 py-3 font-bold text-black">Net Balance</div></TableHead>}
                 <TableHead className="w-10 min-w-10 p-1 pr-[5px] text-center font-semibold align-middle" />
               </TableRow>
             </TableHeader>
             <TableBody>
               <AnimatePresence>
-              {paginatedRows.map((t) => {
+              {paginatedRows.map((t, rowIndex) => {
                 const d = safeToDate(t.date);
                 const dateStr = d ? (dateSystem === "BS" ? formatDateBS(d) : formatDate(d)) : "—";
                 const entryClock = formatVoucherEntryTimeLocal(t as unknown as Record<string, unknown>);
                 const isCreditSide = t.type === "purchase";
                 const balanceVal = isCreditSide ? -t.outstanding : t.outstanding;
                 const displayUserName = resolveUserName(t, userNames);
+                const txnStripeAttr = String(rowIndex % 2);
+                const isSelected = selectedId === t.id;
+                const pairHovered = hoveredTxnId === t.id;
+                const mainRowDomId = `overdue-main-${t.id}`;
+                const narrRowDomId = `overdue-narr-${t.id}`;
                 return (
                   <React.Fragment key={t.id}>
                   <motion.tr
+                    id={mainRowDomId}
                     layout
                     initial={false}
                     exit={{ transition: { duration: 0 } }}
@@ -397,14 +512,18 @@ export function OverdueAccountView({
                       ease: "easeInOut",
                     }}
                     className={cn(
-                      "cursor-pointer min-h-[28px]",
+                      "transaction-main-row min-h-[28px] cursor-pointer",
                       showNarration ? "border-b-0" : "border-b",
-                      selectedId === t.id &&
-                        "[&>td]:bg-primary/10 [&>td]:border-t-2 [&>td]:border-primary [&>td:first-child]:rounded-l-full [&>td:first-child]:border-l-2 [&>td:first-child]:border-primary [&>td:first-child]:overflow-hidden [&>td:last-child]:rounded-r-full [&>td:last-child]:border-r-2 [&>td:last-child]:border-primary [&>td:last-child]:overflow-hidden",
-                      selectedId === t.id && showNarration && "[&>td]:border-b-0",
+                      isSelected && txnSelectedMainRowCn(showNarration),
                       showNarration && "[&>td]:pb-0.5"
                     )}
+                    data-txn-stripe={txnStripeAttr}
+                    data-pl-txn-hovered={pairHovered ? "" : undefined}
+                    data-pl-txn-selected={isSelected ? "" : undefined}
+                    onMouseEnter={() => setHoveredTxnId(t.id)}
+                    onMouseLeave={(e) => clearOverduePairHoverUnlessMovingTo(t.id, e, narrRowDomId)}
                     onClick={() => setSelectedId(t.id)}
+                    onDoubleClick={() => onEditVoucher?.(t)}
                   >
                     {visibleColumns.date && (
                       <TableCell className="whitespace-nowrap pl-3 pr-2">
@@ -463,7 +582,7 @@ export function OverdueAccountView({
                     >
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
+                          <Button variant="ghost" size="icon" data-pl-txn-icon-btn="" className={cn(txnTableIconBtnCn, "h-8 w-8 shrink-0")}>
                             <MoreVertical className="h-4 w-4 text-muted-foreground" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -501,14 +620,19 @@ export function OverdueAccountView({
                           (visibleColumns.status ? 0 : 1);
                     return (
                     <tr
+                      id={narrRowDomId}
                       role="button"
                       tabIndex={-1}
                       onClick={() => setSelectedId(t.id)}
+                      onDoubleClick={() => onEditVoucher?.(t)}
+                      data-txn-stripe={txnStripeAttr}
+                      data-pl-txn-hovered={pairHovered ? "" : undefined}
+                      data-pl-txn-selected={isSelected ? "" : undefined}
+                      onMouseEnter={() => setHoveredTxnId(t.id)}
+                      onMouseLeave={(e) => clearOverduePairHoverUnlessMovingTo(t.id, e, mainRowDomId)}
                       className={cn(
-                        "narration-row border-b cursor-pointer -mt-1.5",
-                        selectedId === t.id
-                          ? "bg-primary/10 [&>td]:border-t-0 [&>td]:border-b-2 [&>td]:border-primary [&>td]:border-x-0 [&>td:first-child]:border-l-2 [&>td:first-child]:border-primary [&>td:last-child]:border-r-2 [&>td:last-child]:border-primary"
-                          : "bg-muted/30 hover:bg-muted/40"
+                        "narration-row -mt-1.5 cursor-pointer border-b",
+                        isSelected && txnSelectedNarrationRowCn()
                       )}
                     >
                       <TableCell
@@ -560,113 +684,59 @@ export function OverdueAccountView({
           </Table>
           </div>
         </CardContent>
-        {/* Footer: same layout as Party Details */}
-        <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim flex-shrink-0 mt-auto bg-background">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <span className="whitespace-nowrap flex-shrink-0">{sortedRows.length} voucher(s).</span>
-              <div className="flex items-center space-x-2 flex-shrink-0">
-                <Checkbox
-                  id="show-narration-overdue"
-                  checked={showNarration}
-                  onCheckedChange={(checked: boolean) => handleShowNarrationChange(Boolean(checked))}
-                />
-                <label htmlFor="show-narration-overdue" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
-              </div>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">
-                    <Columns3 className="h-4 w-4" />
-                    Columns
-                    <ChevronDown className="h-4 w-4 opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-52 p-2">
-                  {(Object.keys(OVERDUE_COLUMN_LABELS) as OverdueColumnKey[]).map((key) => (
-                    <DropdownMenuItem
-                      key={key}
-                      onSelect={(e) => e.preventDefault()}
-                      className="flex items-center gap-2 cursor-pointer"
-                    >
-                      <Checkbox
-                        id={`overdue-col-${key}`}
-                        checked={visibleColumns[key] !== false}
-                        onCheckedChange={(c) => handleColumnVisibilityChange(key, Boolean(c))}
-                      />
-                      <label htmlFor={`overdue-col-${key}`} className="text-sm font-medium flex-1 cursor-pointer">
-                        {OVERDUE_COLUMN_LABELS[key]}
-                      </label>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-            <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
-              <TransactionTableSortDropdown
-                sortBy={sortBy}
-                sortOrder={sortOrder}
-                onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
-                viewMode="statement"
-              />
-              <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
-              <Select
-                value={`${rowsPerPage}`}
-                onValueChange={(value) => {
-                  setRowsPerPage(Number(value) || 0);
-                  setCurrentPage(1);
-                }}
-              >
-                <SelectTrigger className="h-8 w-[70px]">
-                  <SelectValue placeholder={`${rowsPerPage}`} />
-                </SelectTrigger>
-                <SelectContent side="top">
-                  {[10, 20, 30, 50].map((pageSize) => (
-                    <SelectItem key={pageSize} value={`${pageSize}`}>{pageSize}</SelectItem>
-                  ))}
-                  <SelectItem value="0">All</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-sm font-medium flex-shrink-0">
-                Page {currentPage} of {totalPages}
-              </p>
-              <div className="flex items-center space-x-1 flex-shrink-0">
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(1)}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronsLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage === totalPages}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(totalPages)}
-                  disabled={currentPage === totalPages}
-                >
-                  <ChevronsRight className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
       </Card>
+      {/* Footer: global PC shell — Party Details jaisa LedgerDesktopFooter */}
+      <LedgerDesktopFooter
+        left={
+          <>
+            {/* Count sirf pagination bar par Total Trxn — left duplicate mat */}
+            <LedgerFooterCheckboxPill
+              id="show-narration-overdue"
+              checked={showNarration}
+              onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))}
+              label="Show Narration"
+            />
+            <LedgerFooterColumnsMenu>
+              <DropdownMenuContent align="start" className="w-52 p-2">
+                {(Object.keys(OVERDUE_COLUMN_LABELS) as OverdueColumnKey[]).map((key) => (
+                  <DropdownMenuItem
+                    key={key}
+                    onSelect={(e) => e.preventDefault()}
+                    className="flex cursor-pointer items-center gap-2"
+                  >
+                    <Checkbox
+                      id={`overdue-col-${key}`}
+                      checked={visibleColumns[key] !== false}
+                      onCheckedChange={(c) => handleColumnVisibilityChange(key, Boolean(c))}
+                    />
+                    <label htmlFor={`overdue-col-${key}`} className="flex-1 cursor-pointer text-sm font-medium">
+                      {OVERDUE_COLUMN_LABELS[key]}
+                    </label>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </LedgerFooterColumnsMenu>
+          </>
+        }
+        sortBy={sortBy}
+        sortOrder={sortOrder}
+        onSortChange={(by, order) => {
+          setSortBy(by);
+          setSortOrder(order);
+        }}
+        viewMode="bill_wise"
+        currentPage={currentPage}
+        totalPages={totalPages}
+        setCurrentPage={setCurrentPage}
+        rowsPerPageSelectValue={rowsPerPageSelectValue(rowsPerPage, ROWS_PER_PAGE_OPTIONS_DEFAULT, "10")}
+        onRowsPerPageChange={(value) => {
+          setRowsPerPage(Number(value) || 0);
+          setCurrentPage(1);
+        }}
+        beforeCount={overduePaging.beforeCount}
+        afterCount={overduePaging.afterCount}
+        totalCount={sortedRows.length}
+      />
     </div>
   );
 }

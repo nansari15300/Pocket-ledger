@@ -66,6 +66,12 @@ import {
   masterEntityDialogHeaderClassName,
   masterEntityDialogFormWrapperClassName,
 } from "@/lib/masterEntityDialogClasses";
+import { MasterFormTwoColGrid } from "@/components/inter-company/MasterFormLayout";
+import {
+  masterFormRadioGroupClassName,
+  masterSpecialAccountPanelClassName,
+  masterSpecialAccountPanelTitleClassName,
+} from "@/lib/masterFormPillChrome";
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -775,8 +781,8 @@ export function CreateBankAccountDialog({
           <div className={masterEntityDialogFormWrapperClassName}>
           <Form {...form}>
             <form onSubmit={(e) => handleFormSubmit(e)} className="flex min-h-0 flex-1 flex-col">
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+              <MasterFormTwoColGrid>
                 <FormField
                   control={form.control}
                   name="accountName"
@@ -799,7 +805,7 @@ export function CreateBankAccountDialog({
                       <RadioGroup
                         onValueChange={field.onChange}
                         value={field.value}
-                        className="flex space-x-4 pt-2"
+                        className={masterFormRadioGroupClassName}
                       >
                         <FormItem className="flex items-center space-x-2 space-y-0">
                           <FormControl><RadioGroupItem value="Bank" /></FormControl>
@@ -814,15 +820,17 @@ export function CreateBankAccountDialog({
                     </FormItem>
                   )}
                 />
-                 <FormField
+              </MasterFormTwoColGrid>
+
+              {/* Group | Bank name */}
+              <MasterFormTwoColGrid>
+                <FormField
                     control={form.control}
                     name="groupId"
                     render={({ field }: any) => (
                         <FormItem>
                         <FormLabel>Group</FormLabel>
                         <FormControl>
-                            <div className="flex items-center gap-2">
-                            <div className="flex-1">
                             <Combobox
                                 options={[
                                     { value: getUngroupedGroupId("bank"), label: "Ungrouped" },
@@ -848,16 +856,31 @@ export function CreateBankAccountDialog({
                                 addNewLabel="Create New Group"
                                 disabled={isLoading}
                                 />
-                            </div>
-                            </div>
                         </FormControl>
                         <FormMessage />
                         </FormItem>
                     )}
                     />
-              </div>
+                {accountType === "Bank" ? (
+                  <FormField
+                    control={form.control}
+                    name="bankName"
+                    render={({ field }: any) => (
+                      <FormItem>
+                        <FormLabel>Bank Name</FormLabel>
+                        <FormControl>
+                          <Input placeholder="e.g., Himalayan Bank" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                ) : (
+                  <div aria-hidden className="hidden sm:block" />
+                )}
+              </MasterFormTwoColGrid>
 
-              <div className="grid grid-cols-2 gap-4">
+              <MasterFormTwoColGrid>
                 <FormField
                   control={form.control}
                   name="openingBalance"
@@ -908,24 +931,10 @@ export function CreateBankAccountDialog({
                     </FormItem>
                   )}
                 />
-              </div>
+              </MasterFormTwoColGrid>
 
                 {accountType === "Bank" && (
-                  <div className="space-y-4">
-                    <FormField
-                      control={form.control}
-                      name="bankName"
-                      render={({ field }: any) => (
-                        <FormItem>
-                          <FormLabel>Bank Name</FormLabel>
-                          <FormControl>
-                            <Input placeholder="e.g., Himalayan Bank" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <MasterFormTwoColGrid>
                         <FormField
                           control={form.control}
                           name="accountNumber"
@@ -952,8 +961,7 @@ export function CreateBankAccountDialog({
                             </FormItem>
                           )}
                         />
-                    </div>
-                  </div>
+                  </MasterFormTwoColGrid>
                 )}
                 
                 {can('manage_special_bank_accounts') && (
@@ -961,7 +969,12 @@ export function CreateBankAccountDialog({
                   control={form.control}
                   name="isSpecial"
                   render={({ field }: any) => (
-                    <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3 shadow-sm">
+                    <FormItem
+                      className={cn(
+                        "flex flex-row items-center justify-between p-3",
+                        masterSpecialAccountPanelClassName
+                      )}
+                    >
                       <div className="space-y-0.5">
                         <FormLabel>Mark as Special Account</FormLabel>
                         <FormDescription>Special accounts have restricted visibility.</FormDescription>
@@ -973,8 +986,12 @@ export function CreateBankAccountDialog({
                 )}
                 
                 {isSpecial && can('manage_special_bank_accounts') && (
-                      <Card className="p-4">
-                        <CardHeader className="p-0 pb-4"><CardTitle className="text-base">Special Account Usage Control</CardTitle></CardHeader>
+                      <Card className={cn("p-4", masterSpecialAccountPanelClassName)}>
+                        <CardHeader className="p-0 pb-4">
+                          <CardTitle className={masterSpecialAccountPanelTitleClassName}>
+                            Special Account Usage Control
+                          </CardTitle>
+                        </CardHeader>
                         <CardContent className="p-0">
                            <SpecialAccountAccessControl
                                 users={usersForAccessControl}

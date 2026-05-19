@@ -46,6 +46,8 @@ import { doc, setDoc, serverTimestamp, Timestamp, collection, query, where, getD
 import { initializeCompanyDataClient } from "@/lib/initializeCompanyDataClient";
 import { ensureSuperAdminInSharedEmails } from "@/lib/superAdminEmails";
 import { generateCompanyId } from "@/lib/generateCompanyId";
+import { generateUniqueInterCompanyAccountNo } from "@/lib/interCompany/interCompanyAccountNo";
+import { CompanyInterCompanyAcNoField } from "@/components/inter-company/CompanyInterCompanyAcNoField";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { numericEntitlement, type PlanId } from "@/config/plans";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
@@ -182,6 +184,11 @@ export function CreateCompanyForm({
     form.setValue("billingCurrencyCountry", selectedCountry, { shouldDirty: false });
   }, [selectedCountry, form]);
 
+  // Static build: online slot na ho to bhi Local option dikhe — default Local select
+  useEffect(() => {
+    if (!staticBuildAllowsLocalCompany || forceLocalCompanyCreation) return;
+    if (!hasFreeOnlineSlot) setCreationMode("local");
+  }, [staticBuildAllowsLocalCompany, forceLocalCompanyCreation, hasFreeOnlineSlot]);
 
   const displayDate = (date?: Date) => {
     if (!date || isNaN(date.getTime())) return "Pick a date";
@@ -360,6 +367,8 @@ export function CreateCompanyForm({
     setIsLoading(true);
     try {
       const companyId = generateCompanyId(values.companyName);
+      // Inter-company: unique 15-digit A/c No (Firestore duplicate check + local mirror).
+      const interCompanyAccountNo = await generateUniqueInterCompanyAccountNo(companyId);
       let logoUrl: string | null = null;
 
       // Local SQLite company bhi Edit jaisa logo Firebase Storage pe — dono paths (createAsLocalOnly / online) me upload
@@ -422,6 +431,7 @@ export function CreateCompanyForm({
         await upsertLocalCompany({
           id: companyId,
           name: values.companyName,
+          interCompanyAccountNo,
           address: values.address ?? "",
           phone: values.phone ?? "",
           email: values.email ?? "",
@@ -453,6 +463,7 @@ export function CreateCompanyForm({
         const currencyRowOnline = getDefaultCurrencyForCountry(values.billingCurrencyCountry);
         await setDoc(doc(firestore, "companies", companyId), {
           name: values.companyName,
+          interCompanyAccountNo,
           address: values.address ?? "",
           phone: values.phone ?? "",
           email: values.email ?? "",
@@ -483,6 +494,7 @@ export function CreateCompanyForm({
           await upsertLocalCompany({
             id: companyId,
             name: values.companyName,
+            interCompanyAccountNo,
             address: values.address ?? "",
             phone: values.phone ?? "",
             email: values.email ?? "",
@@ -554,7 +566,7 @@ export function CreateCompanyForm({
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6" autoComplete="off">
-        <div className="grid grid-cols-2 gap-2 sm:gap-4">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-4">
           <FormField
             control={form.control}
             name="companyName"
@@ -568,6 +580,8 @@ export function CreateCompanyForm({
               </FormItem>
             )}
           />
+
+          <CompanyInterCompanyAcNoField mode="create" />
 
           <FormField
             control={form.control}
@@ -709,20 +723,33 @@ export function CreateCompanyForm({
           />
         </div>
 
-        {/* Sirf static/APK: local vs online — web/browser par ye choice nahi */}
-        {staticBuildAllowsLocalCompany && !forceLocalCompanyCreation && hasFreeOnlineSlot && (
+        {/* Sirf static/APK: Local + Online choice — web par ye section nahi */}
+        {staticBuildAllowsLocalCompany && !forceLocalCompanyCreation && (
           <div className="space-y-2 rounded-md border border-black bg-muted/30 p-3">
             <FormLabel className="text-xs sm:text-sm">Save company as</FormLabel>
             <FormDescription className="text-xs">
-              Your plan has a free online company slot. Pick cloud sync or keep data only on this device.
+              {hasFreeOnlineSlot
+                ? "Pick cloud sync or keep data only on this device."
+                : maxOnlineSlots === 0
+                  ? "Your plan has no online company slots. Choose Local, or upgrade at Billing for cloud sync."
+                  : `All ${maxOnlineSlots} online slot${maxOnlineSlots === 1 ? " is" : "s are"} in use (${usedOnlineSlots}/${maxOnlineSlots}). You can still create a Local company on this device.`}
             </FormDescription>
             <RadioGroup
               value={creationMode}
               onValueChange={(v) => setCreationMode(v as "local" | "online")}
               className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:gap-6"
             >
-              <label className="flex cursor-pointer items-center gap-2">
-                <RadioGroupItem value="online" id="create-company-online" />
+              <label
+                className={cn(
+                  "flex items-center gap-2",
+                  hasFreeOnlineSlot ? "cursor-pointer" : "cursor-not-allowed opacity-60"
+                )}
+              >
+                <RadioGroupItem
+                  value="online"
+                  id="create-company-online"
+                  disabled={!hasFreeOnlineSlot}
+                />
                 <span className="text-xs sm:text-sm">Online (sync across devices)</span>
               </label>
               <label className="flex cursor-pointer items-center gap-2">
@@ -731,13 +758,6 @@ export function CreateCompanyForm({
               </label>
             </RadioGroup>
           </div>
-        )}
-        {staticBuildAllowsLocalCompany && !forceLocalCompanyCreation && !hasFreeOnlineSlot && (
-          <p className="rounded-md border border-dashed border-muted-foreground/30 p-2 text-xs text-muted-foreground">
-            {maxOnlineSlots === 0
-              ? "Your plan does not include online companies. This company will be saved only on this device."
-              : `All ${maxOnlineSlots} online company slot${maxOnlineSlots === 1 ? " is" : "s are"} in use (${usedOnlineSlots}/${maxOnlineSlots}). This company will be saved only on this device.`}
-          </p>
         )}
         {!staticBuildAllowsLocalCompany && !hasFreeOnlineSlot && (
           <p className="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 p-2 text-xs text-muted-foreground">

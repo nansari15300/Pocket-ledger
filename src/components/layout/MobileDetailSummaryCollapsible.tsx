@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * Mobile-only: date / balance / filters summary — collapse state; FAB alag portal se footer par.
+ * Mobile-only: date / balance / filters summary — collapse state; fixed FAB provider se ek hi.
  */
 import type { ReactNode } from "react";
+import { useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { useMobileDetailSummaryCollapsed } from "@/contexts/MobileDetailSummaryCollapseContext";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { MobileDetailSummaryFloatingToggle } from "@/components/layout/MobileDetailSummaryFloatingToggle";
 
 export type MobileDetailSummaryCollapsibleProps = {
   children: ReactNode;
@@ -19,7 +19,15 @@ export function MobileDetailSummaryCollapsible({
   className,
 }: MobileDetailSummaryCollapsibleProps) {
   const isMobile = useIsMobile();
-  const { collapsed, pagerFabHostCount } = useMobileDetailSummaryCollapsed();
+  const { collapsed, registerCollapsibleHost, unregisterCollapsibleHost } =
+    useMobileDetailSummaryCollapsed();
+
+  // Sirf related detail/report pages — provider ek hi fixed FAB dikhata hai
+  useEffect(() => {
+    if (!isMobile) return;
+    registerCollapsibleHost();
+    return () => unregisterCollapsibleHost();
+  }, [isMobile, registerCollapsibleHost, unregisterCollapsibleHost]);
 
   if (!isMobile) {
     return <>{children}</>;
@@ -27,8 +35,6 @@ export function MobileDetailSummaryCollapsible({
 
   return (
     <>
-      {/* Report list (bina pager): fixed FAB — detail pages par pager inline FAB use karta hai */}
-      {pagerFabHostCount === 0 ? <MobileDetailSummaryFloatingToggle placement="fixed" /> : null}
       {!collapsed ? (
         <div className={cn("flex flex-shrink-0 flex-col", className)}>{children}</div>
       ) : null}

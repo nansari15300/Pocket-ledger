@@ -40,9 +40,9 @@ export const mdc = {
     "pointer-events-none absolute left-2 top-1/2 z-10 h-3 w-3 -translate-y-1/2 text-muted-foreground",
   searchInput: "h-8 w-full min-w-0 pl-7 text-xs",
 
-  /** Summary collapse FAB — fixed (report list, bina pager) */
+  /** Summary collapse FAB — fixed (report list, bina pager); z-40 = dialog overlay (z-50) ke neeche */
   summaryFab:
-    "pointer-events-auto fixed right-3 z-[60] flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background text-foreground shadow-lg backdrop-blur-md hover:bg-muted active:scale-95",
+    "pointer-events-auto fixed right-3 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background text-foreground shadow-lg backdrop-blur-md hover:bg-muted active:scale-95",
   /** Report list: action footer ke upar */
   summaryFabPosition:
     "bottom-[calc(env(safe-area-inset-bottom,0px)+3.25rem)]",

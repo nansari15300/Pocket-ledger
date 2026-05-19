@@ -45,6 +45,19 @@ export function PaymentInReportDetail() {
   // Dashboard deep-link `voucherScope`: same split as stat cards (Payment In vs Direct Income).
   const voucherScope = searchParams.get("voucherScope");
 
+  // List/register title vs all-vouchers aggregate label (header me duplicate na ho).
+  const reportRegisterTitle = useMemo(() => {
+    if (voucherScope === "directIncomeOnly") return "Direct Income";
+    if (voucherScope === "paymentInOnly") return "Payment In";
+    return "Payment In";
+  }, [voucherScope]);
+
+  const reportAllVouchersTitle = useMemo(() => {
+    if (voucherScope === "directIncomeOnly") return "All Direct Income";
+    if (voucherScope === "paymentInOnly") return "All Payment In";
+    return "All Payment In";
+  }, [voucherScope]);
+
   const paymentInVouchers = useMemo(() => {
     const family = allVouchers.filter((v) => ["payment_in", "direct_income"].includes(v.type));
     if (voucherScope === "directIncomeOnly") return family.filter((v) => v.type === "direct_income");
@@ -140,12 +153,12 @@ export function PaymentInReportDetail() {
     const totalAmount = paymentInVouchers.reduce((sum, v) => sum + (v.total || v.amount || 0), 0);
     return {
       id: "all",
-      name: "All Receipts",
+      name: reportAllVouchersTitle,
       type: "Other" as const,
       balance: totalAmount,
-      entity: { id: "all", name: "All Receipts", balance: totalAmount, openingBalance: 0 },
+      entity: { id: "all", name: reportAllVouchersTitle, balance: totalAmount, openingBalance: 0 },
     };
-  }, [showAllCompanyVouchers, paymentInVouchers]);
+  }, [showAllCompanyVouchers, paymentInVouchers, reportAllVouchersTitle]);
 
   const currentEntity = showAllCompanyVouchers ? allPaymentsEntity : selectedPayee;
   const currentTransactions = showAllCompanyVouchers ? paymentInVouchers : payeeTransactions;
@@ -217,13 +230,7 @@ export function PaymentInReportDetail() {
       return (
         <>
           <div className="flex flex-col h-full min-h-0 overflow-hidden">
-            <div className={mdc.reportBackRow} {...mdcNoEdgeSwipeCapture}>
-              <Button variant="ghost" size="icon" className={mdc.reportBackBtn} onClick={() => { setSelectedPayee(null); setShowAllCompanyVouchers(false); }}>
-                <ArrowLeft className="h-3 w-3" />
-              </Button>
-              <span className="font-semibold truncate">{currentEntity.name}</span>
-            </div>
-            <div className="flex-1 min-h-0 overflow-hidden">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               <PartyDetails
                 party={currentEntity as any}
                 transactions={currentTransactions}
@@ -235,6 +242,9 @@ export function PaymentInReportDetail() {
                 isAllVouchersView={showAllCompanyVouchers}
                 userNames={userNames}
                 context="payment-in"
+                mobileFooterVariant="report"
+                mobileReportStickyTitle={showAllCompanyVouchers ? reportAllVouchersTitle : reportRegisterTitle}
+                onBack={() => { setSelectedPayee(null); setShowAllCompanyVouchers(false); }}
               />
             </div>
           </div>
@@ -251,7 +261,7 @@ export function PaymentInReportDetail() {
     return (
       <>
         <ReportRegisterMobileListChrome
-          title="Payment In"
+          title={reportRegisterTitle}
           actionSlot={
             <div className="grid grid-cols-2 gap-2">
               <PermissionButton permission="create_records" className="w-full" onClick={() => openVoucherDialog("payment_in")}>
@@ -349,6 +359,8 @@ export function PaymentInReportDetail() {
                 isAllVouchersView={showAllCompanyVouchers}
                 userNames={userNames}
                 context="payment-in"
+                mobileFooterVariant="report"
+                mobileReportStickyTitle={showAllCompanyVouchers ? reportAllVouchersTitle : reportRegisterTitle}
               />
             ) : (
               <div className="flex flex-1 items-center justify-center p-8">

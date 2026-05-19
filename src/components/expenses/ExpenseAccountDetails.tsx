@@ -17,10 +17,6 @@ import {
   Printer,
   Landmark,
   Calendar as CalendarIcon,
-  ChevronsLeft,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsRight,
   FilePlus,
   XCircle,
   MoreVertical,
@@ -51,7 +47,9 @@ import {
   DrawerClose,
   DrawerFooter,
 } from "@/components/ui/drawer";
-import { cn } from "@/lib/utils";
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import * as XLSX from "xlsx";
+import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -91,11 +89,16 @@ import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
-import { LedgerFooterCheckboxPill, LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
+import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
+import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
+import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
+import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 
 
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
@@ -141,6 +144,9 @@ interface ExpenseAccountDetailsProps {
   dateRange?: DateRange;
   onDateRangeChange?: (range: DateRange | undefined) => void;
   onBack?: () => void;
+  /** Reports embed: Print·Excel·Bill wise·Date footer (income/expense ledger actions hide). */
+  mobileFooterVariant?: "ledger" | "report";
+  mobileReportStickyTitle?: string;
 }
 
 export function ExpenseAccountDetails({
@@ -157,6 +163,8 @@ export function ExpenseAccountDetails({
   dateRange,
   onDateRangeChange,
   onBack,
+  mobileFooterVariant = "ledger",
+  mobileReportStickyTitle,
 }: ExpenseAccountDetailsProps) {
   const { company, companyId } = useCompany();
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatRunning } =
@@ -179,7 +187,7 @@ export function ExpenseAccountDetails({
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
-  const { balanceMode } = useBalanceMode();
+  const { balanceMode, setBalanceMode } = useBalanceMode();
   const { can } = usePermissions();
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
@@ -259,6 +267,18 @@ export function ExpenseAccountDetails({
     setFilters({});
   };
 
+  const {
+    unapprovedOnly,
+    toggleUnapprovedOnly,
+    filterByUnapprovedOnly,
+    onDateRangeChangeWithUnapprovedReset,
+  } = useLedgerUnapprovedOnlyFilter({
+    onDateRangeChange,
+    setCurrentPage,
+    setFilters,
+    setActiveFilter,
+  });
+
   const anyMobilePopupOpen = isMobile && (
     !!mobileFooterDialogOpen || isCalendarOpen || isVoucherDialogOpen
   );
@@ -336,10 +356,11 @@ export function ExpenseAccountDetails({
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
-        sortTransactionsWithFiscalMergeForCompany(displayTransactions, sortBy, sortOrder, undefined, company),
+        sortTransactionsWithFiscalMergeForCompany(
+          filterByUnapprovedOnly(displayTransactions), sortBy, sortOrder, undefined, company),
         openingBalanceForPeriod
       ),
-    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
+    [displayTransactions, filterByUnapprovedOnly, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
 
 
@@ -505,7 +526,9 @@ export function ExpenseAccountDetails({
     currentPage,
     ledgerOpeningForRunning: openingBalanceForPeriod,
   });
-
+  // Radix rows Select — value list me honi chahiye (LedgerDesktopFooter pagination)
+  const { selectValue: rowsPerPageSelectValue, onSelectValueChange: handleRowsPerPageChange } =
+    useRowsPerPageSelectControl(rowsPerPage, setRowsPerPage, setCurrentPage, ROWS_PER_PAGE_OPTIONS_DEFAULT, "10");
 
   useEffect(() => {
     const total = rowsPerPage > 0 ? Math.ceil(searchFilteredTransactions.length / rowsPerPage) : 1;
@@ -662,6 +685,7 @@ export function ExpenseAccountDetails({
               </div>
             </div>
             <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <BsDatePicker
                   isRange
@@ -783,10 +807,11 @@ export function ExpenseAccountDetails({
           </div>
           <ScrollBar orientation="horizontal" />
         </ScrollArea>
-        {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className="flex-shrink-0 border-t py-2 px-4 overflow-auto min-h-0 scrollbar-slim-dim">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
+        {/* Footer — global PC shell LedgerDesktopFooter */}
+        <LedgerDesktopFooter
+          shellClassName="flex-shrink-0"
+          left={
+            <>
               <LedgerFooterCheckboxPill
                 id="show-narration-account"
                 checked={showNarration}
@@ -835,72 +860,107 @@ export function ExpenseAccountDetails({
                 viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
                 hiddenCount={statementCheck.hiddenCount}
               />
-            </div>
-            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
-              <TransactionTableSortDropdown
-                sortBy={sortBy}
-                sortOrder={sortOrder}
-                onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
-                viewMode="statement"
-              />
-              <LedgerFooterTextPill>Page {currentPage} of {totalPages}</LedgerFooterTextPill>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(totalPages)}
-                disabled={currentPage === totalPages}
-              >
-                <ChevronsLeft className="h-4 w-4" />
-              </Button>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(currentPage + 1)}
-                disabled={currentPage === totalPages}
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <LedgerFooterChromePill className="px-1">
-
-              <Select
-                value={`${rowsPerPage}`}
-                onValueChange={(value) => {
-                  setRowsPerPage(Number(value) || 0);
-                  setCurrentPage(1);
-                }}
-              >
-                <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
-                  <SelectValue placeholder={`${rowsPerPage}`} />
-                </SelectTrigger>
-                <SelectContent side="top">
-                  {[10, 20, 30, 50].map((pageSize) => (
-                    <SelectItem key={pageSize} value={`${pageSize}`}>{pageSize}</SelectItem>
-                  ))}
-                  <SelectItem value="0">All</SelectItem>
-                </SelectContent>
-              </Select>
-              </LedgerFooterChromePill><Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(currentPage - 1)}
-                disabled={currentPage === 1}
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(1)}
-                disabled={currentPage === 1}
-              >
-                <ChevronsRight className="h-4 w-4" />
-              </Button>
-              <LedgerFooterTextPill>Total Trxn {displayTransactions.length}</LedgerFooterTextPill>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          onSortChange={(by, order) => {
+            setSortBy(by);
+            setSortOrder(order);
+          }}
+          viewMode="statement"
+          currentPage={currentPage}
+          totalPages={totalPages}
+          setCurrentPage={setCurrentPage}
+          rowsPerPageSelectValue={rowsPerPageSelectValue}
+          onRowsPerPageChange={handleRowsPerPageChange}
+          beforeCount={desktopPaginationMeta.beforeCount}
+          afterCount={desktopPaginationMeta.afterCount}
+          totalCount={displayTransactions.length}
+        />
       </div>
   );
   }
 
+  const reportStickyTitle = mobileReportStickyTitle ?? (context === "payment-out" ? "Payment Out" : "Report");
+
+  const handleExcelLedger = useCallback(() => {
+    const rows = searchFilteredTransactions.map((t: Record<string, unknown>) => {
+      const dRaw = (t as { date?: { toDate?: () => Date } }).date;
+      const d = dRaw?.toDate ? dRaw.toDate() : new Date((t as { date?: unknown }).date as string | number | Date);
+      return {
+        "Date (BS)": formatDateBS(d),
+        "Date (AD)": formatDate(d),
+        "Voucher No.": (t as { voucherNumber?: string }).voucherNumber,
+        Narration: String((t as { narration?: string }).narration || ""),
+        Debit: Number((t as { debit?: number }).debit) || 0,
+        Credit: Number((t as { credit?: number }).credit) || 0,
+        Balance: `${Math.abs(Number((t as { balance?: number }).balance) || 0).toFixed(2)} ${((t as { balance?: number }).balance ?? 0) >= 0 ? "Dr" : "Cr"}`,
+      };
+    });
+    const summaryRows = [
+      {
+        "Date (BS)": "Opening Balance",
+        Balance: `${Math.abs(openingBalanceForPeriod).toFixed(2)} ${openingBalanceForPeriod >= 0 ? "Dr" : "Cr"}`,
+      },
+      { "Date (BS)": "Total", Debit: periodDr, Credit: periodCr },
+      {
+        "Date (BS)": "Closing Balance",
+        Balance: `${Math.abs(closingBalance).toFixed(2)} ${closingBalance >= 0 ? "Dr" : "Cr"}`,
+      },
+    ];
+    const worksheet = XLSX.utils.json_to_sheet([...rows, {}, ...summaryRows] as Record<string, unknown>[]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Ledger");
+    const safeName = (account.name || "account").replace(/[/\\?%*:|"<>]/g, "-");
+    XLSX.writeFile(workbook, `${safeName}_ledger.xlsx`);
+  }, [
+    searchFilteredTransactions,
+    formatDate,
+    formatDateBS,
+    openingBalanceForPeriod,
+    periodDr,
+    periodCr,
+    closingBalance,
+    account.name,
+  ]);
+
   if (isMobile) {
+    const isReportMobileChrome = mobileFooterVariant === "report";
+    // Report all-vouchers: account picker hide — sirf search + filters.
+    const hideReportAccountPicker = isReportMobileChrome && (isAllVouchersView || account.id === "all");
+
     return (
+      <>
       <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
-        {/* Single root: fills ResponsiveMasterDetail slot so flex-1 scroll + pager pin to bottom */}
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden w-full">
-          {/* Row 1: Back | Title | Showing x of y */}
+          {isReportMobileChrome && onBack ? (
+            <header className="sticky top-0 z-10 flex-shrink-0 border-b bg-white p-3 dark:bg-card">
+              <div className="flex min-w-0 items-center gap-2">
+                <Button variant="ghost" size="icon" className="h-8 w-8 flex-shrink-0" onClick={handleMobileBack} aria-label="Back">
+                  <ArrowLeft className="h-4 w-4" />
+                </Button>
+                <div className="flex min-w-0 flex-1 items-center gap-1">
+                  <h1 className="shrink-0 text-base font-bold text-muted-foreground">{reportStickyTitle}</h1>
+                  <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>·</span>
+                  <span
+                    className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
+                    title={account.name}
+                  >
+                    {account.name}
+                  </span>
+                </div>
+                <span
+                  className={cn(
+                    "shrink-0 text-sm font-bold whitespace-nowrap",
+                    closingBalance >= 0 ? "text-green-600" : "text-red-600"
+                  )}
+                >
+                  {formatCurrency(closingBalance, { showDrCr: true })}
+                </span>
+              </div>
+            </header>
+          ) : null}
           {/* Mobile: date/balance/search — footer chevron se collapse (group pages jaisa) */}
           <MobileDetailSummaryCollapsible>
           {/* Row 2: Last 10 Txns / date range */}
@@ -932,7 +992,7 @@ export function ExpenseAccountDetails({
           {/* Dropdown + Edit + Search */}
           <div className="p-2 border-b flex-shrink-0">
             <div className="flex items-stretch gap-2">
-              {allAccounts && allAccounts.length > 0 && (
+              {!hideReportAccountPicker && allAccounts && allAccounts.length > 0 && (
                 <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
                   <Combobox
                     options={accountDropdownOptions}
@@ -1023,7 +1083,20 @@ export function ExpenseAccountDetails({
             />
           </div>
         </div>
-        {/* Fixed bottom: Add Expense, Add Income, Calendar */}
+        {isReportMobileChrome ? (
+          <ReportMobileLedgerFooter
+            onPrint={handlePrint}
+            onExcel={handleExcelLedger}
+            onDateOpen={() => {
+              openingModalRef.current = true;
+              setIsCalendarOpen(true);
+              openModalInUrl();
+            }}
+            balanceMode={balanceMode}
+            onBalanceModeToggle={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
+            showChart={false}
+          />
+        ) : (
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
           <Button
             className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium"
@@ -1124,6 +1197,81 @@ export function ExpenseAccountDetails({
             </DrawerContent>
           </Drawer>
         </div>
+        )}
+        {isReportMobileChrome ? (
+          <Drawer
+            open={isCalendarOpen}
+            onOpenChange={(open: boolean) => {
+              if (open) {
+                openingModalRef.current = true;
+                openModalInUrl();
+              }
+              setIsCalendarOpen(open);
+              if (!open) closeModalInUrl();
+            }}
+          >
+            <DrawerContent>
+              <DrawerHeader className="p-4 text-left">
+                <DrawerTitle>Select Date Range</DrawerTitle>
+                <MobileDialogDescription>Select a date range for the transaction list.</MobileDialogDescription>
+              </DrawerHeader>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
+                {(dateSystem === "BS" || dateSystem === "Both") && (
+                  <NepaliCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          onDateRangeChange?.(r);
+                          setIsCalendarOpen(false);
+                        }}
+                      />
+                    }
+                    onSelect={handleNepaliSelect}
+                    valueAD={dateRange}
+                    isRange={true}
+                    numberOfMonths={calendarMonths}
+                  />
+                )}
+                {(dateSystem === "AD" || dateSystem === "Both") && (
+                  <div className="flex-1 w-full min-w-0">
+                    <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            onDateRangeChange?.(r);
+                            setIsCalendarOpen(false);
+                          }}
+                        />
+                      }
+                      valueAD={dateRange}
+                      isRange
+                      numberOfMonths={calendarMonths}
+                      onSelect={(adDate) => {
+                        const range = dateRange;
+                        if (!range?.from || (range.from && range.to)) {
+                          onDateRangeChange?.({ from: adDate, to: undefined });
+                        } else if (adDate < range.from) {
+                          onDateRangeChange?.({ from: adDate, to: range.from });
+                          setIsCalendarOpen(false);
+                        } else {
+                          onDateRangeChange?.({ from: range.from, to: adDate });
+                          setIsCalendarOpen(false);
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+              <DrawerFooter className="p-4 pt-2">
+                <DrawerClose asChild>
+                  <Button variant="outline">Close</Button>
+                </DrawerClose>
+              </DrawerFooter>
+            </DrawerContent>
+          </Drawer>
+        ) : null}
         <AddVoucherDialog
           isOpen={!!mobileFooterDialogOpen && mobileFooterDialogOpen === "add_expense"}
           onOpenChange={(open: boolean) => {
@@ -1158,6 +1306,7 @@ export function ExpenseAccountDetails({
           onVoucherAction={() => setSelectedVoucher(null)}
         />
       </div>
+      </>
     );
   }
 

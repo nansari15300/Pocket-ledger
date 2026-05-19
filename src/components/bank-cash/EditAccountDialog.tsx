@@ -33,6 +33,16 @@ import {
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
+import {
+  MasterFormNameAcNoRow,
+  MasterFormTwoColGrid,
+  MasterMobileNoField,
+} from "@/components/inter-company/MasterFormLayout";
+import {
+  masterFormRadioGroupClassName,
+  masterSpecialAccountPanelClassName,
+  masterSpecialAccountPanelTitleClassName,
+} from "@/lib/masterFormPillChrome";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { CreateAccountGroupDialog } from "./CreateAccountGroupDialog";
@@ -79,6 +89,7 @@ const MAX_FILE_SIZE_MB = 0.5;
 
 const formSchema = z.object({
   accountName: z.string().min(2, { message: "Account name must be at least 2 characters." }),
+  phone: z.string().optional(),
   accountType: z.enum(["Bank", "Cash"]),
   openingBalance: z.coerce.number(),
   openingBalanceDate: z.any().optional(),
@@ -158,6 +169,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     resolver: zodResolver(formSchema) as Resolver<FormValues>,
     defaultValues: {
         accountName: account.accountName,
+        phone: account.phone ?? "",
         accountType: account.accountType,
         openingBalance: account.openingBalance,
         openingBalanceDate: (account as any).openingBalanceDate?.toDate ? (account as any).openingBalanceDate.toDate() : undefined,
@@ -391,6 +403,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         /** Firestore `undefined` field skip / local mirror — explicit payload (EditExpenseAccountDialog jaisa) */
         const updatePayload: Record<string, unknown> = {
           accountName: values.accountName,
+          phone: values.phone?.trim() || null,
           accountType: values.accountType,
           bankName: values.bankName ?? "",
           accountNumber: values.accountNumber ?? "",
@@ -652,21 +665,29 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
               onSubmit={form.handleSubmit(onSubmit)}
               className="flex min-h-0 flex-1 flex-col"
             >
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-2">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <FormField
-                    control={form.control}
-                    name="accountName"
-                    render={({ field }: any) => (
+            <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-2">
+                <MasterFormNameAcNoRow
+                  entityKind="bank"
+                  entityId={account.id}
+                  mode="edit"
+                  nameField={
+                    <FormField
+                      control={form.control}
+                      name="accountName"
+                      render={({ field }: any) => (
                         <FormItem>
-                        <FormLabel>Account Name</FormLabel>
-                        <FormControl>
+                          <FormLabel>Account Name</FormLabel>
+                          <FormControl>
                             <Input placeholder="e.g., Primary Savings" {...field} />
-                        </FormControl>
-                        <FormMessage />
+                          </FormControl>
+                          <FormMessage />
                         </FormItem>
-                    )}
+                      )}
                     />
+                  }
+                />
+                <MasterFormTwoColGrid>
+                  <MasterMobileNoField control={form.control} />
                     <FormField
                     control={form.control}
                     name="accountType"
@@ -676,7 +697,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                         <RadioGroup
                             onValueChange={field.onChange}
                             defaultValue={field.value}
-                            className="flex space-x-4 pt-2"
+                            className={masterFormRadioGroupClassName}
                             >
                             <FormItem className="flex items-center space-x-2 space-y-0">
                                 <FormControl><RadioGroupItem value="Bank" /></FormControl>
@@ -691,11 +712,13 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                         </FormItem>
                     )}
                     />
+                </MasterFormTwoColGrid>
+                <MasterFormTwoColGrid>
                 <FormField
                   control={form.control}
                   name="groupId"
                   render={({ field }: any) => (
-                    <FormItem className="flex flex-col space-y-1 w-full">
+                    <FormItem>
                       <FormLabel>Group (Optional)</FormLabel>
                       <FormControl>
                         <div className="w-full">
@@ -721,8 +744,25 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                     </FormItem>
                   )}
                 />
-              </div>
-               <div className="grid grid-cols-2 gap-4">
+                {accountType === "Bank" ? (
+                  <FormField
+                    control={form.control}
+                    name="bankName"
+                    render={({ field }: any) => (
+                      <FormItem>
+                        <FormLabel>Bank Name</FormLabel>
+                        <FormControl>
+                          <Input placeholder="e.g., State Bank of India" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                ) : (
+                  <div aria-hidden className="hidden sm:block" />
+                )}
+                </MasterFormTwoColGrid>
+                <MasterFormTwoColGrid>
                   <FormField
                       control={form.control}
                       name="openingBalance"
@@ -769,24 +809,10 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                         </FormItem>
                     )}
                   />
-              </div>
+                </MasterFormTwoColGrid>
 
               {accountType === "Bank" && (
-                  <div className="space-y-4">
-                      <FormField
-                          control={form.control}
-                          name="bankName"
-                          render={({ field }: any) => (
-                              <FormItem>
-                                  <FormLabel>Bank Name</FormLabel>
-                                  <FormControl>
-                                      <Input placeholder="e.g., State Bank of India" {...field} />
-                                  </FormControl>
-                                  <FormMessage />
-                              </FormItem>
-                          )}
-                      />
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <MasterFormTwoColGrid>
                           <FormField
                             control={form.control}
                             name="accountNumber"
@@ -813,8 +839,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                               </FormItem>
                             )}
                           />
-                      </div>
-                  </div>
+                  </MasterFormTwoColGrid>
               )}
                 
                 {can('manage_special_bank_accounts') && (
@@ -822,7 +847,12 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                   control={form.control}
                   name="isSpecial"
                   render={({ field }: any) => (
-                    <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3 shadow-sm">
+                    <FormItem
+                      className={cn(
+                        "flex flex-row items-center justify-between p-3",
+                        masterSpecialAccountPanelClassName
+                      )}
+                    >
                       <div className="space-y-0.5">
                         <FormLabel>Mark as Special Account</FormLabel>
                         <FormDescription>Special accounts have restricted visibility.</FormDescription>
@@ -834,8 +864,12 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                 )}
                 
                 {isSpecial && can('manage_special_bank_accounts') && (
-                      <Card className="p-4">
-                        <CardHeader className="p-0 pb-4"><CardTitle className="text-base">Special Account Usage Control</CardTitle></CardHeader>
+                      <Card className={cn("p-4", masterSpecialAccountPanelClassName)}>
+                        <CardHeader className="p-0 pb-4">
+                          <CardTitle className={masterSpecialAccountPanelTitleClassName}>
+                            Special Account Usage Control
+                          </CardTitle>
+                        </CardHeader>
                         <CardContent className="p-0">
                            <SpecialAccountAccessControl
                                 users={usersForAccessControl}

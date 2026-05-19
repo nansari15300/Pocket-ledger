@@ -57,11 +57,12 @@ export function SpecialAccountAccessControl({
     onUseForChange({ ...useFor, [type]: newList });
   };
   
+  // Parent green panel ke saath table border/bg — `globals.css` `.pl-master-special-account-table`
   return (
-    <div className="border rounded-lg">
+    <div className="pl-master-special-account-table overflow-hidden rounded-lg border">
       <ScrollArea className="h-64">
         <Table>
-          <TableHeader className="sticky top-0 bg-background/95 backdrop-blur z-10">
+          <TableHeader className="sticky top-0 z-10 backdrop-blur">
             <TableRow>
               <TableHead>User</TableHead>
               <TableHead>Role</TableHead>

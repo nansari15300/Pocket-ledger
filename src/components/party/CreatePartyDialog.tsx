@@ -10,6 +10,12 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { useIsMobile } from "@/hooks/use-mobile";
+import {
+  cnMasterEntityDialogContent,
+  masterEntityDialogFormWrapperClassName,
+  masterEntityDialogHeaderClassName,
+} from "@/lib/masterEntityDialogClasses";
 import { CreatePartyForm } from "./CreatePartyForm";
 
 export function CreatePartyDialog({
@@ -32,6 +38,7 @@ export function CreatePartyDialog({
     parentOnOpenChange !== undefined ? parentOnOpenChange : setInternalIsOpen;
   /** Parent `isOpen` pass = controlled — trigger bahar; DialogTrigger asChild ref loop avoid */
   const isDialogControlled = parentIsOpen !== undefined;
+  const isMobile = useIsMobile();
 
   const handlePartyCreated = (isSaveAndNew: boolean, newId: string) => {
     onPartyCreated(newId);
@@ -49,7 +56,7 @@ export function CreatePartyDialog({
       )}
       {/* MOBILE: max-h 85vh; PC (sm+): max-h 90vh taaki lamba form scroll ho — inner div overflow-y-auto. */}
       <DialogContent
-    className="z-50 max-h-[85vh] w-[98vw] max-w-[98vw] flex min-h-0 flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:w-full sm:max-w-3xl sm:px-6"
+    className={cnMasterEntityDialogContent(isMobile)}
     onOpenAutoFocus={(e) => e.preventDefault()}
     onCloseAutoFocus={(e) => e.preventDefault()}
     onPointerDownOutside={(e) => {
@@ -71,14 +78,14 @@ export function CreatePartyDialog({
       if (isInsideNested) e.preventDefault();
     }}
   >
-        <DialogHeader className="shrink-0">
+        <DialogHeader className={masterEntityDialogHeaderClassName}>
           <DialogTitle>Create a New Party</DialogTitle>
           <DialogDescription>
             Add a new customer or vendor to your records. You can also upload a related file.
           </DialogDescription>
         </DialogHeader>
-        {/* Edit Party jaisa: flex column, form ke andar body scroll + sticky footer (create buttons). */}
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden py-0">
+        {/* Bank/Staff jaisa — portal par Pro theme fields (gray + black border) */}
+        <div className={masterEntityDialogFormWrapperClassName}>
           <CreatePartyForm
             onPartyCreated={handlePartyCreated}
             onNestedDialogOpenChange={setIsNestedOpen}

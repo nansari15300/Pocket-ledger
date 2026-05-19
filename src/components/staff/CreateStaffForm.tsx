@@ -55,6 +55,8 @@ import {
   staffPrefillPartsFromStaffRow,
 } from "@/lib/crossCompanyMasterPrefill";
 import { useDate } from "@/hooks/useDate";
+import { MasterFormNameAcNoRow, MasterMobileNoField, MasterFormTwoColGrid } from "@/components/inter-company/MasterFormLayout";
+import { interCompanyAcNoForNewEntity } from "@/lib/interCompany/interCompanyAccountNo";
 
 import type { StaffGroup } from "@/components/staff/types";
 import { CreateStaffGroupDialog } from "./CreateStaffGroupDialog";
@@ -482,6 +484,7 @@ export function CreateStaffForm({
           }
         }
         const localId = createLocalEntityId("staff");
+        const interCompanyAccountNo = await interCompanyAcNoForNewEntity("staff");
         const stagedLocal = await stageEntityAvatarAndDocuments({
           companyId,
           collectionSeg: "staff",
@@ -503,6 +506,7 @@ export function CreateStaffForm({
           ...(stagedLocal.documentFileUrls.length ? { documentFileUrls: stagedLocal.documentFileUrls } : {}),
           createdAt: new Date().toISOString(),
           isDeleted: false,
+          interCompanyAccountNo,
         };
         await upsertCompanyDocInBrowserDb(companyId, "staff", localId, payload);
         await enqueueCompanyDocOutbox(companyId, "staff", "create", localId, payload);
@@ -586,6 +590,7 @@ export function CreateStaffForm({
         documentFiles,
       });
 
+      const interCompanyAccountNo = await interCompanyAcNoForNewEntity("staff");
       await setDoc(staffRef, {
         ...values,
         openingBalance: values.openingBalance || 0,
@@ -597,6 +602,7 @@ export function CreateStaffForm({
         balance: values.openingBalance || 0,
         isDeleted: false,
         createdAt: serverTimestamp(),
+        interCompanyAccountNo,
         fileUrl: staged.fileUrl,
         ...(staged.documentFileUrls.length ? { documentFileUrls: staged.documentFileUrls } : {}),
       });
@@ -719,24 +725,29 @@ export function CreateStaffForm({
     <>
       <Form {...form}>
         <form onSubmit={(e) => handleFormSubmit(e)} className="flex min-h-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 space-y-6 overflow-y-auto pr-1 sm:pr-2">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Name */}
-            <FormField
-              control={form.control}
-              name="name"
-              render={({ field }: any) => (
-                <FormItem>
-                  <FormLabel>Full Name</FormLabel>
-                  <FormControl>
-                    <Input placeholder="e.g., Jane Doe" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
+          <div className="pl-master-form-scroll min-h-0 flex-1 space-y-6 overflow-y-auto pr-1 sm:pr-2">
+          <div className="space-y-4">
+            <MasterFormNameAcNoRow
+              entityKind="staff"
+              mode="create"
+              nameField={
+                <FormField
+                  control={form.control}
+                  name="name"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Full Name</FormLabel>
+                      <FormControl>
+                        <Input placeholder="e.g., Jane Doe" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              }
             />
-
-            {/* Group */}
+            <MasterFormTwoColGrid>
+              <MasterMobileNoField control={form.control} />
             <FormField
               control={form.control}
               name="groupId"
@@ -786,21 +797,7 @@ export function CreateStaffForm({
                 </FormItem>
               )}
             />
-
-            {/* Phone */}
-            <FormField
-              control={form.control}
-              name="phone"
-              render={({ field }: any) => (
-                <FormItem>
-                  <FormLabel>Phone Number</FormLabel>
-                  <FormControl>
-                    <Input placeholder="Enter phone number" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            </MasterFormTwoColGrid>
 
             {/* Salary + Period */}
             <FormItem>

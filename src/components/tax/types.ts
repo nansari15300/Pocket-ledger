@@ -15,6 +15,7 @@ export type Tax = {
   openingBalanceDate?: any;
   openingBalanceNarration?: string;
   documentFileUrls?: string[];
+  phone?: string;
 };
 
 export type TaxGroup = {

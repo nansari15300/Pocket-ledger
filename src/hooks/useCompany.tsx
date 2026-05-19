@@ -27,6 +27,9 @@ import {
   syncCompanyPlanFromServer,
   markDailyAuthoritativePlanSyncDone,
   PLAN_SERVER_SYNC_INTERVAL_MS,
+  PLAN_SERVER_SYNC_STALE_INTERVAL_MS,
+  PLAN_SYNC_STALE_AFTER_MS,
+  readPlanAuthoritativeSyncTimestamp,
   recomputePlanSyncBannerState,
   shouldRunDailyAuthoritativePlanSync,
   type PlanSyncBannerState,
@@ -42,6 +45,8 @@ import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySu
 import { clearSelectedCompanyId, readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { shouldSuppressTransientCompanyClear, shouldDeferMissingCompanyRedirectNative } from "@/lib/apkLedgerRouteShield";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
+import { ensureCompanyInterCompanyAcNo } from "@/lib/interCompany/ensureCompanyInterCompanyAcNo";
+import { readCompanyInterCompanyAcNo } from "@/lib/interCompany/interCompanyAccountNo";
 import { plNavDbg, plNavDbgCritical, plNavDbgIdHint } from "@/lib/plNavRedirectDebug";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
@@ -173,6 +178,8 @@ export type Company = {
     enableCrossCompanyLedgerCopy?: boolean;
     /** Country selected when company was created (e.g. Nepal for VAT reports). */
     country?: string;
+    /** Inter-company network: 15-digit company A/c No (auto-generated on create / company open). */
+    interCompanyAccountNo?: string;
     /** Approve & message notification on/off and where to show (entity, list, transaction). */
     notificationSettings?: NotificationSettings;
     /** Tracked usage for plan limits (bytes). */
@@ -191,7 +198,7 @@ export type Company = {
       enabled?: boolean;
       runScope?: "owner_only" | "all_users" | "selected_users";
       allowedUserIds?: string[];
-      /** Voucher dialog: Auto Monthly strip + nested settings + Generate now — `configure_company_settings` ke andar kaun. */
+      /** @deprecated — Manage Sharing → Recurring Auto Voucher permissions. */
       voucherAutoEditorsScope?: "all_configure_users" | "owner_only" | "selected_users";
       voucherAutoEditorsUserIds?: string[];
     };
@@ -500,12 +507,18 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     };
   }, [companyId]);
 
+  const [isBrowserOnline, setIsBrowserOnline] = useState(() =>
+    typeof navigator !== "undefined" ? navigator.onLine : true
+  );
+  const [planSyncInFlight, setPlanSyncInFlight] = useState(false);
   const [planAuthoritativeSync, setPlanAuthoritativeSync] = useState<PlanSyncBannerState>({
     lastSuccessAtMs: null,
     isStale: false,
     needsOnlinePlanSync: false,
     offlineLicenseValidUntilMs: null,
     offlineLicenseExpired: false,
+    isBrowserOnline: typeof navigator !== "undefined" ? navigator.onLine : true,
+    planSyncInFlight: false,
   });
   /** Har browser par alag — notification settings save par CustomEvent se recompute */
   const [notificationPrefsEpoch, bumpNotificationPrefs] = useState(0);
@@ -536,11 +549,37 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         needsOnlinePlanSync: false,
         offlineLicenseValidUntilMs: null,
         offlineLicenseExpired: false,
+        isBrowserOnline,
+        planSyncInFlight,
       });
       return;
     }
-    setPlanAuthoritativeSync(recomputePlanSyncBannerState(companyId, company));
-  }, [companyId, registryVersion, company]);
+    setPlanAuthoritativeSync(
+      recomputePlanSyncBannerState(companyId, company, {
+        online: isBrowserOnline,
+        planSyncInFlight,
+      })
+    );
+  }, [companyId, registryVersion, company, isBrowserOnline, planSyncInFlight]);
+
+  /**
+   * Company open / switch: purani company par missing Inter Co. A/c No — auto unique generate.
+   * Party edit khole bina; owned company par Firestore + SQLite backfill.
+   */
+  useEffect(() => {
+    if (!companyId?.trim() || !company) return;
+    if (company.isOwned === false) return;
+    if (readCompanyInterCompanyAcNo(company)) return;
+
+    let cancelled = false;
+    void ensureCompanyInterCompanyAcNo(companyId).then((ac) => {
+      if (cancelled || !ac) return;
+      reloadLocalCompanyRegistry();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, company, reloadLocalCompanyRegistry]);
 
   // Billing success → local SQLite plan patch ke baad list dubara load (offline company).
   useEffect(() => {
@@ -827,40 +866,51 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       if (!user || !companyId?.trim() || authLoading) {
         return { ok: false, applied: false, reason: "no_context" };
       }
-      const row = await getLocalCompanyById(companyId);
-      const firebaseCompanyId =
-        String(row?.authoritativeCompanyId || companyId).trim() || companyId;
-      const r = await syncCompanyPlanFromServer({
-        firebaseCompanyId,
-        localCompanyId: companyId,
-        getIdToken: () => user.getIdToken(),
-      });
-      const rowAfter = await getLocalCompanyById(companyId);
-      if (rowAfter && r.ok && r.applied) {
-        const norm = normalizeLocalCompany(rowAfter as unknown as Company);
-        setCompany((prev) => (prev?.id === companyId ? norm : prev));
-        setAllCompanies((prev) => {
-          const idx = prev.findIndex((c) => c.id === companyId);
-          if (idx < 0) return prev;
-          const next = [...prev];
-          next[idx] = norm;
-          return next;
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        return { ok: false, applied: false, reason: "offline" };
+      }
+      setPlanSyncInFlight(true);
+      try {
+        const row = await getLocalCompanyById(companyId);
+        const firebaseCompanyId =
+          String(row?.authoritativeCompanyId || companyId).trim() || companyId;
+        const r = await syncCompanyPlanFromServer({
+          firebaseCompanyId,
+          localCompanyId: companyId,
+          getIdToken: () => user.getIdToken(),
         });
+        const rowAfter = await getLocalCompanyById(companyId);
+        if (rowAfter && r.ok && r.applied) {
+          const norm = normalizeLocalCompany(rowAfter as unknown as Company);
+          setCompany((prev) => (prev?.id === companyId ? norm : prev));
+          setAllCompanies((prev) => {
+            const idx = prev.findIndex((c) => c.id === companyId);
+            if (idx < 0) return prev;
+            const next = [...prev];
+            next[idx] = norm;
+            return next;
+          });
+        }
+        setPlanAuthoritativeSync(
+          recomputePlanSyncBannerState(companyId, rowAfter as { offlineLicenseValidUntilMs?: number } | null, {
+            online: typeof navigator !== "undefined" ? navigator.onLine : true,
+            planSyncInFlight: false,
+          })
+        );
+        if (r.ok && options?.recordDailySuccess && user.uid) {
+          markDailyAuthoritativePlanSyncDone(user.uid);
+        }
+        return r;
+      } finally {
+        setPlanSyncInFlight(false);
       }
-      setPlanAuthoritativeSync(
-        recomputePlanSyncBannerState(companyId, rowAfter as { offlineLicenseValidUntilMs?: number } | null)
-      );
-      if (r.ok && options?.recordDailySuccess && user.uid) {
-        markDailyAuthoritativePlanSyncDone(user.uid);
-      }
-      return r;
     },
     [user, companyId, authLoading, normalizeLocalCompany]
   );
 
-  /** Login + selected company: server → local plan + offline license; `normalizeLocalCompany` ke baad hook order safe. */
-  const planSyncBurstRef = useRef(0);
+  /** Login + selected company: online-only live plan sync; offline par timer band. */
   const planPeriodicSyncInFlightRef = useRef(false);
+  const planSyncChainTimerRef = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (!user || !companyId || authLoading) return;
 
@@ -868,43 +918,68 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
     const runDailyIdleSync = () => {
       if (cancelled) return;
+      if (typeof navigator !== "undefined" && !navigator.onLine) return;
       if (!user.uid || !shouldRunDailyAuthoritativePlanSync(user.uid)) return;
       void refreshAuthoritativePlan({ recordDailySuccess: true });
     };
 
-    const runOnlineSync = () => {
-      if (cancelled) return;
-      void refreshAuthoritativePlan();
-    };
-
-    planSyncBurstRef.current = 0;
-    // APK/static: pehli full warm ke baad startup par `getIdToken`/plan API attachment prefetch se race na karein — sync sirf `online` + deferred.
     const embeddedClient =
       isStaticAppBuild() || (typeof window !== "undefined" && isCapacitorNativeApp());
     const skipIdlePlanSyncBoot =
       isLocalOnlyMode() &&
       embeddedClient &&
       shouldSkipEmbeddedStartupAuthChurn(user?.uid, auth.currentUser?.uid);
-    // Embedded local-first: offline→online transition par immediate plan-sync rerender ko avoid karo (refresh-like jump).
-    // Web "Local" data source bhi: `window` `online` par turant POST/auth churn na ho — session + SQLite pehle se theek.
     const skipOnlinePlanSyncForLocalOnly = isLocalOnlyMode();
 
-    /** Online + selected company: har 5 min server se planId/expiry refresh (overlap skip). */
-    const runPeriodicOnlinePlanSync = () => {
-      if (cancelled || planPeriodicSyncInFlightRef.current) return;
-      if (typeof navigator !== "undefined" && !navigator.onLine) return;
-      if (skipOnlinePlanSyncForLocalOnly) return;
+    const canSyncNow = () => {
+      if (cancelled) return false;
+      if (typeof navigator !== "undefined" && !navigator.onLine) return false;
+      if (skipOnlinePlanSyncForLocalOnly) return false;
+      return true;
+    };
+
+    const runOnlineSync = () => {
+      if (!canSyncNow() || planPeriodicSyncInFlightRef.current) return;
       planPeriodicSyncInFlightRef.current = true;
       void refreshAuthoritativePlan().finally(() => {
         planPeriodicSyncInFlightRef.current = false;
+        if (!cancelled && canSyncNow()) scheduleNextPlanSync();
       });
     };
 
-    // Browser timer ids — `NodeJS.Timeout` union avoid (tsc DOM vs @types/node)
+    const clearPlanSyncChain = () => {
+      if (planSyncChainTimerRef.current !== undefined && typeof window !== "undefined") {
+        window.clearTimeout(planSyncChainTimerRef.current);
+        planSyncChainTimerRef.current = undefined;
+      }
+    };
+
+    /** Online: stale ho to ~1 min, warna 5 min — offline par chain stop */
+    const scheduleNextPlanSync = () => {
+      clearPlanSyncChain();
+      if (!canSyncNow() || typeof window === "undefined") return;
+      const last = readPlanAuthoritativeSyncTimestamp(companyId);
+      const stale =
+        last != null && Date.now() - last > PLAN_SYNC_STALE_AFTER_MS;
+      const delay = stale ? PLAN_SERVER_SYNC_STALE_INTERVAL_MS : PLAN_SERVER_SYNC_INTERVAL_MS;
+      planSyncChainTimerRef.current = window.setTimeout(() => {
+        planSyncChainTimerRef.current = undefined;
+        runOnlineSync();
+      }, delay);
+    };
+
+    const startOnlinePlanSync = () => {
+      if (!canSyncNow()) return;
+      runOnlineSync();
+    };
+
+    const stopOnlinePlanSync = () => {
+      clearPlanSyncChain();
+    };
+
     let planSyncIdleCallbackId: number | undefined;
     let planSyncIdleFallbackTimerId: number | undefined;
     let deferredLazyPlanTimer: number | null = null;
-    let planPeriodicIntervalId: number | undefined;
     if (typeof window === "undefined") {
       return () => {
         cancelled = true;
@@ -912,45 +987,43 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     }
     const win = window;
 
-    if (!skipIdlePlanSyncBoot) {
-      // Startup: idle par **calendar-day** gate — din me ek baar automatic overwrite (extra POST kam).
-      if ("requestIdleCallback" in win && typeof win.requestIdleCallback === "function") {
-        planSyncIdleCallbackId = win.requestIdleCallback(() => runDailyIdleSync(), { timeout: 2500 });
-      } else {
-        planSyncIdleFallbackTimerId = win.setTimeout(() => runDailyIdleSync(), 1200);
-      }
-    } else {
-      // Continuous online par `online` event nahi aata — ~1 min baad background plan sync (sirf jab aaj ka daily sync pending ho)
-      deferredLazyPlanTimer = win.setTimeout(() => runDailyIdleSync(), 60_000);
-    }
-
-    const onOnline = () => {
-      if (process.env.NODE_ENV !== "production") {
-        console.log("[ONLINE_EVENT]", "useCompany:planAuthoritative window online", {
-          skipOnlinePlanSyncForLocalOnly,
-        });
-      }
+    const onBrowserOnline = () => {
+      setIsBrowserOnline(true);
       if (skipOnlinePlanSyncForLocalOnly) return;
-      planSyncBurstRef.current = 0;
-      runOnlineSync();
+      startOnlinePlanSync();
     };
 
-    win.addEventListener("online", onOnline);
+    const onBrowserOffline = () => {
+      setIsBrowserOnline(false);
+      stopOnlinePlanSync();
+      setPlanSyncInFlight(false);
+    };
 
-    // Online rehne par har 5 min plan sync — `online` event + daily idle ke alawa
-    if (!skipOnlinePlanSyncForLocalOnly) {
-      planPeriodicIntervalId = win.setInterval(
-        runPeriodicOnlinePlanSync,
-        PLAN_SERVER_SYNC_INTERVAL_MS
-      );
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && canSyncNow()) runOnlineSync();
+    };
+
+    win.addEventListener("online", onBrowserOnline);
+    win.addEventListener("offline", onBrowserOffline);
+    document.addEventListener("visibilitychange", onVisible);
+
+    setIsBrowserOnline(navigator.onLine);
+    if (navigator.onLine && !skipOnlinePlanSyncForLocalOnly) {
+      if (!skipIdlePlanSyncBoot) {
+        if ("requestIdleCallback" in win && typeof win.requestIdleCallback === "function") {
+          planSyncIdleCallbackId = win.requestIdleCallback(() => runDailyIdleSync(), { timeout: 2500 });
+        } else {
+          planSyncIdleFallbackTimerId = win.setTimeout(() => runDailyIdleSync(), 1200);
+        }
+      } else {
+        deferredLazyPlanTimer = win.setTimeout(() => runDailyIdleSync(), 60_000);
+      }
+      startOnlinePlanSync();
     }
 
     return () => {
       cancelled = true;
-      if (planPeriodicIntervalId !== undefined) {
-        win.clearInterval(planPeriodicIntervalId);
-        planPeriodicIntervalId = undefined;
-      }
+      stopOnlinePlanSync();
       if (deferredLazyPlanTimer != null) {
         win.clearTimeout(deferredLazyPlanTimer);
         deferredLazyPlanTimer = null;
@@ -965,7 +1038,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       if (planSyncIdleFallbackTimerId !== undefined) {
         win.clearTimeout(planSyncIdleFallbackTimerId);
       }
-      win.removeEventListener("online", onOnline);
+      win.removeEventListener("online", onBrowserOnline);
+      win.removeEventListener("offline", onBrowserOffline);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [user, companyId, authLoading, refreshAuthoritativePlan]);
 

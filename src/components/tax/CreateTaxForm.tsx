@@ -27,6 +27,12 @@ import {
 } from "@/components/common/EntityProfileDocumentsNarrationFields";
 import usePermissions from "@/hooks/usePermissions";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import {
+  MasterFormNameAcNoRow,
+  MasterFormTwoColGrid,
+  MasterMobileNoField,
+} from "@/components/inter-company/MasterFormLayout";
+import { interCompanyAcNoForNewEntity } from "@/lib/interCompany/interCompanyAccountNo";
 import { Input } from "@/components/ui/input";
 import { Loader2, Trash2, FileText, CalendarIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -74,6 +80,7 @@ function createLocalEntityId(prefix: string): string {
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Tax name must be at least 2 characters." }),
+  phone: z.string().optional(),
   rate: z.number().min(0, "Tax rate cannot be negative.").max(100, "Tax rate cannot be over 100."),
   openingBalance: z.coerce.number(),
   openingBalanceDate: z.date().optional(),
@@ -344,6 +351,7 @@ export function CreateTaxForm({
           }
         }
         const localId = createLocalEntityId("tax");
+        const interCompanyAccountNo = await interCompanyAcNoForNewEntity("tax");
         const stagedLocal = await stageEntityAvatarAndDocuments({
           companyId,
           collectionSeg: "taxes",
@@ -354,6 +362,7 @@ export function CreateTaxForm({
         const payload = {
           id: localId,
           name: values.name.trim(),
+          phone: values.phone?.trim() || null,
           rate: values.rate,
           openingBalance: values.openingBalance || 0,
           openingBalanceDate: values.openingBalanceDate || null,
@@ -363,6 +372,7 @@ export function CreateTaxForm({
           companyId,
           balance: values.openingBalance || 0,
           createdAt: new Date().toISOString(),
+          interCompanyAccountNo,
           fileUrl: stagedLocal.fileUrl ?? null,
           ...(stagedLocal.documentFileUrls.length ? { documentFileUrls: stagedLocal.documentFileUrls } : {}),
           isDeleted: false,
@@ -460,8 +470,10 @@ export function CreateTaxForm({
         documentFiles,
       });
 
+      const interCompanyAccountNo = await interCompanyAcNoForNewEntity("tax");
       await setDoc(taxRef, {
         name: values.name.trim(),
+        phone: values.phone?.trim() || null,
         rate: values.rate,
         openingBalance: values.openingBalance || 0,
         openingBalanceDate: values.openingBalanceDate || null,
@@ -471,6 +483,7 @@ export function CreateTaxForm({
         companyId,
         balance: values.openingBalance || 0,
         createdAt: serverTimestamp(),
+        interCompanyAccountNo,
         fileUrl: staged.fileUrl,
         ...(staged.documentFileUrls.length ? { documentFileUrls: staged.documentFileUrls } : {}),
         isDeleted: false,
@@ -531,6 +544,7 @@ export function CreateTaxForm({
             if (!lim.allowed) throw new Error(lim.message || "Storage limit reached.");
           }
           const localId = createLocalEntityId("tax");
+          const interCompanyAccountNo = await interCompanyAcNoForNewEntity("tax");
           const stagedCatch = await stageEntityAvatarAndDocuments({
             companyId,
             collectionSeg: "taxes",
@@ -551,6 +565,7 @@ export function CreateTaxForm({
             companyId,
             balance: values.openingBalance || 0,
             createdAt: nowTs,
+            interCompanyAccountNo,
             fileUrl: stagedCatch.fileUrl ?? null,
             ...(stagedCatch.documentFileUrls.length ? { documentFileUrls: stagedCatch.documentFileUrls } : {}),
             isDeleted: false,
@@ -617,21 +632,29 @@ export function CreateTaxForm({
     <>
     <Form {...form}>
       <form onSubmit={(e) => handleFormSubmit(e)} className="flex min-h-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto pr-1 sm:pr-2">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <FormField
-            control={form.control}
-            name="name"
-            render={({ field }: any) => (
-                <FormItem>
-                <FormLabel>Tax Name</FormLabel>
-                <FormControl>
-                    <Input placeholder="e.g., VAT" {...field} />
-                </FormControl>
-                <FormMessage />
-                </FormItem>
-            )}
+        <div className="pl-master-form-scroll min-h-0 flex-1 space-y-6 overflow-y-auto pr-1 sm:pr-2">
+        <div className="space-y-4">
+            <MasterFormNameAcNoRow
+              entityKind="tax"
+              mode="create"
+              nameField={
+                <FormField
+                  control={form.control}
+                  name="name"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Tax Name</FormLabel>
+                      <FormControl>
+                        <Input placeholder="e.g., VAT" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              }
             />
+            <MasterFormTwoColGrid>
+              <MasterMobileNoField control={form.control} />
             <FormField
               control={form.control}
               name="groupId"
@@ -679,7 +702,8 @@ export function CreateTaxForm({
                 </FormItem>
             )}
             />
-             <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            </MasterFormTwoColGrid>
+             <MasterFormTwoColGrid>
               <FormField
               control={form.control}
               name="openingBalance"
@@ -735,7 +759,7 @@ export function CreateTaxForm({
                     </FormItem>
                   )}
                 />
-             </div>
+             </MasterFormTwoColGrid>
             <EntityProfilePhotoBlock
               file={avatarToUpload?.file ?? null}
               onPickClick={() => avatarInputRef.current?.click()}

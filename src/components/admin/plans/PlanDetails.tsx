@@ -159,7 +159,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
     /** Nepal / SAARC / International — admin alag monthly & yearly rate. */
     const handleRegionalPriceChange = (
         region: BillingRegionId,
-        field: keyof RegionalPlanPrice,
+        field: "monthly" | "yearly",
         value: string
     ) => {
         setEditablePlan((prev) => {
@@ -169,6 +169,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                 currency: BILLING_REGIONS[region].defaultCurrency,
             };
             const nextRow: RegionalPlanPrice = { ...cur };
+            // Sirf monthly/yearly numeric — currency/markup alag handlers
             nextRow[field] = value === "" ? 0 : Number(value);
             return {
                 ...prev,

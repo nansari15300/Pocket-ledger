@@ -66,6 +66,12 @@ import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import {
+  matchesOverdueImportanceFilter,
+  readOverdueImportanceFilter,
+  writeOverdueImportanceFilter,
+  type OverdueImportanceFilter,
+} from "@/lib/overdueImportanceFilter";
 
 function PartyPageContent() {
   const { user } = useAuth();
@@ -158,6 +164,8 @@ function PartyPageContent() {
   const [partyDetailsDateRange, setPartyDetailsDateRange] = useState<DateRange | undefined>(undefined);
   const [groupDetailsDateRange, setGroupDetailsDateRange] = useState<DateRange | undefined>(undefined);
   const [overdueVoucherToEdit, setOverdueVoucherToEdit] = useState<any>(null);
+  /** Overdue se voucher dialog khula — save/cancel ke baad overdue detail par wapas */
+  const editingFromOverdueRef = useRef(false);
   const [historyVoucher, setHistoryVoucher] = useState<any>(null);
   const [linkAdvancesVoucher, setLinkAdvancesVoucher] = useState<any>(null);
   const [linkPaymentVoucher, setLinkPaymentVoucher] = useState<any>(null);
@@ -165,6 +173,17 @@ function PartyPageContent() {
   const [overdueFilters, setOverdueFilters] = useState<Record<string, string>>({});
   const [overdueActiveFilter, setOverdueActiveFilter] = useState<string | null>(null);
   const [overdueFooterDialog, setOverdueFooterDialog] = useState<null | "payment_in" | "payment_out" | "sale">(null);
+  const [overdueImportanceFilter, setOverdueImportanceFilter] = useState<OverdueImportanceFilter>(() =>
+    readOverdueImportanceFilter()
+  );
+  const handleOverdueImportanceFilterChange = useCallback((next: OverdueImportanceFilter) => {
+    setOverdueImportanceFilter(next);
+    writeOverdueImportanceFilter(next);
+  }, []);
+  const overdueTransactionsForView = useMemo(
+    () => overdueTransactions.filter((t) => matchesOverdueImportanceFilter(t, overdueImportanceFilter)),
+    [overdueTransactions, overdueImportanceFilter]
+  );
   const [overdueShowNarration, setOverdueShowNarration] = useState(() => {
     if (typeof window === "undefined") return true;
     try {
@@ -248,7 +267,7 @@ function PartyPageContent() {
 
   // Overdue mobile: map overdue rows to transaction-like for TransactionsTable (same UI as Party Details)
   const overdueAsTransactions = useMemo(() => {
-    return overdueTransactions.map((row) => {
+    return overdueTransactionsForView.map((row) => {
       const v = vouchers.find((v) => v.id === row.id);
       const out = Number(row.outstanding) ?? 0;
       const signedOut =
@@ -276,7 +295,7 @@ function PartyPageContent() {
         partyName: row.partyName,
       };
     });
-  }, [overdueTransactions, vouchers]);
+  }, [overdueTransactionsForView, vouchers]);
 
   const overduePartyNames = useMemo(() => {
     const m: Record<string, string> = {};
@@ -317,6 +336,11 @@ function PartyPageContent() {
   }, [mobileFilteredOverdue]);
 
   const partiesForList = processedPartiesForSelection;
+  /** usePageMemory: overdue virtual row list me — save ke baad __overdue__ valid rahe */
+  const partiesForPageMemory = useMemo(() => {
+    if (!overdueVirtualParty) return partiesForList;
+    return [overdueVirtualParty, ...partiesForList];
+  }, [partiesForList, overdueVirtualParty]);
   const partiesForPartyListView = useMemo(() => {
     if (!showOnlyPartiesWithPendingApproval || !showApproveOnList) return partiesForList;
     return partiesForList.filter((p) => (pendingApprovalByPartyId[p.id] ?? 0) > 0);
@@ -365,7 +389,7 @@ function PartyPageContent() {
     setActiveView,            
     selected,                 
     setSelected,              
-    activeView === 'parties' ? partiesForList : processedGroups, 
+    activeView === 'parties' ? partiesForPageMemory : processedGroups, 
     pageDataLoading,
     undefined,
     selectedIdFromUrl
@@ -542,6 +566,17 @@ function PartyPageContent() {
       .reduce((acc, group) => acc + group.balance, 0);
   }, [activeView, processedParties, processedGroups]);
 
+  const restoreOverdueDetailAfterVoucherDialog = useCallback(() => {
+    if (!editingFromOverdueRef.current || !overdueVirtualParty) return;
+    editingFromOverdueRef.current = false;
+    setActiveView("parties");
+    setSelected(overdueVirtualParty);
+    const overdueUrl = `/party?selected=${encodeURIComponent(OVERDUE_ACCOUNT_ID)}`;
+    if (useQueryNav && shouldReplaceWithMasterDetailCanonical(overdueUrl)) {
+      router.replace(overdueUrl, { scroll: false });
+    }
+  }, [overdueVirtualParty, setSelected, setActiveView, useQueryNav, router]);
+
   const handleSelect = (item: Party | Group) => {
     if (useQueryNav) {
         // Static export ke liye query params use karte hain – /party/[id] path 404 de sakta hai
@@ -687,10 +722,15 @@ function PartyPageContent() {
       {activeView === 'parties' && selectedParty?.id === OVERDUE_ACCOUNT_ID && (
         <OverdueAccountView
           overdueTransactions={overdueTransactions}
+          importanceFilter={overdueImportanceFilter}
+          onImportanceFilterChange={handleOverdueImportanceFilterChange}
           userNames={mergedUserNames}
           onEditVoucher={(row: OverdueTransactionRow) => {
             const voucher = vouchers.find((v) => v.id === row.id);
-            if (voucher) setOverdueVoucherToEdit(voucher);
+            if (voucher) {
+              editingFromOverdueRef.current = true;
+              setOverdueVoucherToEdit(voucher);
+            }
           }}
           onHistoryVoucher={(row: OverdueTransactionRow) => {
             const voucher = vouchers.find((v) => v.id === row.id);
@@ -719,7 +759,10 @@ function PartyPageContent() {
   if (isMobile && selectedParty?.id === OVERDUE_ACCOUNT_ID) {
     const handleOverdueRowClick = (t: any) => {
       const voucher = vouchers.find((v) => v.id === t.id);
-      if (voucher) setOverdueVoucherToEdit(voucher);
+      if (voucher) {
+        editingFromOverdueRef.current = true;
+        setOverdueVoucherToEdit(voucher);
+      }
     };
     const handleOverdueHistory = (t: any) => {
       const voucher = vouchers.find((v) => v.id === t.id);
@@ -745,9 +788,35 @@ function PartyPageContent() {
               Showing {mobileFilteredOverdue.length} of {overdueAsTransactions.length} voucher(s)
             </span>
           </div>
-          {/* Row 2: Overdue label */}
-          <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
-            <span className="text-xs font-medium text-muted-foreground">Overdue</span>
+          {/* Row 2: All / Important / Normal — desktop overdue header jaisa */}
+          <div className="px-2 py-1.5 border-b flex justify-center items-center gap-2 flex-shrink-0">
+            <Button
+              type="button"
+              variant={overdueImportanceFilter === "all" ? "default" : "outline"}
+              size="sm"
+              className="h-8"
+              onClick={() => handleOverdueImportanceFilterChange("all")}
+            >
+              All
+            </Button>
+            <Button
+              type="button"
+              variant={overdueImportanceFilter === "important" ? "default" : "outline"}
+              size="sm"
+              className="h-8"
+              onClick={() => handleOverdueImportanceFilterChange("important")}
+            >
+              Important
+            </Button>
+            <Button
+              type="button"
+              variant={overdueImportanceFilter === "normal" ? "default" : "outline"}
+              size="sm"
+              className="h-8"
+              onClick={() => handleOverdueImportanceFilterChange("normal")}
+            >
+              Normal
+            </Button>
           </div>
           {/* To Pay total */}
           <div className="px-3 py-3 border-b flex-shrink-0">
@@ -799,13 +868,13 @@ function PartyPageContent() {
         </div>
         {/* Fixed bottom: Receive, Pay, New Sale (no Bill wise – overdue mobile is always bill-wise) */}
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
-          <Button className="flex-1 h-6 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium" onClick={() => setOverdueFooterDialog("payment_in")}>
+          <Button className="flex-1 h-6 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium" onClick={() => { editingFromOverdueRef.current = true; setOverdueFooterDialog("payment_in"); }}>
             Receive
           </Button>
-          <Button className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium" onClick={() => setOverdueFooterDialog("payment_out")}>
+          <Button className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium" onClick={() => { editingFromOverdueRef.current = true; setOverdueFooterDialog("payment_out"); }}>
             Pay
           </Button>
-          <Button className="flex-1 h-6 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium" onClick={() => setOverdueFooterDialog("sale")}>
+          <Button className="flex-1 h-6 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium" onClick={() => { editingFromOverdueRef.current = true; setOverdueFooterDialog("sale"); }}>
             New Sale
           </Button>
         </div>
@@ -815,12 +884,17 @@ function PartyPageContent() {
             if (!open) {
               setOverdueVoucherToEdit(null);
               setOverdueFooterDialog(null);
+              restoreOverdueDetailAfterVoucherDialog();
             }
           }}
           voucher={overdueVoucherToEdit}
           defaultTab={overdueFooterDialog || undefined}
           defaultVoucherData={overdueVoucherToEdit ? undefined : {}}
-          onVoucherAction={() => { setOverdueVoucherToEdit(null); setOverdueFooterDialog(null); }}
+          onVoucherAction={() => {
+            setOverdueVoucherToEdit(null);
+            setOverdueFooterDialog(null);
+            restoreOverdueDetailAfterVoucherDialog();
+          }}
         />
         <HistoryDialog
           voucher={historyVoucher}
@@ -905,9 +979,17 @@ function PartyPageContent() {
       />
       <AddVoucherDialog
         isOpen={!!overdueVoucherToEdit}
-        onOpenChange={(open: boolean) => !open && setOverdueVoucherToEdit(null)}
+        onOpenChange={(open: boolean) => {
+          if (!open) {
+            setOverdueVoucherToEdit(null);
+            restoreOverdueDetailAfterVoucherDialog();
+          }
+        }}
         voucher={overdueVoucherToEdit}
-        onVoucherAction={() => setOverdueVoucherToEdit(null)}
+        onVoucherAction={() => {
+          setOverdueVoucherToEdit(null);
+          restoreOverdueDetailAfterVoucherDialog();
+        }}
       />
       <HistoryDialog
         voucher={historyVoucher}

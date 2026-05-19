@@ -202,7 +202,7 @@ export function JournalReportDetail() {
               setShowAllCompanyVouchers(false);
             }}
             mobileFooterVariant="report"
-            mobileReportStickyTitle="Journal"
+            mobileReportStickyTitle={showAllCompanyVouchers ? "All Journal" : "Journal"}
           />
           </div>
         </div>

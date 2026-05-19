@@ -6,7 +6,7 @@ import { Loader2, PlusCircle } from "lucide-react";
 import { useState } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
-import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+import { collection, doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -22,6 +22,12 @@ import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-group
 import { apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import {
+  MasterFormNameAcNoRow,
+  MasterFormTwoColGrid,
+  MasterMobileNoField,
+} from "@/components/inter-company/MasterFormLayout";
+import { interCompanyAcNoForNewEntity } from "@/lib/interCompany/interCompanyAccountNo";
 
 function createLocalEntityId(prefix: string): string {
   const rand =
@@ -33,6 +39,7 @@ function createLocalEntityId(prefix: string): string {
 
 const formSchema = z.object({
   accountName: z.string().min(2, "Account name must be at least 2 characters."),
+  phone: z.string().optional(),
   accountType: z.enum(["Bank", "Cash"], { message: "Account type is required." }),
   openingBalance: z.coerce.number().min(0),
   groupId: z.string().optional(),
@@ -54,6 +61,7 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
     resolver: zodResolver(formSchema) as Resolver<FormValues>,
     defaultValues: {
       accountName: "",
+      phone: "",
       accountType: "Bank",
       openingBalance: 0,
       bankName: "",
@@ -81,15 +89,18 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
       if (apkEntityWriteUsesLocalSqliteMirror(company)) {
         // Local-only mode: save account in browser DB and queue cloud backup sync.
         const localId = createLocalEntityId("bank");
+        const interCompanyAccountNo = await interCompanyAcNoForNewEntity("bank");
         const payload = {
           id: localId,
           ...values,
+          phone: values.phone?.trim() || null,
           ownerId: user.uid,
           companyId,
           groupId: values.groupId?.trim() || getUngroupedGroupId("bank"),
           balance: values.openingBalance,
           createdAt: new Date().toISOString(),
           isDeleted: false,
+          interCompanyAccountNo,
         };
         await upsertCompanyDocInBrowserDb(companyId, "bank_accounts", localId, payload);
         await enqueueCompanyDocOutbox(companyId, "bank_accounts", "create", localId, payload);
@@ -109,13 +120,18 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
       // If user leaves group unchanged, auto-assign/create Ungrouped before save.
       const resolvedGroupId =
         values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "bank"));
-      const docRef = await addDoc(collection(firestore, `companies/${companyId}/bank_accounts`), {
+      const bankRef = doc(collection(firestore, `companies/${companyId}/bank_accounts`));
+      const interCompanyAccountNo = await interCompanyAcNoForNewEntity("bank");
+      await setDoc(bankRef, {
         ...values,
+        phone: values.phone?.trim() || null,
         ownerId: user.uid,
         companyId,
         groupId: resolvedGroupId || getUngroupedGroupId("bank"),
         balance: values.openingBalance,
         createdAt: serverTimestamp(),
+        isDeleted: false,
+        interCompanyAccountNo,
       });
       
       toast({
@@ -145,20 +161,28 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
     <>
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <FormField
-            control={form.control}
-            name="accountName"
-            render={({ field }: any) => (
-                <FormItem>
-                <FormLabel>Account Name</FormLabel>
-                <FormControl>
-                    <Input placeholder="e.g., Primary Savings" {...field} />
-                </FormControl>
-                <FormMessage />
-                </FormItem>
-            )}
+        <div className="space-y-4">
+            <MasterFormNameAcNoRow
+              entityKind="bank"
+              mode="create"
+              nameField={
+                <FormField
+                  control={form.control}
+                  name="accountName"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Account Name</FormLabel>
+                      <FormControl>
+                        <Input placeholder="e.g., Primary Savings" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              }
             />
+            <MasterFormTwoColGrid>
+              <MasterMobileNoField control={form.control} />
             <FormField
             control={form.control}
             name="accountType"
@@ -168,7 +192,7 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
                  <RadioGroup
                     onValueChange={field.onChange}
                     defaultValue={field.value}
-                    className="flex items-center space-x-4 pt-2"
+                    className="flex h-10 w-full items-center space-x-4"
                     >
                     <FormItem className="flex items-center space-x-2 space-y-0">
                         <FormControl>
@@ -187,7 +211,9 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
                 </FormItem>
             )}
             />
-            <FormField
+            </MasterFormTwoColGrid>
+            <MasterFormTwoColGrid>
+              <FormField
               control={form.control}
               name="groupId"
               render={({ field }: any) => (
@@ -228,6 +254,26 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
                 </FormItem>
               )}
             />
+            {accountType === "Bank" ? (
+              <FormField
+                control={form.control}
+                name="bankName"
+                render={({ field }: any) => (
+                  <FormItem>
+                    <FormLabel>Bank Name</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g., State Bank of India" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            ) : (
+              <div aria-hidden className="hidden sm:block" />
+            )}
+            </MasterFormTwoColGrid>
+
+            <MasterFormTwoColGrid>
             <FormField
             control={form.control}
             name="openingBalance"
@@ -241,22 +287,11 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
                 </FormItem>
             )}
             />
+            <div />
+            </MasterFormTwoColGrid>
 
             {accountType === "Bank" && (
-                <>
-                    <FormField
-                        control={form.control}
-                        name="bankName"
-                        render={({ field }: any) => (
-                            <FormItem>
-                                <FormLabel>Bank Name</FormLabel>
-                                <FormControl>
-                                    <Input placeholder="e.g., State Bank of India" {...field} />
-                                </FormControl>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
+                <MasterFormTwoColGrid>
                     <FormField
                         control={form.control}
                         name="accountNumber"
@@ -283,7 +318,7 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
                             </FormItem>
                         )}
                     />
-                </>
+                </MasterFormTwoColGrid>
             )}
         </div>
 

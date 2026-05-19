@@ -29,6 +29,7 @@ import {
 import { useCompany } from "@/hooks/useCompany";
 import { getPlanVoucherHistoryLimit, normalizeVoucherHistoryFullBehavior } from "@/lib/voucherHistoryUtils";
 import { useAuth } from "@/hooks/useAuth";
+import usePermissions from "@/hooks/usePermissions";
 import { useState, useEffect, useMemo } from "react";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
@@ -194,28 +195,12 @@ const voucherSettingsSchema = z.object({
     (raw) => normalizeVoucherHistoryFullBehavior(raw),
     z.enum(["block_edit", "allow_edit_delete_last"]),
   ),
-  // Recurring automation: admin app-open trigger scope + optional selected users list.
+  // Recurring: company master toggle + app-open run scope (per-user rights → Manage Sharing).
   recurringVoucherSettingsEnabled: z.boolean(),
-  recurringVoucherRunScope: z.enum(["owner_only", "all_users", "selected_users"]),
-  recurringVoucherAllowedUserIdsCsv: z.string().default(""),
-  /** Voucher par Auto Monthly UI: kaun `configure_company_settings` users use kar saken. */
-  recurringVoucherEditorScope: z.enum(["all_configure_users", "owner_only", "selected_users"]),
-  recurringVoucherEditorAllowedUserIdsCsv: z.string().default(""),
-})
-  .superRefine((data, ctx) => {
-    if (data.recurringVoucherEditorScope !== "selected_users") return;
-    const ids = data.recurringVoucherEditorAllowedUserIdsCsv.split(",").map((x) => x.trim()).filter(Boolean);
-    if (ids.length === 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Select at least one user for voucher Auto Monthly access.",
-        path: ["recurringVoucherEditorAllowedUserIdsCsv"],
-      });
-    }
-  });
+  recurringVoucherRunScope: z.enum(["owner_only", "all_users"]),
+});
 
 type VoucherSettingsValues = z.infer<typeof voucherSettingsSchema>;
-type RecurringScopeUserOption = { id: string; label: string; detail?: string };
 
 export function VoucherSettings() {
   // triggerSync / reloadLocalCompanyRegistry: save ke baad header `CopyLedgerHeaderButton` + SQLite mirror jaldi align
@@ -225,42 +210,14 @@ export function VoucherSettings() {
   const { theme } = useTheme();
   const isProTheme = theme === PRO_THEME_CLASS;
   const isCompanyOwner = !!company && (company.ownerId === user?.uid || (user?.email && company.ownerEmail === user.email));
+  const { can } = usePermissions();
+  // Company recurring master — sirf `configure_recurring_auto_company` (owner ko role se sab true).
+  const canConfigureRecurringCompany = can("configure_recurring_auto_company");
   const [isLoading, setIsLoading] = useState(false);
   const [planHistoryLimit, setPlanHistoryLimit] = useState<number>(10);
    const [newPrefixValues, setNewPrefixValues] = useState<Record<keyof VoucherPrefixValues, string>>(
       Object.keys(defaultPrefixes).reduce((acc, key) => ({ ...acc, [key]: "" }), {} as any)
     );
-  const recurringScopeUserOptions = useMemo<RecurringScopeUserOption[]>(() => {
-    // Recurring selected-users dropdown: company owner + shared users ko user-name labels ke saath build karo.
-    const out: RecurringScopeUserOption[] = [];
-    const seen = new Set<string>();
-    const ownerId = String(company?.ownerId || "").trim();
-    const ownerEmail = String(company?.ownerEmail || "").trim();
-    if (ownerId) {
-      seen.add(ownerId);
-      out.push({
-        id: ownerId,
-        label: ownerEmail ? `Owner - ${ownerEmail}` : "Owner",
-        detail: ownerEmail || undefined,
-      });
-    }
-    const shared = Array.isArray(company?.sharedWith) ? company.sharedWith : [];
-    for (const row of shared as Array<Record<string, unknown>>) {
-      const uid = String(row?.uid || "").trim();
-      if (!uid || seen.has(uid)) continue;
-      const displayName = String(row?.displayName || row?.name || "").trim();
-      const email = String(row?.email || "").trim();
-      const role = String(row?.role || "").trim();
-      seen.add(uid);
-      out.push({
-        id: uid,
-        label: displayName || email || uid,
-        detail: [email, role].filter(Boolean).join(" - ") || undefined,
-      });
-    }
-    return out;
-  }, [company?.ownerId, company?.ownerEmail, company?.sharedWith]);
-
   const form = useForm<VoucherSettingsValues>({
     // zod preprocess + RHF Resolver generic mismatch — runtime OK
     resolver: zodResolver(voucherSettingsSchema) as any,
@@ -295,9 +252,6 @@ export function VoucherSettings() {
         voucherHistoryFullBehavior: 'allow_edit_delete_last' as const,
         recurringVoucherSettingsEnabled: false,
         recurringVoucherRunScope: "owner_only",
-        recurringVoucherAllowedUserIdsCsv: "",
-        recurringVoucherEditorScope: "all_configure_users",
-        recurringVoucherEditorAllowedUserIdsCsv: "",
     },
   });
 
@@ -360,23 +314,9 @@ export function VoucherSettings() {
         recurringVoucherSettingsEnabled: (company as any)?.recurringVoucherSettings?.enabled === true,
         recurringVoucherRunScope: (() => {
           const raw = String((company as any)?.recurringVoucherSettings?.runScope || "owner_only");
-          if (raw === "all_users" || raw === "selected_users" || raw === "owner_only") return raw;
+          if (raw === "all_users") return "all_users";
           return "owner_only";
         })(),
-        recurringVoucherAllowedUserIdsCsv: Array.isArray((company as any)?.recurringVoucherSettings?.allowedUserIds)
-          ? ((company as any).recurringVoucherSettings.allowedUserIds as unknown[]).map((x) => String(x || "").trim()).filter(Boolean).join(", ")
-          : "",
-        recurringVoucherEditorScope: (() => {
-          const raw = String((company as any)?.recurringVoucherSettings?.voucherAutoEditorsScope || "all_configure_users");
-          if (raw === "owner_only" || raw === "selected_users" || raw === "all_configure_users") return raw;
-          return "all_configure_users";
-        })(),
-        recurringVoucherEditorAllowedUserIdsCsv: Array.isArray((company as any)?.recurringVoucherSettings?.voucherAutoEditorsUserIds)
-          ? ((company as any).recurringVoucherSettings.voucherAutoEditorsUserIds as unknown[])
-              .map((x) => String(x || "").trim())
-              .filter(Boolean)
-              .join(", ")
-          : "",
     });
     }
   }, [company, form, planHistoryLimit]);
@@ -414,17 +354,6 @@ export function VoucherSettings() {
         toast({ title: "Plan limit applied", description: `Max history entries capped to ${planHistoryLimit} (your plan's limit).` });
       }
       const companyRef = doc(firestore, "companies", companyId);
-      const recurringAllowedUserIds =
-        data.recurringVoucherRunScope === "selected_users"
-          ? data.recurringVoucherAllowedUserIdsCsv
-              .split(",")
-              .map((x) => x.trim())
-              .filter(Boolean)
-          : [];
-      const recurringEditorAllowedUserIds =
-        data.recurringVoucherEditorScope === "selected_users"
-          ? data.recurringVoucherEditorAllowedUserIdsCsv.split(",").map((x) => x.trim()).filter(Boolean)
-          : [];
       const voucherSettingsPatch = {
         autoVoucherNumbering: data.autoVoucherNumbering,
         allowVoucherNumberEditing: data.allowVoucherNumberEditing,
@@ -442,9 +371,6 @@ export function VoucherSettings() {
         recurringVoucherSettings: {
           enabled: data.recurringVoucherSettingsEnabled,
           runScope: data.recurringVoucherRunScope,
-          allowedUserIds: recurringAllowedUserIds,
-          voucherAutoEditorsScope: data.recurringVoucherEditorScope,
-          voucherAutoEditorsUserIds: recurringEditorAllowedUserIds,
         },
       };
       await updateDoc(companyRef, voucherSettingsPatch);
@@ -753,7 +679,7 @@ export function VoucherSettings() {
               </div>
             )}
 
-            {isCompanyOwner && (
+            {canConfigureRecurringCompany && (
               <div className="space-y-4">
                 <h3 className={cn("text-lg font-medium pb-2", VS_BORDER_B)}>Recurring Auto Voucher</h3>
                 <Card className={cn("p-4 space-y-4", VS_CARD_BORDER)}>
@@ -788,223 +714,19 @@ export function VoucherSettings() {
                           </FormControl>
                           <SelectContent>
                             <SelectItem value="owner_only">Owner/Admin only</SelectItem>
-                            <SelectItem value="all_users">All users</SelectItem>
-                            <SelectItem value="selected_users">Selected user IDs</SelectItem>
+                            <SelectItem value="all_users">Users with “Trigger month-end…” permission</SelectItem>
                           </SelectContent>
                         </Select>
                         <FormDescription>
-                          Control who can trigger recurring creation when they open the app.
+                          When not owner-only, only roles with trigger permission in Manage Sharing → Recurring Auto Voucher
+                          run generation on app open. Auto Monthly on vouchers uses the same permission group.
                         </FormDescription>
                       </FormItem>
                     )}
                   />
-                  {form.watch("recurringVoucherRunScope") === "selected_users" ? (
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:items-start md:gap-4">
-                      <FormField
-                        control={form.control}
-                        name="recurringVoucherAllowedUserIdsCsv"
-                        render={({ field }: any) => (
-                          <FormItem>
-                            <FormLabel>Allowed users</FormLabel>
-                            <FormControl>
-                              <div className="space-y-2">
-                                <DropdownMenu>
-                                  <DropdownMenuTrigger asChild>
-                                    <Button type="button" variant="outline" className={cn("w-full justify-start text-left font-normal", VS_FIELD_OUTLINE)}>
-                                      {(() => {
-                                        // Selected ids ko friendly user names me show karo; unknown id fallback raw id.
-                                        const selectedIds = String(field.value || "")
-                                          .split(",")
-                                          .map((x) => x.trim())
-                                          .filter(Boolean);
-                                        if (selectedIds.length === 0) return "Select users";
-                                        const labels = selectedIds.map(
-                                          (id) => recurringScopeUserOptions.find((u) => u.id === id)?.label || id,
-                                        );
-                                        return `${labels.join(", ")}`;
-                                      })()}
-                                    </Button>
-                                  </DropdownMenuTrigger>
-                                  <DropdownMenuContent align="start" className="w-[26rem] max-w-[90vw]">
-                                    <DropdownMenuLabel>Select users who can trigger recurring</DropdownMenuLabel>
-                                    <DropdownMenuSeparator />
-                                    {recurringScopeUserOptions.length === 0 ? (
-                                      <div className="px-2 py-3 text-sm text-muted-foreground">
-                                        No company users found.
-                                      </div>
-                                    ) : (
-                                      recurringScopeUserOptions.map((opt) => {
-                                        const selectedIds = String(field.value || "")
-                                          .split(",")
-                                          .map((x) => x.trim())
-                                          .filter(Boolean);
-                                        const checked = selectedIds.includes(opt.id);
-                                        return (
-                                          <DropdownMenuCheckboxItem
-                                            key={opt.id}
-                                            checked={checked}
-                                            onCheckedChange={(nextChecked) => {
-                                              // Check/uncheck ke baad same csv field update rakho so existing save logic unchanged rahe.
-                                              const set = new Set(selectedIds);
-                                              if (nextChecked) set.add(opt.id);
-                                              else set.delete(opt.id);
-                                              field.onChange(Array.from(set).join(", "));
-                                            }}
-                                            onSelect={(e) => e.preventDefault()}
-                                          >
-                                            <div className="flex flex-col">
-                                              <span>{opt.label}</span>
-                                              {opt.detail ? (
-                                                <span className="text-xs text-muted-foreground">{opt.detail}</span>
-                                              ) : null}
-                                            </div>
-                                          </DropdownMenuCheckboxItem>
-                                        );
-                                      })
-                                    )}
-                                  </DropdownMenuContent>
-                                </DropdownMenu>
-                                <div className="flex flex-wrap gap-1">
-                                  {String(field.value || "")
-                                    .split(",")
-                                    .map((x) => x.trim())
-                                    .filter(Boolean)
-                                    .map((id) => {
-                                      const u = recurringScopeUserOptions.find((row) => row.id === id);
-                                      return (
-                                        <Badge key={id} variant="secondary">
-                                          {u?.label || id}
-                                        </Badge>
-                                      );
-                                    })}
-                                </div>
-                              </div>
-                            </FormControl>
-                            <FormDescription>
-                              Select users by name. Their user IDs are saved internally for generation permission.
-                            </FormDescription>
-                          </FormItem>
-                        )}
-                      />
-                      {/* Allowed users ke saath dahini taraf: month-end app-open behaviour explain. */}
-                      <p className={cn("text-sm leading-snug text-muted-foreground rounded-md bg-muted/40 p-3 md:mt-7", VS_DASHED_BOX)}>
-                        Month-end recurring voucher generation runs on app open based on this company setting.
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">
-                      Month-end recurring voucher generation runs on app open based on this company setting.
-                    </p>
-                  )}
-                  {/* App-open trigger vs voucher-par Auto Monthly editors — do alag permission blocks. */}
-                  <Separator className={VS_SEPARATOR_LEDGER} />
-                  <FormField
-                    control={form.control}
-                    name="recurringVoucherEditorScope"
-                    render={({ field }: any) => (
-                      <FormItem>
-                        <FormLabel>Who can use Auto Monthly on vouchers</FormLabel>
-                        <Select value={field.value} onValueChange={field.onChange}>
-                          <FormControl>
-                            <SelectTrigger className={VS_FIELD_OUTLINE}>
-                              <SelectValue placeholder="Select scope" />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            <SelectItem value="all_configure_users">Everyone with Configure Company Settings</SelectItem>
-                            <SelectItem value="owner_only">Company owner only</SelectItem>
-                            <SelectItem value="selected_users">Selected users only</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <FormDescription>
-                          Strip, settings dialog, template save on voucher, and Generate now. Role permission
-                          &quot;Configure Company Settings&quot; is still required; this narrows which of those users may use Auto Monthly.
-                        </FormDescription>
-                      </FormItem>
-                    )}
-                  />
-                  {form.watch("recurringVoucherEditorScope") === "selected_users" && (
-                    <FormField
-                      control={form.control}
-                      name="recurringVoucherEditorAllowedUserIdsCsv"
-                      render={({ field }: any) => (
-                        <FormItem>
-                          <FormLabel>Users who may configure Auto Monthly on vouchers</FormLabel>
-                          <FormControl>
-                            <div className="space-y-2">
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button type="button" variant="outline" className={cn("w-full justify-start text-left font-normal", VS_FIELD_OUTLINE)}>
-                                    {(() => {
-                                      const selectedIds = String(field.value || "")
-                                        .split(",")
-                                        .map((x) => x.trim())
-                                        .filter(Boolean);
-                                      if (selectedIds.length === 0) return "Select users";
-                                      const labels = selectedIds.map(
-                                        (id) => recurringScopeUserOptions.find((u) => u.id === id)?.label || id,
-                                      );
-                                      return labels.join(", ");
-                                    })()}
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="start" className="w-[26rem] max-w-[90vw]">
-                                  <DropdownMenuLabel>Select users</DropdownMenuLabel>
-                                  <DropdownMenuSeparator />
-                                  {recurringScopeUserOptions.length === 0 ? (
-                                    <div className="px-2 py-3 text-sm text-muted-foreground">No company users found.</div>
-                                  ) : (
-                                    recurringScopeUserOptions.map((opt) => {
-                                      const selectedIds = String(field.value || "")
-                                        .split(",")
-                                        .map((x) => x.trim())
-                                        .filter(Boolean);
-                                      const checked = selectedIds.includes(opt.id);
-                                      return (
-                                        <DropdownMenuCheckboxItem
-                                          key={opt.id}
-                                          checked={checked}
-                                          onCheckedChange={(nextChecked) => {
-                                            const set = new Set(selectedIds);
-                                            if (nextChecked) set.add(opt.id);
-                                            else set.delete(opt.id);
-                                            field.onChange(Array.from(set).join(", "));
-                                          }}
-                                          onSelect={(e) => e.preventDefault()}
-                                        >
-                                          <div className="flex flex-col">
-                                            <span>{opt.label}</span>
-                                            {opt.detail ? (
-                                              <span className="text-xs text-muted-foreground">{opt.detail}</span>
-                                            ) : null}
-                                          </div>
-                                        </DropdownMenuCheckboxItem>
-                                      );
-                                    })
-                                  )}
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                              <div className="flex flex-wrap gap-1">
-                                {String(field.value || "")
-                                  .split(",")
-                                  .map((x) => x.trim())
-                                  .filter(Boolean)
-                                  .map((id) => {
-                                    const u = recurringScopeUserOptions.find((row) => row.id === id);
-                                    return (
-                                      <Badge key={id} variant="secondary">
-                                        {u?.label || id}
-                                      </Badge>
-                                    );
-                                  })}
-                              </div>
-                            </div>
-                          </FormControl>
-                          <FormDescription>At least one user required. User IDs stored on the company document.</FormDescription>
-                        </FormItem>
-                      )}
-                    />
-                  )}
+                  <p className={cn("text-sm leading-snug text-muted-foreground rounded-md bg-muted/40 p-3", VS_DASHED_BOX)}>
+                    Month-end recurring runs on app open when company recurring is ON and this scope allows the user.
+                  </p>
                 </Card>
               </div>
             )}

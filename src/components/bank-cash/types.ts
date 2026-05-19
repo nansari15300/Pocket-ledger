@@ -23,6 +23,7 @@ export type Account = {
   debit: number;
   credit: number;
   fileUrl?: string;
+  phone?: string;
   isDeleted?: boolean;
   isOwnerAccount?: boolean;
 };

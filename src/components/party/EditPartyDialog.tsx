@@ -28,6 +28,11 @@ import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Textarea } from "../ui/textarea";
 import { CreateGroupDialog } from "./CreateGroupDialog";
 import { toast as sonnerToast } from "sonner";
+import {
+  MasterFormNameAcNoRow,
+  MasterMobileNoField,
+  MasterFormTwoColGrid,
+} from "@/components/inter-company/MasterFormLayout";
 import { Combobox } from "../ui/combobox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { useDate } from "@/hooks/useDate";
@@ -58,6 +63,12 @@ import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
   MASTER_DIALOG_FOOTER_ROW_CLASS,
 } from "@/lib/masterDialogFooterStyles";
+import { useIsMobile } from "@/hooks/use-mobile";
+import {
+  cnMasterEntityDialogContent,
+  masterEntityDialogFormWrapperClassName,
+  masterEntityDialogHeaderClassName,
+} from "@/lib/masterEntityDialogClasses";
 
 /** Create form jaisa: combobox value hamesha `ungrouped_party` ho jab party bucket “Ungrouped” ho (null / legacy empty). */
 function normalizePartyEditGroupId(groupId: string | null | undefined): string {
@@ -109,6 +120,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
   const { canAddAvatar, canAddFileImagePdf } = usePermissions();
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { dateSystem } = useDate();
+  const isMobile = useIsMobile();
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -556,64 +568,86 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {isOpen && <div className="fixed inset-0 bg-black/45 backdrop-blur-sm z-40" />}
         <DialogContent
-            className="z-50 max-h-[85vh] w-[98vw] max-w-[98vw] flex min-h-0 flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:w-full sm:max-w-3xl sm:px-6"
+            className={cnMasterEntityDialogContent(isMobile)}
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
         >
-          <DialogHeader className="shrink-0">
+          <DialogHeader className={masterEntityDialogHeaderClassName}>
             <DialogTitle>Edit Party</DialogTitle>
             <DialogDescription>Update the details for {party.name}.</DialogDescription>
           </DialogHeader>
+          <div className={masterEntityDialogFormWrapperClassName}>
           <Form {...form}>
             {/* Scroll body + ek hi row footer: Cancel • Bin • Save — pehle grid me Save neeche doosri line tha */}
             <form onSubmit={form.handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <FormField
-                    control={form.control}
-                    name="name"
-                    render={({ field }: any) => (
+            <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
+              <MasterFormNameAcNoRow
+                  entityKind="party"
+                  entityId={party.id}
+                  mode="edit"
+                  nameField={
+                    <FormField
+                      control={form.control}
+                      name="name"
+                      render={({ field }: any) => (
                         <FormItem>
-                        <FormLabel>Party Name</FormLabel>
-                        <FormControl>
+                          <FormLabel>Party Name</FormLabel>
+                          <FormControl>
                             <Input placeholder="e.g., Creative Solutions Ltd." {...field} />
-                        </FormControl>
-                        <FormMessage />
+                          </FormControl>
+                          <FormMessage />
                         </FormItem>
-                    )}
+                      )}
                     />
+                  }
+                />
+              <MasterFormTwoColGrid>
                 <FormField
                   control={form.control}
                   name="groupId"
                   render={({ field }: any) => (
-                    <FormItem className="flex flex-col space-y-1 w-full">
+                    <FormItem>
                       <FormLabel>Group</FormLabel>
+                      <Combobox
+                        options={partyGroupOptions}
+                        value={field.value}
+                        onChange={(val, newName) => {
+                          if (val === "add-new") {
+                            setIsCreateGroupOpen(true);
+                            setTimeout(() => {
+                              document.dispatchEvent(
+                                new CustomEvent("prefill-create-group-name", { detail: newName })
+                              );
+                            }, 100);
+                          } else {
+                            field.onChange(val === "none" ? "" : val);
+                          }
+                        }}
+                        placeholder="Select a group"
+                        addNewLabel="+ Add New Group"
+                      />
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="pan"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>PAN/VAT No.</FormLabel>
                       <FormControl>
-                        <div className="w-full">
-                           <Combobox
-                              options={partyGroupOptions}
-                              value={field.value}
-                              onChange={(val, newName) => {
-                                  if (val === 'add-new') {
-                                    setIsCreateGroupOpen(true);
-                                    setTimeout(() => {
-                                      document.dispatchEvent(new CustomEvent('prefill-create-group-name', { detail: newName }));
-                                    }, 100);
-                                  } else {
-                                    field.onChange(val === 'none' ? '' : val);
-                                  }
-                              }}
-                              placeholder="Select a group"
-                              addNewLabel="+ Add New Group"
-                            />
-                        </div>
+                        <Input placeholder="ABCDE1234F" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
+              </MasterFormTwoColGrid>
+              <MasterFormTwoColGrid>
+                <MasterMobileNoField control={form.control} placeholder="+91 12345 67890" />
                 <FormField
                   control={form.control}
                   name="email"
@@ -627,34 +661,22 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                     </FormItem>
                   )}
                 />
+              </MasterFormTwoColGrid>
                 <FormField
                   control={form.control}
-                  name="phone"
+                  name="address"
                   render={({ field }: any) => (
                     <FormItem>
-                      <FormLabel>Phone No.</FormLabel>
+                      <FormLabel>Address</FormLabel>
                       <FormControl>
-                        <Input placeholder="+91 12345 67890" {...field} />
+                        <Textarea placeholder="123 Main Street, Anytown..." {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
-                <FormField
-                  control={form.control}
-                  name="pan"
-                  render={({ field }: any) => (
-                    <FormItem>
-                      <FormLabel>PAN No.</FormLabel>
-                      <FormControl>
-                        <Input placeholder="ABCDE1234F" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                {/* OB + date — File tick hata: attachments sirf Documents section + statement row */}
-                <div className="md:col-span-1 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {/* Opening balance | As on date — ek row, barabar width */}
+                <MasterFormTwoColGrid>
                   <FormField
                     control={form.control}
                     name="openingBalance"
@@ -701,21 +723,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                       </FormItem>
                     )}
                   />
-                </div>
-                <FormField
-                  control={form.control}
-                  name="address"
-                  render={({ field }: any) => (
-                    <FormItem className="md:col-span-2">
-                      <FormLabel>Address</FormLabel>
-                      <FormControl>
-                        <Textarea placeholder="123 Main Street, Anytown..." {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
+                </MasterFormTwoColGrid>
                 <FormItem>
                   <FormLabel>Profile photo</FormLabel>
                   {!canAddAvatar ? (
@@ -874,6 +882,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
               </DialogFooter>
             </form>
           </Form>
+          </div>
         </DialogContent>
       </Dialog>
       

@@ -61,6 +61,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDate } from "@/hooks/useDate";
+import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
+
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { EditAccountDialog } from "../bank-cash/EditAccountDialog";
 import BsDatePicker from "@/components/ui/BsDatePicker";
@@ -107,6 +110,10 @@ import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { useVouchers } from "@/hooks/useVouchers";
 import { PermissionButton } from "@/components/permission";
+import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
+import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
+import { RunningBalanceFullChart } from "@/components/reports/RunningBalanceFullChart";
 
 interface AccountDetailsProps {
   account: Account;
@@ -163,6 +170,7 @@ export function AccountDetails({
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [mobileSearchTerm, setMobileSearchTerm] = useState("");
+  const [mobileReportView, setMobileReportView] = useState<"list" | "chart">("list");
   const [isDateSearchMode, setIsDateSearchMode] = useState(false);
   // Desktop Calendar State
   const [isDesktopCalendarOpen, setIsDesktopCalendarOpen] = useState(false);
@@ -179,6 +187,17 @@ export function AccountDetails({
     if (!allAccounts) return initialAccount;
     return allAccounts.find(p => p.id === initialAccount.id) || initialAccount;
   }, [allAccounts, initialAccount]);
+
+  // All Journal / All Contra: page 1 = latest (party tail jaisa); single account = page 1 = oldest.
+  const isContraAllView = Boolean(
+    isAllVouchersView && account?.id === "all" && account.accountName?.includes("Contra")
+  );
+  const isJournalAllView = Boolean(
+    isAllVouchersView &&
+      account?.id === "all" &&
+      (account.accountName?.includes("Journal") || account.accountType === "journal_view")
+  );
+  const useTailPaging = isJournalAllView || isContraAllView;
 
   useEffect(() => {
     setCurrentPage(1);
@@ -283,8 +302,15 @@ export function AccountDetails({
     }
     const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
     const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
-    const startIdx = (safePage - 1) * rowsPerPage;
-    const endIdx = Math.min(startIdx + rowsPerPage, total);
+    let startIdx: number;
+    let endIdx: number;
+    if (useTailPaging) {
+      endIdx = total - (safePage - 1) * rowsPerPage;
+      startIdx = Math.max(0, endIdx - rowsPerPage);
+    } else {
+      startIdx = (safePage - 1) * rowsPerPage;
+      endIdx = Math.min(startIdx + rowsPerPage, total);
+    }
     const pageRows = list.slice(startIdx, endIdx);
     const previousTx = startIdx > 0 ? list[startIdx - 1] : null;
     const previousRunningBalance =
@@ -309,7 +335,11 @@ export function AccountDetails({
       closingForPage = adjusted.closingForPage;
     }
     return { pageRows, openingForPage, periodDrForPage, periodCrForPage, closingForPage };
-  }, [ledgerListForDisplay, rowsPerPage, currentPage, openingBalanceForPeriod, statementCheck.adjustPeriodTotals]);
+  }, [ledgerListForDisplay, rowsPerPage, currentPage, openingBalanceForPeriod, statementCheck.adjustPeriodTotals, useTailPaging]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(Math.max(1, prev), totalPages));
+  }, [totalPages]);
 
   const paginatedTransactions = ledgerPagination.pageRows;
   const ledgerPageStats = {
@@ -330,16 +360,25 @@ export function AccountDetails({
       if (hasLedgerDateFilter) return dateRange?.from;
       return undefined;
     }
-    if (currentPage === 1) {
+    const totalPagesLocal = Math.max(1, Math.ceil(list.length / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    let sliceStart: number;
+    if (useTailPaging) {
+      const total = list.length;
+      const end = total - (safePage - 1) * rowsPerPage;
+      sliceStart = Math.max(0, end - rowsPerPage);
+    } else {
+      sliceStart = (safePage - 1) * rowsPerPage;
+    }
+    if (sliceStart === 0) {
       if (hasLedgerDateFilter) return dateRange?.from;
       return undefined;
     }
-    const prevLastIdx = (currentPage - 1) * rowsPerPage - 1;
-    const t = list[prevLastIdx] as any;
+    const t = list[sliceStart - 1] as any;
     if (!t) return undefined;
     const raw = t.date?.toDate ? t.date.toDate() : t.date ? new Date(t.date) : undefined;
     return raw instanceof Date && !isNaN(raw.getTime()) ? raw : undefined;
-  }, [processedTransactions, rowsPerPage, currentPage, hasLedgerDateFilter, dateRange?.from]);
+  }, [processedTransactions, rowsPerPage, currentPage, hasLedgerDateFilter, dateRange?.from, useTailPaging]);
 
   /** Master books OB — Book Opening pill / stacked card (form se). */
   const masterAccountOpening = Number(account.openingBalance) || 0;
@@ -515,6 +554,38 @@ export function AccountDetails({
     });
   }, [processedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
 
+  /** Reports mobile (Journal/Contra all-vouchers): tail/head slice + pager edge counts */
+  const mobileReportPagingWindow = useMemo(() => {
+    const list = filteredMobileTransactions;
+    const total = list.length;
+    const totalPagesLocal = rowsPerPage > 0 ? Math.max(1, Math.ceil(total / rowsPerPage)) : 1;
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    if (rowsPerPage <= 0) {
+      return { pageTransactions: list, before: 0, after: 0 };
+    }
+    if (useTailPaging) {
+      const end = total - (safePage - 1) * rowsPerPage;
+      const start = Math.max(0, end - rowsPerPage);
+      return {
+        pageTransactions: list.slice(start, end),
+        before: start,
+        after: Math.max(0, total - end),
+      };
+    }
+    const start = (safePage - 1) * rowsPerPage;
+    const end = Math.min(start + rowsPerPage, total);
+    return {
+      pageTransactions: list.slice(start, end),
+      before: start,
+      after: Math.max(0, total - end),
+    };
+  }, [filteredMobileTransactions, rowsPerPage, currentPage, useTailPaging]);
+
+  const mobileReportPaginatedTransactions = mobileReportPagingWindow.pageTransactions;
+  const mobileReportPagerEdgeCounts = {
+    before: mobileReportPagingWindow.before,
+    after: mobileReportPagingWindow.after,
+  };
 
   const TransactionRow = React.memo(({ transaction }: { transaction: any }) => {
     const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
@@ -545,7 +616,10 @@ export function AccountDetails({
                       <p className={cn("font-bold text-sm whitespace-nowrap", transaction.debit > 0 ? "text-green-600" : "text-red-600")}>{formatCurrency(transaction.debit > 0 ? transaction.debit : transaction.credit)}</p>
                       <div className="flex flex-col items-end">
                           <Badge variant="secondary" className={cn("font-normal text-xs px-1.5 py-0.5", transaction.balance >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800')}>Bal: {formatCurrency(transaction.balance)}</Badge>
-                          <p className="text-xs text-muted-foreground font-medium mt-1">User: {userNames?.[transaction.userId] || 'N/A'}</p>
+                          {/* Mobile card: user naam ek line — wrap na ho */}
+                          <p className="text-xs text-muted-foreground font-medium mt-1 whitespace-nowrap truncate max-w-[min(42vw,9rem)]">
+                            User: {userNames?.[transaction.userId] || "N/A"}
+                          </p>
                       </div>
                 </div>
             </div>
@@ -564,6 +638,8 @@ export function AccountDetails({
     // `report`: Reports hub Contra/Journal — Party header + Print/Excel/Date; `ledger`: bank-cash quick voucher row.
     const isReportChrome = mobileFooterVariant === "report";
     const reportTitle = mobileReportStickyTitle ?? "Report";
+    // All Journal / All Contra: sirf ek title — "All Journal · All Journal Vouchers" duplicate na ho.
+    const reportHeaderTitleOnly = isReportChrome && useTailPaging;
     const dateLineLabel = buildDateRangeText();
     const hasDateFilterMobile = !!(dateRange?.from || dateRange?.to);
 
@@ -642,51 +718,149 @@ export function AccountDetails({
       </Drawer>
     );
 
-    return (
-      <div className="relative flex w-full min-h-0 flex-1 flex-col overflow-hidden">
-        {isReportChrome ? (
-          <header className="sticky top-0 z-10 flex-shrink-0 flex flex-col gap-2 border-b bg-white p-3">
+    // Reports drill-down (dashboard txn count → Journal/Contra): Party ledger mobile — collapsible summary + scroll + pager
+    if (isReportChrome) {
+      return (
+        <div className="relative flex w-full min-h-0 flex-1 flex-col overflow-hidden">
+          <header className="sticky top-0 z-10 flex-shrink-0 border-b bg-white p-3 dark:bg-card">
             <div className="flex min-w-0 items-center gap-2">
               {onBack ? (
                 <Button variant="ghost" size="icon" className="h-8 w-8 flex-shrink-0" onClick={onBack}>
                   <ArrowLeft className="h-4 w-4" />
                 </Button>
               ) : null}
-              <div className="flex min-w-0 flex-1 items-center gap-1">
-                <h1 className="shrink-0 text-base font-bold text-muted-foreground">{reportTitle}</h1>
-                <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
-                  ·
-                </span>
-                <span
-                  className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
-                  title={account.accountName}
-                >
-                  {account.accountName}
-                </span>
-              </div>
-              <span className={cn("shrink-0 text-sm font-bold whitespace-nowrap", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                {formatCurrency(closingBalance, { showDrCr: true })}
-              </span>
+              {reportHeaderTitleOnly ? (
+                <h1 className="min-w-0 flex-1 text-base font-bold text-muted-foreground">{reportTitle}</h1>
+              ) : (
+                <>
+                  <div className="flex min-w-0 flex-1 items-center gap-1">
+                    <h1 className="shrink-0 text-base font-bold text-muted-foreground">{reportTitle}</h1>
+                    <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
+                      ·
+                    </span>
+                    <span
+                      className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
+                      title={account.accountName}
+                    >
+                      {account.accountName}
+                    </span>
+                  </div>
+                  <span
+                    className={cn(
+                      "shrink-0 text-sm font-bold whitespace-nowrap",
+                      closingBalance >= 0 ? "text-green-600" : "text-red-600"
+                    )}
+                  >
+                    {formatCurrency(closingBalance, { showDrCr: true })}
+                  </span>
+                </>
+              )}
             </div>
-            <div className="flex items-center justify-center gap-2">
+          </header>
+
+          <MobileDetailSummaryCollapsible>
+            <div className="flex flex-shrink-0 items-center justify-center gap-2 border-b px-2 py-1">
               <span className="text-xs font-medium text-muted-foreground">{dateLineLabel}</span>
               {hasDateFilterMobile ? (
-                <Button variant="ghost" size="icon" className="h-6 w-6 flex-shrink-0" title="Clear date filter" onClick={() => onDateRangeChange(undefined)}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 flex-shrink-0"
+                  title="Clear date filter"
+                  onClick={() => onDateRangeChange(undefined)}
+                >
                   <X className="h-3.5 w-3.5" />
                 </Button>
               ) : null}
             </div>
-            <div className="relative">
+            <div className="relative flex-shrink-0 border-b p-2">
               <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder="search transactions"
                 className="w-full pl-9"
                 value={mobileSearchTerm}
-                onChange={(e) => setMobileSearchTerm(e.target.value)}
+                onChange={(e) => {
+                  setMobileSearchTerm(e.target.value);
+                  setCurrentPage(1);
+                }}
               />
             </div>
-          </header>
-        ) : (
+          </MobileDetailSummaryCollapsible>
+
+          <div
+            className="min-h-0 flex-1 overflow-auto scroll-touch"
+            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+          >
+            <div className="pb-2">
+              {mobileReportView === "chart" ? (
+                <RunningBalanceFullChart
+                  transactions={filteredMobileTransactions}
+                  openingBalance={openingBalanceForPeriod}
+                />
+              ) : (
+              <TransactionsTable
+                transactions={mobileReportPaginatedTransactions}
+                context="account"
+                contextId={account.id}
+                dateRange={dateRange}
+                openingBalance={ledgerPageStats.openingForPage}
+                booksOpeningBalance={masterAccountOpening}
+                openingBalanceDate={(account as { openingBalanceDate?: unknown }).openingBalanceDate}
+                ledgerDateFilterActive={hasLedgerDateFilter}
+                ledgerShowBookOpeningRow={rowsPerPage <= 0 || currentPage === 1}
+                openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
+                showNarration={showNarration}
+                visibleColumns={visibleColumns}
+                userNames={userNames}
+                journalAccountNames={journalAccountNames}
+                onRowClick={handleEditVoucher}
+                filters={filters}
+                setFilters={setFilters}
+                activeFilter={activeFilter}
+                setActiveFilter={setActiveFilter}
+                periodDr={ledgerPageStats.periodDrForPage}
+                periodCr={ledgerPageStats.periodCrForPage}
+                closingBalance={ledgerPageStats.closingForPage}
+                hideFooter
+                transactionCardSearchHighlight={mobileSearchTerm}
+                {...statementCheck.tableProps}
+              />
+              )}
+            </div>
+          </div>
+
+          {mobileReportView === "list" ? (
+          <MobileTransactionsPager
+            className="mb-12 flex-shrink-0"
+            currentPage={currentPage}
+            totalItems={filteredMobileTransactions.length}
+            rowsPerPage={rowsPerPage}
+            onRowsPerPageChange={(nextRows) => {
+              setRowsPerPage(nextRows);
+              setCurrentPage(1);
+            }}
+            onPageChange={setCurrentPage}
+            edgeCounts={rowsPerPage > 0 && useTailPaging ? mobileReportPagerEdgeCounts : undefined}
+            pagingMode={useTailPaging ? "newest-first" : "oldest-first"}
+          />
+          ) : null}
+
+          {mobileCalendarDrawer}
+
+          <ReportMobileLedgerFooter
+            onPrint={handlePrintStatement}
+            onExcel={handleExcelLedger}
+            onDateOpen={() => setIsCalendarOpen(true)}
+            showBillWise={false}
+            mobileView={mobileReportView}
+            onViewToggle={() => setMobileReportView((v) => (v === "list" ? "chart" : "list"))}
+          />
+        </div>
+      );
+    }
+
+    return (
+      <div className="relative flex w-full min-h-0 flex-1 flex-col overflow-hidden">
           <div className="sticky top-0 z-10 flex-shrink-0 space-y-3 border-b bg-background p-2">
             <div className="bg-card flex items-center justify-between gap-2 rounded-lg p-3">
               {onBack && (
@@ -729,7 +903,6 @@ export function AccountDetails({
               </div>
             </div>
           </div>
-        )}
 
         {openingBalanceForPeriod !== 0 && (
           <div className="bg-muted/30 m-4 rounded-lg p-3">
@@ -752,32 +925,7 @@ export function AccountDetails({
 
         {mobileCalendarDrawer}
 
-        {isReportChrome ? (
-          <footer className="fixed bottom-0 left-0 right-0 z-50 flex items-stretch justify-around gap-1 border-t bg-white p-1.5">
-            <PermissionButton
-              permission="export_data"
-              className="flex min-w-0 flex-1 flex-col items-center justify-center rounded-md bg-green-500 py-1 text-white hover:bg-green-600"
-              onClick={handlePrintStatement}
-            >
-              <Printer className="mb-0 h-4 w-4" /> <span className="text-[10px] leading-tight">Print</span>
-            </PermissionButton>
-            <PermissionButton
-              permission="export_data"
-              className="flex min-w-0 flex-1 flex-col items-center justify-center rounded-md bg-yellow-500 py-1 text-white hover:bg-yellow-600"
-              onClick={handleExcelLedger}
-            >
-              <File className="mb-0 h-4 w-4" /> <span className="text-[10px] leading-tight">Excel</span>
-            </PermissionButton>
-            <Button
-              type="button"
-              className="flex min-w-0 flex-1 flex-col items-center justify-center rounded-md bg-slate-500 py-1 text-white hover:bg-slate-600"
-              onClick={() => setIsCalendarOpen(true)}
-            >
-              <CalendarIcon className="mb-0 h-4 w-4" /> <span className="text-[10px] leading-tight">Date</span>
-            </Button>
-          </footer>
-        ) : (
-          <div className="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-around gap-2 border-t bg-background/80 p-2 backdrop-blur-sm">
+        <div className="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-around gap-2 border-t bg-background/80 p-2 backdrop-blur-sm">
             <AddVoucherDialog defaultTab="payment_in">
               <Button className="h-12 flex-1 rounded-lg bg-green-500 hover:bg-green-600">Receive</Button>
             </AddVoucherDialog>
@@ -791,16 +939,12 @@ export function AccountDetails({
               <CalendarIcon />
             </Button>
           </div>
-        )}
       </div>
     );
   };
 
   const renderDesktopView = () => {
-    // Exclude Contra and Journal from "Under Development" - they should show all transactions
-    const isContraAllView = isAllVouchersView && account.id === 'all' && account.accountName?.includes('Contra');
-    const isJournalAllView = isAllVouchersView && account.id === 'all' && (account.accountName?.includes('Journal') || account.accountType === 'journal_view');
-    // Show "Under Development" only if it's all vouchers view AND it's NOT contra all view AND it's NOT journal all view
+    // Show "Under Development" only if it's all vouchers view AND it's NOT contra/journal all view
     if (isAllVouchersView && !isContraAllView && !isJournalAllView && (account.accountType === "journal_view" || account.id === 'all')) {
         return (
             <Card className="h-full flex items-center justify-center">
@@ -1055,7 +1199,7 @@ export function AccountDetails({
 
   return (
     <>
-      <div className="h-full">
+      <div className={cn("h-full", isMobile && mobileFooterVariant === "report" && "flex min-h-0 flex-1 flex-col")}>
         {isMobile ? renderMobileView() : renderDesktopView()}
       </div>
       <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>

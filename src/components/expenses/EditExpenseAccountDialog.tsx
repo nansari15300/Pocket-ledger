@@ -29,6 +29,11 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import {
+  MasterFormNameAcNoRow,
+  MasterFormTwoColGrid,
+  MasterMobileNoField,
+} from "@/components/inter-company/MasterFormLayout";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
@@ -73,6 +78,7 @@ function normalizeExpenseAccountEditGroupId(groupId: string | null | undefined):
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Account name must be at least 2 characters." }),
+  phone: z.string().optional(),
   groupId: z.string().optional(),
   openingBalance: z.coerce.number(),
   openingBalanceDate: z.date().optional(),
@@ -128,6 +134,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
     defaultValues: {
       name: account.name,
+      phone: account.phone ?? "",
       groupId: normalizeExpenseAccountEditGroupId(account.groupId),
       openingBalance: account.openingBalance || 0,
       openingBalanceDate: (account as any).openingBalanceDate?.toDate ? (account as any).openingBalanceDate.toDate() : undefined,
@@ -150,6 +157,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
       }
       form.reset({
         name: account.name,
+        phone: account.phone ?? "",
         groupId: normalizeExpenseAccountEditGroupId(account.groupId),
         openingBalance: account.openingBalance || 0,
         openingBalanceDate: finalDate,
@@ -285,6 +293,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
         const narrationClean = values.openingBalanceNarration?.trim() || null;
         const updatePayload = {
           name: values.name,
+          phone: values.phone?.trim() || null,
           groupId: values.groupId || null,
           openingBalance: newOpeningBalance,
           openingBalanceDate: values.openingBalanceDate || null,
@@ -485,34 +494,45 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
           <div className={masterEntityDialogFormWrapperClassName}>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:pr-2">
-              <FormField
-                control={form.control}
-                name="name"
-                render={({ field }: any) => (
-                  <FormItem>
-                    <FormLabel>Account Name</FormLabel>
-                    <FormControl>
-                      <Input placeholder="e.g., Office Rent" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
+            <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:pr-2">
+              <MasterFormNameAcNoRow
+                entityKind="expense"
+                entityId={account.id}
+                mode="edit"
+                nameField={
+                  <FormField
+                    control={form.control}
+                    name="name"
+                    render={({ field }: any) => (
+                      <FormItem>
+                        <FormLabel>Account Name</FormLabel>
+                        <FormControl>
+                          <Input placeholder="e.g., Office Rent" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                }
               />
-              <FormField
-                control={form.control}
-                name="groupId"
-                render={({ field }: any) => (
-                  <FormItem>
-                    <FormLabel>Group (Optional)</FormLabel>
-                     <Combobox
+              <MasterFormTwoColGrid>
+                <MasterMobileNoField control={form.control} />
+                <FormField
+                  control={form.control}
+                  name="groupId"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Group (Optional)</FormLabel>
+                      <Combobox
                         options={allGroupOptions}
                         value={field.value}
                         onChange={(value, newName) => {
                           if (value === "add-new") {
                             setIsCreateGroupOpen(true);
                             setTimeout(() => {
-                              document.dispatchEvent(new CustomEvent('prefill-create-expense-group-name', { detail: newName }));
+                              document.dispatchEvent(
+                                new CustomEvent("prefill-create-expense-group-name", { detail: newName })
+                              );
                             }, 100);
                           } else {
                             field.onChange(value === "none" ? "" : value);
@@ -521,11 +541,12 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                         placeholder="Select a group"
                         addNewLabel="+ Add New Group"
                       />
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <div className="grid grid-cols-2 gap-4">
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </MasterFormTwoColGrid>
+              <MasterFormTwoColGrid>
                 <FormField
                   control={form.control}
                   name="openingBalance"
@@ -572,7 +593,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                     </FormItem>
                   )}
                 />
-              </div>
+              </MasterFormTwoColGrid>
 
               <EntityProfilePhotoBlock
                 file={file}

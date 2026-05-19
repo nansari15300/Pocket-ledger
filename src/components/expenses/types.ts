@@ -11,6 +11,7 @@ export type ExpenseAccount = {
     openingBalanceNarration?: string;
     fileUrl?: string;
     documentFileUrls?: string[];
+    phone?: string;
     isDeleted?: boolean;
     type?: 'Income' | 'Expense' | 'Salary';
 };

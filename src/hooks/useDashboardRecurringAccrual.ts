@@ -46,6 +46,32 @@ function accountLabelForEntry(
   return "Line";
 }
 
+/** Popup Account column: journal line jisme Dr ya Cr amount hai usi khate ka naam. */
+function journalEntrySideAccountLabel(
+  body: Record<string, unknown>,
+  side: "debit" | "credit",
+  journalAccountNames: Record<string, string>,
+  partyNameById: Map<string, string>,
+  staffNameById: Map<string, string>,
+): string {
+  const entries = body.entries;
+  if (!Array.isArray(entries)) return "";
+  let best = "";
+  let bestMag = 0;
+  for (const raw of entries) {
+    if (!raw || typeof raw !== "object") continue;
+    const e = raw as Record<string, unknown>;
+    const { dr, cr } = journalLineDrCr(e);
+    const mag = side === "debit" ? dr : cr;
+    if (mag <= 0) continue;
+    if (mag >= bestMag) {
+      bestMag = mag;
+      best = accountLabelForEntry(e, journalAccountNames, partyNameById, staffNameById);
+    }
+  }
+  return best;
+}
+
 type UseArgs = {
   companyId: string | undefined;
   /** Company setting OFF par Firestore mat suno */
@@ -193,8 +219,22 @@ export function useDashboardRecurringAccrual({
         bucket,
       });
 
-      // Popup journal: **ek voucher no = ek row** — Cr cell company ledger → Dr list; Cr cell party/staff/tax → Cr list (`recurringJournalLineDetailSide`)
+      // Popup journal: ek voucher = ek row; Dr column = debit wali line ka account, Cr = credit wali line ka account
       if (Array.isArray(body.entries)) {
+        const debitKhataLabel = journalEntrySideAccountLabel(
+          body,
+          "debit",
+          journalAccountNames,
+          partyNameById,
+          staffNameById,
+        );
+        const creditKhataLabel = journalEntrySideAccountLabel(
+          body,
+          "credit",
+          journalAccountNames,
+          partyNameById,
+          staffNameById,
+        );
         let scoreDr = 0;
         let scoreCr = 0;
         let labelDr = "";
@@ -229,14 +269,14 @@ export function useDashboardRecurringAccrual({
           if (scoreDr > scoreCr || (scoreDr === scoreCr && scoreDr > 0)) {
             detailDebitLines.push({
               ...baseLine,
-              accountLabel: labelDr || narrShort.slice(0, 48) || "Journal",
+              accountLabel: debitKhataLabel || labelDr || narrShort.slice(0, 48) || "Journal",
               debit: amt,
               credit: 0,
             });
           } else if (scoreCr > 0) {
             detailCreditLines.push({
               ...baseLine,
-              accountLabel: labelCr || narrShort.slice(0, 48) || "Journal",
+              accountLabel: creditKhataLabel || labelCr || narrShort.slice(0, 48) || "Journal",
               debit: 0,
               credit: amt,
             });
@@ -246,21 +286,26 @@ export function useDashboardRecurringAccrual({
             if (drAmt >= crAmt && drAmt > 0) {
               detailDebitLines.push({ ...baseLine, accountLabel: "Journal", debit: drAmt, credit: 0 });
             } else if (crAmt > 0) {
-              detailCreditLines.push({ ...baseLine, accountLabel: "Journal", debit: 0, credit: crAmt });
+              detailCreditLines.push({
+                ...baseLine,
+                accountLabel: creditKhataLabel || labelCr || "Journal",
+                debit: 0,
+                credit: crAmt,
+              });
             }
           }
         } else {
           if (scoreDr > scoreCr && scoreDr > 0) {
             detailDebitLines.push({
               ...baseLine,
-              accountLabel: labelDr || "Journal",
+              accountLabel: debitKhataLabel || labelDr || "Journal",
               debit: round2(flowIn),
               credit: 0,
             });
           } else if (scoreCr > 0) {
             detailCreditLines.push({
               ...baseLine,
-              accountLabel: labelCr || "Journal",
+              accountLabel: creditKhataLabel || labelCr || "Journal",
               debit: 0,
               credit: round2(flowOut),
             });
@@ -268,7 +313,12 @@ export function useDashboardRecurringAccrual({
             if (flowIn >= flowOut && flowIn > 0) {
               detailDebitLines.push({ ...baseLine, accountLabel: "Journal", debit: round2(flowIn), credit: 0 });
             } else if (flowOut > 0) {
-              detailCreditLines.push({ ...baseLine, accountLabel: "Journal", debit: 0, credit: round2(flowOut) });
+              detailCreditLines.push({
+                ...baseLine,
+                accountLabel: creditKhataLabel || labelCr || "Journal",
+                debit: 0,
+                credit: round2(flowOut),
+              });
             }
           }
         }

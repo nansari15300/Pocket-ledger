@@ -519,10 +519,10 @@ body.theme-colorfull [data-theme-table="transactions"] table thead th[data-theme
   color: #000 !important;
 }
 /* Colorfull: stripe per transaction (main + narration same) — nth-child row se nahi */
-body.theme-colorfull [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+body.theme-colorfull [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
   background: hsl(var(--row-odd-bg)) !important;
 }
-body.theme-colorfull [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+body.theme-colorfull [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
   background: hsl(var(--row-even-bg)) !important;
 }
 body.theme-colorfull [data-theme-table="transactions"] table tbody td {
@@ -2549,6 +2549,336 @@ body.theme-pro [data-pl-company-profile-chrome] .border-dashed {
   border-color: #000 !important;
 }
 
+/* Master add/edit dialogs — non-Pro: gray pill fields; Pro: row-wise colored pills (header chrome jaisa) */
+.pl-master-entity-form-chrome,
+body.theme-colorfull .pl-master-entity-form-chrome,
+body.theme-pro .pl-master-entity-form-chrome {
+  --border: 0 0% 0% !important;
+  --input: 0 0% 0% !important;
+  --ring: 0 0% 0% !important;
+}
+.pl-master-entity-form-chrome input:not([type="checkbox"]):not([type="radio"]),
+.pl-master-entity-form-chrome textarea,
+.pl-master-entity-form-chrome select,
+body.theme-colorfull .pl-master-entity-form-chrome input:not([type="checkbox"]):not([type="radio"]),
+body.theme-colorfull .pl-master-entity-form-chrome textarea,
+body.theme-colorfull .pl-master-entity-form-chrome select {
+  border-color: #000 !important;
+  border-width: 1px !important;
+  background-color: hsl(var(--muted) / 0.72) !important;
+}
+.pl-master-entity-form-chrome button[role="combobox"],
+.pl-master-entity-form-chrome button[data-theme-detail="date-range"],
+.pl-master-entity-form-chrome button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not(.bg-primary):not(.bg-destructive),
+body.theme-colorfull .pl-master-entity-form-chrome button[role="combobox"],
+body.theme-colorfull .pl-master-entity-form-chrome button[data-theme-detail="date-range"],
+body.theme-colorfull .pl-master-entity-form-chrome button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not(.bg-primary):not(.bg-destructive) {
+  border-color: #000 !important;
+  border-width: 1px !important;
+  background-color: hsl(var(--muted) / 0.72) !important;
+}
+.pl-master-entity-form-chrome .border-dashed,
+body.theme-colorfull .pl-master-entity-form-chrome .border-dashed {
+  border-color: #000 !important;
+}
+
+/* Pro: popup shell = emerald dashboard card */
+body.theme-pro .pl-master-entity-form-chrome.pl-dashboard-ribbon-emerald {
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.98) 0%, #ffffff 50%, rgba(209, 250, 229, 0.92) 100%) !important;
+  border-color: #000 !important;
+  border-width: 1px !important;
+}
+
+/* Pro master pills — shared shape (pic-2 header pills jaisa) */
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll textarea,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll select,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll button[role="combobox"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll button[data-theme-detail="date-range"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not(.bg-primary):not(.bg-destructive),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid textarea,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid button[role="combobox"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not(.bg-primary):not(.bg-destructive) {
+  border-radius: 9999px !important;
+  border-style: solid !important;
+  /* Fill ke hue se match — sirf 1px, thoda dark (header chrome pill jaisa) */
+  border-width: 1px !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll textarea {
+  border-radius: 1rem !important;
+  min-height: 4.5rem;
+}
+
+/* Pro master form — sab pills same height; har row mein label + control ek line par align */
+body.theme-pro .pl-master-entity-form-chrome {
+  --pl-master-pill-h: 2.5rem;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll select,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll button[role="combobox"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll button[data-theme-detail="date-range"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not(.bg-primary):not(.bg-destructive),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid button[role="combobox"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not(.bg-primary):not(.bg-destructive) {
+  min-height: var(--pl-master-pill-h) !important;
+  height: var(--pl-master-pill-h) !important;
+  box-sizing: border-box !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-row {
+  align-items: stretch;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-row > [class*="space-y"] {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0.5rem !important;
+  min-width: 0;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-row > [class*="space-y"] > * + * {
+  margin-top: 0 !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-row > [class*="space-y"] > label {
+  min-height: 1.25rem;
+  line-height: 1.25rem;
+  display: flex;
+  align-items: center;
+  margin: 0;
+}
+/* Control slot — input / combobox / date / radio same vertical band */
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-row > [class*="space-y"] > :nth-child(2) {
+  min-height: var(--pl-master-pill-h);
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin: 0;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-row > [class*="space-y"] > :nth-child(2) > .grid {
+  width: 100%;
+  min-height: var(--pl-master-pill-h);
+  align-items: center;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-row [role="radiogroup"] {
+  min-height: var(--pl-master-pill-h) !important;
+  height: auto !important;
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  column-gap: 1rem !important;
+  row-gap: 0.25rem !important;
+  padding-top: 0 !important;
+  width: 100%;
+}
+
+/* Master form — radio + switch: pill cycle mat; Voucher Settings jaisa chhota circle / toggle */
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll button[role="radio"] {
+  height: 1rem !important;
+  width: 1rem !important;
+  min-height: 1rem !important;
+  min-width: 1rem !important;
+  max-height: 1rem !important;
+  max-width: 1rem !important;
+  aspect-ratio: 1 / 1 !important;
+  padding: 0 !important;
+  border-radius: 9999px !important;
+  border-width: 1px !important;
+  border-color: hsl(var(--primary)) !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  color: hsl(var(--primary)) !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll button[role="radio"][data-state="checked"] {
+  border-color: hsl(var(--primary)) !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll button[role="switch"] {
+  width: 88px !important;
+  min-width: 88px !important;
+  max-width: 88px !important;
+  height: 19px !important;
+  min-height: 19px !important;
+  max-height: 19px !important;
+  padding: 0 !important;
+  border-radius: 9999px !important;
+  border-width: 1px !important;
+  border-color: rgb(212 212 212) !important;
+  background-color: rgb(229 229 229) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll button[role="switch"][data-state="checked"] {
+  border-color: rgb(134 239 172) !important;
+  background-color: rgb(220 252 231 / 0.8) !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll button[role="switch"] > span[aria-hidden="true"]:not(.sr-only) {
+  height: calc(100% - 6px) !important;
+}
+
+/* Special account — dashboard card jaisa soft emerald (dark saturated green nahi) */
+body.theme-pro .pl-master-entity-form-chrome .pl-master-special-account-panel {
+  border-radius: 0.5rem !important;
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(167 243 208 / 0.7) !important;
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(
+    92deg,
+    rgba(236, 253, 245, 0.82) 0%,
+    rgba(255, 255, 255, 0.96) 50%,
+    rgba(236, 253, 245, 0.82) 100%
+  ) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
+  color: hsl(var(--foreground)) !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-special-account-panel label {
+  color: hsl(var(--foreground)) !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-special-account-panel .text-muted-foreground {
+  color: hsl(var(--muted-foreground)) !important;
+}
+/* Card default bg-card override — ribbon emerald gradient */
+body.theme-pro .pl-master-entity-form-chrome .pl-master-special-account-panel.bg-card {
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(
+    92deg,
+    rgba(236, 253, 245, 0.82) 0%,
+    rgba(255, 255, 255, 0.96) 50%,
+    rgba(236, 253, 245, 0.82) 100%
+  ) !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-special-account-panel .pl-master-special-account-table {
+  border-color: rgb(167 243 208 / 0.65) !important;
+  background-color: rgba(255, 255, 255, 0.72) !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-special-account-panel thead {
+  background-color: rgba(236, 253, 245, 0.75) !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-special-account-panel th {
+  color: hsl(var(--foreground)) !important;
+  font-weight: 600;
+}
+
+/* Row 1,5,… blue */
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 1) input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 1) textarea,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 1) select,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 1) button[role="combobox"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 1) button[data-theme-detail="date-range"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 1) button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not(.bg-primary):not(.bg-destructive),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 1) input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 1) textarea,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 1) button[role="combobox"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 1) button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 2) input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 2) textarea,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 2) button[role="combobox"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 2) button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]) {
+  background-color: rgb(219 234 254 / 0.92) !important;
+  border-color: rgb(147 197 253) !important;
+  color: rgb(30 58 138) !important;
+}
+
+/* Row 2,6,… green */
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 2) input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 2) textarea,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 2) select,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 2) button[role="combobox"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 2) button[data-theme-detail="date-range"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 2) button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not(.bg-primary):not(.bg-destructive),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 3) input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 3) textarea,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 3) button[role="combobox"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 3) button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 4) input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 4) textarea,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 4) button[role="combobox"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(4n + 4) button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]) {
+  background-color: rgb(209 250 229 / 0.92) !important;
+  border-color: rgb(110 231 183) !important;
+  color: rgb(6 78 59) !important;
+}
+
+/* Row 3,7,… pink */
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 3) input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 3) textarea,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 3) select,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 3) button[role="combobox"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 3) button[data-theme-detail="date-range"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 3) button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not(.bg-primary):not(.bg-destructive),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(8n + 5) input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(8n + 5) textarea,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(8n + 5) button[role="combobox"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(8n + 6) input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(8n + 6) textarea,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(8n + 6) button[role="combobox"] {
+  background-color: rgb(252 231 243 / 0.95) !important;
+  border-color: rgb(249 168 212) !important;
+  color: rgb(131 24 67) !important;
+}
+
+/* Row 4,8,… violet */
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 4) input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 4) textarea,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 4) select,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 4) button[role="combobox"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 4) button[data-theme-detail="date-range"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll > *:nth-child(4n + 4) button[class*="border"]:not([role="checkbox"]):not([role="radio"]):not([role="switch"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not(.bg-primary):not(.bg-destructive),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(8n + 7) input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(8n + 7) textarea,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(8n + 7) button[role="combobox"],
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(8n + 8) input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(8n + 8) textarea,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .grid > *:nth-child(8n + 8) button[role="combobox"] {
+  background-color: rgb(237 233 254 / 0.95) !important;
+  border-color: rgb(196 181 253) !important;
+  color: rgb(76 29 149) !important;
+}
+
+body.theme-pro .pl-master-entity-form-chrome .pl-master-form-scroll .border-dashed {
+  border-color: #000 !important;
+  border-width: 1px !important;
+  background-color: rgba(255, 255, 255, 0.55) !important;
+  border-radius: 0.75rem !important;
+}
+
+/* Footer pills — blue | green | pink */
+body.theme-pro .pl-master-entity-form-chrome .pl-master-dialog-footer button {
+  border-radius: 9999px !important;
+  border-width: 1px !important;
+  border-style: solid !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-dialog-footer > *:nth-child(1) button,
+body.theme-pro .pl-master-entity-form-chrome .pl-master-dialog-footer > button:first-of-type:not(:last-of-type) {
+  background-color: rgb(219 234 254 / 0.95) !important;
+  border-color: rgb(147 197 253) !important;
+  color: rgb(30 58 138) !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-dialog-footer > *:nth-child(2) button {
+  background-color: rgb(209 250 229 / 0.95) !important;
+  border-color: rgb(110 231 183) !important;
+  color: rgb(6 78 59) !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-dialog-footer > button[type="submit"] {
+  background-color: rgb(252 231 243 / 0.95) !important;
+  border-color: rgb(249 168 212) !important;
+  color: rgb(131 24 67) !important;
+}
+body.theme-pro .pl-master-entity-form-chrome .pl-master-dialog-footer > button.bg-destructive {
+  background-color: rgb(254 226 226 / 0.95) !important;
+  border-color: rgb(252 165 165) !important;
+  color: rgb(127 29 29) !important;
+}
+
 /* Settings list column shell — 1px normal (theme/4K `border-2`/`3px` override na kare) */
 .pl-settings-list-shell,
 body.theme-colorfull main .pl-settings-list-shell,
@@ -3026,11 +3356,25 @@ body.theme-pro [data-theme-table="transactions"] table thead tr {
   color: hsl(var(--table-header-fg)) !important;
 }
 /* Pro: gray/white per transaction block (main + narration match) */
-body.theme-pro [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+body.theme-pro [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
   background: hsl(var(--row-odd-bg)) !important;
 }
-body.theme-pro [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+body.theme-pro [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
   background: hsl(var(--row-even-bg)) !important;
+}
+
+/* PC ledger: unapproved (`isApproved` !== true) — har theme par pink, stripe override se upar */
+[data-theme-table="transactions"] tbody tr[data-pl-pending-approval] > td {
+  background-color: rgb(252 231 243) !important;
+}
+.dark [data-theme-table="transactions"] tbody tr[data-pl-pending-approval] > td {
+  background-color: rgb(80 7 36 / 0.4) !important;
+}
+[data-theme-table="transactions"] tbody tr[data-pl-pending-approval]:hover > td {
+  background-color: rgb(251 207 232) !important;
+}
+.dark [data-theme-table="transactions"] tbody tr[data-pl-pending-approval]:hover > td {
+  background-color: rgb(80 7 36 / 0.55) !important;
 }
 
 /* ========== All themes: har container/box — sirf 1px black line ========== */
@@ -3220,8 +3564,8 @@ body.theme-pure-white main button[data-theme-detail="date-range"] {
   background-color: #ffffff !important;
 }
 body.theme-pure-white [data-theme-table="transactions"] table thead tr,
-body.theme-pure-white [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]) > td,
-body.theme-pure-white [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]) > td {
+body.theme-pure-white [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]) > td,
+body.theme-pure-white [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]) > td {
   background: #ffffff !important;
 }
 
@@ -3274,10 +3618,10 @@ body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] ta
   background: hsl(var(--muted)) !important;
 }
 /* Soft green etc.: transaction 0 = gray muted, 1 = white card — main+narration same data-txn-stripe */
-body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
   background: hsl(var(--muted) / 0.55) !important;
 }
-body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
   background: hsl(var(--card)) !important;
 }
 body:not(.theme-pro):not(.theme-pure-white) .app-chrome-top-ribbon::before,
@@ -3673,5 +4017,28 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-w
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="pink"][data-pl-spend-edge~="bottom"] > td,
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="blue"][data-pl-spend-edge~="bottom"] > td {
   border-bottom-width: 2px !important;
+}
+
+/* Inter Company voucher — dashboard emerald inputs + dropdown triggers */
+.pl-inter-company-voucher input:not([type="checkbox"]):not([type="radio"]):not([role="switch"]),
+.pl-inter-company-voucher textarea,
+.pl-inter-company-voucher button[role="combobox"],
+.pl-inter-company-voucher [data-radix-select-trigger] {
+  border-color: rgb(167 243 208 / 0.9) !important;
+  background-color: rgb(255 255 255 / 0.92) !important;
+}
+.pl-inter-company-voucher input:focus-visible,
+.pl-inter-company-voucher textarea:focus-visible,
+.pl-inter-company-voucher button[role="combobox"]:focus-visible,
+.pl-inter-company-voucher [data-radix-select-trigger]:focus {
+  border-color: rgb(16 185 129) !important;
+  --tw-ring-color: rgb(16 185 129 / 0.35);
+}
+.dark .pl-inter-company-voucher input:not([type="checkbox"]):not([type="radio"]):not([role="switch"]),
+.dark .pl-inter-company-voucher textarea,
+.dark .pl-inter-company-voucher button[role="combobox"],
+.dark .pl-inter-company-voucher [data-radix-select-trigger] {
+  border-color: rgb(6 78 59 / 0.85) !important;
+  background-color: rgb(2 44 34 / 0.45) !important;
 }
 

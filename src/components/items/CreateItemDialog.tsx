@@ -958,7 +958,7 @@ const capitalizeFirstLetter = (str: string) => {
           <div className={masterEntityDialogFormWrapperClassName}>
           <Form {...form}>
             <form onSubmit={(e) => handleFormSubmit(e)} className="flex min-h-0 flex-1 flex-col">
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
+            <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
 
               <Tabs value={itemType} onValueChange={(value) => form.setValue('type', value as 'item' | 'service' | 'finished_good')} className="w-full mb-4">
                   <TabsList>

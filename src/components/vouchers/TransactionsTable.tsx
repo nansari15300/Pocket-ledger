@@ -929,7 +929,8 @@ export function TransactionsTable({
       context === "tax" ||
       context === "item" ||
       context === "party" ||
-      context === "group");
+      context === "group" ||
+      context === "note");
   // Bill-wise in mobile card: party, group, staff, account (same as party details / bank details)
   const isBillWiseCardContext = resolvedBalanceMode === "bill_wise" && (context === "party" || context === "group" || context === "staff" || context === "account");
   // In party/staff/group billwise view, status shows only bill-wise link voucher no (not spend-wise RCPT/PYMT/Contra).
@@ -1172,22 +1173,21 @@ export function TransactionsTable({
       const useNeutralStatus = ["Journal", "Note", "Contra", "Salary"].includes(statusLabel);
       const isPaidStatus = statusLabel === "Paid";
       const isUnpaidStatus = statusLabel === "Partial" || statusLabel === "Unpaid" || statusLabel === "Overdue";
-      const isPendingApproval = highlightPendingApproval && (t as any).isApproved !== true;
+      const isPendingApproval = highlightPendingApproval && (t as any).isApproved !== true; // mobile card — theme stripe N/A
       const swBorder = !insideGroup && typeof (t as any)._spendWiseGroupColorIndex === "number"
         ? ((t as any)._spendWiseGroupColorIndex === 1 ? "border-l-4 border-l-green-500" : (t as any)._spendWiseGroupColorIndex === 2 ? "border-l-4 border-l-pink-500" : "border-l-4 border-l-blue-500")
         : "";
-      // Mobile transaction cards: slightly thicker border for clearer box visibility.
+      // Mobile transaction cards: border card-tone se match — black ki jagah thoda bold same-hue edge.
       return (
         <Card
           key={key}
           className={cn(
-            // Mobile cards: keep a solid black border for stronger separation in all themes.
-            "p-2.5 min-w-0 w-full overflow-hidden border-[1.5px] border-black shadow-sm cursor-pointer transition-colors",
+            "p-2.5 min-w-0 w-full overflow-hidden border-2 shadow-sm cursor-pointer transition-colors",
             context === "daybook" && "rounded-lg",
             swBorder,
             isPendingApproval
-              ? "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 border-[1.5px] border-black"
-              : "bg-card hover:bg-muted/30"
+              ? "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 border-pink-300/90 dark:border-pink-700/55"
+              : "bg-card hover:bg-muted/30 border-emerald-300/85 dark:border-emerald-800/50"
           )}
           onClick={() => onRowClick?.(t)}
         >
@@ -1265,7 +1265,8 @@ export function TransactionsTable({
                   {hl(`Bal:${formatAmountOrQty(balanceAbs)}${isItemQty ? "" : ` ${balanceSuffix}`}`)}
                 </Badge>
               )}
-              <p className="text-[10px] text-muted-foreground truncate max-w-[120px]">
+              {/* User line: single row — `max-w-[120px]` se lamba naam wrap ho jata tha */}
+              <p className="text-[10px] text-muted-foreground whitespace-nowrap truncate max-w-[min(42vw,9rem)] sm:max-w-[10rem]">
                 {hl(`User: ${userName}`)}
               </p>
             </div>
@@ -1290,7 +1291,7 @@ export function TransactionsTable({
           <>
             {/* Date filter + master OB: pehla card (stacked); search slot sirf neeche wale card par */}
             {showBookOpeningAboveDatedRow ? (
-              <Card className="p-2.5 min-h-9 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
+              <Card className="p-2.5 min-h-9 min-w-0 overflow-hidden bg-card border-2 border-emerald-300/85 dark:border-emerald-800/50 shadow-sm">
                 <div className="flex justify-between items-start gap-2 min-w-0">
                   <div className="flex min-w-0 flex-1 flex-col gap-0.5 min-h-9 justify-center">
                     <Badge

@@ -4,6 +4,7 @@
  * Mobile detail pages: date/balance/toolbar summary hide-show — ek global preference (APK/static + mobile web).
  */
 import * as React from "react";
+import { MobileDetailSummaryFixedFab } from "@/components/layout/MobileDetailSummaryFixedFab";
 
 const STORAGE_KEY = "pl-mobile-detail-summary-collapsed";
 
@@ -16,6 +17,10 @@ type MobileDetailSummaryCollapseContextValue = {
   pagerFabHostCount: number;
   registerPagerFabHost: () => void;
   unregisterPagerFabHost: () => void;
+  /** MobileDetailSummaryCollapsible mount — sirf in pages par ek hi fixed FAB */
+  collapsibleHostCount: number;
+  registerCollapsibleHost: () => void;
+  unregisterCollapsibleHost: () => void;
 };
 
 const MobileDetailSummaryCollapseContext =
@@ -45,6 +50,7 @@ export function MobileDetailSummaryCollapseProvider({
 }) {
   const [collapsed, setCollapsedState] = React.useState(false);
   const [pagerFabHostCount, setPagerFabHostCount] = React.useState(0);
+  const [collapsibleHostCount, setCollapsibleHostCount] = React.useState(0);
 
   React.useEffect(() => {
     setCollapsedState(readStoredCollapsed());
@@ -56,6 +62,14 @@ export function MobileDetailSummaryCollapseProvider({
 
   const unregisterPagerFabHost = React.useCallback(() => {
     setPagerFabHostCount((c) => Math.max(0, c - 1));
+  }, []);
+
+  const registerCollapsibleHost = React.useCallback(() => {
+    setCollapsibleHostCount((c) => c + 1);
+  }, []);
+
+  const unregisterCollapsibleHost = React.useCallback(() => {
+    setCollapsibleHostCount((c) => Math.max(0, c - 1));
   }, []);
 
   const setCollapsed = React.useCallback((next: boolean) => {
@@ -79,13 +93,28 @@ export function MobileDetailSummaryCollapseProvider({
       pagerFabHostCount,
       registerPagerFabHost,
       unregisterPagerFabHost,
+      collapsibleHostCount,
+      registerCollapsibleHost,
+      unregisterCollapsibleHost,
     }),
-    [collapsed, setCollapsed, toggle, pagerFabHostCount, registerPagerFabHost, unregisterPagerFabHost]
+    [
+      collapsed,
+      setCollapsed,
+      toggle,
+      pagerFabHostCount,
+      registerPagerFabHost,
+      unregisterPagerFabHost,
+      collapsibleHostCount,
+      registerCollapsibleHost,
+      unregisterCollapsibleHost,
+    ]
   );
 
   return (
     <MobileDetailSummaryCollapseContext.Provider value={value}>
       {children}
+      {/* Ek hi fixed FAB — har Collapsible alag portal na banaye */}
+      <MobileDetailSummaryFixedFab />
     </MobileDetailSummaryCollapseContext.Provider>
   );
 }

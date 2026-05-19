@@ -42,6 +42,13 @@ export function voucherTouchesPartyLedger(v: any, partyId: string): boolean {
   if (v.entries?.some((e: any) => ledgerIdEq(e?.accountId, partyId))) return true;
   if (v.type === "note" && ledgerIdEq(v.entityId, partyId)) return true;
   if (v.type === "contra" && (ledgerIdEq(v.fromAccountId, partyId) || ledgerIdEq(v.toAccountId, partyId))) return true;
+  // Inter Company — source/target party ids (sirf `partyId` kabhi peer side par nahi hota)
+  if (v.type === "inter_company") {
+    const sk = String(v.sourceEntityKind || "").toLowerCase();
+    const tk = String(v.targetEntityKind || "").toLowerCase();
+    if (sk === "party" && ledgerIdEq(v.sourceEntityId, partyId)) return true;
+    if (tk === "party" && ledgerIdEq(v.targetEntityId, partyId)) return true;
+  }
   return false;
 }
 
@@ -75,6 +82,10 @@ export function collectPartyIdsTouchedByUnapprovedVoucher(v: any, partyIdSet: Se
   if (v.type === "contra") {
     add(v.fromAccountId);
     add(v.toAccountId);
+  }
+  if (v.type === "inter_company") {
+    if (String(v.sourceEntityKind || "").toLowerCase() === "party") add(v.sourceEntityId);
+    if (String(v.targetEntityKind || "").toLowerCase() === "party") add(v.targetEntityId);
   }
   if (Array.isArray(v.lineItems)) v.lineItems.forEach((li: any) => {
     add(li?.itemId);

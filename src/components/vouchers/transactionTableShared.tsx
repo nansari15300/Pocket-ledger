@@ -26,6 +26,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import usePermissions from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
+import { isLedgerTransactionUnapproved } from "@/lib/ledgerPendingApproval";
 import { txnSelectedMainRowCn, txnSelectedNarrationRowCn, txnTableIconBtnCn } from "@/lib/listSelectionChrome";
 import { getAllocationTotal } from "@/lib/payment-allocation-utils";
 import type { Item } from "@/components/items/types";
@@ -165,6 +166,7 @@ export const formatQuantity = (val: number) =>
 const getDisplayType = (t: any) => {
   if (!t.type) return "";
   if (t.type === "journal" && t.subType === "add_salary") return "Add Salary";
+  if (t.type === "inter_company") return "Inter Company";
   return t.type.replace(/_/g, " ");
 };
 
@@ -1201,7 +1203,7 @@ export const TransactionRow = React.memo(
     );
 
     const isPaid = (transaction as any).paymentStatus === "paid";
-    const isPendingApproval = highlightPendingApproval && (transaction as any).isApproved !== true;
+    const isPendingApproval = highlightPendingApproval && isLedgerTransactionUnapproved(transaction as { isApproved?: boolean; type?: string; id?: string });
     const narrationText =
       transaction.type === "note" ? transaction.title : transaction.narration;
     const narrationLabel = transaction.type === "note" ? "Title" : "Narration";
@@ -1335,6 +1337,8 @@ export const TransactionRow = React.memo(
         onClick={() => onRowSelect?.(transaction)}
         onDoubleClick={() => onRowClick?.(transaction)}
         data-txn-stripe={txnStripeAttr}
+        /* Theme stripe rules (globals.css) se bachne + pink !important target */
+        data-pl-pending-approval={isPendingApproval ? "" : undefined}
         /* globals.css [data-pl-txn-selected] — theme stripe/bg par orange box dikhe */
         ref={mainRowRef}
         onMouseEnter={onPairHoverEnter}
@@ -1422,6 +1426,7 @@ export const TransactionRow = React.memo(
         onClick={() => onRowSelect?.(transaction)}
         onDoubleClick={() => onRowClick?.(transaction)}
         data-txn-stripe={txnStripeAttr}
+        data-pl-pending-approval={isPendingApproval ? "" : undefined}
         data-pl-txn-hovered={pairHovered ? "" : undefined}
         data-pl-txn-selected={txnRowSelectedChrome ? "" : undefined}
         data-pl-spend-wise-group={useRowSpendBorders ? swColor : undefined}

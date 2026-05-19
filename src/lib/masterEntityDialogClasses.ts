@@ -5,6 +5,10 @@ import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDial
  * Add/Edit master flows (party, bank, staff, tax, expense, item):
  * max ~90vh, flex min-h-0, inner scroll; static APK + mobile = fullscreen via cnStatic.
  */
+/** Portal master dialogs — Pro: emerald dashboard card shell; fields gray (`globals.css`) */
+export const masterEntityFormChromeClassName =
+  "pl-master-entity-form-chrome pl-dashboard-ribbon-emerald border-black";
+
 const MASTER_ENTITY_BASE =
   "z-50 max-h-[85vh] w-[98vw] max-w-[98vw] flex min-h-0 flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:w-full sm:px-6";
 
@@ -18,6 +22,7 @@ export function cnMasterEntityDialogContent(
 ): string {
   return cn(
     cnStaticMobileFullscreenDialog(isMobile, MASTER_ENTITY_BASE, "sm:max-w-3xl"),
+    masterEntityFormChromeClassName,
     ...(extra as string[])
   );
 }
@@ -29,6 +34,7 @@ export function cnMasterEntityNarrowDialogContent(
 ): string {
   return cn(
     cnStaticMobileFullscreenDialog(isMobile, MASTER_ENTITY_BASE, "sm:max-w-md"),
+    masterEntityFormChromeClassName,
     ...(extra as string[])
   );
 }

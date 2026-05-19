@@ -29,6 +29,7 @@ const ROUTE_PREFIX_LABELS: { prefix: string; label: string }[] = [
   { prefix: "/payment-in", label: "Payment In" },
   { prefix: "/payment-out", label: "Payment Out" },
   { prefix: "/journal", label: "Journal" },
+  { prefix: "/inter-company", label: "Inter Company" },
   { prefix: "/add-salary", label: "Add Salary" },
   { prefix: "/purchase", label: "Purchase" },
   { prefix: "/messages", label: "Messages" },

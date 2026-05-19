@@ -25,37 +25,8 @@ export type RecurringNarrationMode = "advance_bs_month";
 export type RecurringRunScope = "owner_only" | "all_users" | "selected_users";
 /** Manual Generate: pehla gap voucher-date se (default) vs aaj se peechhe sabse naya gap (“sirf is mahina” dialog). */
 export type ManualRecurringPickStrategy = "chronological" | "latest";
-/** Company setting: `configure_company_settings` wale me se kaun voucher par Auto Monthly strip / Generate / template save kar sake. */
+/** @deprecated Voucher Settings user list — ab Manage Sharing → Recurring Auto Voucher permissions. */
 export type RecurringVoucherAutoEditorsScope = "all_configure_users" | "owner_only" | "selected_users";
-
-/**
- * Role me Configure Company Settings hone ke baad bhi — owner yahan se aur narrow kar sakta hai.
- * Firestore rules alag; yeh sirf app UI + client save path gate hai.
- */
-export function canManageVoucherRecurringAutoEditors(
-  company: Company | null,
-  userId: string | undefined,
-  userEmail: string | null | undefined,
-): boolean {
-  if (!userId?.trim()) return false;
-  const settings = (company as any)?.recurringVoucherSettings || {};
-  const scope = String(settings.voucherAutoEditorsScope || "all_configure_users") as RecurringVoucherAutoEditorsScope;
-  if (scope === "all_configure_users") return true;
-  const ownerId = String(company?.ownerId || "").trim();
-  const ownerEmail = String(company?.ownerEmail || "").trim().toLowerCase();
-  const email = String(userEmail || "").trim().toLowerCase();
-  if (scope === "owner_only") {
-    if (ownerId && userId === ownerId) return true;
-    return !!ownerEmail && !!email && ownerEmail === email;
-  }
-  if (scope === "selected_users") {
-    const allowedIds = Array.isArray(settings.voucherAutoEditorsUserIds)
-      ? settings.voucherAutoEditorsUserIds.map((x: unknown) => String(x).trim()).filter(Boolean)
-      : [];
-    return allowedIds.includes(userId);
-  }
-  return true;
-}
 /** BS calendar day 1–31, or 32 = last day of that BS month */
 export type RecurringScheduleBsDay = number;
 export type RecurringRateAdjustMode = "none" | "percent" | "fixed";
@@ -1103,20 +1074,27 @@ export async function clearRecurringTemplateForVoucher(companyId: string, source
   await deleteDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, docId));
 }
 
-function canRunForCurrentUser(
+/**
+ * App-open month-end runner: company `runScope` + Manage Sharing `trigger_recurring_auto_on_app_open`.
+ * Legacy `selected_users` + `allowedUserIds` ab bhi chalenge jab tak purani company doc me hon.
+ */
+export function canRunRecurringAutoOnAppOpen(
   company: Company | null,
   currentUserId: string,
   currentUserEmail?: string | null,
+  hasTriggerPermission = false,
 ): boolean {
   const settings = (company as any)?.recurringVoucherSettings || {};
   const scope = String(settings.runScope || "owner_only") as RecurringRunScope;
   const ownerId = String(company?.ownerId || "").trim();
   const ownerEmail = String(company?.ownerEmail || "").trim().toLowerCase();
   const email = String(currentUserEmail || "").trim().toLowerCase();
-  if (scope === "all_users") return true;
+  if (scope === "all_users") return hasTriggerPermission;
   if (scope === "selected_users") {
-    const allowedIds = Array.isArray(settings.allowedUserIds) ? settings.allowedUserIds.map((x: unknown) => String(x).trim()).filter(Boolean) : [];
-    return allowedIds.includes(currentUserId);
+    const allowedIds = Array.isArray(settings.allowedUserIds)
+      ? settings.allowedUserIds.map((x: unknown) => String(x).trim()).filter(Boolean)
+      : [];
+    return allowedIds.includes(currentUserId) || hasTriggerPermission;
   }
   if (ownerId && currentUserId === ownerId) return true;
   return !!ownerEmail && !!email && ownerEmail === email;
@@ -1582,11 +1560,12 @@ export async function generateDueRecurringVouchersOnAppOpen(
   companyId: string,
   company: Company | null,
   actor: GenerateActor,
+  options?: { hasTriggerPermission?: boolean },
 ): Promise<void> {
   if (!companyId?.trim() || !actor?.uid) return;
   const settings = (company as any)?.recurringVoucherSettings || {};
   if (settings.enabled !== true) return;
-  if (!canRunForCurrentUser(company, actor.uid, actor.email)) return;
+  if (!canRunRecurringAutoOnAppOpen(company, actor.uid, actor.email, options?.hasTriggerPermission === true)) return;
 
   const now = new Date();
   const bsNow = adToBs(now);

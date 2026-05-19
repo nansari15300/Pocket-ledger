@@ -6,13 +6,18 @@ import { openPrintDirect } from "@/lib/printDirect";
 import type { Tax, TaxGroup } from "@/components/tax/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Receipt, ChevronDown, Columns3 } from "lucide-react";
+import { Edit, Printer, Users, Calendar as CalendarIcon, FilePlus, XCircle, MoreVertical, ArrowLeft, Receipt, ChevronDown, Columns3 } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
-import { LedgerFooterCheckboxPill, LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
+import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
+import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
+import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
+import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 
 
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
@@ -277,6 +282,19 @@ export function TaxGroupDetails({
     setFilters({});
   };
 
+
+  const {
+    unapprovedOnly,
+    toggleUnapprovedOnly,
+    filterByUnapprovedOnly,
+    onDateRangeChangeWithUnapprovedReset,
+  } = useLedgerUnapprovedOnlyFilter({
+    onDateRangeChange,
+    setCurrentPage,
+    setFilters,
+    setActiveFilter,
+  });
+
   const handleEditVoucher = (voucher: any) => {
     openingModalRef.current = true;
     setSelectedVoucher(voucher);
@@ -324,10 +342,11 @@ export function TaxGroupDetails({
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
-        sortTransactionsWithFiscalMergeForCompany(displayTransactions, sortBy, sortOrder, undefined, company),
+        sortTransactionsWithFiscalMergeForCompany(
+          filterByUnapprovedOnly(displayTransactions), sortBy, sortOrder, undefined, company),
         openingBalanceForPeriod
       ),
-    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
+    [displayTransactions, filterByUnapprovedOnly, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
 
   const filteredMobileTransactions = useMemo(() => {
@@ -415,8 +434,10 @@ export function TaxGroupDetails({
     currentPage,
     ledgerOpeningForRunning: openingBalanceForPeriod,
   });
+  // Radix rows Select — value list me honi chahiye (LedgerDesktopFooter pagination)
+  const { selectValue: rowsPerPageSelectValue, onSelectValueChange: handleRowsPerPageChange } =
+    useRowsPerPageSelectControl(rowsPerPage, setRowsPerPage, setCurrentPage, ROWS_PER_PAGE_OPTIONS_DEFAULT, "10");
 
-  
   const handleOpenNoteDialog = (taxId?: string) => {
     if (taxes.length === 1) {
         setNoteEntityId(taxes[0].id);
@@ -574,8 +595,9 @@ export function TaxGroupDetails({
               closingBalance={desktopPaginationMeta.closingForPage}
               isTaxContext={true}
               scrollOnlyTransactions
-            
-              {...statementCheck.tableProps}/>
+              highlightPendingApproval
+              {...statementCheck.tableProps}
+            />
             </div>
             </div>
             <MobileTransactionsPager
@@ -793,11 +815,12 @@ export function TaxGroupDetails({
               </div>
             </div>
             <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
                   isRange
                   valueAD={dateRange}
-                  onChangeAD={(range) => onDateRangeChange(range as DateRange | undefined)}
+                  onChangeAD={(range) => onDateRangeChangeWithUnapprovedReset(range as DateRange | undefined)}
                   transactionDates={transactionDates}
                   className="w-auto"
                 />
@@ -912,6 +935,8 @@ export function TaxGroupDetails({
               periodDr={desktopPaginationMeta.periodDrForPage}
               periodCr={desktopPaginationMeta.periodCrForPage}
               closingBalance={desktopPaginationMeta.closingForPage}
+              scrollOnlyTransactions
+              highlightPendingApproval
               {...statementCheck.tableProps}
             />
             {paginatedTransactions.length === 0 && (
@@ -923,9 +948,10 @@ export function TaxGroupDetails({
           <ScrollBar orientation="horizontal" />
         </ScrollArea>
         {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
+        {/* Footer — global PC shell LedgerDesktopFooter */}
+        <LedgerDesktopFooter
+          left={
+            <>
               <LedgerFooterCheckboxPill
                 id="show-narration-tax-group"
                 checked={showNarration}
@@ -974,63 +1000,25 @@ export function TaxGroupDetails({
                 viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
                 hiddenCount={statementCheck.hiddenCount}
               />
-            </div>
-            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
-              <TransactionTableSortDropdown
-                sortBy={sortBy}
-                sortOrder={sortOrder}
-                onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
-                viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
-              />
-              <LedgerFooterTextPill>Page {currentPage} of {totalPages}</LedgerFooterTextPill>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(totalPages)}
-                disabled={currentPage === totalPages}
-              >
-                <ChevronsLeft className="h-4 w-4" />
-              </Button>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(currentPage + 1)}
-                disabled={currentPage === totalPages}
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <LedgerFooterChromePill className="px-1">
-
-              <Select
-                value={`${rowsPerPage}`}
-                onValueChange={(value) => {
-                  setRowsPerPage(Number(value));
-                  setCurrentPage(1);
-                }}
-              >
-                <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
-                  <SelectValue placeholder={`${rowsPerPage}`} />
-                </SelectTrigger>
-                <SelectContent side="top">
-                  {[10, 20, 30, 50].map((pageSize) => (
-                    <SelectItem key={pageSize} value={`${pageSize}`}>
-                      {pageSize}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              </LedgerFooterChromePill><Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(currentPage - 1)}
-                disabled={currentPage === 1}
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(1)}
-                disabled={currentPage === 1}
-              >
-                <ChevronsRight className="h-4 w-4" />
-              </Button>
-              <LedgerFooterTextPill>Total Trxn {displayTransactions.length}</LedgerFooterTextPill>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          onSortChange={(by, order) => {
+            setSortBy(by);
+            setSortOrder(order);
+          }}
+          viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+          currentPage={currentPage}
+          totalPages={totalPages}
+          setCurrentPage={setCurrentPage}
+          rowsPerPageSelectValue={rowsPerPageSelectValue}
+          onRowsPerPageChange={handleRowsPerPageChange}
+          includeAllOption={false}
+          beforeCount={desktopPaginationMeta.beforeCount}
+          afterCount={desktopPaginationMeta.afterCount}
+          totalCount={displayTransactions.length}
+        />
       </div>
       </div>
       <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>

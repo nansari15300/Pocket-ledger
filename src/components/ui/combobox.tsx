@@ -379,6 +379,8 @@ export function Combobox({
                   }}
                   className={cn(
                     "flex w-full min-w-0 items-center",
+                    // Patla trigger: dropdown row wrap na ho — ek line + andar scroll
+                    effectiveNoWrap && "whitespace-nowrap",
                     // Sirf Check = form selection; aria-selected sirf halka hover (scroll pe galat “selected” na lage).
                     "[&[aria-selected=true]]:!bg-muted/25 [&[aria-selected=true]]:!text-foreground",
                     option.isSpecial && "text-amber-600 font-medium",

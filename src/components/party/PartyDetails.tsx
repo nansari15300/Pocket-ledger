@@ -43,7 +43,10 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { addDays, format, startOfDay, endOfDay, isSameDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import * as XLSX from "xlsx";
+import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
+import { RunningBalanceFullChart } from "@/components/reports/RunningBalanceFullChart";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -90,12 +93,14 @@ import { EntityAlarmPopup } from "@/components/messages/EntityAlarmPopup";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type Context, type VisibleColumns, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
-import { LedgerFooterCheckboxPill, ledgerFooterRowCn } from "@/components/vouchers/ledgerFooterChrome";
-import { LedgerFooterPaginationBar } from "@/components/vouchers/LedgerFooterPaginationBar";
+import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT, rowsPerPageSelectValue } from "@/lib/rowsPerPageSelect";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
+import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 
 import { useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
 import {
@@ -182,8 +187,8 @@ function filterByStatus(txns: any[], statusFilter: StatusFilter): any[] {
   return txns.filter((t) => {
     // Notes have no payment status; always show them regardless of status filter
     if (t.type === "note") return true;
-    // Journal/Contra are non-bill-wise rows; keep visible in party ledger regardless of payment-status filter.
-    if (t.type === "journal" || t.type === "contra") return true;
+    // Journal/Contra/Inter Company — bill-wise status nahi; filter se hide na hon
+    if (t.type === "journal" || t.type === "contra" || t.type === "inter_company") return true;
     if (statusFilter.paid && t.paymentStatus === "paid") return true;
     if (statusFilter.unpaid && t.paymentStatus === "unpaid") return true;
     if (statusFilter.partial && t.paymentStatus === "partially_paid") return true;
@@ -208,6 +213,9 @@ export function PartyDetails({
   context,
   /** Jab PartyDetails kisi report ke andar ho: dropdown se party badle bina `/party` par na jao */
   onEmbeddedPartyChange,
+  /** Reports / dashboard txn-count: Print·Excel·Bill wise·Date·Chart footer (party page Receive/Pay hide). */
+  mobileFooterVariant = "ledger",
+  mobileReportStickyTitle,
 }: {
   party: Party & { saleTotal?: number; purchaseTotal?: number };
   allParties?: Party[];
@@ -223,6 +231,8 @@ export function PartyDetails({
   onBack?: () => void;
   context?: string;
   onEmbeddedPartyChange?: (partyId: string) => void;
+  mobileFooterVariant?: "ledger" | "report";
+  mobileReportStickyTitle?: string;
 }) {
   const { company, companyId } = useCompany();
   const { balanceMode, setBalanceMode } = useBalanceMode();
@@ -236,6 +246,7 @@ export function PartyDetails({
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const [isDateChange, setIsDateChange] = useState(false);
+  const [mobileReportView, setMobileReportView] = useState<"list" | "chart">("list");
 
   const party = useMemo(() => {
     if (!processedParties || !initialParty) return initialParty;
@@ -571,6 +582,18 @@ export function PartyDetails({
     onDateRangeChange(undefined);
     setFilters({});
   };
+
+  const {
+    unapprovedOnly,
+    toggleUnapprovedOnly,
+    filterByUnapprovedOnly,
+    onDateRangeChangeWithUnapprovedReset,
+  } = useLedgerUnapprovedOnlyFilter({
+    onDateRangeChange,
+    setCurrentPage,
+    setFilters,
+    setActiveFilter,
+  });
   
   // PC: preference; mobile: hamesha notes (includeNotesInTable)
   const displayTransactions = useMemo(
@@ -588,10 +611,11 @@ export function PartyDetails({
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
-        sortTransactionsWithFiscalMergeForCompany(statusFilteredTransactions, sortBy, sortOrder, undefined, company),
+        sortTransactionsWithFiscalMergeForCompany(
+          filterByUnapprovedOnly(statusFilteredTransactions), sortBy, sortOrder, undefined, company),
         ledgerOpeningForRunning
       ),
-    [statusFilteredTransactions, sortBy, sortOrder, ledgerOpeningForRunning, company]
+    [statusFilteredTransactions, filterByUnapprovedOnly, sortBy, sortOrder, ledgerOpeningForRunning, company]
   );
 
   const searchFilteredTransactions = useMemo(() => {
@@ -758,7 +782,61 @@ export function PartyDetails({
       }
     })();
   };
-  
+
+  const handleExcelLedger = useCallback(() => {
+    const rows = statusFilteredTransactions.map((t: Record<string, unknown>) => {
+      const dRaw = (t as { date?: { toDate?: () => Date } }).date;
+      const d = dRaw?.toDate ? dRaw.toDate() : new Date((t as { date?: unknown }).date as string | number | Date);
+      return {
+        "Date (BS)": formatDateBS(d),
+        "Date (AD)": formatDate(d),
+        "Voucher No.": (t as { voucherNumber?: string }).voucherNumber,
+        Type:
+          typeof (t as { type?: string }).type === "string"
+            ? ((t as { type: string }).type || "").replace(/_/g, " ")
+            : String((t as { type?: unknown }).type ?? ""),
+        Narration: String((t as { narration?: string }).narration || ""),
+        Debit: Number((t as { debit?: number }).debit) || 0,
+        Credit: Number((t as { credit?: number }).credit) || 0,
+        Balance: `${Math.abs(Number((t as { balance?: number }).balance) || 0).toFixed(2)} ${((t as { balance?: number }).balance ?? 0) >= 0 ? "Dr" : "Cr"}`,
+      };
+    });
+    const summaryRows = [
+      {
+        "Date (BS)": "Opening Balance",
+        Balance: `${Math.abs(openingBalanceForPeriod).toFixed(2)} ${openingBalanceForPeriod >= 0 ? "Dr" : "Cr"}`,
+      },
+      { "Date (BS)": "Total", Debit: periodDr, Credit: periodCr },
+      {
+        "Date (BS)": "Closing Balance",
+        Balance: `${Math.abs(closingBalance).toFixed(2)} ${closingBalance >= 0 ? "Dr" : "Cr"}`,
+      },
+    ];
+    const worksheet = XLSX.utils.json_to_sheet([...rows, {}, ...summaryRows] as Record<string, unknown>[]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Ledger");
+    const safeName = (party.name || "party").replace(/[/\\?%*:|"<>]/g, "-");
+    XLSX.writeFile(workbook, `${safeName}_ledger.xlsx`);
+  }, [
+    statusFilteredTransactions,
+    formatDateBS,
+    formatDate,
+    openingBalanceForPeriod,
+    periodDr,
+    periodCr,
+    closingBalance,
+    party.name,
+  ]);
+
+  const reportStickyTitle = useMemo(() => {
+    if (mobileReportStickyTitle) return mobileReportStickyTitle;
+    if (context === "sale") return "Sales";
+    if (context === "purchase") return "Purchases";
+    if (context === "payment-in") return "Payment In";
+    if (context === "payment-out") return "Payment Out";
+    return "Report";
+  }, [mobileReportStickyTitle, context]);
+
   if(!party) return null;
 
   const dateRangeLabel = buildDateRangeText() || "All Time";
@@ -810,12 +888,49 @@ export function PartyDetails({
   }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, historyVoucher, linkPaymentVoucher, linkAdvancesVoucher, closeModalInUrl, onBack]);
 
   if (isMobile) {
+    const isReportMobileChrome = mobileFooterVariant === "report";
+    const hideReportPartyPicker = isReportMobileChrome && (isAllVouchersView || party.id === "all");
+    // All-vouchers report: sirf ek title upar — balance neeche summary row me rahe.
+    const reportHeaderTitleOnly = isReportMobileChrome && (isAllVouchersView || party.id === "all");
+
     return (
       <>
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
-          {/* Mobile: no pb-24 here so scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
-          {/* Master-detail flow: title "Party details" master header me; yahan sirf direct /party/[id] pe back + context. */}
-          {onBack ? (
+          {isReportMobileChrome && onBack ? (
+            <header className="sticky top-0 z-10 flex-shrink-0 border-b bg-white p-3 dark:bg-card">
+              <div className="flex min-w-0 items-center gap-2">
+                <Button variant="ghost" size="icon" className="h-8 w-8 flex-shrink-0" onClick={handleMobileBack} aria-label="Back">
+                  <ArrowLeft className="h-4 w-4" />
+                </Button>
+                {reportHeaderTitleOnly ? (
+                  <h1 className="min-w-0 flex-1 text-base font-bold text-muted-foreground">{reportStickyTitle}</h1>
+                ) : (
+                  <>
+                    <div className="flex min-w-0 flex-1 items-center gap-1">
+                      <h1 className="shrink-0 text-base font-bold text-muted-foreground">{reportStickyTitle}</h1>
+                      <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
+                        ·
+                      </span>
+                      <span
+                        className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
+                        title={party.name}
+                      >
+                        {party.name}
+                      </span>
+                    </div>
+                    <span
+                      className={cn(
+                        "shrink-0 text-sm font-bold whitespace-nowrap",
+                        closingBalance >= 0 ? "text-green-600" : "text-red-600"
+                      )}
+                    >
+                      {formatCurrency(closingBalance, { showDrCr: true })}
+                    </span>
+                  </>
+                )}
+              </div>
+            </header>
+          ) : onBack ? (
             <div className="flex flex-shrink-0 items-center gap-1.5 border-b px-2 py-1">
               <Button variant="ghost" size="icon" onClick={handleMobileBack} className="h-7 w-7 flex-shrink-0" aria-label="Back">
                 <ArrowLeft className="h-3.5 w-3.5" />
@@ -826,7 +941,7 @@ export function PartyDetails({
               </span>
             </div>
           ) : null}
-          {/* Mobile: date/balance/search — footer chevron se collapse (group pages jaisa) */}
+          {/* Mobile: date/balance/search — footer chevron se collapse */}
           <MobileDetailSummaryCollapsible>
           {/* Row 2 (center): Date range - compact; no filter = "Last 10 Txns", else date range; cross to reset when filter is on */}
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
@@ -851,7 +966,7 @@ export function PartyDetails({
           {/* Dropdown + Edit icon + Search - same size (equal width & height) */}
           <div className="p-2 border-b flex-shrink-0">
             <div className="flex items-stretch gap-2">
-              {allParties && allParties.length > 0 && (
+              {!hideReportPartyPicker && allParties && allParties.length > 0 && (
                 <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
                   <Combobox
                     options={partyDropdownOptions}
@@ -866,7 +981,7 @@ export function PartyDetails({
                   />
                 </div>
               )}
-              {party.id !== "all" && !(party as any).isSystemAccount && (
+              {!hideReportPartyPicker && party.id !== "all" && !(party as any).isSystemAccount && (
                 <EditPartyDialog
                   party={party}
                   onPartyUpdated={onPartyUpdated}
@@ -899,8 +1014,12 @@ export function PartyDetails({
             style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
           >
             <div className="pb-2">
-            {/* Unapproved (`isApproved` !== true): pink row tint — TransactionsTable default highlightPendingApproval */}
-            {/* Book/Dated opening pills table row me; subtitle "Books opening" hata diya */}
+            {mobileReportView === "chart" ? (
+              <RunningBalanceFullChart
+                transactions={searchFilteredTransactions}
+                openingBalance={openingBalanceForPeriod}
+              />
+            ) : (
             <TransactionsTable
               transactions={paginatedTransactions}
               context="party"
@@ -938,6 +1057,7 @@ export function PartyDetails({
               hideBalanceColumn={false}
               isDateChange={isDateChange}
               scrollOnlyTransactions
+              highlightPendingApproval
               statusFilter={statusFilter}
               statusFilterAllChecked={statusFilterAllChecked}
               onStatusFilterAll={handleStatusFilterAll}
@@ -945,8 +1065,10 @@ export function PartyDetails({
               statusFilterIdPrefix="party"
               {...statementCheck.tableProps}
             />
+            )}
             </div>
           </div>
+          {mobileReportView === "list" ? (
           <MobileTransactionsPager
             className="flex-shrink-0 mb-12"
             currentPage={currentPage}
@@ -959,8 +1081,23 @@ export function PartyDetails({
             onPageChange={setCurrentPage}
             edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
           />
+          ) : null}
         </div>
-        {/* Fixed bottom: Bill wise/Statement, Receive, Pay, New Sale, Calendar - open popups */}
+        {isReportMobileChrome ? (
+          <ReportMobileLedgerFooter
+            onPrint={handlePrint}
+            onExcel={handleExcelLedger}
+            onDateOpen={() => {
+              openingModalRef.current = true;
+              setIsCalendarOpen(true);
+              openModalInUrl();
+            }}
+            balanceMode={balanceMode}
+            onBalanceModeToggle={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
+            mobileView={mobileReportView}
+            onViewToggle={() => setMobileReportView((v) => (v === "list" ? "chart" : "list"))}
+          />
+        ) : (
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
           <Button
             type="button"
@@ -1080,6 +1217,7 @@ export function PartyDetails({
             </DrawerContent>
           </Drawer>
         </div>
+        )}
         <Dialog
           open={isNoteOpen}
           onOpenChange={(open: boolean) => {
@@ -1215,12 +1353,13 @@ export function PartyDetails({
             </div>
             {/* Part 2: date range, Add Note, print — single line, no wrap; on small screens this row is below */}
             <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <BsDatePicker
                     isRange
                     valueAD={dateRange}
-                    onChangeAD={(range) => onDateRangeChange(range as DateRange | undefined)}
+                    onChangeAD={(range) => onDateRangeChangeWithUnapprovedReset(range as DateRange | undefined)}
                     transactionDates={transactionDates}
                     className="w-auto"
                   />
@@ -1379,6 +1518,7 @@ export function PartyDetails({
               hideBalanceColumn={false}
               isDateChange={isDateChange}
               scrollOnlyTransactions
+              highlightPendingApproval
               statusFilter={statusFilter}
               statusFilterAllChecked={statusFilterAllChecked}
               onStatusFilterAll={handleStatusFilterAll}
@@ -1388,15 +1528,10 @@ export function PartyDetails({
             />
           </div>
         </div>
-        {/* Footer: fixed at bottom of details pane (screen anusar) */}
-        <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim flex-shrink-0 mt-auto bg-background">
-          <div className={cn("flex min-w-max flex-col gap-y-2 sm:flex-row sm:items-center", ledgerFooterRowCn)}>
-            <div
-              className={cn(
-                ledgerFooterRowCn,
-                "min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground"
-              )}
-            >
+        {/* Footer: global PC shell — LedgerDesktopFooter */}
+        <LedgerDesktopFooter
+          left={
+            <>
               <LedgerFooterCheckboxPill
                 id="show-narration-party"
                 checked={showNarration}
@@ -1445,33 +1580,31 @@ export function PartyDetails({
                 viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
                 hiddenCount={statementCheck.hiddenCount}
               />
-            </div>
-            <LedgerFooterPaginationBar
-              sortBy={sortBy}
-              sortOrder={sortOrder}
-              onSortChange={(by, order) => {
-                setSortBy(by);
-                setSortOrder(order);
-              }}
-              viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
-              currentPage={currentPage}
-              totalPages={totalPages}
-              setCurrentPage={setCurrentPage}
-              rowsPerPageSelectValue={rowsPerPageSelectValue(
-                rowsPerPage,
-                ROWS_PER_PAGE_OPTIONS_DEFAULT,
-                "10"
-              )}
-              onRowsPerPageChange={(value) => {
-                setRowsPerPage(Number(value) || 0);
-                setCurrentPage(1);
-              }}
-              beforeCount={desktopPaginationMeta.beforeCount}
-              afterCount={desktopPaginationMeta.afterCount}
-              totalCount={statusFilteredTransactions.length}
-            />
-          </div>
-        </div>
+            </>
+          }
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          onSortChange={(by, order) => {
+            setSortBy(by);
+            setSortOrder(order);
+          }}
+          viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+          currentPage={currentPage}
+          totalPages={totalPages}
+          setCurrentPage={setCurrentPage}
+          rowsPerPageSelectValue={rowsPerPageSelectValue(
+            rowsPerPage,
+            ROWS_PER_PAGE_OPTIONS_DEFAULT,
+            "10"
+          )}
+          onRowsPerPageChange={(value) => {
+            setRowsPerPage(Number(value) || 0);
+            setCurrentPage(1);
+          }}
+          beforeCount={desktopPaginationMeta.beforeCount}
+          afterCount={desktopPaginationMeta.afterCount}
+          totalCount={statusFilteredTransactions.length}
+        />
       </div>
       <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>
         <DialogContent className="h-[95vh] w-full max-w-3xl flex flex-col">

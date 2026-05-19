@@ -12,8 +12,10 @@ import { normalizePlanIdForClient } from "@/config/plans";
 import { verifyPlanEntitlementJws } from "@/lib/security/planEntitlementJwtVerify";
 import { getOrCreateClientDeviceId } from "@/lib/security/deviceIdentity";
 
-/** Online par har 5 min authoritative plan sync — `useCompany` setInterval. */
+/** Online + healthy: har 5 min plan sync. */
 export const PLAN_SERVER_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+/** Online + stale banner: tez retry (live sync jab tak server touch na ho). */
+export const PLAN_SERVER_SYNC_STALE_INTERVAL_MS = 60 * 1000;
 
 const DAILY_AUTH_PLAN_SYNC_YMD_KEY = (uid: string) =>
   `pocket-ledger:dailyAuthoritativePlanSyncYmd:${uid.trim()}`;
@@ -90,13 +92,22 @@ export type PlanSyncBannerState = {
   needsOnlinePlanSync: boolean;
   offlineLicenseValidUntilMs: number | null;
   offlineLicenseExpired: boolean;
+  /** Browser offline — stale/20d banner mat dikhao; sync band */
+  isBrowserOnline: boolean;
+  /** Online live sync chal rahi hai — "stay online" flash kam */
+  planSyncInFlight: boolean;
 };
 
 /** Profile banner: 3d tech stale + 20d mandatory online + server offline window */
 export function recomputePlanSyncBannerState(
   localCompanyId: string | null,
-  companyShape: { offlineLicenseValidUntilMs?: number } | null
+  companyShape: { offlineLicenseValidUntilMs?: number } | null,
+  opts?: { online?: boolean; planSyncInFlight?: boolean }
 ): PlanSyncBannerState {
+  const isBrowserOnline =
+    opts?.online ?? (typeof navigator !== "undefined" ? navigator.onLine : true);
+  const planSyncInFlight = opts?.planSyncInFlight === true;
+
   if (!localCompanyId?.trim()) {
     return {
       lastSuccessAtMs: null,
@@ -104,16 +115,21 @@ export function recomputePlanSyncBannerState(
       needsOnlinePlanSync: false,
       offlineLicenseValidUntilMs: null,
       offlineLicenseExpired: false,
+      isBrowserOnline,
+      planSyncInFlight,
     };
   }
   const lastSuccessAtMs = readPlanAuthoritativeSyncTimestamp(localCompanyId);
-  const online = typeof navigator !== "undefined" && navigator.onLine;
   const isStale =
-    online &&
+    isBrowserOnline &&
+    !planSyncInFlight &&
     lastSuccessAtMs != null &&
     Date.now() - lastSuccessAtMs > PLAN_SYNC_STALE_AFTER_MS;
   const needsOnlinePlanSync =
-    lastSuccessAtMs != null && Date.now() - lastSuccessAtMs > OFFLINE_PLAN_SYNC_WARNING_MS;
+    isBrowserOnline &&
+    !planSyncInFlight &&
+    lastSuccessAtMs != null &&
+    Date.now() - lastSuccessAtMs > OFFLINE_PLAN_SYNC_WARNING_MS;
   const rawUntil = companyShape?.offlineLicenseValidUntilMs;
   const offlineLicenseValidUntilMs =
     typeof rawUntil === "number" && Number.isFinite(rawUntil) ? rawUntil : null;
@@ -125,6 +141,8 @@ export function recomputePlanSyncBannerState(
     needsOnlinePlanSync,
     offlineLicenseValidUntilMs,
     offlineLicenseExpired,
+    isBrowserOnline,
+    planSyncInFlight,
   };
 }
 

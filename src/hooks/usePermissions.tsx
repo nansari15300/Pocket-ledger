@@ -46,14 +46,14 @@ export const initialPermissionConfig: PermissionConfig = {
     acc[group.title] = group.permissions.map(p => p.label);
     return acc;
   }, {} as Record<string, string[]>),
-  // Role arrays: order matches flattenedPermissions (view_history removed from General; voucher perms moved into General)
+  // Role arrays: order matches flattenedPermissions (trailing block = Recurring Auto Voucher group).
   roles: {
-    viewer:       [true, false, false, false, false, false, false, false, false, false, false, false, true, false, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false],
-    // data-entry: manage_users_roles + configure_company_settings = false (Settings / admin tabs hide)
-    "data-entry": [true, false, true, true, false, true, false, false, false, false, false, false, false, false, true, true, true, false, false, false, false, false, false, false, false, false, false, false, true, true, false, false],
-    accountant:   [true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, false, true, true, true, false, false, false, false, false, false, true, false, true, true, false, false],
-    editor:       [true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, false, true, true, true, false, false, false, false, false, false, true, false, true, true, false, false],
-    manager:      [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, true],
+    viewer:       [true, false, false, false, false, false, false, false, false, false, false, false, true, false, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false],
+    // data-entry: manage_users_roles + configure_company_settings = false; recurring voucher strip allowed.
+    "data-entry": [true, false, true, true, false, true, false, false, false, false, false, false, false, false, true, true, true, false, false, false, false, false, false, false, false, false, false, false, true, true, false, false, false, false, true, true, true, true, false, false],
+    accountant:   [true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, false, true, true, true, false, false, false, false, false, false, true, false, true, true, false, false, false, false, true, true, true, true, true],
+    editor:       [true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, false, true, true, true, false, false, false, false, false, false, true, false, true, true, false, false, false, false, true, true, true, true, true],
+    manager:      [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true],
     owner: Array(flattenedPermissions.length).fill(true)
   },
   dateLimits: {

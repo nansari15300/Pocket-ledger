@@ -132,11 +132,10 @@ export function AddSalaryReportDetail() {
       return (
         <>
           <div className="flex flex-col h-full min-h-0 overflow-hidden">
-            {/* Mobile parity: use the same StaffDetails top+bottom UI with in-view back handling. */}
-            <div className="flex-1 min-h-0 overflow-hidden">
+            {/* Report mobile: flex chain taaki andar scroll + report footer (Party/Sale jaisa) kaam kare. */}
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               <StaffDetails
                 staff={currentStaff}
-                // Keep dropdown data available so mobile header can show staff selector left of edit icon.
                 allStaff={staffWithSalary}
                 transactions={currentTransactions}
                 onStaffUpdated={() => {}}
@@ -147,9 +146,10 @@ export function AddSalaryReportDetail() {
                 isAllVouchersView={showAllCompanyVouchers}
                 userNames={userNames}
                 context="add_salary"
+                mobileFooterVariant="report"
+                mobileReportStickyTitle={showAllCompanyVouchers ? "All Salary" : "Add Salary"}
                 onBack={() => { setSelectedStaff(null); setShowAllCompanyVouchers(false); }}
                 onSelectStaff={(staffId) => {
-                  // Keep user on report page: switch selected staff in-place, no route redirect.
                   const next = staffWithSalary.find((s) => s.id === staffId);
                   if (next) {
                     setShowAllCompanyVouchers(false);

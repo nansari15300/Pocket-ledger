@@ -27,6 +27,11 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import {
+  MasterFormNameAcNoRow,
+  MasterFormTwoColGrid,
+  MasterMobileNoField,
+} from "@/components/inter-company/MasterFormLayout";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
@@ -66,6 +71,7 @@ import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Account name must be at least 2 characters." }),
+  phone: z.string().optional(),
   rate: z.number().min(0, "Tax rate cannot be negative.").max(100, "Tax rate cannot be over 100."),
   openingBalance: z.coerce.number(),
   openingBalanceDate: z.date().optional(),
@@ -121,6 +127,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     resolver: zodResolver(formSchema) as Resolver<FormValues>,
     defaultValues: {
       name: tax.name,
+      phone: tax.phone ?? "",
       rate: tax.rate,
       openingBalance: tax.openingBalance || 0,
       openingBalanceDate: (tax as any).openingBalanceDate?.toDate ? (tax as any).openingBalanceDate.toDate() : undefined,
@@ -278,6 +285,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
         const narrationClean = values.openingBalanceNarration?.trim() || null;
         const updatePayload = {
           name: values.name,
+          phone: values.phone?.trim() || null,
           rate: values.rate,
           openingBalance: newOpeningBalance,
           openingBalanceDate: values.openingBalanceDate || null,
@@ -487,21 +495,29 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
           <div className={masterEntityDialogFormWrapperClassName}>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:pr-2">
-             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <FormField
-                    control={form.control}
-                    name="name"
-                    render={({ field }: any) => (
+            <div className="pl-master-form-scroll min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:pr-2">
+                <MasterFormNameAcNoRow
+                  entityKind="tax"
+                  entityId={tax.id}
+                  mode="edit"
+                  nameField={
+                    <FormField
+                      control={form.control}
+                      name="name"
+                      render={({ field }: any) => (
                         <FormItem>
-                        <FormLabel>Tax Name</FormLabel>
-                        <FormControl>
+                          <FormLabel>Tax Name</FormLabel>
+                          <FormControl>
                             <Input placeholder="e.g., VAT" {...field} />
-                        </FormControl>
-                        <FormMessage />
+                          </FormControl>
+                          <FormMessage />
                         </FormItem>
-                    )}
+                      )}
                     />
+                  }
+                />
+                <MasterFormTwoColGrid>
+                  <MasterMobileNoField control={form.control} />
                 <FormField
                   control={form.control}
                   name="groupId"
@@ -549,7 +565,8 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                     </FormItem>
                 )}
                 />
-                 <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                </MasterFormTwoColGrid>
+                <MasterFormTwoColGrid>
                     <FormField
                     control={form.control}
                     name="openingBalance"
@@ -601,11 +618,10 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                                 )}
                             </div>
                           <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                </div>
-              </div>
+                    </FormItem>
+                )}
+                />
+                </MasterFormTwoColGrid>
                <EntityProfilePhotoBlock
                   file={file}
                   onPickClick={() => avatarInputRef.current?.click()}

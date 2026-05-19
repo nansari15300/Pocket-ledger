@@ -166,10 +166,10 @@ export default function PaymentInPage() {
         const totalAmount = paymentInVouchers.reduce((sum, v) => sum + (v.total || v.amount || 0), 0);
         return {
             id: 'all',
-            name: 'All Receipts',
+            name: 'All Payment In',
             type: 'Other',
             balance: totalAmount,
-            entity: { id: 'all', name: 'All Receipts', balance: totalAmount, openingBalance: 0 }
+            entity: { id: 'all', name: 'All Payment In', balance: totalAmount, openingBalance: 0 }
         };
     }, [showAllCompanyVouchers, paymentInVouchers]);
     
@@ -269,6 +269,8 @@ export default function PaymentInPage() {
                           isAllVouchersView={showAllCompanyVouchers}
                           userNames={userNames}
                           context="payment-in"
+                          mobileFooterVariant="report"
+                          mobileReportStickyTitle={showAllCompanyVouchers ? "All Payment In" : "Payment In"}
                         />
                     </div>
                 ): (

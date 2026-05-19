@@ -11,7 +11,13 @@ export function PlanAuthoritativeSyncBanner() {
   const s = planAuthoritativeSync;
 
   if (!companyId) return null;
-  if (!s.needsOnlinePlanSync && !s.offlineLicenseExpired && !s.isStale) return null;
+  // Offline: sync band — sirf license-expired dikhao (stale / 20d nag offline par nahi)
+  if (!s.isBrowserOnline) {
+    if (!s.offlineLicenseExpired) return null;
+  } else if (!s.needsOnlinePlanSync && !s.offlineLicenseExpired && !s.isStale) {
+    return null;
+  }
+  if (s.planSyncInFlight && s.isBrowserOnline && !s.offlineLicenseExpired) return null;
 
   const primary = s.offlineLicenseExpired
     ? "Your offline license period from the server has ended. Connect to the internet and open the app to sync your plan."

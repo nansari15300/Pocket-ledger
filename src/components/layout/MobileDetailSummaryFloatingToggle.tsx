@@ -9,6 +9,7 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { mdc, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
 import { useMobileDetailSummaryCollapsed } from "@/contexts/MobileDetailSummaryCollapseContext";
+import { useAppModalOverlayOpen } from "@/hooks/useAppModalOverlayOpen";
 
 export type MobileDetailSummaryFloatingToggleProps = {
   /** `inline`: pager wrapper ke upar; `fixed`: body portal (report register list). */
@@ -19,11 +20,17 @@ export function MobileDetailSummaryFloatingToggle({
   placement = "fixed",
 }: MobileDetailSummaryFloatingToggleProps) {
   const { collapsed, toggle } = useMobileDetailSummaryCollapsed();
+  const overlayOpen = useAppModalOverlayOpen();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Print / edit dialogs ke upar chevron na dikhe
+  if (overlayOpen) {
+    return null;
+  }
 
   const button = (
     <button

@@ -1,7 +1,7 @@
 "use client";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { PlusCircle, Search, Users, ArrowLeft } from "lucide-react";
+import { PlusCircle, Search, Users } from "lucide-react";
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
@@ -19,10 +19,8 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { Button } from "@/components/ui/button";
 import { useSearchParams } from "next/navigation";
 import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
-import { mdc, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
 import {
   voucherCountsAsDashboardPaySalary,
   voucherCountsAsDashboardPaymentOutExcludingPaySalary,
@@ -50,6 +48,19 @@ export function PaymentOutReportDetail() {
   const hasAutoSelected = useRef(false);
 
   const voucherScope = searchParams.get("voucherScope");
+
+  // List/register title vs all-vouchers aggregate label (header me duplicate na ho).
+  const reportRegisterTitle = useMemo(() => {
+    if (voucherScope === "directExpenseOnly") return "Direct Expense";
+    if (voucherScope === "paySalary") return "Pay Salary";
+    return "Payment Out";
+  }, [voucherScope]);
+
+  const reportAllVouchersTitle = useMemo(() => {
+    if (voucherScope === "directExpenseOnly") return "All Direct Exp";
+    if (voucherScope === "paySalary") return "All Pay Salary";
+    return "All Payment Out";
+  }, [voucherScope]);
 
   const paymentOutVouchers = useMemo(() => {
     // Pay Salary dashboard count = `pay_salary` type + staff `payment_out` (see `dashboardPaySalaryStat`) — not only payment_out/direct_expense.
@@ -157,12 +168,12 @@ export function PaymentOutReportDetail() {
     const totalAmount = paymentOutVouchers.reduce((sum, v) => sum + (v.total || v.amount || 0), 0);
     return {
       id: "all",
-      name: "All Payments",
+      name: reportAllVouchersTitle,
       type: "Other" as const,
       balance: totalAmount,
-      entity: { id: "all", name: "All Payments", balance: totalAmount, openingBalance: 0 },
+      entity: { id: "all", name: reportAllVouchersTitle, balance: totalAmount, openingBalance: 0 },
     };
-  }, [showAllCompanyVouchers, paymentOutVouchers]);
+  }, [showAllCompanyVouchers, paymentOutVouchers, reportAllVouchersTitle]);
 
   const currentEntity = showAllCompanyVouchers ? allPaymentsEntity : selectedPayee;
   const currentTransactions = showAllCompanyVouchers ? paymentOutVouchers : payeeTransactions;
@@ -219,6 +230,18 @@ export function PaymentOutReportDetail() {
     setIsVoucherOpen(true);
   };
 
+  const reportMobileDetailProps = useMemo(
+    () => ({
+      mobileFooterVariant: "report" as const,
+      mobileReportStickyTitle: showAllCompanyVouchers ? reportAllVouchersTitle : reportRegisterTitle,
+      onBack: () => {
+        setSelectedPayee(null);
+        setShowAllCompanyVouchers(false);
+      },
+    }),
+    [showAllCompanyVouchers, reportAllVouchersTitle, reportRegisterTitle]
+  );
+
   const renderDetailsView = () => {
     if (!currentEntity) {
       return (
@@ -247,6 +270,7 @@ export function PaymentOutReportDetail() {
           isAllVouchersView={showAllCompanyVouchers}
           userNames={userNames}
           context="payment-out"
+          {...reportMobileDetailProps}
         />
       );
     }
@@ -268,6 +292,7 @@ export function PaymentOutReportDetail() {
             isAllVouchersView={showAllCompanyVouchers}
             context="payment-out"
             userNames={userNames}
+            {...reportMobileDetailProps}
           />
         );
       case "Staff":
@@ -283,6 +308,7 @@ export function PaymentOutReportDetail() {
             isAllVouchersView={showAllCompanyVouchers}
             context="payment-out"
             userNames={userNames}
+            {...reportMobileDetailProps}
           />
         );
       case "Tax":
@@ -298,6 +324,7 @@ export function PaymentOutReportDetail() {
             onDateRangeChange={setDateRange}
             context="payment-out"
             userNames={userNames}
+            {...reportMobileDetailProps}
           />
         );
       case "Expense":
@@ -313,6 +340,7 @@ export function PaymentOutReportDetail() {
             isAllVouchersView={showAllCompanyVouchers}
             context="payment-out"
             userNames={userNames}
+            {...reportMobileDetailProps}
           />
         );
       default:
@@ -328,6 +356,7 @@ export function PaymentOutReportDetail() {
             isAllVouchersView={showAllCompanyVouchers}
             context="payment-out"
             userNames={userNames}
+            {...reportMobileDetailProps}
           />
         );
     }
@@ -349,13 +378,7 @@ export function PaymentOutReportDetail() {
       return (
         <>
           <div className="flex flex-col h-full min-h-0 overflow-hidden">
-            <div className={mdc.reportBackRow} {...mdcNoEdgeSwipeCapture}>
-              <Button variant="ghost" size="icon" className={mdc.reportBackBtn} onClick={() => { setSelectedPayee(null); setShowAllCompanyVouchers(false); }}>
-                <ArrowLeft className="h-3 w-3" />
-              </Button>
-              <span className="font-semibold truncate">{currentEntity.name}</span>
-            </div>
-            <div className="flex-1 min-h-0 overflow-hidden">{renderDetailsView()}</div>
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{renderDetailsView()}</div>
           </div>
           <AddVoucherDialog
             isOpen={isVoucherOpen}
@@ -369,7 +392,7 @@ export function PaymentOutReportDetail() {
     return (
       <>
         <ReportRegisterMobileListChrome
-          title="Payment Out"
+          title={reportRegisterTitle}
           actionSlot={
             <div className="grid grid-cols-2 gap-2">
               <PermissionButton permission="create_records" className="w-full" onClick={() => openVoucherDialog("payment_out")}>

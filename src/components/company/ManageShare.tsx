@@ -102,7 +102,34 @@ function buildMergedPermissionConfig(currentConfig: PermissionConfig | undefined
   if (merged.roles.owner) {
     merged.roles.owner = Array(flattenedPermissions.length).fill(true);
   }
+  // Har role ki boolean[] ko current PermissionGroups length tak pad — naye recurring keys align rahein.
+  const roleKeys = Object.keys(merged.roles) as UserRole[];
+  for (const roleKey of roleKeys) {
+    if (roleKey === "owner") continue;
+    const defaultArr = initialPermissionConfig.roles[roleKey] || [];
+    const stored = merged.roles[roleKey] || [];
+    merged.roles[roleKey] = flattenedPermissions.map((_, i) =>
+      i < stored.length ? !!stored[i] : !!defaultArr[i],
+    );
+  }
   return merged;
+}
+
+/** Save se pehle har role array ko full length par normalize — sparse index bug avoid. */
+function normalizePermissionConfigForSave(config: PermissionConfig): PermissionConfig {
+  const out = JSON.parse(JSON.stringify(config)) as PermissionConfig;
+  if (out.roles.owner) {
+    out.roles.owner = Array(flattenedPermissions.length).fill(true);
+  }
+  for (const roleKey of Object.keys(out.roles) as UserRole[]) {
+    if (roleKey === "owner") continue;
+    const defaultArr = initialPermissionConfig.roles[roleKey] || [];
+    const stored = out.roles[roleKey] || [];
+    out.roles[roleKey] = flattenedPermissions.map((_, i) =>
+      i < stored.length ? !!stored[i] : !!defaultArr[i],
+    );
+  }
+  return out;
 }
 
 export function ManageShare() {
@@ -370,15 +397,15 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
     }
     setIsSavingPermissions(true);
     try {
-      // Ensure owner role always has all permissions set to true
-      const configToSave = JSON.parse(JSON.stringify(editablePermissionConfig));
-      if (configToSave.roles.owner) {
-        configToSave.roles.owner = Array(flattenedPermissions.length).fill(true);
-      }
+      // Ensure owner role always has all permissions set to true; baaki roles ko full length par pad.
+      const configToSave = normalizePermissionConfigForSave(editablePermissionConfig);
       
       if (companyData && isOfflineCompanyStorage(companyData)) {
         const localOk = await updateCompanyDocRoot(companyId, { permissionConfig: configToSave });
         if (localOk) {
+          reloadLocalCompanyRegistry();
+          setFirestorePermissionConfig(configToSave);
+          setEditablePermissionConfig(configToSave);
           toast({ title: "Success", description: "Permissions have been saved." });
           return;
         }
@@ -391,6 +418,9 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
               permissionConfig: configToSave,
               updatedAt: Date.now(),
             } as LocalCompanyDoc);
+            reloadLocalCompanyRegistry();
+            setFirestorePermissionConfig(configToSave);
+            setEditablePermissionConfig(configToSave);
             toast({ title: "Success", description: "Permissions have been saved (this device)." });
             return;
           }
@@ -407,6 +437,9 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
 
       const companyRef = doc(firestore, "companies", companyId);
       await updateDoc(companyRef, { permissionConfig: configToSave });
+      setFirestorePermissionConfig(configToSave);
+      setEditablePermissionConfig(configToSave);
+      triggerSync();
       toast({ title: "Success", description: "Permissions have been saved." });
     } catch (error) {
       console.error("Error saving permissions:", error);
