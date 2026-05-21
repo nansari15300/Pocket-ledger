@@ -49,7 +49,11 @@ export type Permission =
   /** Generate now / missed-period Create & batch picker. */
   | "generate_recurring_voucher_now"
   /** Month-end auto-create when app opens (with company run scope). */
-  | "trigger_recurring_auto_on_app_open";
+  | "trigger_recurring_auto_on_app_open"
+  /** Inter Company Join tab — view join settings, groups, invite inbox */
+  | "inter_company_read"
+  /** Inter Company Join tab — save joins, groups, accept invites (shared user inherits admin joins) */
+  | "inter_company_write";
 
 export type PermissionInfo = {
   key: Permission;
@@ -141,6 +145,13 @@ export const PermissionGroups: PermissionGroup[] = [
             { key: "edit_recurring_auto_monthly", label: "Edit Auto Monthly settings (schedule & rates)" },
             { key: "generate_recurring_voucher_now", label: "Generate recurring voucher now" },
             { key: "trigger_recurring_auto_on_app_open", label: "Trigger month-end auto generation on app open" },
+        ],
+    },
+    {
+        title: "Inter Company",
+        permissions: [
+            { key: "inter_company_read", label: "View Inter Company join settings & groups" },
+            { key: "inter_company_write", label: "Manage Inter Company joins & groups" },
         ],
     },
 ];

@@ -4,19 +4,31 @@
  * Selected party/account — saari fields + avatar (inter-company target/source).
  */
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
-import { INTER_COMPANY_ENTITY_LABELS, type InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
+import { INTER_COMPANY_ENTITY_LABELS } from "@/components/inter-company/InterCompanyEntitySide";
 import { useDate } from "@/hooks/useDate";
 import type { InterCompanyEntityDetail } from "@/lib/interCompany/interCompanyEntityTypes";
+import {
+  formatInterCompanyFieldForPartnerView,
+  type InterCompanyPartnerPrivacy,
+} from "@/lib/interCompany/interCompanyPartnerPrivacy";
+import { readInterCompanyAcNoFromDoc } from "@/lib/interCompany/interCompanyAccountNo";
 import { normalizeInterCompanyPhone } from "@/lib/interCompany/interCompanyPhone";
+import {
+  interCompanyIcAvatarClass,
+  interCompanyIcAvatarFallbackClass,
+  interCompanyIcReadonlyFieldClass,
+  interCompanyViewOnlyAllowCopyClass,
+} from "@/lib/interCompany/interCompanyVoucherChrome";
 import { cn } from "@/lib/utils";
 
 type Props = {
   entity: InterCompanyEntityDetail | null;
-  /** Company-level Inter Co. A/c No — voucher strip ke saath */
   companyAcNo?: string;
   companyMobile?: string;
-  /** Sirf source account — closing balance (target par false) */
+  companyPan?: string;
   showClosingBalance?: boolean;
+  /** Target privacy — partner view mask/visibility */
+  partnerViewPrivacy?: InterCompanyPartnerPrivacy | null;
 };
 
 function DetailRow({ label, value }: { label: string; value?: string | null }) {
@@ -30,39 +42,75 @@ function DetailRow({ label, value }: { label: string; value?: string | null }) {
   );
 }
 
+function partnerField(
+  privacy: InterCompanyPartnerPrivacy | null | undefined,
+  field: keyof InterCompanyPartnerPrivacy["viewFields"],
+  raw: string | null | undefined
+): string | null {
+  if (!privacy) return String(raw ?? "").trim() || null;
+  return formatInterCompanyFieldForPartnerView(privacy, field, raw);
+}
+
 export function InterCompanyEntityDetailsCard({
   entity,
   companyAcNo,
   companyMobile,
+  companyPan,
   showClosingBalance = false,
+  partnerViewPrivacy = null,
 }: Props) {
   if (!entity) return null;
 
   const { formatCurrency } = useDate();
   const kindLabel = INTER_COMPANY_ENTITY_LABELS[entity.kind];
-  const phone = normalizeInterCompanyPhone(entity.phone);
+  const phoneRaw = normalizeInterCompanyPhone(entity.phone) || entity.phone;
+  const entityIcAc = readInterCompanyAcNoFromDoc(entity) || entity.interCompanyAccountNo;
+  const pocketLedgerRaw =
+    entity.kind === "bank" && entity.accountNumber
+      ? String(entity.accountNumber)
+      : entityIcAc || "";
+
+  const accountName = partnerField(partnerViewPrivacy, "accountName", entity.label) ?? entity.label;
+  const mobile = partnerField(partnerViewPrivacy, "mobileNo", phoneRaw);
+  const pan = partnerField(partnerViewPrivacy, "panNo", entity.pan);
+  const pocketLedger = partnerField(partnerViewPrivacy, "pocketLedgerAcNo", pocketLedgerRaw);
+  const showCompanyAc = partnerField(partnerViewPrivacy, "pocketLedgerAcNo", companyAcNo);
+  const showCompanyMob = partnerField(partnerViewPrivacy, "mobileNo", companyMobile);
+  const showCompanyPan = partnerField(partnerViewPrivacy, "panNo", companyPan);
+
   const closing =
     showClosingBalance && entity.closingBalance != null && !Number.isNaN(entity.closingBalance)
       ? entity.closingBalance
       : null;
 
   return (
-    <div className="rounded-md border border-emerald-200/70 bg-white/80 p-3 dark:border-emerald-900/60 dark:bg-emerald-950/30">
+    <div
+      className={cn(
+        "rounded-md border border-sky-400/70 bg-sky-50/50 p-3 dark:border-sky-400/50 dark:bg-sky-950/25",
+        interCompanyViewOnlyAllowCopyClass
+      )}
+    >
       <div className="flex gap-3">
         <ResolvedEntityAvatar
           src={entity.fileUrl}
           alt={entity.label}
           fallbackText={entity.label.slice(0, 2).toUpperCase()}
-          className="h-14 w-14 shrink-0 rounded-full border"
+          className={cn("h-14 w-14 shrink-0", interCompanyIcAvatarClass)}
+          fallbackClassName={interCompanyIcAvatarFallbackClass}
         />
         <div className="min-w-0 flex-1 space-y-2">
           <div>
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{kindLabel}</p>
-            <p className="text-base font-semibold leading-tight">{entity.label}</p>
+            <p className="text-base font-semibold leading-tight">{accountName}</p>
           </div>
           {closing != null ? (
-            <div className="rounded-md border border-emerald-200/80 bg-emerald-50/70 px-2.5 py-2 dark:border-emerald-900/60 dark:bg-emerald-950/30">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-emerald-800/80 dark:text-emerald-200/80">
+            <div
+              className={cn(
+                "rounded-md border border-sky-400/80 px-2.5 py-2",
+                interCompanyIcReadonlyFieldClass
+              )}
+            >
+              <p className="text-[11px] font-medium uppercase tracking-wide text-black/70">
                 Closing balance
               </p>
               <p
@@ -75,23 +123,26 @@ export function InterCompanyEntityDetailsCard({
               </p>
             </div>
           ) : null}
-          {(companyAcNo || companyMobile) && (
-            <div className="rounded bg-emerald-50/80 px-2 py-1.5 text-xs dark:bg-emerald-950/40">
-              <p className="font-medium text-emerald-900 dark:text-emerald-100">Company (Inter Co.)</p>
-              {companyAcNo ? <p className="font-mono tabular-nums">A/c No: {companyAcNo}</p> : null}
-              {companyMobile ? <p>Mob: {companyMobile}</p> : null}
+          {(showCompanyAc || showCompanyMob || showCompanyPan) && (
+            <div className={cn("rounded border border-sky-400/60 px-2 py-1.5 text-xs text-black", interCompanyIcReadonlyFieldClass)}>
+              <p className="font-medium text-black">Company (Inter Co.)</p>
+              {showCompanyAc ? <p className="font-mono tabular-nums">A/c No: {showCompanyAc}</p> : null}
+              {showCompanyPan ? <p className="font-mono tabular-nums">PAN: {showCompanyPan}</p> : null}
+              {showCompanyMob ? <p>Mob: {showCompanyMob}</p> : null}
             </div>
           )}
           <div className="space-y-1 border-t pt-2">
-            <DetailRow label="Mobile" value={phone || entity.phone} />
+            {mobile ? <DetailRow label="Mobile" value={mobile} /> : null}
             <DetailRow label="Email" value={entity.email} />
-            <DetailRow label="PAN" value={entity.pan} />
+            {pan ? <DetailRow label="PAN" value={pan} /> : null}
             <DetailRow label="Address" value={entity.address} />
             {entity.kind === "bank" ? (
               <>
                 <DetailRow label="Bank" value={entity.bankName} />
-                <DetailRow label="A/c No." value={entity.accountNumber} />
+                {pocketLedger ? <DetailRow label="A/c No." value={pocketLedger} /> : null}
               </>
+            ) : pocketLedger ? (
+              <DetailRow label="Pocket ledger A/C" value={pocketLedger} />
             ) : null}
             {entity.openingBalance != null && !Number.isNaN(entity.openingBalance) ? (
               <DetailRow label="Op. balance" value={String(entity.openingBalance)} />

@@ -36,10 +36,23 @@ import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
 import { toast } from "sonner";
 import { isSuppressibleNewTransactionAlert } from "@/lib/transactionAlerts";
+import {
+  IC_REVERSE_REQUESTS_CHANGED,
+  readInterCompanyReverseInbox,
+} from "@/lib/interCompany/interCompanyReverseRequests";
+import { isInterCompanyReverseAlertReadLocal } from "@/lib/interCompany/interCompanyReverseRequestAlert";
+import { IC_ALERTS_CHANGED } from "@/lib/interCompany/interCompanyAlerts";
+import { interCompanySystemJoinAlertVisibleForCompany } from "@/lib/interCompany/interCompanySystemJoinRequest";
 import { AlertsTab } from '@/components/messages/AlertsTab';
 import { ChatTab } from '@/components/messages/ChatTab';
 import { AlarmsTab } from '@/components/messages/AlarmsTab';
 import { Badge } from "@/components/ui/badge";
+import {
+  messagesTabRibbonClassName,
+  messagesTabListClassName,
+  messagesTabTriggerClassName,
+  messagesTabUnreadBadgeClassName,
+} from "@/lib/messagesChrome";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { HistoryDialog } from "@/components/vouchers/HistoryDialog";
 
@@ -430,20 +443,38 @@ export default function MessagesPage() {
       return;
     }
     const unreadByRecipient: Record<string, Set<string>> = {};
+    const unreadIcSystemJoinsByRecipient: Record<string, Set<string>> = {};
     const unsubscribers: Array<() => void> = [];
     const recompute = () => {
-      const merged = new Set<string>();
-      Object.values(unreadByRecipient).forEach((set) => set.forEach((id) => merged.add(id)));
       const auto = new Set<string>();
       const regular = new Set<string>();
+      const firestoreIcReqIds = new Set<string>();
       Object.values(unreadByRecipient).forEach((set) => {
-        set.forEach((rawIdAndKind) => {
-          const [idPart, kindPart] = rawIdAndKind.split("::");
+        set.forEach((raw) => {
+          const parts = raw.split("::");
+          const idPart = parts[0] || "";
+          const kindPart = parts[1] || "";
+          const icReqId = parts[2] || "";
           if (kindPart === "auto_created") auto.add(idPart);
-          else regular.add(idPart);
+          else {
+            regular.add(idPart);
+            if (kindPart === "ic_reverse_pending" && icReqId) firestoreIcReqIds.add(icReqId);
+          }
         });
       });
-      setUnreadAlerts(regular.size);
+      Object.values(unreadIcSystemJoinsByRecipient).forEach((set) => {
+        set.forEach((id) => regular.add(id));
+      });
+      const icLocalOnly =
+        companyId && company?.isOwned === true
+          ? readInterCompanyReverseInbox(companyId).filter(
+              (r) =>
+                r.status === "pending" &&
+                !firestoreIcReqIds.has(r.id) &&
+                !isInterCompanyReverseAlertReadLocal(companyId, r.id)
+            ).length
+          : 0;
+      setUnreadAlerts(regular.size + icLocalOnly);
       setUnreadAutoAlerts(auto.size);
     };
 
@@ -459,14 +490,42 @@ export default function MessagesPage() {
         unreadByRecipient[id] = new Set(
           snapshot.docs
             .filter((d) => !isSuppressibleNewTransactionAlert(d.data() as any))
-            .map((d) => `${d.id}::${String((d.data() as any)?.kind || "")}`)
+            .map((d) => {
+              const data = d.data() as { kind?: string; interCompanyRequestId?: string };
+              return `${d.id}::${String(data?.kind || "")}::${String(data?.interCompanyRequestId || "")}`;
+            })
         );
         recompute();
       });
       unsubscribers.push(unsubAlerts);
+
+      const systemJoinAlertsQuery = query(
+        collection(firestore, "admin_notifications"),
+        where("recipientUserId", "==", id),
+        where("kind", "==", "ic_system_join_pending"),
+        where("isRead", "==", false)
+      );
+      const unsubIcSystemJoin = onSnapshot(systemJoinAlertsQuery, (snapshot) => {
+        const next = new Set<string>();
+        snapshot.docs.forEach((d) => {
+          if (interCompanySystemJoinAlertVisibleForCompany(d.data() as Record<string, unknown>, companyId)) {
+            next.add(d.id);
+          }
+        });
+        unreadIcSystemJoinsByRecipient[id] = next;
+        recompute();
+      });
+      unsubscribers.push(unsubIcSystemJoin);
     });
 
-    return () => unsubscribers.forEach((unsub) => unsub());
+    window.addEventListener(IC_REVERSE_REQUESTS_CHANGED, recompute);
+    window.addEventListener(IC_ALERTS_CHANGED, recompute);
+
+    return () => {
+      unsubscribers.forEach((unsub) => unsub());
+      window.removeEventListener(IC_REVERSE_REQUESTS_CHANGED, recompute);
+      window.removeEventListener(IC_ALERTS_CHANGED, recompute);
+    };
   }, [myUserIds, company?.isOwned, companyId]);
   
   const handleConversationSelect = useCallback((conversation: any) => {
@@ -751,67 +810,42 @@ export default function MessagesPage() {
               onValueChange={handleTabChange}
               className="flex flex-1 flex-col min-h-0 w-full"
             >
-                <div className="flex flex-col gap-2 w-full overflow-x-auto overflow-y-visible">
-                    {/* Badge: purana top-0 -50% clip, top-1 zyada niche — ab top-0 + -translate-y-[30%] beech ka rasta */}
-                    <TabsList
-                      className={cn(
-                        "mb-0 flex h-10 w-full min-h-10 max-h-10 overflow-visible p-1 sm:inline-flex sm:w-auto",
-                      )}
-                    >
-                        <TabsTrigger
-                          value="alerts"
-                          className="relative flex min-w-0 flex-1 items-center justify-center gap-1.5 overflow-visible px-2 py-1.5 sm:flex-initial sm:gap-2 sm:px-3"
-                        >
+                <div className="flex flex-col gap-2 w-full">
+                    <div className={messagesTabRibbonClassName}>
+                    <TabsList className={messagesTabListClassName} data-pl-messages-tabs="">
+                        <TabsTrigger value="alerts" className={messagesTabTriggerClassName}>
                             <Bell className="h-4 w-4 shrink-0" />
                             <span className="truncate">Alerts</span>
                             {unreadAlerts > 0 && (effectiveNotificationSettings?.transactionAlerts?.onTabs !== false) && (
-                              <Badge
-                                className="pointer-events-none absolute right-1 top-0 z-10 flex h-4 min-w-[1rem] max-w-[2.75rem] -translate-y-[30%] items-center justify-center border-2 border-background px-1 py-0 text-[10px] font-bold leading-none shadow-sm"
-                                variant="default"
-                              >
+                              <span className={messagesTabUnreadBadgeClassName}>
                                 {unreadAlerts > 99 ? "99+" : unreadAlerts}
-                              </Badge>
+                              </span>
                             )}
                         </TabsTrigger>
-                        <TabsTrigger
-                          value="auto"
-                          className="relative flex min-w-0 flex-1 items-center justify-center gap-1.5 overflow-visible px-2 py-1.5 sm:flex-initial sm:gap-2 sm:px-3"
-                        >
+                        <TabsTrigger value="auto" className={messagesTabTriggerClassName}>
                             <Bot className="h-4 w-4 shrink-0" />
                             <span className="truncate sm:whitespace-normal">Auto Voucher</span>
                             {unreadAutoAlerts > 0 && (effectiveNotificationSettings?.transactionAlerts?.onTabs !== false) && (
-                              <Badge
-                                className="pointer-events-none absolute right-1 top-0 z-10 flex h-4 min-w-[1rem] max-w-[2.75rem] -translate-y-[30%] items-center justify-center border-2 border-background px-1 py-0 text-[10px] font-bold leading-none shadow-sm"
-                                variant="default"
-                              >
+                              <span className={messagesTabUnreadBadgeClassName}>
                                 {unreadAutoAlerts > 99 ? "99+" : unreadAutoAlerts}
-                              </Badge>
+                              </span>
                             )}
                         </TabsTrigger>
-                        <TabsTrigger
-                          value="chat"
-                          className="relative flex min-w-0 flex-1 items-center justify-center gap-1.5 overflow-visible px-2 py-1.5 sm:flex-initial sm:gap-2 sm:px-3"
-                        >
-                            {/* Mobile par sirf Chat tab: icon chhupa — jagah + cleaner row */}
+                        <TabsTrigger value="chat" className={messagesTabTriggerClassName}>
                             {!isMobile ? <MessageSquare className="h-4 w-4 shrink-0" /> : null}
                             <span className="truncate">Chat</span>
                             {unreadMessages > 0 && (
-                              <Badge
-                                className="pointer-events-none absolute right-1 top-0 z-10 flex h-4 min-w-[1rem] max-w-[2.75rem] -translate-y-[30%] items-center justify-center border-2 border-background px-1 py-0 text-[10px] font-bold leading-none shadow-sm"
-                                variant="default"
-                              >
+                              <span className={messagesTabUnreadBadgeClassName}>
                                 {unreadMessages > 99 ? "99+" : unreadMessages}
-                              </Badge>
+                              </span>
                             )}
                         </TabsTrigger>
-                        <TabsTrigger
-                          value="alarms"
-                          className="relative flex min-w-0 flex-1 items-center justify-center gap-1.5 overflow-visible px-2 py-1.5 sm:flex-initial sm:gap-2 sm:px-3"
-                        >
+                        <TabsTrigger value="alarms" className={messagesTabTriggerClassName}>
                             <AlarmPlus className="h-4 w-4 shrink-0" />
                             <span className="truncate">Alarms</span>
                         </TabsTrigger>
                     </TabsList>
+                    </div>
                     <CardDescription className="text-green-500 whitespace-nowrap text-right sm:text-left">Online from: <span className="font-semibold text-foreground">{company?.name || 'Personal Account'}</span></CardDescription>
                 </div>
                 <TabsContent value="alerts" className="h-full flex-1 min-h-0 w-full data-[state=inactive]:hidden">

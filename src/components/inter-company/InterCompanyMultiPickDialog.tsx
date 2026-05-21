@@ -13,6 +13,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import {
+  interCompanyIcAvatarClass,
+  interCompanyIcAvatarFallbackClass,
+} from "@/lib/interCompany/interCompanyVoucherChrome";
+import { cn } from "@/lib/utils";
 
 export type InterCompanyPickOption = {
   id: string;
@@ -67,7 +72,8 @@ export function InterCompanyMultiPickDialog({
                       src={opt.avatarUrl}
                       alt={opt.label}
                       fallbackText={opt.avatarFallback || opt.label.slice(0, 2).toUpperCase()}
-                      className="h-9 w-9 shrink-0 rounded-full border"
+                      className={cn("h-9 w-9 shrink-0", interCompanyIcAvatarClass)}
+                      fallbackClassName={interCompanyIcAvatarFallbackClass}
                     />
                   ) : null}
                   <span className="min-w-0 flex-1">

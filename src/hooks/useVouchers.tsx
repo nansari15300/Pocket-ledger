@@ -38,6 +38,13 @@ import { stripLocalMirrorMetaForUiRow } from "@/lib/localMirrorServerMeta";
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts, getAllocatedByVoucherIdFromPurchase, getAllocatedByVoucherIdFromSale, getAllocatedByVoucherIdFromJournal, getOutgoingAllocatedToOpposite, getPaymentStatus as getPaymentStatusResult } from "@/lib/payment-allocation-utils";
 import { shouldSuppressTransientCompanyClear } from "@/lib/apkLedgerRouteShield";
+import { resolveInterCompanyLegsForVoucher } from "@/lib/interCompany/interCompanyPostingLegs";
+import {
+  interCompanyVoucherViewerSide,
+  isInterCompanyVisibleOnTargetBank,
+} from "@/lib/interCompany/interCompanyVoucherHydrate";
+import { isRecurringAutoUserDisplayLabel } from "@/lib/interCompany/interCompanyVoucherHistory";
+import { backfillInterCompanySourceApprovedFlags } from "@/lib/interCompany/interCompanyVisibilityBackfill";
 
 /** Offline company: vouchers me `userId` aksar owner ka Firebase uid ya `local` — sirf `user.uid` match se shared user ko 0 rows. */
 function localCompanyRoleAllowsViewAll(role: string | undefined): boolean {
@@ -385,6 +392,30 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
 
     return activeVouchers.filter((v) => v.userId === user.uid);
   }, [vouchers, viewAllRecords, user?.uid, isLocalCompanySelected, companyId, localAuthEpoch]);
+
+  // Target IC: source pehle approve ho chuka ho to `interCompanySourceApproved` backfill (bank/recent ke liye)
+  const icBackfillGenRef = useRef(0);
+  useEffect(() => {
+    if (!companyId || !vouchersForDisplay.length) return;
+    const needsBackfill = vouchersForDisplay.some(
+      (v) =>
+        String(v?.type || "") === "inter_company" &&
+        interCompanyVoucherViewerSide(v as Record<string, unknown>) === "target" &&
+        (v as Record<string, unknown>).interCompanySourceApproved !== true
+    );
+    if (!needsBackfill) return;
+    const gen = ++icBackfillGenRef.current;
+    const timer = setTimeout(() => {
+      void backfillInterCompanySourceApprovedFlags(
+        companyId,
+        vouchersForDisplay as Array<Record<string, unknown> & { id?: string }>
+      ).then(() => {
+        if (gen !== icBackfillGenRef.current) return;
+        /* Firestore listener vouchers refresh karega */
+      });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [companyId, vouchersForDisplay]);
   
   const [parties, setParties] = useState<Party[]>([]);
   const [staff, setStaff] = useState<Staff[]>([]);
@@ -1162,6 +1193,8 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
             fromVoucher = localSessionDisplayName;
           }
           if (!uid || !fromVoucher) return;
+          // "Auto" uid map me mat daalo — baaki rows ke liye asli naam Firestore se aaye
+          if (isRecurringAutoUserDisplayLabel(fromVoucher)) return;
           if (fromVoucher !== "Unknown" && fromVoucher !== "N/A") {
             if ((nameSnapshot[uid] || "") !== fromVoucher) {
               newUserNames[uid] = fromVoucher;
@@ -1367,6 +1400,35 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
         if (v.type === "payment_out") {
             const expenseAccId = v.expenseAccountId || v.toAccountId;
             if (expenseAccId) addVal(expenseMap, expenseAccId, 'debit', amount);
+        }
+
+        // Inter Company — compound legs (entity + IC counterparty + bank)
+        if (v.type === "inter_company") {
+            if (!isInterCompanyVisibleOnTargetBank(v as Record<string, unknown>)) {
+                // Target: source approve se pehle balance maps me mat jodo
+            } else {
+            const legs = resolveInterCompanyLegsForVoucher(v as Record<string, unknown>);
+            if (legs.length > 0) {
+                legs.forEach((leg) => {
+                    const map =
+                        leg.kind === "party"
+                            ? partyMap
+                            : leg.kind === "bank"
+                              ? accountMap
+                              : leg.kind === "staff"
+                                ? staffMap
+                                : leg.kind === "tax"
+                                  ? taxMap
+                                  : expenseMap;
+                    if (leg.debit > 0) addVal(map, leg.accountId, "debit", leg.debit);
+                    if (leg.credit > 0) addVal(map, leg.accountId, "credit", leg.credit);
+                });
+            } else if (v.partyId) {
+                const side = String((v as { interCompanyLink?: { role?: string } }).interCompanyLink?.role || "");
+                if (side === "source") addVal(partyMap, v.partyId, "debit", amount);
+                else if (side === "target" && v.isApproved === true) addVal(partyMap, v.partyId, "credit", amount);
+            }
+            }
         }
         if (v.type === "direct_income" && v.incomeAccountId) {
             addVal(expenseMap, v.incomeAccountId, 'credit', amount);

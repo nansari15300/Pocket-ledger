@@ -31,6 +31,14 @@ import { getLocalCompanyById, listLocalCompanies } from "@/lib/localCompanyStore
 import { resolvePlanIdForVoucherEnforcement } from "@/lib/companyPlanLocalCache";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
+import {
+  buildInterCompanyCreateHistoryChanges,
+  type InterCompanyCreateHistoryInput,
+} from "@/lib/interCompany/interCompanyVoucherHistory";
+import { buildInterCompanyApprovalPatch } from "@/lib/interCompany/interCompanyApproval";
+import { assertInterCompanyTargetApproveAllowed } from "@/lib/interCompany/interCompanyTargetApproval";
+import { interCompanyVoucherViewerSide, readInterCompanyLink } from "@/lib/interCompany/interCompanyVoucherHydrate";
+import { reconcileRecurringTemplateAfterAutoVoucherRecycle } from "@/lib/writeGateway/recurringVouchers";
 import { startOfDay, endOfDay, startOfMonth, endOfMonth } from "date-fns";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
@@ -500,6 +508,10 @@ export async function softDeleteVoucherMoveToRecycleBin(
     deletedAt: voucherRecycleBinDeletedAt(),
     deletedBy: deletedByUid || "",
   });
+  // Last auto recycle → template `lastGenerated*` clear; dashboard card + strip dubara accrue karein
+  void reconcileRecurringTemplateAfterAutoVoucherRecycle(fsCompanyId, voucherId).catch((e) => {
+    console.warn("[softDeleteVoucher] recurring template reconcile failed", e);
+  });
   const u = auth.currentUser;
   void sendRecycleBinMovedAlert(fsCompanyId, (reg as Company) ?? null, {
     entityKind: "voucher",
@@ -556,6 +568,28 @@ function getChanges(oldData: any, newData: any): Record<string, { from: any; to:
     }
   });
   return changes;
+}
+
+/** Create-time history: inter_company ke liye alag rows; baaki vouchers generic `created` + lastEdited. */
+function buildInitialCreateHistoryChanges(args: {
+  voucherData: Record<string, unknown>;
+  userId: string;
+  creatorDisplayName: string | null;
+  creatorEmail: string | null;
+  now: Date;
+  interCompanyCreateHistory?: InterCompanyCreateHistoryInput | null;
+}): Record<string, { from: unknown; to: unknown }> {
+  const isIc =
+    String(args.voucherData?.type || "").toLowerCase() === "inter_company" &&
+    args.interCompanyCreateHistory != null;
+  if (isIc && args.interCompanyCreateHistory) {
+    return buildInterCompanyCreateHistoryChanges(args.interCompanyCreateHistory);
+  }
+  return {
+    created: { from: "N/A", to: "Created" },
+    lastEditedByUserName: { from: "N/A", to: args.creatorDisplayName || args.userId },
+    lastEditedAt: { from: null, to: args.now },
+  };
 }
 
 /**
@@ -724,11 +758,14 @@ async function saveVoucherOfflineLocalCreate(
         {
           changedAt: nowTs,
           changedBy: userId,
-          changes: {
-            created: { from: "N/A", to: "Created" },
-            lastEditedByUserName: { from: "N/A", to: creatorDisplayName || userId },
-            lastEditedAt: { from: null, to: now },
-          },
+          changes: buildInitialCreateHistoryChanges({
+            voucherData: cleanVoucherData as Record<string, unknown>,
+            userId,
+            creatorDisplayName,
+            creatorEmail,
+            now,
+            interCompanyCreateHistory: options?.interCompanyCreateHistory ?? null,
+          }),
         },
       ]
     : [];
@@ -792,6 +829,18 @@ async function resolveVoucherSnapshotForLocalWrite(
   return null;
 }
 
+/** Source IC approve — target copy par visibility flag taaki target ledger me tab dikhe. */
+async function syncInterCompanySourceApprovedToPeerTarget(
+  sourceVoucher: Record<string, unknown>
+): Promise<void> {
+  if (interCompanyVoucherViewerSide(sourceVoucher) !== "source") return;
+  const link = readInterCompanyLink(sourceVoucher);
+  if (!link?.peerCompanyId || !link?.peerVoucherId) return;
+  await patchVoucherFields(link.peerCompanyId, link.peerVoucherId, {
+    interCompanySourceApproved: true,
+  });
+}
+
 /** Local mirror pe approve persist (local-only APK + Firebase mode offline fallback). */
 async function approveVoucherLocalPersist(
   companyId: string,
@@ -803,6 +852,7 @@ async function approveVoucherLocalPersist(
   if (!resolved) throw new Error("Voucher not found.");
   const { voucher, writeCompanyId } = resolved;
   if ((voucher as Record<string, unknown>)?.["isApproved"] === true) return;
+  await assertInterCompanyTargetApproveAllowed(voucher as Record<string, unknown>);
   // Firebase-mode offline me `getEffectiveHistorySettings` Firestore pe ja sakta — yahan defaults safe.
   const { enabled: historyEnabled, limit: historyLimit } = isLocalOnlyMode()
     ? await getEffectiveHistorySettings(companyId)
@@ -826,8 +876,10 @@ async function approveVoucherLocalPersist(
     },
   };
   const newHistory = historyEnabled ? [approvalEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
+  const icLegPatch = buildInterCompanyApprovalPatch(voucher as Record<string, unknown>);
   const payload = removeUndefined({
     ...voucher,
+    ...icLegPatch,
     id: voucherId,
     isApproved: true,
     approvedByUserId,
@@ -838,6 +890,9 @@ async function approveVoucherLocalPersist(
   coerceVoucherDocumentDate(payload);
   await upsertCompanyDocInBrowserDb(writeCompanyId, "vouchers", voucherId, payload);
   await enqueueVoucherOutbox(writeCompanyId, "update", voucherId, payload);
+  if (interCompanyVoucherViewerSide(payload) === "source") {
+    await syncInterCompanySourceApprovedToPeerTarget(payload);
+  }
 }
 
 /**
@@ -854,6 +909,8 @@ export type SaveVoucherOptions = {
   userDisplayNameOverride?: string;
   /** Recurring auto-create: history/editor actor name ko stable label do. */
   actorDisplayNameOverride?: string;
+  /** Inter Company create: pehli history me user / company detail rows. */
+  interCompanyCreateHistory?: InterCompanyCreateHistoryInput;
 };
 
 export async function saveVoucher(
@@ -992,7 +1049,20 @@ export async function saveVoucher(
     const { enabled: historyEnabled } = await getEffectiveHistorySettings(companyId);
     const now = new Date();
     const initialHistory = historyEnabled
-      ? [{ changedAt: now, changedBy: userId, changes: { created: { from: "N/A", to: "Created" }, lastEditedByUserName: { from: "N/A", to: creatorDisplayName || userId }, lastEditedAt: { from: null, to: now } } }]
+      ? [
+          {
+            changedAt: now,
+            changedBy: userId,
+            changes: buildInitialCreateHistoryChanges({
+              voucherData: cleanVoucherData as Record<string, unknown>,
+              userId,
+              creatorDisplayName,
+              creatorEmail,
+              now,
+              interCompanyCreateHistory: options?.interCompanyCreateHistory ?? null,
+            }),
+          },
+        ]
       : [];
     // Firestore create: default policy par `local:` pe blocking hydrate skip — stable `preGeneratedVoucherId` + `setDoc` taaki `pendingFiles.docPath` match rahe; phir `syncPendingFiles`.
     const fsIdCreate = await resolveAuthoritativeFirestoreCompanyId(companyId);
@@ -1468,6 +1538,10 @@ export async function approveVoucherWithHistory(
   const { enabled: historyEnabled, limit: historyLimit } = await getEffectiveHistorySettings(companyId);
 
   try {
+    const preApproveSnap = await getDoc(voucherRef);
+    if (!preApproveSnap.exists()) throw new Error("Voucher not found.");
+    await assertInterCompanyTargetApproveAllowed(preApproveSnap.data() as Record<string, unknown>);
+
     await runTransaction(firestore, async (tx) => {
       const snap = await tx.get(voucherRef);
       if (!snap.exists()) throw new Error("Voucher not found.");
@@ -1491,8 +1565,10 @@ export async function approveVoucherWithHistory(
       };
 
       const newHistory = historyEnabled ? [approvalEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
+      const icLegPatch = buildInterCompanyApprovalPatch(voucher as Record<string, unknown>);
 
       tx.update(voucherRef, {
+        ...icLegPatch,
         isApproved: true,
         approvedByUserId: approvedByUserId,
         approvedByUserName: approverName,
@@ -1500,6 +1576,13 @@ export async function approveVoucherWithHistory(
         history: newHistory,
       });
     });
+    const approvedSnap = await getDoc(voucherRef);
+    if (approvedSnap.exists()) {
+      const approvedRow = { ...approvedSnap.data(), id: voucherId } as Record<string, unknown>;
+      if (interCompanyVoucherViewerSide(approvedRow) === "source") {
+        await syncInterCompanySourceApprovedToPeerTarget(approvedRow);
+      }
+    }
   } catch (e) {
     // `saveVoucher` jaisa: APK + Firestore company par offline queue mat — seedha throw (allowLocalFirestoreFailureQueue false).
     if (!isLikelyOfflineFirestoreError(e)) throw e;

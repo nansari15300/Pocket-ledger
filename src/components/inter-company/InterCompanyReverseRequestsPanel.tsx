@@ -23,14 +23,14 @@ import { interCompanySettingsCardClass, interCompanyVoucherTabShellClass } from 
 
 type Props = {
   companyId: string;
-  /** Sirf is voucher se linked pending (optional filter) */
-  filterTargetVoucherId?: string;
+  /** Open IC voucher se linked — highlight/sort; list poori company inbox dikhati hai */
+  highlightTargetVoucherId?: string;
   onAccepted?: () => void;
 };
 
 export function InterCompanyReverseRequestsPanel({
   companyId,
-  filterTargetVoucherId,
+  highlightTargetVoucherId,
   onAccepted,
 }: Props) {
   const { user, customUser } = useAuth();
@@ -43,12 +43,9 @@ export function InterCompanyReverseRequestsPanel({
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
-    let list = readInterCompanyReverseInbox(companyId);
-    if (filterTargetVoucherId) {
-      list = list.filter((r) => r.targetVoucherId === filterTargetVoucherId);
-    }
-    setRows(list);
-  }, [companyId, filterTargetVoucherId]);
+    // Poori company inbox — badge count jaisa; pehle sirf current voucher filter tha isliye list khali rehti thi
+    setRows(readInterCompanyReverseInbox(companyId));
+  }, [companyId]);
 
   useEffect(() => {
     refresh();
@@ -112,6 +109,10 @@ export function InterCompanyReverseRequestsPanel({
               <RequestCard
                 key={req.id}
                 req={req}
+                highlighted={
+                  !!highlightTargetVoucherId &&
+                  (req.targetVoucherId === highlightTargetVoucherId || !req.targetVoucherId)
+                }
                 formatCurrency={formatAmountLabel}
                 formatDate={formatDate}
                 accepting={acceptingId === req.id}
@@ -142,17 +143,25 @@ function RequestCard({
   formatCurrency,
   formatDate,
   accepting,
+  highlighted = false,
   onAccept,
 }: {
   req: InterCompanyReverseRequest;
   formatCurrency: (n: number) => string;
   formatDate: (d: Date) => string;
   accepting: boolean;
+  highlighted?: boolean;
   onAccept?: () => void;
 }) {
   const created = new Date(req.createdAt);
   return (
-    <div className={cn(interCompanySettingsCardClass, "space-y-2 p-3 text-sm")}>
+    <div
+      className={cn(
+        interCompanySettingsCardClass,
+        "space-y-2 p-3 text-sm",
+        highlighted && "ring-2 ring-amber-400/80"
+      )}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-semibold">{req.sourceCompanyName}</span>
         <Badge

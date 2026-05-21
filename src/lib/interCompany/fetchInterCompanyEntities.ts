@@ -1,7 +1,7 @@
 /**
  * Ek company ke inter-company masters — Firestore (target column search ke liye).
  */
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import type { InterCompanyEntityDetail } from "@/lib/interCompany/interCompanyEntityTypes";
 
@@ -71,6 +71,7 @@ export async function fetchInterCompanyEntitiesForCompany(
       name?: string;
       phone?: string;
       email?: string;
+      pan?: string;
       interCompanyAccountNo?: string;
       fileUrl?: string | null;
     };
@@ -80,6 +81,7 @@ export async function fetchInterCompanyEntitiesForCompany(
       label: data.name || d.id,
       phone: data.phone,
       email: data.email,
+      pan: data.pan,
       fileUrl: data.fileUrl,
       interCompanyAccountNo: data.interCompanyAccountNo,
     });
@@ -103,4 +105,36 @@ export async function fetchInterCompanyEntitiesForCompany(
     });
   });
   return rows;
+}
+
+/** Edit hydrate: bank id list me na mile to Firestore se naam lao */
+export async function fetchInterCompanyBankEntityDetail(
+  companyId: string,
+  bankAccountId: string
+): Promise<InterCompanyEntityDetail | null> {
+  const cid = String(companyId || "").trim();
+  const bid = String(bankAccountId || "").trim();
+  if (!cid || !bid) return null;
+  try {
+    const snap = await getDoc(doc(firestore, `companies/${cid}/bank_accounts`, bid));
+    if (!snap.exists()) return null;
+    const data = snap.data() as {
+      accountName?: string;
+      bankName?: string;
+      accountNumber?: string;
+      phone?: string;
+      interCompanyAccountNo?: string;
+    };
+    return {
+      id: snap.id,
+      kind: "bank",
+      label: data.accountName || snap.id,
+      bankName: data.bankName,
+      accountNumber: data.accountNumber,
+      phone: data.phone,
+      interCompanyAccountNo: data.interCompanyAccountNo,
+    };
+  } catch {
+    return null;
+  }
 }

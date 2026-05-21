@@ -3,6 +3,11 @@
  * same voucher set pe laana jo `useTransactions(..., "party")` table me dikhata hai.
  * Pehle sirf `v.partyId` count hota tha — Journal / contra / multi-field vouchers miss ho rahe the.
  */
+import {
+  collectInterCompanyIdsForPendingApproval,
+  isInterCompanyVisibleOnTargetEntity,
+} from "@/lib/interCompany/interCompanyVoucherHydrate";
+
 /** Firestore kabhi string, kabhi DocumentReference-like `{ id }` — Compare / copy ke baad filter match na tootey. */
 function ledgerIdEq(a: unknown, b: string): boolean {
   const nb = String(b ?? "").trim();
@@ -44,6 +49,7 @@ export function voucherTouchesPartyLedger(v: any, partyId: string): boolean {
   if (v.type === "contra" && (ledgerIdEq(v.fromAccountId, partyId) || ledgerIdEq(v.toAccountId, partyId))) return true;
   // Inter Company — source/target party ids (sirf `partyId` kabhi peer side par nahi hota)
   if (v.type === "inter_company") {
+    if (!isInterCompanyVisibleOnTargetEntity(v)) return false;
     const sk = String(v.sourceEntityKind || "").toLowerCase();
     const tk = String(v.targetEntityKind || "").toLowerCase();
     if (sk === "party" && ledgerIdEq(v.sourceEntityId, partyId)) return true;
@@ -65,6 +71,11 @@ export function isUnapprovedVoucherForParty(v: any, partyId: string): boolean {
 export function collectPartyIdsTouchedByUnapprovedVoucher(v: any, partyIdSet: Set<string>): Set<string> {
   const out = new Set<string>();
   if (!v || v.isApproved === true) return out;
+  // IC: generic payee fields se badge mat — sirf target approve + entity ledger jaisa
+  if (String(v.type || "") === "inter_company") {
+    collectInterCompanyIdsForPendingApproval(v, partyIdSet, "party").forEach((id) => out.add(id));
+    return out;
+  }
   const add = (id: unknown) => {
     const s = id != null && id !== "" ? String(id) : "";
     if (s && partyIdSet.has(s)) out.add(s);
@@ -82,10 +93,6 @@ export function collectPartyIdsTouchedByUnapprovedVoucher(v: any, partyIdSet: Se
   if (v.type === "contra") {
     add(v.fromAccountId);
     add(v.toAccountId);
-  }
-  if (v.type === "inter_company") {
-    if (String(v.sourceEntityKind || "").toLowerCase() === "party") add(v.sourceEntityId);
-    if (String(v.targetEntityKind || "").toLowerCase() === "party") add(v.targetEntityId);
   }
   if (Array.isArray(v.lineItems)) v.lineItems.forEach((li: any) => {
     add(li?.itemId);

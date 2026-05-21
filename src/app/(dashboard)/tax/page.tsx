@@ -22,6 +22,7 @@ import { PermissionButton } from "@/components/permission";
 import { useVouchers } from "@/hooks/useVouchers";
 import usePermissions from "@/hooks/usePermissions";
 import type { Tax, TaxGroup } from "@/components/tax/types";
+import { collectInterCompanyIdsForPendingApproval } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
@@ -61,14 +62,17 @@ function TaxPageContent() {
     vouchers.forEach((v: any) => {
       if (v.isApproved === true) return;
       const ids = new Set<string>();
-      // Sirf is company ke tax masters — sidebar/list alignment
-      if (v.taxAccountId && taxIdSet.has(v.taxAccountId)) ids.add(v.taxAccountId);
-      (v.lineItems || []).forEach((line: any) => {
-        if (line.taxAccountId && taxIdSet.has(line.taxAccountId)) ids.add(line.taxAccountId);
-      });
-      (v.entries || []).forEach((entry: any) => {
-        if (entry.accountId && taxIdSet.has(entry.accountId)) ids.add(entry.accountId);
-      });
+      if (String(v.type || "") === "inter_company") {
+        collectInterCompanyIdsForPendingApproval(v, taxIdSet, "tax").forEach((id) => ids.add(id));
+      } else {
+        if (v.taxAccountId && taxIdSet.has(v.taxAccountId)) ids.add(v.taxAccountId);
+        (v.lineItems || []).forEach((line: any) => {
+          if (line.taxAccountId && taxIdSet.has(line.taxAccountId)) ids.add(line.taxAccountId);
+        });
+        (v.entries || []).forEach((entry: any) => {
+          if (entry.accountId && taxIdSet.has(entry.accountId)) ids.add(entry.accountId);
+        });
+      }
       ids.forEach((id) => {
         map[id] = (map[id] || 0) + 1;
       });

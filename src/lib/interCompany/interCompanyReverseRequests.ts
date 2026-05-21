@@ -113,6 +113,13 @@ export function appendInterCompanyReverseRequest(req: InterCompanyReverseRequest
 
   const outbox = readInterCompanyReverseOutbox(req.sourceCompanyId);
   writeList(outboxKey(req.sourceCompanyId), [req, ...outbox]);
+
+  // Target owner — Messages → Alerts (async; local inbox phir bhi AlertsTab merge karta hai)
+  if (typeof window !== "undefined") {
+    void import("@/lib/interCompany/interCompanyReverseRequestAlert").then(({ sendInterCompanyReverseRequestAlert }) =>
+      sendInterCompanyReverseRequestAlert(req)
+    );
+  }
 }
 
 export function updateInterCompanyReverseRequestStatus(

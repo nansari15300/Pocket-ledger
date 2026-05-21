@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import {
   interCompanyAmountInputSizingClass,
   interCompanyInputClass,
+  interCompanyReadOnlyCopyInputClass,
 } from "@/lib/interCompany/interCompanyVoucherChrome";
 import { cn } from "@/lib/utils";
 
@@ -142,8 +143,9 @@ export function InterCompanyAmountDualFields({
                       displayText={sourceDisplay}
                       placeholder={AMOUNT_MEASURE_FALLBACK}
                       value={sourceDisplay}
-                      disabled={fieldsDisabled}
                       readOnly={sourceReadOnly}
+                      disabled={sourceReadOnly ? false : fieldsDisabled}
+                      className={cn(sourceReadOnly && interCompanyReadOnlyCopyInputClass)}
                       onFocus={() => {
                         if (sourceReadOnly) return;
                         setSourceFocused(true);
@@ -176,13 +178,11 @@ export function InterCompanyAmountDualFields({
           <InterCompanyResponsiveAmountInput
             type="text"
             readOnly
-            tabIndex={-1}
             aria-readonly
-            disabled={fieldsDisabled}
             displayText={targetDisplay}
             placeholder="Same as source"
             value={targetDisplay}
-            className="bg-muted/40"
+            className={cn("bg-muted/40", interCompanyReadOnlyCopyInputClass)}
           />
         </InterCompanyAmountSideRow>
       </div>

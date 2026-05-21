@@ -77,6 +77,7 @@ import { Badge } from "../ui/badge";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { planSyncFailureUserMessage } from "@/lib/companyPlanServerSync";
 import { cn } from "@/lib/utils";
+import { usePendingInterCompanySystemJoinCount } from "@/lib/interCompany/usePendingInterCompanySystemJoinCount";
 import { useMasterDetailHeaderIdSnapshot } from "@/hooks/useMasterDetailHeaderIdSnapshot";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
@@ -427,6 +428,12 @@ function MobileReportButtonsOnly() {
 
 function HeaderActions() {
   const { isMobile } = useMobileView();
+  const { user } = useAuth();
+  const { company } = useCompany();
+  const pendingSystemJoinCount = usePendingInterCompanySystemJoinCount({
+    ownerUserId: user?.uid,
+    companyId: company?.id,
+  });
   const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
   const [isCreateItemOpen, setIsCreateItemOpen] = useState(false);
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
@@ -482,11 +489,16 @@ function HeaderActions() {
           permission="create_records"
           variant="chromePill"
           size="sm"
-          className={buttonClass}
+          className={cn(buttonClass, "relative")}
           onClick={() => setOpenInterCompany(true)}
           data-theme-btn="inter-company"
         >
           <ArrowLeftRight className="mr-1 h-4 w-4" /> Inter Company
+          {pendingSystemJoinCount > 0 ? (
+            <span className="ml-1.5 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground">
+              {pendingSystemJoinCount > 99 ? "99+" : pendingSystemJoinCount}
+            </span>
+          ) : null}
         </PermissionButton>
       </AddVoucherDialog>
 

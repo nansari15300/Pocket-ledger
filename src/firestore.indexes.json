@@ -37,6 +37,88 @@
       ]
     },
     {
+      "collectionGroup": "admin_notifications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "recipientUserId", "order": "ASCENDING" },
+        { "fieldPath": "kind", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "admin_notifications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "recipientUserId", "order": "ASCENDING" },
+        { "fieldPath": "kind", "order": "ASCENDING" },
+        { "fieldPath": "isRead", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "inter_company_groups",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "visibility", "order": "ASCENDING" },
+        { "fieldPath": "nameKey", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "inter_company_groups",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "visibility", "order": "ASCENDING" },
+        { "fieldPath": "name", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "inter_company_system_join_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "systemId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "inter_company_system_join_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "systemId", "order": "ASCENDING" },
+        { "fieldPath": "requesterUserId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "inter_company_system_join_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "targetOwnerUserId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "inter_company_system_join_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "requesterUserId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "inter_company_system_join_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "requesterCompanyId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "inter_company_system_join_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "targetCompanyId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "alarms",
       "queryScope": "COLLECTION",
       "fields": [
@@ -182,20 +264,6 @@
       "fields": [
         { "fieldPath": "isDeleted", "order": "ASCENDING" },
         { "fieldPath": "name", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "payments",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "devices",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "userId", "order": "ASCENDING" }
       ]
     }
   ],

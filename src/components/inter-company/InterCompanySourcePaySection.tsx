@@ -13,8 +13,17 @@ import type { InterCompanyEntityDetail } from "@/lib/interCompany/interCompanyEn
 import { readCompanyInterCompanyAcNo } from "@/lib/interCompany/interCompanyAccountNo";
 import { normalizeInterCompanyPhone } from "@/lib/interCompany/interCompanyPhone";
 import type { Company } from "@/hooks/useCompany";
-import { interCompanyInputClass } from "@/lib/interCompany/interCompanyVoucherChrome";
+import {
+  interCompanyCompanyFieldsRowClass,
+  interCompanyFieldColClass,
+  interCompanyIcReadonlyFieldClass,
+  interCompanyInputClass,
+  interCompanyReadOnlyCopyInputClass,
+  interCompanyViewOnlyAllowCopyClass,
+} from "@/lib/interCompany/interCompanyVoucherChrome";
 import { cn } from "@/lib/utils";
+import { useMemo } from "react";
+import { useStickyInterCompanyCompanyCode } from "@/components/inter-company/useStickyInterCompanyCompanyCode";
 
 type Props = {
   company: Company | null;
@@ -33,6 +42,10 @@ type Props = {
   onRequestReverse?: () => void;
   reverseRequestPending?: boolean;
   reverseRequestDone?: boolean;
+  /** Revert accept — header par blue Reverted pill (Payment Out ke left) */
+  showRevertedBadge?: boolean;
+  companyBankAccountId?: string;
+  onCompanyBankAccountIdChange?: (id: string) => void;
 };
 
 export function InterCompanySourcePaySection({
@@ -49,28 +62,29 @@ export function InterCompanySourcePaySection({
   onRequestReverse,
   reverseRequestPending = false,
   reverseRequestDone = false,
+  showRevertedBadge = false,
+  companyBankAccountId = "",
+  onCompanyBankAccountIdChange,
 }: Props) {
   const companyAc = readCompanyInterCompanyAcNo(company);
+  const companyCode = useStickyInterCompanyCompanyCode(company);
   const companyMob = normalizeInterCompanyPhone(company?.phone);
+  const bankEntities = useMemo(() => entities.filter((e) => e.kind === "bank"), [entities]);
   // Edit locked: Firestore se accounts load — phir read-only UI (disabled par sirf hint mat dikhao)
   const showReadOnlyAccounts = fieldsDisabled && !entitiesLoading;
 
   return (
     <div
-      className={cn(
-        "flex flex-col gap-3 p-3",
-        fieldsDisabled && "pointer-events-none select-none"
-      )}
+      className={cn("flex flex-col gap-3", fieldsDisabled && interCompanyViewOnlyAllowCopyClass)}
     >
       <div className="space-y-2">
         <InterCompanySectionTitle
           title="Source company"
           flowBadge={showPaymentOutBadge ? "payment_out" : null}
+          showRevertedBadge={showRevertedBadge}
           trailingAction={
-            showPaymentOutBadge && onRequestReverse ? (
-              reverseRequestDone ? (
-                <span className="text-[10px] font-medium text-emerald-700">Reversed</span>
-              ) : reverseRequestPending ? (
+            showPaymentOutBadge && onRequestReverse && !showRevertedBadge ? (
+              reverseRequestPending ? (
                 <span className="text-[10px] font-medium text-amber-700">Request pending</span>
               ) : (
                 <Button
@@ -89,32 +103,43 @@ export function InterCompanySourcePaySection({
         <p className="text-[11px] text-muted-foreground">
           {isPeerSourceCompany ? "Linked source company" : "Auto — current logged-in company"}
         </p>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_minmax(9rem,11rem)_minmax(8rem,10rem)] sm:items-end">
-          <div className="min-w-0 space-y-0.5">
-            <Label className="text-xs text-muted-foreground sm:sr-only">Company name</Label>
+        <div className={interCompanyCompanyFieldsRowClass}>
+          <div className={cn(interCompanyFieldColClass, "min-w-[8.5rem]")}>
+            <Label className="whitespace-nowrap text-xs text-muted-foreground sm:sr-only">Company name</Label>
             <Input
               readOnly
               value={company?.name || "—"}
-              className={cn(interCompanyInputClass, "bg-emerald-100/60 dark:bg-emerald-950/35")}
-              tabIndex={-1}
+              className={cn(
+                interCompanyInputClass,
+                interCompanyIcReadonlyFieldClass,
+                interCompanyReadOnlyCopyInputClass
+              )}
             />
           </div>
-          <div className="space-y-0.5">
-            <Label className="text-xs text-muted-foreground">A/c No</Label>
+          <div className={interCompanyFieldColClass}>
+            <Label className="whitespace-nowrap text-xs text-muted-foreground">Company Code</Label>
             <Input
               readOnly
-              value={companyAc}
-              className={cn(interCompanyInputClass, "bg-emerald-100/60 font-mono text-xs tabular-nums dark:bg-emerald-950/35")}
-              tabIndex={-1}
+              value={companyCode || "—"}
+              placeholder="SWIFT-style code"
+              className={cn(
+                interCompanyInputClass,
+                interCompanyIcReadonlyFieldClass,
+                interCompanyReadOnlyCopyInputClass,
+                "font-mono text-xs uppercase"
+              )}
             />
           </div>
-          <div className="space-y-0.5">
-            <Label className="text-xs text-muted-foreground">Mobile No.</Label>
+          <div className={interCompanyFieldColClass}>
+            <Label className="whitespace-nowrap text-xs text-muted-foreground">Mobile No.</Label>
             <Input
               readOnly
               value={companyMob}
-              className={cn(interCompanyInputClass, "bg-emerald-100/60 dark:bg-emerald-950/35")}
-              tabIndex={-1}
+              className={cn(
+                interCompanyInputClass,
+                interCompanyIcReadonlyFieldClass,
+                interCompanyReadOnlyCopyInputClass
+              )}
             />
           </div>
         </div>
@@ -141,6 +166,31 @@ export function InterCompanySourcePaySection({
             : "Saved voucher — accounts are read-only"
         }
       />
+
+      {onCompanyBankAccountIdChange ? (
+        <InterCompanyAccountLookupSection
+          sectionTitle="Company bank (Bank/Cash)"
+          entities={bankEntities}
+          entitiesLoading={entitiesLoading}
+          activeCompanyId={company?.id ?? ""}
+          autoEnsureInterCoAcNo
+          lockEntityKind="bank"
+          entityKind="bank"
+          onEntityKindChange={() => {}}
+          entityId={companyBankAccountId}
+          onEntityIdChange={onCompanyBankAccountIdChange}
+          companyAcNo={companyAc}
+          companyMobile={companyMob}
+          disabled={fieldsDisabled}
+          allowLookupWithoutCompany={showReadOnlyAccounts}
+          showDetails={false}
+          disabledHint={
+            entitiesLoading
+              ? "Loading bank accounts…"
+              : "Saved voucher — bank account is read-only"
+          }
+        />
+      ) : null}
     </div>
   );
 }

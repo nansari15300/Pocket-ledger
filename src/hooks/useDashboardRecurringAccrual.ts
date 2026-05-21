@@ -4,6 +4,7 @@ import * as React from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import type { RecurringVoucherTemplate } from "@/lib/recurringVouchers";
+import { resolveRecurringTemplateProgress } from "@/lib/recurringVouchers";
 import {
   computeTemplateAccruedAmount,
   companyFlowFaceFromBody,
@@ -15,21 +16,6 @@ import {
   type RecurringDashboardLine,
   type RecurringDashboardTemplateRow,
 } from "@/lib/dashboardRecurringAccrual";
-
-function lastGeneratedMsFromVoucherRow(v: Record<string, unknown> | undefined): number | null {
-  if (!v) return null;
-  const meta = v.recurringMeta;
-  if (meta && typeof meta === "object") {
-    const g = (meta as Record<string, unknown>).generatedAtMs;
-    if (typeof g === "number" && Number.isFinite(g)) return g;
-  }
-  const ca = v.createdAt as { toDate?: () => Date } | undefined;
-  if (ca && typeof ca.toDate === "function") {
-    const d = ca.toDate();
-    return Number.isNaN(d.getTime()) ? null : d.getTime();
-  }
-  return null;
-}
 
 function accountLabelForEntry(
   e: Record<string, unknown>,
@@ -180,8 +166,15 @@ export function useDashboardRecurringAccrual({
       if (vtype !== "journal") continue;
       const lastVid = String(tpl.lastGeneratedVoucherId || "").trim();
       const lastGen = lastVid ? voucherById.get(lastVid) : undefined;
-      const lastMs = lastGeneratedMsFromVoucherRow(lastGen);
-      const accrued = computeTemplateAccruedAmount(tpl, body, lastMs, nowMs);
+      // Delete/recycle last auto: stale `lastGeneratedPeriodKey` se next-due skip + accrued 0 na ho
+      const progress = resolveRecurringTemplateProgress(tpl, lastGen);
+      const accrued = computeTemplateAccruedAmount(
+        tpl,
+        body,
+        progress.lastGeneratedAtMs,
+        nowMs,
+        progress.lastGeneratedPeriodKey,
+      );
       const { dr, cr } = journalEntryDrCrTotals(body);
       // Sirf journal body yahan tak — sale/purchase face rule pehle `continue` se hata chuke
       const drTotal = dr;

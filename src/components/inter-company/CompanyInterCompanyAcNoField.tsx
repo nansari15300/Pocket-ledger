@@ -69,7 +69,7 @@ export function CompanyInterCompanyAcNoField({ mode = "edit" }: Props) {
         )}
       </div>
       <p className="text-[11px] text-muted-foreground">
-        Inter-company vouchers me target company isi number se bhi select ho sakti hai.
+        In inter-company vouchers, the target company can also be selected using this number.
       </p>
     </div>
   );

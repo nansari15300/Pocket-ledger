@@ -133,15 +133,15 @@ export function InterCompanyRequestReverseDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[min(90vh,32rem)] max-w-md flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="shrink-0 space-y-1.5 px-6 pb-2 pt-6 text-left">
           <DialogTitle>Request for reverse</DialogTitle>
           <DialogDescription>
             Target company ({draft.targetCompanyName}) will receive this request on their Inter Company
             voucher. They can accept to reverse Dr/Cr on both linked vouchers.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 pb-3">
           <div className="space-y-1.5">
             <Label>Reason</Label>
             <Textarea
@@ -153,9 +153,14 @@ export function InterCompanyRequestReverseDialog({
               disabled={sending}
             />
           </div>
-          <InterCompanyVoucherAttachments files={files} onFilesChange={setFiles} disabled={sending} />
+          <InterCompanyVoucherAttachments
+            files={files}
+            onFilesChange={setFiles}
+            disabled={sending}
+            compact
+          />
         </div>
-        <DialogFooter className="gap-2 sm:gap-0">
+        <DialogFooter className="shrink-0 gap-2 border-t bg-background px-6 py-4 sm:gap-0">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={sending}>
             Cancel
           </Button>

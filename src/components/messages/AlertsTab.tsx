@@ -46,6 +46,19 @@ import Link from "next/link";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Badge } from "@/components/ui/badge";
 import { isSuppressibleNewTransactionAlert } from "@/lib/transactionAlerts";
+import {
+  IC_REVERSE_REQUESTS_CHANGED,
+  readInterCompanyReverseInbox,
+} from "@/lib/interCompany/interCompanyReverseRequests";
+import {
+  interCompanyReverseToLocalAlertNotification,
+  markInterCompanyReverseAlertReadLocal,
+} from "@/lib/interCompany/interCompanyReverseRequestAlert";
+import {
+  formatInterCompanySystemJoinAlertMessage,
+  interCompanySystemJoinAlertVisibleForCompany,
+  interCompanySystemJoinAlertsGoToPath,
+} from "@/lib/interCompany/interCompanySystemJoinRequest";
 
 type Notification = {
   id: string;
@@ -95,6 +108,8 @@ export function AlertsTab({
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<Notification | null>(null);
+  /** Local IC revert inbox — Firestore ke saath merge */
+  const [icReverseTick, setIcReverseTick] = useState(0);
   const isCompanyOwner = company?.isOwned === true;
   const recipientIds = React.useMemo(() => {
     const ids = new Set<string>();
@@ -128,6 +143,8 @@ export function AlertsTab({
     }
     // Recurring vouchers ke liye dedicated title taaki Alerts/Auto tab dono me clear badge text aaye.
     if (kind === "auto_created") return "Auto created voucher";
+    if (kind === "ic_reverse_pending") return "Inter Company revert request";
+    if (kind === "ic_system_join_pending") return "Inter Company system join";
     return "Alert";
   };
   const getByLabel = (n: Notification) => {
@@ -180,11 +197,28 @@ export function AlertsTab({
     const recompute = () => {
       const mergedById = new Map<string, Notification>();
       Object.values(byRecipient).forEach((m) => m.forEach((v, k) => mergedById.set(k, v)));
+
+      // Local IC revert (same browser) — jinke liye Firestore row abhi nahi / fail hui
+      const firestoreReqIds = new Set<string>();
+      mergedById.forEach((n) => {
+        const rid = String((n as { interCompanyRequestId?: string }).interCompanyRequestId || "").trim();
+        if (rid) firestoreReqIds.add(rid);
+      });
+      if (companyId && kindFilter !== "auto_only") {
+        for (const req of readInterCompanyReverseInbox(companyId)) {
+          if (req.status !== "pending" || firestoreReqIds.has(req.id)) continue;
+          const localN = interCompanyReverseToLocalAlertNotification(req, companyId) as Notification;
+          mergedById.set(localN.id, localN);
+        }
+      }
+
       const sorted = Array.from(mergedById.values())
         // User request: normal "new transaction added" alerts hide; big amount alerts still visible.
         .filter((n) => !isSuppressibleNewTransactionAlert(n as any))
         .filter((n) => {
           const kind = String((n as any)?.kind || "");
+          const type = String((n as any)?.type || "");
+          if (kind === "ic_invite_pending" || type === "inter_company_invite") return false;
           if (kindFilter === "auto_only") return kind === "auto_created";
           if (kindFilter === "exclude_auto") return kind !== "auto_created";
           return true;
@@ -219,12 +253,46 @@ export function AlertsTab({
         }
       );
       unsubscribers.push(unsub);
+
+      const qSystemJoin = query(
+        collection(firestore, "admin_notifications"),
+        where("recipientUserId", "==", id),
+        where("kind", "==", "ic_system_join_pending")
+      );
+      const unsubSystemJoin = onSnapshot(
+        qSystemJoin,
+        (snapshot) => {
+          const joinMap = new Map<string, Notification>();
+          snapshot.docs.forEach((d) => {
+            const data = d.data() as Record<string, unknown>;
+            if (!interCompanySystemJoinAlertVisibleForCompany(data, companyId)) return;
+            joinMap.set(d.id, { id: d.id, ...data } as Notification);
+          });
+          byRecipient[`${id}::ic_system_join`] = joinMap;
+          recompute();
+        },
+        (error) => {
+          console.warn("IC system join alerts snapshot:", error);
+        }
+      );
+      unsubscribers.push(unsubSystemJoin);
     });
 
     return () => unsubscribers.forEach((unsub) => unsub());
-  }, [user, authLoading, recipientIds, isCompanyOwner, companyId, kindFilter]);
+  }, [user, authLoading, recipientIds, isCompanyOwner, companyId, kindFilter, icReverseTick]);
+
+  useEffect(() => {
+    const onIc = () => setIcReverseTick((n) => n + 1);
+    window.addEventListener(IC_REVERSE_REQUESTS_CHANGED, onIc);
+    return () => window.removeEventListener(IC_REVERSE_REQUESTS_CHANGED, onIc);
+  }, []);
 
   const handleMarkAsRead = async (id: string) => {
+    if (id.startsWith("local-ic-rev-") && companyId) {
+      markInterCompanyReverseAlertReadLocal(companyId, id.replace("local-ic-rev-", ""));
+      setIcReverseTick((n) => n + 1);
+      return;
+    }
     try {
       await updateDoc(doc(firestore, "admin_notifications", id), { isRead: true });
     } catch (error) {
@@ -233,16 +301,27 @@ export function AlertsTab({
   };
 
   const handleMarkAllAsRead = async () => {
-    const unread = notifications.filter(n => !n.isRead);
-    if(unread.length === 0) return;
-    
+    const unread = notifications.filter((n) => !n.isRead);
+    if (unread.length === 0) return;
+
+    const localUnread = unread.filter((n) => n.id.startsWith("local-ic-rev-"));
+    if (companyId) {
+      for (const n of localUnread) {
+        markInterCompanyReverseAlertReadLocal(companyId, n.id.replace("local-ic-rev-", ""));
+      }
+      if (localUnread.length) setIcReverseTick((t) => t + 1);
+    }
+
+    const firestoreUnread = unread.filter((n) => !n.id.startsWith("local-ic-rev-"));
+    if (firestoreUnread.length === 0) return;
+
     const batch = writeBatch(firestore);
-    unread.forEach(n => {
-        const docRef = doc(firestore, "admin_notifications", n.id);
-        batch.update(docRef, { isRead: true });
+    firestoreUnread.forEach((n) => {
+      const docRef = doc(firestore, "admin_notifications", n.id);
+      batch.update(docRef, { isRead: true });
     });
     await batch.commit();
-  }
+  };
   
   const handleDelete = async (item: Notification) => {
     setIsProcessing(true);
@@ -266,8 +345,17 @@ export function AlertsTab({
           const toDelete = notifications.filter(
             (n) => !user?.uid || (n as any).recipientUserId === user.uid
           );
-          for (let i = 0; i < toDelete.length; i += BATCH_SIZE) {
-            const chunk = toDelete.slice(i, i + BATCH_SIZE);
+          if (companyId) {
+            for (const n of toDelete) {
+              if (n.id.startsWith("local-ic-rev-")) {
+                markInterCompanyReverseAlertReadLocal(companyId, n.id.replace("local-ic-rev-", ""));
+              }
+            }
+            setIcReverseTick((t) => t + 1);
+          }
+          const firestoreOnly = toDelete.filter((n) => !n.id.startsWith("local-ic-rev-"));
+          for (let i = 0; i < firestoreOnly.length; i += BATCH_SIZE) {
+            const chunk = firestoreOnly.slice(i, i + BATCH_SIZE);
             const batch = writeBatch(firestore);
             chunk.forEach((n) => {
               batch.delete(doc(firestore, "admin_notifications", n.id));
@@ -359,8 +447,22 @@ export function AlertsTab({
                     const canChat = onStartChat && isSecurityAlert && (n as any).attemptedBy?.uid && (n as any).attemptedBy.uid !== user?.uid;
                     const isTransactionAlert = (n as any).type === "transaction_alert";
                     const isRecycleBinAlert = (n as any).type === "recycle_bin_alert";
+                    const isIcReverseAlert = (n as any).type === "inter_company_reverse_request";
+                    const isIcInviteAlert = (n as any).type === "inter_company_invite";
+                    const isIcSystemJoinAlert =
+                      (n as any).kind === "ic_system_join_pending" ||
+                      (n as any).type === "inter_company_system_join";
+                    const icInviteMessage = isIcInviteAlert
+                      ? String((n as { icInviteMessage?: string }).icInviteMessage || n.message || "").trim()
+                      : "";
+                    const icSystemJoinMessage = isIcSystemJoinAlert
+                      ? formatInterCompanySystemJoinAlertMessage(n as Record<string, unknown>)
+                      : "";
+                    const icSystemJoinGoTo = isIcSystemJoinAlert
+                      ? interCompanySystemJoinAlertsGoToPath(n as Record<string, unknown>, companyId || undefined)
+                      : "";
                     const hasOpenEdit =
-                      (isTransactionAlert || isRecycleBinAlert) &&
+                      (isTransactionAlert || isRecycleBinAlert || isIcReverseAlert) &&
                       (n as any).voucherId &&
                       (n as any).companyId;
                     const timeAgo = n.timestamp?.toDate ? formatDistanceToNow(n.timestamp.toDate(), { addSuffix: true }) : "";
@@ -379,16 +481,52 @@ export function AlertsTab({
                     const alarmNotifyAt = (n as any).alarmNotifyAt;
                     const alarmMessage = (n as any).alarmTitle || (n as any).message;
                     const alarmDateDisplay = formatTs(alarmDatetime) !== "—" ? formatTs(alarmDatetime) : formatTs(alarmNotifyAt);
+                    const icReason = isIcReverseAlert
+                      ? String((n as { icReverseReason?: string }).icReverseReason || n.message || "").trim()
+                      : "";
 
                     const rows: { label: string; right: React.ReactNode }[] = [
                       {
-                        label: isTransactionAlert ? getAlertTitle(n) : "Alert",
+                        label:
+                          isTransactionAlert ||
+                          isIcReverseAlert ||
+                          isIcInviteAlert ||
+                          isIcSystemJoinAlert
+                            ? getAlertTitle(n)
+                            : "Alert",
                         right: (
                           <Button variant="ghost" size="sm" className="h-7 text-destructive hover:text-destructive hover:bg-destructive/10 text-xs" onClick={() => setItemToDelete(n)}>
                             Delete
                           </Button>
                         ),
                       },
+                      ...(isIcReverseAlert && (n as any).sourceCompanyName ? [{
+                        label: "From company",
+                        right: <span className="text-sm font-medium">{(n as any).sourceCompanyName}</span>,
+                      }] : []),
+                      ...(isIcReverseAlert && icReason ? [{
+                        label: "Reason",
+                        right: <span className="text-sm whitespace-pre-wrap">{icReason}</span>,
+                      }] : []),
+                      ...(isIcSystemJoinAlert && (n as any).requesterCompanyName ? [{
+                        label: "From company",
+                        right: <span className="text-sm font-medium">{(n as any).requesterCompanyName}</span>,
+                      }] : []),
+                      ...(isIcSystemJoinAlert && icSystemJoinMessage ? [{
+                        label: "Message",
+                        right: <span className="text-sm whitespace-pre-wrap">{icSystemJoinMessage}</span>,
+                      }] : []),
+                      ...(isIcSystemJoinAlert && icSystemJoinGoTo ? [{
+                        label: "Inter Com System",
+                        right: (
+                          <Link
+                            href={icSystemJoinGoTo}
+                            className="text-primary font-medium text-xs sm:text-sm underline underline-offset-2 hover:no-underline"
+                          >
+                            Go to Inter Company
+                          </Link>
+                        ),
+                      }] : []),
                       ...(isAlarm && alarmMessage ? [{
                         label: "Message",
                         right: <span className="text-sm">{alarmMessage}</span>,
@@ -409,31 +547,40 @@ export function AlertsTab({
                         label: "Alarm date",
                         right: <span className="text-sm">{alarmDateDisplay}</span>,
                       }] : []),
-                      ...(!isSecurityAlert && !isAlarm && (isRecycleBinAlert || voucherNo || amountStr || (n as any).entityName) ? [{
+                      ...(!isSecurityAlert && !isAlarm && (isRecycleBinAlert || isIcReverseAlert || isIcInviteAlert || voucherNo || amountStr || (n as any).entityName) ? [{
                         label: isRecycleBinAlert
                           ? String((n as any).entityName || voucherNo || "—")
-                          : (voucherNo ?? "—"),
+                          : isIcReverseAlert
+                            ? `IC ${voucherNo ?? "—"}`
+                            : isIcInviteAlert
+                              ? "Inter Company"
+                              : (voucherNo ?? "—"),
                         right: (
                           <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                            {amountStr && !isRecycleBinAlert ? <span className="text-sm font-medium">{amountStr}</span> : null}
+                            {amountStr && !isRecycleBinAlert && !isIcInviteAlert ? <span className="text-sm font-medium">{amountStr}</span> : null}
                             {isRecycleBinAlert ? (
                               <Link href="/recycle-bin" className="text-primary font-medium text-xs sm:text-sm underline underline-offset-2 hover:no-underline">
                                 Open Recycle Bin
                               </Link>
                             ) : null}
-                            {hasOpenEdit && !isRecycleBinAlert && (onOpenVoucher
+                            {isIcInviteAlert ? (
+                              <Link href="/inter-company" className="text-primary font-medium text-xs sm:text-sm underline underline-offset-2 hover:no-underline">
+                                Open Inter Company
+                              </Link>
+                            ) : null}
+                            {hasOpenEdit && !isRecycleBinAlert && !isIcInviteAlert && (onOpenVoucher
                               ? (
                                   <button
                                     type="button"
                                     onClick={() => onOpenVoucher((n as any).companyId, (n as any).voucherId)}
                                     className="text-primary font-medium text-xs sm:text-sm underline underline-offset-2 hover:no-underline"
                                   >
-                                    Open Voucher
+                                    {isIcReverseAlert ? "Open Inter Company" : "Open Voucher"}
                                   </button>
                                 )
                               : (
                                   <Link href={`/dashboard?editVoucher=${(n as any).voucherId}&companyId=${(n as any).companyId}`} className="text-primary font-medium text-xs sm:text-sm underline underline-offset-2 hover:no-underline">
-                                    Open Voucher
+                                    {isIcReverseAlert ? "Open Inter Company" : "Open Voucher"}
                                   </Link>
                                 ))}
                           </span>
@@ -443,7 +590,7 @@ export function AlertsTab({
                         label: "Changes",
                         right: <span className="text-sm text-muted-foreground">{editedChanges.join(", ")}</span>,
                       }] : []),
-                      ...(!isAlarm ? [{
+                      ...(!isAlarm && !isIcSystemJoinAlert ? [{
                         label: "User",
                         right: <span className="text-sm">{getUserNameOnly(n)}</span>,
                       }] : []),
@@ -453,7 +600,7 @@ export function AlertsTab({
                       }] : []),
                       {
                         label: timeAgo || "—",
-                        right: hasOpenEdit && !isRecycleBinAlert
+                        right: hasOpenEdit && !isRecycleBinAlert && !isIcReverseAlert
                           ? onOpenHistory
                             ? (
                                 <button
@@ -496,8 +643,12 @@ export function AlertsTab({
                             key={n.id}
                             className={cn(
                                 "p-2.5 sm:p-3 min-w-0 overflow-hidden border border-border/80 shadow-sm transition-colors",
-                                !n.isRead && "bg-blue-50/80 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800",
-                                isSecurityAlert && "bg-red-50/80 border-red-200 dark:bg-red-900/30 border-l-4 border-l-red-600"
+                                !n.isRead &&
+                                  "border-blue-300/90 bg-blue-50/90 dark:border-blue-700 dark:bg-blue-950/35",
+                                (isIcReverseAlert || isIcInviteAlert || isIcSystemJoinAlert) &&
+                                  "border-l-4 border-l-blue-500",
+                                isSecurityAlert &&
+                                  "border-l-4 border-l-red-600 bg-red-50/80 border-red-200 dark:bg-red-900/30"
                             )}
                         >
                             {isSecurityAlert && (

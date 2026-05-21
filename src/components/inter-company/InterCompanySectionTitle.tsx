@@ -12,14 +12,30 @@ type Props = {
   title: string;
   /** Voucher is doc role=source → sender opened → Payment Out; role=target → Payment In */
   flowBadge?: "payment_out" | "payment_in" | null;
+  /** Revert accept — Payment Out/In ke left blue pill */
+  showRevertedBadge?: boolean;
   trailingAction?: ReactNode;
 };
 
-export function InterCompanySectionTitle({ title, flowBadge, trailingAction }: Props) {
+/** Ledger type pill jaisa — reverted IC voucher header */
+const revertedPillClass =
+  "shrink-0 border-blue-600/50 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-600/40";
+
+export function InterCompanySectionTitle({
+  title,
+  flowBadge,
+  showRevertedBadge = false,
+  trailingAction,
+}: Props) {
   return (
     <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
       <FormLabel className="!mt-0 shrink-0">{title}</FormLabel>
       <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+        {showRevertedBadge ? (
+          <Badge variant="outline" className={cn(revertedPillClass)}>
+            Reverted
+          </Badge>
+        ) : null}
         {flowBadge === "payment_out" ? (
           <Badge
             variant="outline"

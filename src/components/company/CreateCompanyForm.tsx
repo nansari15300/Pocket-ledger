@@ -47,7 +47,8 @@ import { initializeCompanyDataClient } from "@/lib/initializeCompanyDataClient";
 import { ensureSuperAdminInSharedEmails } from "@/lib/superAdminEmails";
 import { generateCompanyId } from "@/lib/generateCompanyId";
 import { generateUniqueInterCompanyAccountNo } from "@/lib/interCompany/interCompanyAccountNo";
-import { CompanyInterCompanyAcNoField } from "@/components/inter-company/CompanyInterCompanyAcNoField";
+import { generateUniqueInterCompanyCompanyCode } from "@/lib/interCompany/interCompanyCompanyCode";
+import { CompanyInterCompanyCodeField } from "@/components/inter-company/CompanyInterCompanyCodeField";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { numericEntitlement, type PlanId } from "@/config/plans";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
@@ -367,8 +368,12 @@ export function CreateCompanyForm({
     setIsLoading(true);
     try {
       const companyId = generateCompanyId(values.companyName);
-      // Inter-company: unique 15-digit A/c No (Firestore duplicate check + local mirror).
+      // Inter-company: unique A/c No + 12-char alphanumeric Company Code
       const interCompanyAccountNo = await generateUniqueInterCompanyAccountNo(companyId);
+      const interCompanyCompanyCode = await generateUniqueInterCompanyCompanyCode(
+        companyId,
+        values.companyName
+      );
       let logoUrl: string | null = null;
 
       // Local SQLite company bhi Edit jaisa logo Firebase Storage pe — dono paths (createAsLocalOnly / online) me upload
@@ -432,6 +437,7 @@ export function CreateCompanyForm({
           id: companyId,
           name: values.companyName,
           interCompanyAccountNo,
+          interCompanyCompanyCode,
           address: values.address ?? "",
           phone: values.phone ?? "",
           email: values.email ?? "",
@@ -464,6 +470,7 @@ export function CreateCompanyForm({
         await setDoc(doc(firestore, "companies", companyId), {
           name: values.companyName,
           interCompanyAccountNo,
+          interCompanyCompanyCode,
           address: values.address ?? "",
           phone: values.phone ?? "",
           email: values.email ?? "",
@@ -495,6 +502,7 @@ export function CreateCompanyForm({
             id: companyId,
             name: values.companyName,
             interCompanyAccountNo,
+          interCompanyCompanyCode,
             address: values.address ?? "",
             phone: values.phone ?? "",
             email: values.email ?? "",
@@ -581,7 +589,7 @@ export function CreateCompanyForm({
             )}
           />
 
-          <CompanyInterCompanyAcNoField mode="create" />
+          <CompanyInterCompanyCodeField mode="create" />
 
           <FormField
             control={form.control}

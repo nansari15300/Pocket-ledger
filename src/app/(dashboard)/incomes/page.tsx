@@ -23,6 +23,7 @@ import { mlc, mlcListChromeRoot, mlcListChromeRootData } from "@/lib/mobileListC
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVouchers } from "@/hooks/useVouchers";
+import { collectInterCompanyIdsForPendingApproval } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
@@ -77,12 +78,18 @@ function IncomeExpensePageContent() {
     vouchers.forEach((v: any) => {
       if (v.isApproved === true) return;
       const ids = new Set<string>();
-      if (v.incomeAccountId && expenseAccountIdSet.has(v.incomeAccountId)) ids.add(v.incomeAccountId);
-      if (v.expenseAccountId && expenseAccountIdSet.has(v.expenseAccountId)) ids.add(v.expenseAccountId);
-      if (v.accountId && expenseAccountIdSet.has(v.accountId)) ids.add(v.accountId);
-      (v.entries || []).forEach((e: any) => {
-        if (e.accountId && expenseAccountIdSet.has(e.accountId)) ids.add(e.accountId);
-      });
+      if (String(v.type || "") === "inter_company") {
+        collectInterCompanyIdsForPendingApproval(v, expenseAccountIdSet, "expense").forEach((id) =>
+          ids.add(id)
+        );
+      } else {
+        if (v.incomeAccountId && expenseAccountIdSet.has(v.incomeAccountId)) ids.add(v.incomeAccountId);
+        if (v.expenseAccountId && expenseAccountIdSet.has(v.expenseAccountId)) ids.add(v.expenseAccountId);
+        if (v.accountId && expenseAccountIdSet.has(v.accountId)) ids.add(v.accountId);
+        (v.entries || []).forEach((e: any) => {
+          if (e.accountId && expenseAccountIdSet.has(e.accountId)) ids.add(e.accountId);
+        });
+      }
       ids.forEach((id) => {
         map[id] = (map[id] || 0) + 1;
       });

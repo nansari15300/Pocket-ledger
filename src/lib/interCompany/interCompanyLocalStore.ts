@@ -1,6 +1,19 @@
 /**
  * Inter-company preview settings / invites — localStorage (backend baad me).
  */
+import {
+  DEFAULT_PARTNER_MASK_IN_VIEW,
+  DEFAULT_PARTNER_SEARCH_BY,
+  DEFAULT_PARTNER_VIEW_FIELDS,
+  migrateLegacySearchByName,
+  normalizePartnerFieldFlags,
+  normalizePartnerSearchBy,
+  normalizePartnerViewFields,
+  type InterCompanyPartnerFieldFlags,
+} from "@/lib/interCompany/interCompanyPartnerPrivacy";
+
+export type { InterCompanyPartnerFieldFlags, InterCompanyPartnerFieldKey } from "@/lib/interCompany/interCompanyPartnerPrivacy";
+export { canPartnersSearchTargetAccountsByName } from "@/lib/interCompany/interCompanyPartnerPrivacy";
 
 export type InterCompanyPartnerDisplayMode = "name_and_ac" | "ac_only";
 
@@ -9,20 +22,26 @@ export type InterCompanyLocalSettings = {
   notificationsEnabled: boolean;
   /** Joined partner company ids (tick list) */
   joinedCompanyIds: string[];
+  /** Accepted joins — disconnect block (txn sync); Invite accept / Firestore accepted se bharte hain */
+  permanentJoinedCompanyIds: string[];
   /** Partner list label — fixed: name + A/c No */
   partnerDisplayMode: InterCompanyPartnerDisplayMode;
-  /**
-   * Privacy (this company = target): partners may browse account name list.
-   * false = others must use Inter Co. A/c No or mobile only.
-   */
-  searchTargetAccountByNameFromSource: boolean;
+  /** @deprecated — use partnerSearchBy.accountName */
+  searchTargetAccountByNameFromSource?: boolean;
+  /** How other companies find your accounts */
+  partnerSearchBy: InterCompanyPartnerFieldFlags;
+  /** What other companies can see in account view */
+  partnerViewFields: InterCompanyPartnerFieldFlags;
+  /** ON = mask middle in partner view; OFF = show full text */
+  partnerMaskInView: boolean;
 };
 
 export type InterCompanyPendingInvite = {
   id: string;
   targetLoginOrEmail: string;
   createdAt: number;
-  status: "pending" | "sent";
+  /** Firestore inter_company_invites status — pending = target Join par accept karega */
+  status: "pending" | "sent" | "accepted" | "declined";
   message?: string;
 };
 
@@ -32,8 +51,11 @@ const INVITES_KEY = (companyId: string) => `pl-inter-company-invites::${companyI
 const DEFAULT_SETTINGS: InterCompanyLocalSettings = {
   notificationsEnabled: true,
   joinedCompanyIds: [],
+  permanentJoinedCompanyIds: [],
   partnerDisplayMode: "name_and_ac",
-  searchTargetAccountByNameFromSource: true,
+  partnerSearchBy: { ...DEFAULT_PARTNER_SEARCH_BY },
+  partnerViewFields: { ...DEFAULT_PARTNER_VIEW_FIELDS },
+  partnerMaskInView: DEFAULT_PARTNER_MASK_IN_VIEW,
 };
 
 /** Cross-company search — sirf joined partners (empty = all partners) */
@@ -46,28 +68,26 @@ export function filterPartnersByJoined<T extends { id: string }>(
   return partners.filter((p) => allowed.has(p.id));
 }
 
-/** Target company ki privacy — partner name list dikha sakta hai ya nahi */
-export function canPartnersSearchTargetAccountsByName(targetCompanyId: string): boolean {
-  if (!targetCompanyId) return true;
-  return readInterCompanyLocalSettings(targetCompanyId).searchTargetAccountByNameFromSource;
-}
-
 export function readInterCompanyLocalSettings(companyId: string): InterCompanyLocalSettings {
   if (typeof window === "undefined" || !companyId) return { ...DEFAULT_SETTINGS };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY(companyId));
     if (!raw) return { ...DEFAULT_SETTINGS };
     const parsed = JSON.parse(raw) as Partial<InterCompanyLocalSettings>;
+    migrateLegacySearchByName(parsed);
     return {
       notificationsEnabled: parsed.notificationsEnabled ?? DEFAULT_SETTINGS.notificationsEnabled,
       joinedCompanyIds: Array.isArray(parsed.joinedCompanyIds)
         ? parsed.joinedCompanyIds.filter((x) => typeof x === "string")
         : [],
+      permanentJoinedCompanyIds: Array.isArray(parsed.permanentJoinedCompanyIds)
+        ? parsed.permanentJoinedCompanyIds.filter((x) => typeof x === "string")
+        : [],
       partnerDisplayMode:
         parsed.partnerDisplayMode === "ac_only" ? "ac_only" : "name_and_ac",
-      searchTargetAccountByNameFromSource:
-        parsed.searchTargetAccountByNameFromSource ??
-        DEFAULT_SETTINGS.searchTargetAccountByNameFromSource,
+      partnerSearchBy: normalizePartnerSearchBy(parsed.partnerSearchBy),
+      partnerViewFields: normalizePartnerViewFields(parsed.partnerViewFields),
+      partnerMaskInView: parsed.partnerMaskInView ?? DEFAULT_SETTINGS.partnerMaskInView,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -101,4 +121,21 @@ export function appendInterCompanyPendingInvite(
   if (typeof window === "undefined" || !companyId) return;
   const prev = readInterCompanyPendingInvites(companyId);
   localStorage.setItem(INVITES_KEY(companyId), JSON.stringify([invite, ...prev].slice(0, 50)));
+}
+
+/** Send again / status update — same invite id ya email par row replace */
+export function upsertInterCompanyPendingInvite(
+  companyId: string,
+  invite: InterCompanyPendingInvite
+): void {
+  if (typeof window === "undefined" || !companyId) return;
+  const prev = readInterCompanyPendingInvites(companyId);
+  const key = invite.targetLoginOrEmail.trim().toLowerCase();
+  const next = [
+    invite,
+    ...prev.filter(
+      (r) => r.id !== invite.id && r.targetLoginOrEmail.trim().toLowerCase() !== key
+    ),
+  ].slice(0, 50);
+  localStorage.setItem(INVITES_KEY(companyId), JSON.stringify(next));
 }

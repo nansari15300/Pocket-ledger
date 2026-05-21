@@ -384,15 +384,17 @@ function PartyPageContent() {
 
   // ========== MEMORY LOGIC ==========
   usePageMemory(
-    "partyPageState", 
-    activeView,               
-    setActiveView,            
-    selected,                 
-    setSelected,              
-    activeView === 'parties' ? partiesForPageMemory : processedGroups, 
+    "partyPageState",
+    activeView,
+    setActiveView,
+    selected,
+    setSelected,
+    activeView === "parties" ? partiesForPageMemory : processedGroups,
     pageDataLoading,
     undefined,
-    selectedIdFromUrl
+    selectedIdFromUrl,
+    undefined,
+    [OVERDUE_ACCOUNT_ID]
   );
   // ==================================
 
@@ -434,6 +436,46 @@ function PartyPageContent() {
       router.replace(canonical, { scroll: false });
     }
   }, [selectedIdFromUrl, viewFromUrl, pageDataLoading, processedParties, processedGroups, overdueVirtualParty, setSelected, setActiveView, router]);
+
+  /** Refresh / bare `/party`: URL na ho to partyPageState ya selectedItemId se party restore — Overdue default na kholo */
+  useEffect(() => {
+    if (pageDataLoading) return;
+    if (selectedIdFromUrl) return;
+    if (activeView !== "parties") return;
+    if (selected?.id && selected.id !== OVERDUE_ACCOUNT_ID) return;
+
+    let rememberedId: string | null = null;
+    try {
+      const raw = localStorage.getItem("partyPageState");
+      if (raw) {
+        const parsed = JSON.parse(raw) as { selections?: Record<string, string> };
+        rememberedId = parsed?.selections?.parties ?? null;
+      }
+    } catch {
+      /* ignore */
+    }
+    if (!rememberedId && typeof window !== "undefined") {
+      rememberedId = localStorage.getItem(`selectedItemId_party_view_parties`);
+    }
+    if (!rememberedId || rememberedId === OVERDUE_ACCOUNT_ID) return;
+
+    const party = processedParties.find((p) => p.id === rememberedId);
+    if (!party || party.id === selected?.id) return;
+
+    setSelected(party);
+    const canonical = `/party?selected=${encodeURIComponent(rememberedId)}`;
+    if (shouldReplaceWithMasterDetailCanonical(canonical)) {
+      router.replace(canonical, { scroll: false });
+    }
+  }, [
+    pageDataLoading,
+    selectedIdFromUrl,
+    activeView,
+    processedParties,
+    selected?.id,
+    setSelected,
+    router,
+  ]);
 
   // Sidebar / in-app link zyada tar `/party` (bina query) kholta hai; `usePageMemory` purana `activeView: groups` restore karke
   // Party tab hata deta tha. `?selected=` / `?view=groups` explicit ho to URL hi boss hai.
@@ -578,15 +620,15 @@ function PartyPageContent() {
   }, [overdueVirtualParty, setSelected, setActiveView, useQueryNav, router]);
 
   const handleSelect = (item: Party | Group) => {
-    if (useQueryNav) {
-        // Static export ke liye query params use karte hain – /party/[id] path 404 de sakta hai
-        const path = item.id === OVERDUE_ACCOUNT_ID
-          ? `/party?selected=${OVERDUE_ACCOUNT_ID}`
-          : 'pan' in item ? `/party?selected=${item.id}` : `/party?view=groups&selected=${item.id}`;
-        router.push(path);
-    } else {
-        setSelected(item);
-    }
+    // Har viewport: ?selected= URL sync — refresh / wapas aane par wahi party/group khule
+    const path =
+      item.id === OVERDUE_ACCOUNT_ID
+        ? `/party?selected=${encodeURIComponent(OVERDUE_ACCOUNT_ID)}`
+        : "pan" in item
+          ? `/party?selected=${encodeURIComponent(item.id)}`
+          : `/party?view=groups&selected=${encodeURIComponent(item.id)}`;
+    router.replace(path, { scroll: false });
+    setSelected(item);
   };
 
   const partiesForSelectedGroup = useMemo(() => {

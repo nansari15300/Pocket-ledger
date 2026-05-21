@@ -41,6 +41,9 @@ export type InterCompanyVoucherFooterProps = {
   showApproveButton?: boolean;
   onOpenHistory?: () => void;
   onApprove?: () => void;
+  /** Source IC: target approve ke bina Approve band */
+  approveExtraDisabled?: boolean;
+  approveBlockedHint?: string | null;
   isApproving?: boolean;
   isLoading?: boolean;
   isFormDirty?: boolean;
@@ -60,6 +63,8 @@ export function InterCompanyVoucherFooter({
   showApproveButton = false,
   onOpenHistory,
   onApprove,
+  approveExtraDisabled = false,
+  approveBlockedHint = null,
   isApproving = false,
   isLoading = false,
   isFormDirty = true,
@@ -83,6 +88,7 @@ export function InterCompanyVoucherFooter({
     !showApproveButton ||
     !onApprove ||
     isApproving ||
+    approveExtraDisabled ||
     (!!voucher?.isApproved && !isFormDirty);
 
   const saveDisabled = isEditViewOnly || isLoading || editingDisabled || (!!voucher?.id && !isFormDirty);
@@ -174,6 +180,7 @@ export function InterCompanyVoucherFooter({
           </Button>
           <Button
             type="button"
+            title={approveExtraDisabled ? approveBlockedHint || undefined : undefined}
             onClick={() => onApprove?.()}
             disabled={approveDisabled}
             className={cn("w-full", BTN_APPROVE_CLASS)}
@@ -215,6 +222,7 @@ export function InterCompanyVoucherFooter({
         </Button>
         <Button
           type="button"
+          title={approveExtraDisabled ? approveBlockedHint || undefined : undefined}
           onClick={() => onApprove?.()}
           disabled={approveDisabled}
           className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}

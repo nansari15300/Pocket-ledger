@@ -30,6 +30,8 @@ export type PrintOptionsResult = {
   printIncludeNotes?: boolean;
   /** Color = green/red amounts; bw = sab amounts black/gray (printer-friendly). */
   printColorMode?: PrintColorMode;
+  /** Internal = in-app preview; External = system PDF app / browser tab. */
+  printDestination?: "internal" | "external";
 };
 
 export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
@@ -84,7 +86,8 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
             <DialogHeader>
               <DialogTitle>Print options</DialogTitle>
               <DialogDescription id="print-options-desc">
-                Choose what appears in the PDF header. Cancel stops printing.
+                Choose what appears in the PDF header. Cancel stops printing. Internal opens in-app
+                preview; External opens your device PDF app.
               </DialogDescription>
             </DialogHeader>
             <div className="flex flex-col gap-4 py-2">
@@ -230,14 +233,34 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
                 </RadioGroup>
               </div>
             </div>
-            <DialogFooter className="flex-row items-center justify-end gap-2 [&>*]:mt-0">
-              {/* Company-login-like action styling: blue cancel + green continue in one row. */}
+            <DialogFooter className="flex-row flex-wrap items-center justify-end gap-2 [&>*]:mt-0">
+              {/* Cancel + External (system app) + Internal (in-app preview) */}
               <Button
                 type="button"
                 className="rounded-full border border-blue-600 bg-blue-600 px-5 text-white hover:bg-blue-700 hover:text-white"
                 onClick={() => finish(null)}
               >
                 Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-full border border-slate-500 px-5"
+                onClick={() =>
+                  finish({
+                    printIncludeLogo: printLogo,
+                    printIncludeCompanyDetails: printCompany,
+                    printIncludeNarration: printNarration,
+                    printIncludeTitle: printTitle,
+                    printIncludeUserColumn: printUserColumn,
+                    printIncludeFileColumn: printFileColumn,
+                    printIncludeNotes: printNotes,
+                    printColorMode,
+                    printDestination: "external",
+                  })
+                }
+              >
+                External
               </Button>
               <Button
                 type="button"
@@ -252,10 +275,11 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
                     printIncludeFileColumn: printFileColumn,
                     printIncludeNotes: printNotes,
                     printColorMode,
+                    printDestination: "internal",
                   })
                 }
               >
-                Continue
+                Internal
               </Button>
             </DialogFooter>
           </DialogContent>

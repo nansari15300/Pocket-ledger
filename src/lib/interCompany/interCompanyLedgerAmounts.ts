@@ -4,7 +4,16 @@
  */
 import type { Context } from "@/components/vouchers/TransactionsTable";
 import type { InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
-import { interCompanyVoucherViewerSide } from "@/lib/interCompany/interCompanyVoucherHydrate";
+import {
+  applyInterCompanyReversedLedgerNetZero,
+  getInterCompanyLegAmounts,
+  resolveInterCompanyLegsForVoucher,
+} from "@/lib/interCompany/interCompanyPostingLegs";
+import {
+  interCompanyVoucherViewerSide,
+  isInterCompanyVisibleOnTargetBank,
+  isInterCompanyVisibleOnTargetEntity,
+} from "@/lib/interCompany/interCompanyVoucherHydrate";
 
 const PAYEE_FIELD: Record<InterCompanyEntityKind, string> = {
   party: "partyId",
@@ -39,7 +48,15 @@ function normKind(raw: unknown): InterCompanyEntityKind | null {
   return k in PAYEE_FIELD ? k : null;
 }
 
-/** Voucher is entity se juda hai (payee field ya saved source/target ids) */
+function legKindToContext(kind: InterCompanyEntityKind): Context {
+  if (kind === "bank") return "account";
+  if (kind === "staff") return "staff";
+  if (kind === "tax") return "tax";
+  if (kind === "expense") return "expense";
+  return "party";
+}
+
+/** Voucher is entity se juda hai (legs, IC counterparty, company bank, ya legacy payee) */
 export function interCompanyVoucherTouchesEntity(
   transaction: Record<string, unknown> | null | undefined,
   entityId: string,
@@ -47,6 +64,22 @@ export function interCompanyVoucherTouchesEntity(
 ): boolean {
   const id = String(entityId || "").trim();
   if (!id || String(transaction?.type || "") !== "inter_company") return false;
+  if (!isInterCompanyVisibleOnTargetBank(transaction)) return false;
+
+  const ctx = legKindToContext(kind);
+  const legs = resolveInterCompanyLegsForVoucher(transaction as Record<string, unknown>);
+  if (legs.length > 0) {
+    for (const leg of legs) {
+      if (legKindToContext(leg.kind) === ctx && String(leg.accountId) === id) return true;
+    }
+  }
+
+  if (kind === "party" && String(transaction.interCompanyCounterpartyPartyId || "").trim() === id) {
+    return true;
+  }
+  if (kind === "bank" && String(transaction.companyBankAccountId || "").trim() === id) {
+    return true;
+  }
 
   const payeeField = PAYEE_FIELD[kind];
   if (String(transaction[payeeField] || "").trim() === id) return true;
@@ -96,25 +129,78 @@ export function getInterCompanyLedgerAmounts(
 ): InterCompanyLedgerAmountResult {
   const empty = { touched: false, debit: 0, credit: 0 };
   if (String(transaction?.type || "") !== "inter_company") return empty;
+  // Target: source approve se pehle bank/party/staff par kuch mat dikhao
+  if (!isInterCompanyVisibleOnTargetBank(transaction)) return empty;
+  // Target entity: bank approve ke baad hi (party/staff/tax/expense)
+  if (
+    interCompanyVoucherViewerSide(transaction) === "target" &&
+    context !== "account" &&
+    !isInterCompanyVisibleOnTargetEntity(transaction)
+  ) {
+    return empty;
+  }
 
   const kind = interCompanyKindForContext(context);
   if (!kind || !interCompanyVoucherTouchesEntity(transaction, entityId, kind)) return empty;
 
+  // Naye vouchers: compound legs se Dr/Cr
+  const legs = resolveInterCompanyLegsForVoucher(transaction);
+  if (legs.length > 0) {
+    if (
+      context === "party" ||
+      context === "account" ||
+      context === "staff" ||
+      context === "tax" ||
+      context === "expense"
+    ) {
+      return getInterCompanyLegAmounts(transaction, context, entityId);
+    }
+    return empty;
+  }
+
+  // Target unapproved + koi stored leg nahi: staff/party par legacy payment_in mat lagao
+  if (
+    transaction.isApproved !== true &&
+    interCompanyVoucherViewerSide(transaction) === "target" &&
+    context !== "account"
+  ) {
+    return empty;
+  }
+
+  // Purane vouchers: payment in/out direction
   const dir = interCompanyPaymentDirection(transaction);
   if (!dir) return empty;
 
   const amt = Number(amount) || 0;
   const isOut = dir === "out";
 
-  // Bank/cash account — payment_in = Dr, payment_out = Cr
   if (context === "account") {
-    if (isOut) return { touched: true, debit: 0, credit: amt };
-    return { touched: true, debit: amt, credit: 0 };
+    if (isOut) {
+      return applyInterCompanyReversedLedgerNetZero(transaction, {
+        touched: true,
+        debit: 0,
+        credit: amt,
+      });
+    }
+    return applyInterCompanyReversedLedgerNetZero(transaction, {
+      touched: true,
+      debit: amt,
+      credit: 0,
+    });
   }
 
-  // Party, staff, tax, expense — payment_out = Dr, payment_in = Cr
-  if (isOut) return { touched: true, debit: amt, credit: 0 };
-  return { touched: true, debit: 0, credit: amt };
+  if (isOut) {
+    return applyInterCompanyReversedLedgerNetZero(transaction, {
+      touched: true,
+      debit: amt,
+      credit: 0,
+    });
+  }
+  return applyInterCompanyReversedLedgerNetZero(transaction, {
+    touched: true,
+    debit: 0,
+    credit: amt,
+  });
 }
 
 /** Party list / copy ledger — kya yeh party id inter_company se touch hoti hai */
@@ -123,4 +209,37 @@ export function interCompanyTouchesPartyId(
   partyId: string
 ): boolean {
   return interCompanyVoucherTouchesEntity(voucher, partyId, "party");
+}
+
+/**
+ * Target par IC row hide — source approve se pehle (bank + entity); source approve ke baad
+ * target unapproved par entity hide, bank `getInterCompanyLegAmounts` se.
+ */
+export function hideUnapprovedTargetInterCompanyEntityLedger(
+  transaction: Record<string, unknown> | null | undefined,
+  context: Context,
+  entityId: string
+): boolean {
+  if (!transaction || String(transaction.type || "") !== "inter_company") return false;
+  if (!isInterCompanyVisibleOnTargetBank(transaction)) return true;
+  if (transaction.isApproved === true) return false;
+  if (interCompanyVoucherViewerSide(transaction) !== "target") return false;
+  if (context === "account") return false;
+  const id = String(entityId || "").trim();
+  if (!id) return false;
+  const kind = interCompanyKindForContext(context);
+  if (!kind) return false;
+  return interCompanyVoucherTouchesEntity(transaction, id, kind);
+}
+
+/** @deprecated Bank ab unapproved par amount dikhata hai — placeholder zaroorat nahi */
+export function keepUnapprovedInterCompanyLedgerPlaceholderRow(
+  transaction: Record<string, unknown> | null | undefined,
+  context: Context,
+  entityId: string
+): boolean {
+  void transaction;
+  void context;
+  void entityId;
+  return false;
 }

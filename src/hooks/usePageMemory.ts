@@ -16,7 +16,9 @@ export function usePageMemory<T extends { id: string }>(
   /** When provided, use this ID for restore instead of localStorage (URL takes precedence on refresh) */
   urlSelectedId?: string | null,
   /** Settings page: kabhi LS se `activeView` restore mat karo — `?view=` / pehla allowed tab hi; warna purana sharing/voucher dabaa deta hai */
-  skipRestoreActiveViewFromStorage?: boolean
+  skipRestoreActiveViewFromStorage?: boolean,
+  /** List ke pehle virtual row (e.g. Party Overdue) — memory khali ho to default select mat karo */
+  excludeFromAutoSelectIds?: string[]
 ) {
   // null = SSR/first client frame — never run desktop auto-select until we know real viewport
   const mobileLayoutResolved = useIsMobileLayoutResolved();
@@ -105,9 +107,11 @@ export function usePageMemory<T extends { id: string }>(
       if (lastSelectedIdForThisView) {
         targetItem = currentItems.find((i) => i.id === lastSelectedIdForThisView);
       }
-      // 2. If no memory, open the item on top
+      // 2. If no memory, open first real row — virtual top rows (Overdue) skip
       if (!targetItem) {
-        targetItem = currentItems[0];
+        const skip = new Set(excludeFromAutoSelectIds ?? []);
+        targetItem =
+          currentItems.find((i) => !skip.has(i.id)) ?? currentItems[0];
       }
     } else if (!isCurrentSelectionValid && currentItems.length === 0 && selected) {
       setSelected(null);
@@ -121,7 +125,7 @@ export function usePageMemory<T extends { id: string }>(
     // ⚠️ CRITICAL: Dependency Array बाट 'selected' र 'setSelected' हटाइएको छ।
     // यसले गर्दा User ले क्लिक गरेर selected चेन्ज हुँदा यो इफेक्ट फेरि चल्दैन र लूप लाग्दैन।
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeView, isLoading, currentItems, disableAutoSelect, mobileLayoutResolved, urlSelectedId]); 
+  }, [activeView, isLoading, currentItems, disableAutoSelect, mobileLayoutResolved, urlSelectedId, excludeFromAutoSelectIds]); 
 
   // 3. SAVE STATE (जहिले पनि selection चेन्ज हुँदा मेमोरी अपडेट गर्ने)
   useEffect(() => {

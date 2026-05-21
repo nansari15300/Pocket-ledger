@@ -106,22 +106,37 @@ service cloud.firestore {
     }
     
     // Company access: owner (ownerId or ownerEmail) or shared or handover. Subcollections use get(); company doc uses resource.
-    // ownerId match is primary. After edit: firebase deploy --only firestore:rules
+    // ownerId match is primary. Email compare .lower() — email login / legacy mixed-case ownerEmail.
+    function authEmailLower() {
+      return request.auth.token.email != null ? request.auth.token.email.lower() : '';
+    }
     function isCompanyUser(companyId) {
       let c = get(/databases/$(database)/documents/companies/$(companyId));
       return isSignedIn() && c != null && c.data != null && (
         c.data.get('ownerId', '') == request.auth.uid ||
-        (request.auth.token.email != null && c.data.get('ownerEmail', '') == request.auth.token.email) ||
+        (authEmailLower() != '' && c.data.get('ownerEmail', '').lower() == authEmailLower()) ||
         (request.auth.token.email != null && request.auth.token.email in c.data.get('sharedWithEmails', [])) ||
-        (request.auth.token.email != null && c.data.get('handoverTo', '') == request.auth.token.email)
+        (authEmailLower() != '' && c.data.get('handoverTo', '').lower() == authEmailLower())
       );
     }
     function isCompanyOwner(companyId) {
       let c = get(/databases/$(database)/documents/companies/$(companyId));
       return isSignedIn() && c != null && c.data != null && (
         c.data.get('ownerId', '') == request.auth.uid ||
-        (request.auth.token.email != null && c.data.get('ownerEmail', '') == request.auth.token.email)
+        (authEmailLower() != '' && c.data.get('ownerEmail', '').lower() == authEmailLower())
       );
+    }
+    /** Shared / handover user — sirf profile fields; owner/plan/share mat badlo */
+    function companyMemberProfileUpdateOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'address', 'phone', 'email', 'pan', 'country',
+          'currencyCode', 'currencySymbol', 'logoUrl',
+          'fiscalYearStart', 'fiscalYearEnd', 'adminUsername',
+          'encryptServerBackup', 'encryptServerBackupSalt', 'updatedAt'
+        ])
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.get('ownerEmail', '') == resource.data.get('ownerEmail', '')
+        && request.resource.data.get('planId', '') == resource.data.get('planId', '');
     }
 
     /**
@@ -254,18 +269,31 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
         request.resource.data.ownerId == request.auth.uid;
 
-      // Admin can list/get all companies; others only own or shared.
+      // Admin can list/get all companies; others only own, ownerEmail, shared, or handover.
       allow get, list: if isSignedIn() && (
         isAdmin() ||
         resource.data.ownerId == request.auth.uid ||
+        (authEmailLower() != '' &&
+          resource.data.get('ownerEmail', '').lower() == authEmailLower()) ||
         (request.auth.token.email != null &&
           'sharedWithEmails' in resource.data &&
           request.auth.token.email in resource.data.sharedWithEmails) ||
-        (request.auth.token.email != null &&
-          resource.data.handoverTo == request.auth.token.email)
+        (authEmailLower() != '' &&
+          resource.data.get('handoverTo', '').lower() == authEmailLower())
       );
 
       allow update: if isCompanyOwner(companyId) || isAdmin();
+      // Shared / handover member — Edit Company profile save (name, address, …)
+      allow update: if isSignedIn()
+        && isCompanyUser(companyId)
+        && !isCompanyOwner(companyId)
+        && !isAdmin()
+        && companyMemberProfileUpdateOnly();
+      // Company member — sirf pehli baar khali interCompanyCompanyCode backfill (email/shared login)
+      allow update: if isSignedIn()
+        && isCompanyUser(companyId)
+        && resource.data.get('interCompanyCompanyCode', '') == ''
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['interCompanyCompanyCode']);
       allow delete: if isCompanyOwner(companyId) || isSuperAdmin();
 
       /**
@@ -301,6 +329,15 @@ service cloud.firestore {
       }
 
       match /recurring_voucher_generation_locks/{lockId} {
+        allow read: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
+        allow write: if isCompanyUser(companyId) || isSuperAdmin();
+      }
+
+      /**
+       * Inter Company join settings — shared users same company par auto-sync.
+       * @path /companies/{companyId}/inter_company_config/{docId}
+       */
+      match /inter_company_config/{docId} {
         allow read: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
         allow write: if isCompanyUser(companyId) || isSuperAdmin();
       }
@@ -490,6 +527,151 @@ service cloud.firestore {
       allow list: if isSignedIn();
       // Allow get/update/delete only for the recipient
       allow get, update, delete: if request.auth.uid == resource.data.recipientUserId;
+    }
+
+    /**
+     * Global Inter Company system name registry — duplicate naam block.
+     * @path /inter_company_system_names/{nameKey}
+     */
+    match /inter_company_system_names/{nameKey} {
+      allow read, list: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.ownerUserId == request.auth.uid
+        && request.resource.data.systemId is string
+        && request.resource.data.name is string
+        && !exists(/databases/$(database)/documents/inter_company_system_names/$(nameKey));
+      allow delete: if isSignedIn()
+        && resource.data.ownerUserId == request.auth.uid;
+      allow update: if false;
+    }
+
+    /**
+     * Inter Company groups — owner apni owned companies organize karta hai.
+     * @path /inter_company_groups/{groupId}
+     */
+    match /inter_company_groups/{groupId} {
+      allow create: if isSignedIn()
+        && request.resource.data.ownerUserId == request.auth.uid
+        && request.resource.data.nameKey is string
+        && request.resource.data.nameKey.size() > 0
+        && !exists(/databases/$(database)/documents/inter_company_system_names/$(request.resource.data.nameKey));
+      allow read, list: if isSignedIn() && (
+        resource.data.ownerUserId == request.auth.uid
+        || resource.data.visibility == "public"
+      );
+      allow update, delete: if isSignedIn()
+        && resource.data.ownerUserId == request.auth.uid;
+      allow update: if isSignedIn()
+        && resource.data.visibility == "public"
+        && request.resource.data.ownerUserId == resource.data.ownerUserId
+        && (
+          request.resource.data.companyIds.hasAll(resource.data.companyIds)
+          || (
+            resource.data.companyIds.hasAll(request.resource.data.companyIds)
+            && request.resource.data.companyIds.size() + 1 == resource.data.companyIds.size()
+            && request.resource.data.get("icLeaveCompanyId", "") is string
+            && request.resource.data.icLeaveCompanyId != ""
+            && resource.data.companyIds.hasAny([request.resource.data.icLeaveCompanyId])
+            && !request.resource.data.companyIds.hasAny([request.resource.data.icLeaveCompanyId])
+            && resource.data.get(
+              ["companyOwners", request.resource.data.icLeaveCompanyId, "ownerUserId"],
+              ""
+            ) == request.auth.uid
+          )
+        );
+    }
+
+    /**
+     * Inter Com System join requests — visitor asks to join another company in a public system.
+     * @path /inter_company_system_join_requests/{requestId}
+     */
+    match /inter_company_system_join_requests/{requestId} {
+      // Doc id: systemId__requesterUid__targetCompanyId — requester hamesha read kar sake
+      function joinRequestIdForRequester() {
+        return isSignedIn()
+          && requestId.matches('.+__' + request.auth.uid + '__.+');
+      }
+      function joinRequestRowRequester() {
+        return isSignedIn()
+          && resource.data.get('requesterUserId', '') == request.auth.uid;
+      }
+      function joinRequestCreateRequester() {
+        return isSignedIn()
+          && request.resource.data.get('requesterUserId', '') == request.auth.uid
+          && request.resource.data.get('status', '') == 'pending';
+      }
+      function joinRequestTargetOwner() {
+        return isSignedIn() && (
+          resource.data.get('targetOwnerUserId', '') == request.auth.uid
+          || isCompanyOwner(resource.data.get('targetCompanyId', ''))
+        );
+      }
+
+      allow read, list: if isSignedIn() && (
+        joinRequestRowRequester()
+        || joinRequestIdForRequester()
+        || resource.data.get('systemOwnerUserId', '') == request.auth.uid
+        || joinRequestTargetOwner()
+      );
+
+      allow create: if joinRequestCreateRequester()
+        || (joinRequestIdForRequester()
+          && request.resource.data.get('requesterUserId', '') == request.auth.uid
+          && request.resource.data.get('status', '') == 'pending');
+
+      allow update: if isSignedIn() && (
+        (
+          joinRequestTargetOwner()
+          || resource.data.get('systemOwnerUserId', '') == request.auth.uid
+        )
+        && request.resource.data.get('status', '') in ['accepted', 'declined']
+        && request.resource.data.get('requesterUserId', '') == resource.data.get('requesterUserId', '')
+      )
+      || (
+        joinRequestRowRequester()
+        && resource.data.get('status', '') == 'accepted'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['requesterLinkApplied'])
+      )
+      || (
+        joinRequestRowRequester()
+        && resource.data.get('status', '') == 'declined'
+        && request.resource.data.get('status', '') == 'pending'
+      )
+      || (
+        (joinRequestRowRequester() || joinRequestIdForRequester())
+        && request.resource.data.get('requesterUserId', '') == request.auth.uid
+        && request.resource.data.get('status', '') == 'pending'
+      );
+
+      allow delete: if false;
+    }
+
+    /**
+     * Public Inter Company company profile — code / PAN / phone sab signed-in users read.
+     * Company owner likhta hai jab public system me add / sync karta hai.
+     * @path /inter_company_public_profiles/{companyId}
+     */
+    match /inter_company_public_profiles/{companyId} {
+      allow read, list: if isSignedIn();
+      allow create, update: if isSignedIn() && isCompanyOwner(companyId);
+      allow delete: if isCompanyOwner(companyId) || isAdmin();
+    }
+
+    /**
+     * User bookmarks for public Inter Company systems (Add to my system).
+     * @path /inter_company_public_system_links/{linkId}
+     */
+    match /inter_company_public_system_links/{linkId} {
+      allow read, list: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.systemId is string
+        && request.resource.data.systemName is string
+        && request.resource.data.ownerUserId is string;
+      allow delete: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+      allow update: if false;
     }
     
     /**

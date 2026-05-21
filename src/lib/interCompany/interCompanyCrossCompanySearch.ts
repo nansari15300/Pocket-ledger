@@ -7,6 +7,7 @@ import { fetchInterCompanyEntitiesForCompany } from "@/lib/interCompany/fetchInt
 import {
   filterInterCompanyEntitiesByBankAcNo,
   filterInterCompanyEntitiesByInterCoAcNo,
+  filterInterCompanyEntitiesByPan,
   filterInterCompanyEntitiesByPhone,
 } from "@/lib/interCompany/interCompanyEntityLookup";
 import {
@@ -84,6 +85,23 @@ export async function searchEntityHitsByBankAcNo(
     partners.map(async (p) => {
       const rows = await entitiesForPartner(p.id);
       for (const e of filterInterCompanyEntitiesByBankAcNo(rows, raw)) {
+        out.push({ companyId: p.id, companyName: p.name, entity: e });
+      }
+    })
+  );
+  return out;
+}
+
+/** PAN — linked companies par scan */
+export async function searchEntityHitsByPan(
+  rawPan: string,
+  partners: InterCompanyPartnerRow[]
+): Promise<InterCompanyEntityHit[]> {
+  const out: InterCompanyEntityHit[] = [];
+  await Promise.all(
+    partners.map(async (p) => {
+      const rows = await entitiesForPartner(p.id);
+      for (const e of filterInterCompanyEntitiesByPan(rows, rawPan)) {
         out.push({ companyId: p.id, companyName: p.name, entity: e });
       }
     })

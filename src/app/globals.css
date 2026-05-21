@@ -519,10 +519,10 @@ body.theme-colorfull [data-theme-table="transactions"] table thead th[data-theme
   color: #000 !important;
 }
 /* Colorfull: stripe per transaction (main + narration same) — nth-child row se nahi */
-body.theme-colorfull [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+body.theme-colorfull [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
   background: hsl(var(--row-odd-bg)) !important;
 }
-body.theme-colorfull [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+body.theme-colorfull [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
   background: hsl(var(--row-even-bg)) !important;
 }
 body.theme-colorfull [data-theme-table="transactions"] table tbody td {
@@ -1453,6 +1453,55 @@ button.day_selected.is-today.has-transactions {
     }
   }
 
+  /* Inter Company source/target card — patla light-gray horizontal scrollbar, card niche */
+  .inter-company-panel-x-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: #d1d5db transparent;
+  }
+  .inter-company-panel-x-scroll::-webkit-scrollbar {
+    height: 5px;
+  }
+  .inter-company-panel-x-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .inter-company-panel-x-scroll::-webkit-scrollbar-thumb {
+    background: #d1d5db;
+    border-radius: 9999px;
+  }
+  .inter-company-panel-x-scroll::-webkit-scrollbar-thumb:hover {
+    background: #b8bcc4;
+  }
+
+  /* Inter Company voucher — vertical scroll (Radix 1.2: `data-orientation`, thumb = child div; `bg-border` 4K par black) */
+  .inter-company-voucher-y-scroll [data-orientation="vertical"],
+  .pl-inter-company-voucher .inter-company-voucher-y-scroll [data-orientation="vertical"] {
+    width: 8px !important;
+    background: transparent !important;
+    border: none !important;
+    border-left: none !important;
+  }
+  .inter-company-voucher-y-scroll [data-orientation="horizontal"],
+  .pl-inter-company-voucher .inter-company-voucher-y-scroll [data-orientation="horizontal"] {
+    height: 5px !important;
+    border: none !important;
+    border-top: none !important;
+  }
+  .inter-company-voucher-y-scroll [data-orientation="vertical"] > div,
+  .pl-inter-company-voucher .inter-company-voucher-y-scroll [data-orientation="vertical"] > div,
+  .inter-company-voucher-y-scroll .pl-ic-voucher-scroll-bar > div,
+  .pl-inter-company-voucher .inter-company-voucher-y-scroll .pl-ic-voucher-scroll-bar > div {
+    background: #d1d5db !important;
+    border: none !important;
+    border-width: 0 !important;
+    border-radius: 9999px !important;
+    box-shadow: none !important;
+    min-height: 32px;
+  }
+  .inter-company-voucher-y-scroll [data-orientation="vertical"] > div:hover,
+  .pl-inter-company-voucher .inter-company-voucher-y-scroll [data-orientation="vertical"] > div:hover {
+    background: #b8bcc4 !important;
+  }
+
   /* Link dialogs: table light fill + rows cycle through max 7 light colors */
   .table-row-stripe-7 {
     background: hsl(var(--muted) / 0.5);
@@ -1620,6 +1669,16 @@ button.day_selected.is-today.has-transactions {
   ::-webkit-scrollbar {
     width: 12px !important;
     height: 12px !important;
+  }
+
+  /* Inter Company voucher scroll — 4K black border override se bachao */
+  .inter-company-voucher-y-scroll [data-orientation="vertical"],
+  .inter-company-voucher-y-scroll [data-orientation="vertical"] > div {
+    border-width: 0 !important;
+    border-color: transparent !important;
+  }
+  .inter-company-voucher-y-scroll [data-orientation="vertical"] > div {
+    background-color: #d1d5db !important;
   }
   
   /* UI component borders (shadcn/ui) */
@@ -3113,6 +3172,55 @@ body.theme-pro main [role="tab"][data-state="active"]:hover {
   background-color: hsl(var(--pl-pro-blue-hover)) !important;
 }
 
+/* Messages: header-style pills — active tab same blue/indigo fill, sirf green border */
+body.theme-pro main [data-pl-messages-tabs] [role="tablist"] {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  height: auto !important;
+  min-height: 2.75rem !important;
+  max-height: none !important;
+  padding: 0.35rem 0 !important;
+  overflow: visible !important;
+}
+body.theme-pro main [data-pl-messages-tabs] [role="tab"] {
+  border-width: 1px !important;
+  height: 2.5rem !important;
+  min-height: 2.5rem !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+body.theme-pro main [data-pl-messages-tabs] [role="tab"][data-state="active"] {
+  background-color: rgb(219 234 254 / 0.8) !important;
+  color: rgb(30 58 138) !important;
+  border-color: rgb(22 163 74) !important;
+  border-width: 2px !important;
+  box-shadow: 0 0 0 2px rgb(22 163 74 / 0.35) !important;
+}
+body.theme-pro main [data-pl-messages-tabs] [role="tab"][data-state="active"]:nth-child(even) {
+  background-color: rgb(224 231 255 / 0.8) !important;
+  color: rgb(49 46 129) !important;
+}
+body.theme-pro main [data-pl-messages-tabs] [role="tab"][data-state="active"]:hover {
+  background-color: rgb(191 219 254 / 0.85) !important;
+  color: rgb(30 58 138) !important;
+}
+body.theme-pro main [data-pl-messages-tabs] [role="tab"][data-state="active"]:nth-child(even):hover {
+  background-color: rgb(199 210 254 / 0.85) !important;
+  color: rgb(49 46 129) !important;
+}
+body.theme-colorfull main [data-pl-messages-tabs] [role="tablist"] {
+  background: transparent !important;
+  border: none !important;
+}
+body.theme-colorfull main [data-pl-messages-tabs] [role="tab"][data-state="active"] {
+  background-color: rgb(219 234 254 / 0.8) !important;
+  color: rgb(30 58 138) !important;
+  border-color: rgb(22 163 74) !important;
+  border-width: 2px !important;
+  box-shadow: 0 0 0 2px rgb(22 163 74 / 0.35) !important;
+}
+
 /* Master–detail list PC: saari chrome rows +20% height + green active tab — Party/Tax/Bank/Staff/Items/Incomes */
 @media (min-width: 768px) {
   [data-master-detail-layout] [data-pl-master-list-chrome] .pl-mlc-page-header {
@@ -3356,10 +3464,10 @@ body.theme-pro [data-theme-table="transactions"] table thead tr {
   color: hsl(var(--table-header-fg)) !important;
 }
 /* Pro: gray/white per transaction block (main + narration match) */
-body.theme-pro [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+body.theme-pro [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
   background: hsl(var(--row-odd-bg)) !important;
 }
-body.theme-pro [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+body.theme-pro [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
   background: hsl(var(--row-even-bg)) !important;
 }
 
@@ -3564,8 +3672,8 @@ body.theme-pure-white main button[data-theme-detail="date-range"] {
   background-color: #ffffff !important;
 }
 body.theme-pure-white [data-theme-table="transactions"] table thead tr,
-body.theme-pure-white [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]) > td,
-body.theme-pure-white [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]) > td {
+body.theme-pure-white [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]) > td,
+body.theme-pure-white [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]) > td {
   background: #ffffff !important;
 }
 
@@ -3618,10 +3726,10 @@ body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] ta
   background: hsl(var(--muted)) !important;
 }
 /* Soft green etc.: transaction 0 = gray muted, 1 = white card — main+narration same data-txn-stripe */
-body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
   background: hsl(var(--muted) / 0.55) !important;
 }
-body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
+body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]) > td {
   background: hsl(var(--card)) !important;
 }
 body:not(.theme-pro):not(.theme-pure-white) .app-chrome-top-ribbon::before,
@@ -3875,14 +3983,14 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-w
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="blue"][data-pl-spend-edge~="bottom"] > td:last-child {
   border-bottom-right-radius: 0.75rem;
 }
-/* Selected ledger txn — orange box + peach bg (screenshot); saari themes */
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td,
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td {
+/* Selected ledger txn — orange box + peach bg; marked+selected par green bg (neeche check-marked) */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not([data-pl-check-marked]) > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected]:not([data-pl-check-marked]) > td {
   transition: none !important;
   background-color: rgb(255 247 237 / 0.95) !important;
 }
-body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td,
-body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td {
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not([data-pl-check-marked]) > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected]:not([data-pl-check-marked]) > td {
   background-color: rgb(67 20 7 / 0.35) !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td {
@@ -3926,63 +4034,79 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[d
   border-bottom-right-radius: 0.75rem !important;
 }
 
+/* Check mode marked txn — halka green fill; sirf non-selected marked par border hide */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-check-marked] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-check-marked] > td {
+  transition: none !important;
+  /* green-100 — green-50 se thoda zyada visible, soft fill */
+  background-color: rgb(220 252 231 / 0.98) !important;
+}
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-check-marked] > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.narration-row[data-pl-check-marked] > td {
+  background-color: rgb(20 83 45 / 0.48) !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-check-marked]:not([data-pl-txn-selected]) > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-check-marked]:not([data-pl-txn-selected]) > td {
+  box-shadow: none !important;
+}
+
 /* Ledger txn hover — [data-pl-txn-hovered] (JS pair): main+narration dono; 1px orange; selected 2px upar */
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td,
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td,
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td {
   background-color: rgb(255 247 237 / 0.45) !important;
   box-shadow: none !important;
   border-top-color: transparent !important;
   border-bottom-color: transparent !important;
 }
 /* Pair hover: main ↔ narration beech double line na aaye */
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td {
   border-bottom-width: 0 !important;
 }
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected])[data-pl-txn-hovered] > td {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td {
   border-top-width: 0 !important;
 }
-body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td,
-body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] > td,
-body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.narration-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] > td {
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.narration-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] > td {
   background-color: rgb(67 20 7 / 0.28) !important;
 }
 /* Main pair — top + sides 1px */
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td {
   box-shadow: inset 0 1px 0 0 #fb923c !important;
 }
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:first-child {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:first-child {
   box-shadow: inset 1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c !important;
   border-top-left-radius: 0.75rem !important;
 }
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:last-child {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:last-child {
   box-shadow: inset -1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c !important;
   border-top-right-radius: 0.75rem !important;
 }
 /* Sirf main (narration nahi) — poora 1px box */
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td {
   box-shadow: inset 0 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
 }
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:first-child {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:first-child {
   box-shadow: inset 1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
   border-top-left-radius: 0.75rem !important;
   border-bottom-left-radius: 0.75rem !important;
 }
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:last-child {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:last-child {
   box-shadow: inset -1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
   border-top-right-radius: 0.75rem !important;
   border-bottom-right-radius: 0.75rem !important;
 }
 /* Narration pair — bottom + sides 1px */
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td {
   box-shadow: inset 0 -1px 0 0 #fb923c !important;
 }
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] > td:first-child {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] > td:first-child {
   /* Hover: narration par sirf neeche 1px — left/right vertical mat */
   box-shadow: inset 0 -1px 0 0 #fb923c !important;
   border-bottom-left-radius: 0.75rem !important;
 }
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] > td:last-child {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] > td:last-child {
   box-shadow: inset 0 -1px 0 0 #fb923c !important;
   border-bottom-right-radius: 0.75rem !important;
 }
@@ -4019,26 +4143,65 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-w
   border-bottom-width: 2px !important;
 }
 
-/* Inter Company voucher — dashboard emerald inputs + dropdown triggers */
+/* Inter Company — edit lock par bhi text select + copy (readOnly fields; `disabled` par select band hota hai) */
+.pl-inter-company-voucher.select-text,
+.pl-inter-company-voucher .select-text {
+  user-select: text;
+}
+.pl-inter-company-voucher input[readonly],
+.pl-inter-company-voucher textarea[readonly] {
+  user-select: text;
+  cursor: text;
+  opacity: 1;
+}
+
+/* Inter Company — entity avatar circle: sky border (4K `[class*="avatar"]` black override se bachne ke liye) */
+.pl-inter-company-voucher .pl-ic-avatar {
+  border-width: 2px !important;
+  border-style: solid !important;
+  border-color: rgb(56 189 248 / 0.9) !important;
+  box-sizing: border-box;
+}
+.dark .pl-inter-company-voucher .pl-ic-avatar {
+  border-color: rgb(56 189 248 / 0.55) !important;
+}
+
+/* Inter Company voucher — Payment In / Unapproved sky pill; field text black */
 .pl-inter-company-voucher input:not([type="checkbox"]):not([type="radio"]):not([role="switch"]),
 .pl-inter-company-voucher textarea,
 .pl-inter-company-voucher button[role="combobox"],
+.pl-inter-company-voucher button.pl-ic-sky-field,
+.pl-inter-company-voucher .pl-ic-sky-field,
+.pl-inter-company-voucher button[data-theme-detail="date-range"],
 .pl-inter-company-voucher [data-radix-select-trigger] {
-  border-color: rgb(167 243 208 / 0.9) !important;
-  background-color: rgb(255 255 255 / 0.92) !important;
+  border-color: rgb(56 189 248 / 0.9) !important;
+  background-color: rgb(224 242 254) !important;
+  color: rgb(0 0 0) !important;
+  border-radius: 0.375rem !important;
+}
+.pl-inter-company-voucher input::placeholder,
+.pl-inter-company-voucher textarea::placeholder {
+  color: rgb(0 0 0 / 0.45) !important;
 }
 .pl-inter-company-voucher input:focus-visible,
 .pl-inter-company-voucher textarea:focus-visible,
 .pl-inter-company-voucher button[role="combobox"]:focus-visible,
+.pl-inter-company-voucher button.pl-ic-sky-field:focus-visible,
+.pl-inter-company-voucher .pl-ic-sky-field:focus-visible,
+.pl-inter-company-voucher button[data-theme-detail="date-range"]:focus-visible,
 .pl-inter-company-voucher [data-radix-select-trigger]:focus {
-  border-color: rgb(16 185 129) !important;
-  --tw-ring-color: rgb(16 185 129 / 0.35);
+  border-color: rgb(14 165 233) !important;
+  --tw-ring-color: rgb(14 165 233 / 0.28);
 }
 .dark .pl-inter-company-voucher input:not([type="checkbox"]):not([type="radio"]):not([role="switch"]),
 .dark .pl-inter-company-voucher textarea,
 .dark .pl-inter-company-voucher button[role="combobox"],
+.dark .pl-inter-company-voucher button.pl-ic-sky-field,
+.dark .pl-inter-company-voucher .pl-ic-sky-field,
+.dark .pl-inter-company-voucher button[data-theme-detail="date-range"],
 .dark .pl-inter-company-voucher [data-radix-select-trigger] {
-  border-color: rgb(6 78 59 / 0.85) !important;
-  background-color: rgb(2 44 34 / 0.45) !important;
+  border-color: rgb(56 189 248 / 0.55) !important;
+  background-color: rgb(8 47 73 / 0.35) !important;
+  color: rgb(0 0 0) !important;
 }
 

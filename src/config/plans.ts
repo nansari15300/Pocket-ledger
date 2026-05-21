@@ -86,7 +86,9 @@ export type EntitlementKey =
   /** Plan-wise: enable voucher edit history. */
   | "voucherHistoryEnabled"
   /** Plan-wise: max history entries per voucher (1–100). 0 = use default 10. */
-  | "voucherHistoryLimit";
+  | "voucherHistoryLimit"
+  /** Max joined inter-company partner companies (Join tab). 0 = unlimited. */
+  | "maxInterCompanyPartners";
 
 export type Entitlements = Record<EntitlementKey, number | boolean>;
 
@@ -147,6 +149,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxVoucherFileCount: 0,
       voucherHistoryEnabled: false,
       voucherHistoryLimit: 0,
+      maxInterCompanyPartners: 1,
     },
     features: [
       "Unlimited local (offline) companies",
@@ -192,6 +195,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxVoucherFileCount: 3,
       voucherHistoryEnabled: true,
       voucherHistoryLimit: 10,
+      maxInterCompanyPartners: 3,
     },
     features: [
       "1 online company + unlimited offline",
@@ -239,6 +243,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxVoucherFileCount: 5,
       voucherHistoryEnabled: true,
       voucherHistoryLimit: 20,
+      maxInterCompanyPartners: 10,
     },
     features: [
       "3 online companies + unlimited offline",
@@ -285,6 +290,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxVoucherFileCount: 5,
       voucherHistoryEnabled: true,
       voucherHistoryLimit: 50,
+      maxInterCompanyPartners: 0,
     },
     features: [
       "10 online companies + unlimited offline",
@@ -350,6 +356,7 @@ export function limitFor(
     | "maxDevices"
     | "maxDevicesLocal"
     | "voucherHistoryLimit"
+    | "maxInterCompanyPartners"
   >
 ): number {
   const p = getPlan(planId);

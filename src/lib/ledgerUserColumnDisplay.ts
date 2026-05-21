@@ -1,8 +1,9 @@
 /**
  * Party / account statement "User" column helpers.
- * Recurring BS-month vouchers `userDisplayName: "Auto"` + `recurringMeta` save hote hain, par local Firestore
- * user-name fetch `userNames[uid]` ko asli naam se overwrite kar deta tha — display pe pehle auto-detect lagao.
+ * Recurring BS-month vouchers `userDisplayName: "Auto"` + `recurringMeta` save hote hain — sirf wahi rows "Auto".
+ * `userDisplayName === "Auto"` alone se recurring mat samjho (IC / manual rows flicker na karein).
  */
+import { isRecurringAutoUserDisplayLabel } from "@/lib/interCompany/interCompanyVoucherHistory";
 
 const BAD_USER_LIST_LABEL = new Set(["unknown", "n/a"]);
 
@@ -10,6 +11,7 @@ const BAD_USER_LIST_LABEL = new Set(["unknown", "n/a"]);
 export function isMeaningfulLedgerUserListLabel(s: string | undefined | null): boolean {
   const t = String(s ?? "").trim();
   if (!t) return false;
+  if (isRecurringAutoUserDisplayLabel(t)) return false;
   return !BAD_USER_LIST_LABEL.has(t.toLowerCase());
 }
 
@@ -32,11 +34,33 @@ export function mergeLedgerUserDisplayNameMaps(
   return out;
 }
 
-/** BS-month recurring auto row — User cell me scheduler ki jagah "Auto". */
+/** BS-month recurring auto row — User cell me scheduler ki jagah "Auto" (sirf `recurringMeta`). */
 export function isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay(t: unknown): boolean {
-  const o = t as { recurringMeta?: { generationKind?: string }; userDisplayName?: string } | null | undefined;
+  const o = t as { recurringMeta?: { generationKind?: string } } | null | undefined;
   if (!o || typeof o !== "object") return false;
-  const kind = o.recurringMeta?.generationKind;
-  if (kind === "recurring_bs_monthly") return true;
-  return String(o.userDisplayName ?? "").trim() === "Auto";
+  return o.recurringMeta?.generationKind === "recurring_bs_monthly";
+}
+
+/** Ledger / mobile card User column — stable naam, "Auto" sirf recurring BS-month par. */
+export function resolveLedgerTransactionUserDisplayName(
+  transaction: Record<string, unknown> | null | undefined,
+  userNames?: Record<string, string> | null,
+  opts?: { currentUserUid?: string | null; currentUserDisplayName?: string | null }
+): string {
+  if (!transaction) return "N/A";
+  if (isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay(transaction)) return "Auto";
+
+  const uid = String(transaction.userId || "").trim();
+  const fromMap = uid && userNames?.[uid] ? String(userNames[uid]).trim() : "";
+  if (isMeaningfulLedgerUserListLabel(fromMap)) return fromMap;
+
+  const fromDoc = String(transaction.userDisplayName || transaction.userName || "").trim();
+  if (isMeaningfulLedgerUserListLabel(fromDoc)) return fromDoc;
+
+  const curUid = String(opts?.currentUserUid || "").trim();
+  const curName = String(opts?.currentUserDisplayName || "").trim();
+  if (uid && curUid && uid === curUid) {
+    return curName || "You";
+  }
+  return "N/A";
 }

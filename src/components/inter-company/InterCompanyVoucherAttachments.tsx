@@ -5,7 +5,7 @@
  */
 import { useRef } from "react";
 import { PlusCircle } from "lucide-react";
-import { FormLabel } from "@/components/ui/form";
+import { Label } from "@/components/ui/label";
 import { RestrictedFileUploader } from "@/components/ui/RestrictedFileUploader";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { FilePreview } from "@/components/vouchers/FilePreview";
@@ -13,7 +13,10 @@ import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompresse
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import usePermissions from "@/hooks/usePermissions";
-import { interCompanyPanelClass } from "@/lib/interCompany/interCompanyVoucherChrome";
+import {
+  interCompanyCardClass,
+  interCompanyPanelClass,
+} from "@/lib/interCompany/interCompanyVoucherChrome";
 
 type FileEntry = File | string;
 
@@ -22,6 +25,8 @@ type Props = {
   onFilesChange: (next: FileEntry[]) => void;
   disabled?: boolean;
   className?: string;
+  /** Reverse-request dialog — auto height; `h-full` se footer overlap na ho */
+  compact?: boolean;
 };
 
 export function InterCompanyVoucherAttachments({
@@ -29,6 +34,7 @@ export function InterCompanyVoucherAttachments({
   onFilesChange,
   disabled = false,
   className,
+  compact = false,
 }: Props) {
   const { toast } = useToast();
   const { fileAttachmentLimits, allowAttachments } = usePermissions();
@@ -38,8 +44,16 @@ export function InterCompanyVoucherAttachments({
     allowAttachments && !disabled && fileAttachmentLimits.maxFileCount > 0;
 
   return (
-    <div className={cn(interCompanyPanelClass, "flex h-full min-h-0 flex-col space-y-2 p-3 min-w-0", className)}>
-      <FormLabel>Attachments (optional)</FormLabel>
+    <div
+      className={cn(
+        compact
+          ? cn(interCompanyCardClass, "flex flex-col gap-2 p-3 min-w-0")
+          : cn(interCompanyPanelClass, "flex h-full min-h-0 flex-col space-y-2 p-3 min-w-0"),
+        className
+      )}
+    >
+      {/* Label — FormLabel nahi: reverse dialog bhi yahi use karta hai (FormProvider ke bina). */}
+      <Label>Attachments (optional)</Label>
       <RestrictedFileUploader>
         <div className="flex flex-wrap gap-3">
           {files.map((file, idx) => (
@@ -72,7 +86,7 @@ export function InterCompanyVoucherAttachments({
                 }
                 className={cn(
                   "h-24 w-24 border-2 border-dashed rounded-lg flex flex-col items-center justify-center transition-colors",
-                  "border-emerald-200/70 bg-emerald-50/60 hover:border-emerald-400 dark:border-emerald-900/60 dark:bg-emerald-950/40"
+                  "border-sky-400/70 bg-sky-100/80 hover:border-sky-500 dark:border-sky-400/55 dark:bg-sky-950/35"
                 )}
               >
                 <PlusCircle className="h-6 w-6 text-muted-foreground" />

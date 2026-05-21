@@ -16,6 +16,9 @@ import { showInAppPdfPreview } from "@/lib/inAppPdfPreview";
 import { FISCAL_YEAR_PARTITION_ROW_TYPE, insertFiscalPartitionRows } from "@/lib/fiscalPartitionRows";
 import { buildFiscalMergePartitionBannerLabel } from "@/lib/fiscalYearLabel";
 import { getPrintColorPalette, type PrintColorMode } from "@/lib/printColorPalette";
+import { getInterCompanyLedgerAmounts } from "@/lib/interCompany/interCompanyLedgerAmounts";
+import { sumJournalAmountsForAccount } from "@/lib/journalLedgerAmounts";
+import type { Context as LedgerContext } from "@/components/vouchers/transactionTableShared";
 
 const DEFAULT_AD_FORMAT: ADFormatKey = "yyyy-MM-dd";
 const DEFAULT_BS_FORMAT: BSFormatKey = "YYYY-MM-DD";
@@ -198,12 +201,14 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
     !(iframeTargetIdOrNewTab && typeof (iframeTargetIdOrNewTab as Window).location !== "undefined");
 
   let effectivePayload: PrintPayload = payload;
+  let printDestination: "internal" | "external" = "internal";
   if (!payload.skipPrintOptionsDialog) {
     const { promptPrintOptions } = await import("@/components/print/PrintOptionsPrompt");
     const opts = await promptPrintOptions();
     if (!opts) {
       return;
     }
+    printDestination = opts.printDestination === "external" ? "external" : "internal";
     effectivePayload = {
       ...payload,
       printIncludeLogo: opts.printIncludeLogo,
@@ -258,6 +263,17 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
   try {
     const buffer = await getPdfBufferWithTimeout(pdfDoc, 60000);
     const blob = new Blob([buffer as BlobPart], { type: "application/pdf" });
+
+    // External — system PDF app / browser tab (APK: FileOpener / Chrome)
+    if (printDestination === "external") {
+      const safeTitle = String(effectivePayload.title || "pocket-ledger")
+        .replace(/[^a-zA-Z0-9._-]+/g, "_")
+        .slice(0, 80);
+      const { openPdfBlobInExternalViewer } = await import("@/lib/openPdfExternal");
+      await openPdfBlobInExternalViewer(blob, `${safeTitle || "pocket-ledger"}.pdf`);
+      return;
+    }
+
     const blobUrl = URL.createObjectURL(blob);
 
     if (typeof iframeTargetIdOrNewTab === "string") {
@@ -1026,11 +1042,9 @@ function getTransactionAmounts(t: any, context: Context, entityOrId?: any, stock
             if (t.type === 'direct_income') credit = amount;
         }
         if (t.type === 'journal' && t.entries) {
-            const entry = t.entries.find((e: any) => isIdMatch(e.accountId, entityId));
-            if (entry) {
-                debit += parseFloat(String(entry.debit || 0));
-                credit += parseFloat(String(entry.credit || 0));
-            }
+            const journalAmt = sumJournalAmountsForAccount(t.entries, entityId);
+            debit += journalAmt.debit;
+            credit += journalAmt.credit;
         }
         break;
 
@@ -1119,6 +1133,24 @@ function getTransactionAmounts(t: any, context: Context, entityOrId?: any, stock
       if (typeof t.debit === "number") debit = t.debit;
       if (typeof t.credit === "number") credit = t.credit;
   }
+
+  // Inter Company — print me bhi ledger jaisa Dr/Cr (ek side / dono side legs)
+  if (t.type === "inter_company" && entityId && entityId !== "all") {
+    const icContexts: LedgerContext[] = ["party", "account", "staff", "tax", "expense"];
+    if (icContexts.includes(context as LedgerContext)) {
+      const ic = getInterCompanyLedgerAmounts(
+        t,
+        context as LedgerContext,
+        entityId,
+        amount
+      );
+      if (ic.touched) {
+        debit = ic.debit;
+        credit = ic.credit;
+      }
+    }
+  }
+
   return { debit, credit };
 }
 

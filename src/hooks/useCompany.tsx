@@ -46,6 +46,10 @@ import { clearSelectedCompanyId, readSelectedCompanyId, writeSelectedCompanyId }
 import { shouldSuppressTransientCompanyClear, shouldDeferMissingCompanyRedirectNative } from "@/lib/apkLedgerRouteShield";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
 import { ensureCompanyInterCompanyAcNo } from "@/lib/interCompany/ensureCompanyInterCompanyAcNo";
+import {
+  readCompanyInterCompanyCode,
+  resolveOrEnsureCompanyInterCompanyCode,
+} from "@/lib/interCompany/interCompanyCompanyCode";
 import { readCompanyInterCompanyAcNo } from "@/lib/interCompany/interCompanyAccountNo";
 import { plNavDbg, plNavDbgCritical, plNavDbgIdHint } from "@/lib/plNavRedirectDebug";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
@@ -180,6 +184,8 @@ export type Company = {
     country?: string;
     /** Inter-company network: 15-digit company A/c No (auto-generated on create / company open). */
     interCompanyAccountNo?: string;
+    /** Inter-company: SWIFT-style company code (UI — alag numeric A/c No se). */
+    interCompanyCompanyCode?: string;
     /** Approve & message notification on/off and where to show (entity, list, transaction). */
     notificationSettings?: NotificationSettings;
     /** Tracked usage for plan limits (bytes). */
@@ -563,7 +569,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   }, [companyId, registryVersion, company, isBrowserOnline, planSyncInFlight]);
 
   /**
-   * Company open / switch: purani company par missing Inter Co. A/c No — auto unique generate.
+   * Company open / switch: missing Inter Co. A/c No — auto unique generate.
    * Party edit khole bina; owned company par Firestore + SQLite backfill.
    */
   useEffect(() => {
@@ -580,6 +586,31 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       cancelled = true;
     };
   }, [companyId, company, reloadLocalCompanyRegistry]);
+
+  /**
+   * Company open: Company Code — shared user Firestore fetch; owner/admin generate if missing.
+   */
+  useEffect(() => {
+    if (!companyId?.trim() || !company) return;
+    if (readCompanyInterCompanyCode(company)) return;
+
+    let cancelled = false;
+    void resolveOrEnsureCompanyInterCompanyCode({
+      companyId,
+      companyName: company.name,
+      userUid: user?.uid,
+      userEmail: user?.email,
+      role: customUser?.role,
+      allowEnsure: true,
+    }).then((code) => {
+      if (cancelled || !code) return;
+      reloadLocalCompanyRegistry();
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, company, customUser?.role, user?.email, user?.uid, reloadLocalCompanyRegistry]);
 
   // Billing success → local SQLite plan patch ke baad list dubara load (offline company).
   useEffect(() => {
@@ -734,7 +765,10 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           try {
             const ownedSnap = await getDocs(query(collection(firestore, "companies"), where("ownerId", "==", user.uid)));
             const sharedSnap = await getDocs(query(collection(firestore, "companies"), where("sharedWithEmails", "array-contains", user.email)));
-            const mergedDocs = [...ownedSnap.docs, ...sharedSnap.docs];
+            const ownedByEmailSnap = await getDocs(
+              query(collection(firestore, "companies"), where("ownerEmail", "==", user.email))
+            );
+            const mergedDocs = [...ownedSnap.docs, ...ownedByEmailSnap.docs, ...sharedSnap.docs];
             cloudMirrorAllowedIds = new Set(mergedDocs.map((d) => String(d.id || "")).filter(Boolean));
             for (const d of mergedDocs) {
               const raw = { id: d.id, ...(d.data() || {}) } as Record<string, unknown>;
@@ -1205,7 +1239,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     const companyMap = new Map<string, Company>();
     owned.forEach((c: Company) => companyMap.set(c.id, { ...c, isOwned: true, ownerId: c.ownerId || user?.uid || '', ownerEmail: c.ownerEmail || user?.email || '' }));
     ownedByEmail.forEach((c: Company) => {
-      if (!companyMap.has(c.id)) companyMap.set(c.id, { ...c, isOwned: true });
+      const prev = companyMap.get(c.id);
+      if (!prev) {
+        companyMap.set(c.id, { ...c, isOwned: true });
+        return;
+      }
+      // Email-owned company shared list me pehle isOwned:false aa sakti hai — hamesha owner mark karo
+      companyMap.set(c.id, { ...prev, ...c, isOwned: true });
     });
     shared.forEach((c: Company) => {
         if (!companyMap.has(c.id)) {
@@ -1305,8 +1345,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
     const ownedQuery = query(collection(firestore, "companies"), where("ownerId", "==", user.uid));
     const sharedQuery = query(collection(firestore, "companies"), where("sharedWithEmails", "array-contains", user.email));
+    // Email login — ownerEmail se owned companies (sirf SuperAdmin nahi, sab users)
+    const ownedByEmailQuery = user.email
+      ? query(collection(firestore, "companies"), where("ownerEmail", "==", user.email))
+      : null;
 
-    const needsOwnedByEmail = isSuperAdmin;
+    const needsOwnedByEmail = !!user.email;
     /** Offline / slow Firestore: dono snapshot refs null reh sakte — pehle `listLocalCompanies` se trigger bina iske company list + loading kabhi settle nahi hoti (online backup → local restore → refresh par blank). */
     const emptySnap = (): { docs: readonly unknown[] } => ({ docs: [] });
     /** Har snapshot par taaza SQLite — purana cache delete ke baad bhi company dikhata tha; recycle bin move ke baad live list */
@@ -1348,16 +1392,16 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       console.error("Shared Companies listener error:", err);
     });
 
-    const ownedByEmailQuery = isSuperAdminUser && user?.email
-      ? query(collection(firestore, "companies"), where("ownerEmail", "==", user.email))
-      : null;
     const unsubOwnedByEmail = ownedByEmailQuery
       ? onSnapshot(ownedByEmailQuery, (snap) => {
           ownedByEmailSnapRef.current = snap;
           triggerUpdate();
         }, (err: any) => {
           if (err?.code === 'permission-denied' || err?.code === 'PERMISSION_DENIED') {
-            console.warn('[PERMISSION_DENIED TRACK] source=useCompany query=ownedByEmail', { code: err?.code });
+            console.warn('[PERMISSION_DENIED TRACK] source=useCompany query=ownedByEmail — deploy firestore.rules (ownerEmail list)', { code: err?.code });
+            ownedByEmailSnapRef.current = emptySnap();
+            triggerUpdate();
+            return;
           }
           console.error("Owned by email companies listener error:", err);
         })

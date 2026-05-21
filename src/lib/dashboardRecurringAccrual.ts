@@ -306,12 +306,18 @@ export function computeTemplateAccruedAmount(
   bodyVoucher: Record<string, unknown>,
   lastGeneratedAtMs: number | null | undefined,
   nowMs: number = Date.now(),
+  /** `resolveRecurringTemplateProgress` — recycle-bin last auto par raw template key mat use karo */
+  effectiveLastGeneratedPeriodKey?: string | null,
 ): number | null {
   const scheduleDay = effectiveScheduleBsDay(template);
+  const lastPkForDue =
+    effectiveLastGeneratedPeriodKey !== undefined
+      ? effectiveLastGeneratedPeriodKey
+      : template.lastGeneratedPeriodKey;
   const nextDue = getNextRecurringDueAd(
     scheduleDay,
     new Date(nowMs),
-    template.lastGeneratedPeriodKey,
+    lastPkForDue,
     template.suppressedPeriodKeys,
   );
   if (!nextDue) return null;
@@ -327,7 +333,12 @@ export function computeTemplateAccruedAmount(
   const bs = adToBs(noonLocal);
   const projected = projectNextRecurringMonetaryTotal(template, bodyVoucher, { y: bs.y, m: bs.m });
   if (!Number.isFinite(projected) || projected <= 0) return null;
-  const periodStart = computeRecurringAccrualPeriodStartMs(template, nextDue, lastGeneratedAtMs);
+  const periodStart = computeRecurringAccrualPeriodStartMs(
+    template,
+    nextDue,
+    lastGeneratedAtMs,
+    effectiveLastGeneratedPeriodKey,
+  );
   const endMs = new Date(nextDue.getFullYear(), nextDue.getMonth(), nextDue.getDate(), 23, 59, 59, 999).getTime();
   const totalSpan = endMs - periodStart;
   if (totalSpan <= 0) return null;

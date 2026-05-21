@@ -35,6 +35,16 @@ import { usePathname, useRouter } from "next/navigation";
 import { pruneRememberedLoginEmailIfDisabled } from "@/lib/loginRememberEmail";
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { doc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
+import { isSuppressibleNewTransactionAlert } from "@/lib/transactionAlerts";
+import {
+  IC_REVERSE_REQUESTS_CHANGED,
+  readInterCompanyReverseInbox,
+} from "@/lib/interCompany/interCompanyReverseRequests";
+import { isInterCompanyReverseAlertReadLocal } from "@/lib/interCompany/interCompanyReverseRequestAlert";
+import { IC_ALERTS_CHANGED } from "@/lib/interCompany/interCompanyAlerts";
+import { interCompanySystemJoinAlertVisibleForCompany } from "@/lib/interCompany/interCompanySystemJoinRequest";
+import { usePendingInterCompanySystemJoinCount } from "@/lib/interCompany/usePendingInterCompanySystemJoinCount";
+import { messagesSidebarNavBadgeClassName } from "@/lib/messagesChrome";
 
 import {
   Sidebar,
@@ -65,6 +75,7 @@ import { collectPartyIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesP
 import { collectBankAccountIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesBankLedger";
 import { collectItemIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesItemLedger";
 import { collectStaffIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesStaffLedger";
+import { collectInterCompanyIdsForPendingApproval } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
@@ -253,17 +264,23 @@ export function AppSidebar() {
       const hasStaff =
         staffIdSet.size > 0 && collectStaffIdsTouchedByUnapprovedVoucher(v, staffIdSet).size > 0;
       const hasTax =
-        (v.taxAccountId && taxIdSet.has(v.taxAccountId)) ||
-        (Array.isArray(v.lineItems) &&
-          v.lineItems.some((l: any) => l.taxAccountId && taxIdSet.has(l.taxAccountId))) ||
-        (Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId && taxIdSet.has(e.accountId)));
+        (String(v.type || "") === "inter_company"
+          ? collectInterCompanyIdsForPendingApproval(v, taxIdSet, "tax").size > 0
+          : (v.taxAccountId && taxIdSet.has(v.taxAccountId)) ||
+            (Array.isArray(v.lineItems) &&
+              v.lineItems.some((l: any) => l.taxAccountId && taxIdSet.has(l.taxAccountId))) ||
+            (Array.isArray(v.entries) &&
+              v.entries.some((e: any) => e.accountId && taxIdSet.has(e.accountId))));
       const hasItems =
         itemIdSetForSidebar.size > 0 && collectItemIdsTouchedByUnapprovedVoucher(v, itemIdSetForSidebar).size > 0;
       const hasIncomes =
-        (v.incomeAccountId && expenseAccountIdSet.has(v.incomeAccountId)) ||
-        (v.expenseAccountId && expenseAccountIdSet.has(v.expenseAccountId)) ||
-        (v.accountId && expenseAccountIdSet.has(v.accountId)) ||
-        (Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId && expenseAccountIdSet.has(e.accountId)));
+        String(v.type || "") === "inter_company"
+          ? collectInterCompanyIdsForPendingApproval(v, expenseAccountIdSet, "expense").size > 0
+          : (v.incomeAccountId && expenseAccountIdSet.has(v.incomeAccountId)) ||
+            (v.expenseAccountId && expenseAccountIdSet.has(v.expenseAccountId)) ||
+            (v.accountId && expenseAccountIdSet.has(v.accountId)) ||
+            (Array.isArray(v.entries) &&
+              v.entries.some((e: any) => e.accountId && expenseAccountIdSet.has(e.accountId)));
 
       if (hasParty) out.party += 1;
       if (hasBankCash) out["bank-cash"] += 1;
@@ -302,11 +319,34 @@ export function AppSidebar() {
 
     // Admin/Alarm/transaction alerts — sirf abhi selected company (cross-company badge galat na ho).
     const unreadAlertsByRecipient: Record<string, Set<string>> = {};
+    const unreadIcSystemJoinsByRecipient: Record<string, Set<string>> = {};
     const alertsUnsubscribers: (() => void)[] = [];
     const recomputeUnreadAlerts = () => {
-      const merged = new Set<string>();
-      Object.values(unreadAlertsByRecipient).forEach((set) => set.forEach((id) => merged.add(id)));
-      setUnreadAlerts(merged.size);
+      const regular = new Set<string>();
+      const firestoreIcReqIds = new Set<string>();
+      Object.values(unreadAlertsByRecipient).forEach((set) => {
+        set.forEach((raw) => {
+          const parts = raw.split("::");
+          const idPart = parts[0] || "";
+          const kindPart = parts[1] || "";
+          const icReqId = parts[2] || "";
+          regular.add(idPart);
+          if (kindPart === "ic_reverse_pending" && icReqId) firestoreIcReqIds.add(icReqId);
+        });
+      });
+      Object.values(unreadIcSystemJoinsByRecipient).forEach((set) => {
+        set.forEach((id) => regular.add(id));
+      });
+      const icLocalOnly =
+        cid && company?.isOwned === true
+          ? readInterCompanyReverseInbox(cid).filter(
+              (r) =>
+                r.status === "pending" &&
+                !firestoreIcReqIds.has(r.id) &&
+                !isInterCompanyReverseAlertReadLocal(cid, r.id)
+            ).length
+          : 0;
+      setUnreadAlerts(regular.size + icLocalOnly);
     };
     const cid = companyId?.trim() || "";
     if (!cid) {
@@ -320,12 +360,40 @@ export function AppSidebar() {
           where("isRead", "==", false)
         );
         const unsubAlerts = onSnapshot(alertsQuery, (snapshot) => {
-          unreadAlertsByRecipient[id] = new Set(snapshot.docs.map((d) => d.id));
+          unreadAlertsByRecipient[id] = new Set(
+            snapshot.docs
+              .filter((d) => !isSuppressibleNewTransactionAlert(d.data() as Record<string, unknown>))
+              .map((d) => {
+                const data = d.data() as { kind?: string; interCompanyRequestId?: string };
+                return `${d.id}::${String(data?.kind || "")}::${String(data?.interCompanyRequestId || "")}`;
+              })
+          );
           recomputeUnreadAlerts();
         });
         alertsUnsubscribers.push(unsubAlerts);
+
+        const systemJoinAlertsQuery = query(
+          collection(firestore, "admin_notifications"),
+          where("recipientUserId", "==", id),
+          where("kind", "==", "ic_system_join_pending"),
+          where("isRead", "==", false)
+        );
+        const unsubIcSystemJoin = onSnapshot(systemJoinAlertsQuery, (snapshot) => {
+          const next = new Set<string>();
+          snapshot.docs.forEach((d) => {
+            if (interCompanySystemJoinAlertVisibleForCompany(d.data() as Record<string, unknown>, cid)) {
+              next.add(d.id);
+            }
+          });
+          unreadIcSystemJoinsByRecipient[id] = next;
+          recomputeUnreadAlerts();
+        });
+        alertsUnsubscribers.push(unsubIcSystemJoin);
       });
     }
+
+    const onIcAlerts = () => recomputeUnreadAlerts();
+    window.addEventListener(IC_ALERTS_CHANGED, onIcAlerts);
 
     // Unread Chat Messages (supports both uid + legacy userDocId participants/receiverId)
     const conversationUnreadCounts = new Map<string, number>();
@@ -378,10 +446,11 @@ export function AppSidebar() {
     return () => {
       unsubHandovers();
       alertsUnsubscribers.forEach((unsub) => unsub());
+      window.removeEventListener(IC_ALERTS_CHANGED, onIcAlerts);
       conversationUnsubscribers.forEach((unsub) => unsub());
       messageUnsubscribers.forEach((unsub) => unsub());
     };
-  }, [user?.email, user?.uid, myUserIds, companyId]);
+  }, [user?.email, user?.uid, myUserIds, companyId, company?.isOwned]);
   
   const displayName = user?.displayName || user?.email?.split('@')[0] || "User";
 
@@ -421,7 +490,15 @@ export function AppSidebar() {
   // Default to showing when not explicitly off (so ticked/default = show without needing save). Alerts only for company owner.
   const transactionAlerts = effectiveNotificationSettings?.transactionAlerts;
   const includeAlertsInSidebar = transactionAlerts?.on !== false && transactionAlerts?.onEntity !== false && company?.isOwned === true;
-  const totalNotifications = unreadMessages + (includeAlertsInSidebar ? unreadAlerts : 0);
+  /** Selected company par pending system join — alert doc miss ho to bhi Messages badge */
+  const pendingSystemJoinForCompany = usePendingInterCompanySystemJoinCount({
+    ownerUserId: user?.uid,
+    companyId: company?.isOwned === true ? companyId : null,
+  });
+  const alertCountForSidebar = includeAlertsInSidebar
+    ? Math.max(unreadAlerts, pendingSystemJoinForCompany)
+    : 0;
+  const totalNotifications = unreadMessages + alertCountForSidebar;
   const messageSettings = effectiveNotificationSettings?.message;
   const showMessageBadgeInSidebar =
     (messageSettings?.on !== false && messageSettings?.onEntity !== false) || includeAlertsInSidebar;
@@ -505,8 +582,8 @@ export function AppSidebar() {
             <span className="relative flex shrink-0 items-center justify-center [&_svg]:size-5">
               <item.icon />
               {showBadge && (
-                <span className="absolute top-0 right-0 h-4 min-w-[1rem] translate-x-1/2 -translate-y-1/2 rounded-full bg-red-500 px-0.5 text-[10px] text-white flex items-center justify-center">
-                  {badgeCount}
+                <span className={messagesSidebarNavBadgeClassName}>
+                  {badgeCount > 99 ? "99+" : badgeCount}
                 </span>
               )}
             </span>

@@ -36,7 +36,11 @@ import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
-import { isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay } from "@/lib/ledgerUserColumnDisplay";
+import {
+  isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay,
+  resolveLedgerTransactionUserDisplayName,
+} from "@/lib/ledgerUserColumnDisplay";
+import { isInterCompanyVoucherEditDeleteBlocked } from "@/lib/interCompany/interCompanyVoucherHydrate";
 
 /**
  * Ledger row Dr/Cr/Balance: kabhi Firestore/legacy `debit`/`credit` object ho — table me `[object Object]` na aaye.
@@ -216,9 +220,23 @@ export function resolveTxnDrCrSideFromTransaction(
   return resolveTxnDrCrSide(debit, credit, bal);
 }
 
-/** Type pill classes — Dr green / Cr red; `null` = default outline. */
-export function voucherTypePillClassName(side: TxnDrCrSide | null): string {
+/** Reverted IC voucher — type column pill blue (Dr/Cr dono equal hone par green na dikhe). */
+export function isInterCompanyReversedVoucher(t: { type?: string; interCompanyReversed?: boolean } | null | undefined): boolean {
+  return String(t?.type || "") === "inter_company" && t?.interCompanyReversed === true;
+}
+
+/** Type pill classes — Dr green / Cr red; reverted IC = blue; `null` = default outline. */
+export function voucherTypePillClassName(
+  side: TxnDrCrSide | null,
+  opts?: { interCompanyReversed?: boolean }
+): string {
   const base = "inline-flex h-6 items-center rounded-xl px-2.5 font-medium";
+  if (opts?.interCompanyReversed) {
+    return cn(
+      base,
+      "border-blue-600/50 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-600/40"
+    );
+  }
   if (side === "dr") {
     return cn(
       base,
@@ -779,7 +797,7 @@ export const TransactionRow = React.memo(
     txnStripeIndex,
     /** Check mode: keyboard focus row (scroll-into-view) */
     isCheckModeFocused = false,
-    /** Check mode: Space mark — green full-row border (main + narration) */
+    /** Check mode: Space mark — halka green bg (border nahi) */
     isCheckModeMarked = false,
     /** Spend-wise group shell ke andar: sirf outer card border — row par alag pill mat banao */
     spendWiseInGroupCard = false,
@@ -941,15 +959,11 @@ export const TransactionRow = React.memo(
     const renderHlDrCr = (formatted: React.ReactNode) =>
       typeof formatted === "string" || typeof formatted === "number" ? hl(String(formatted)) : formatted;
 
-    // Show whatever user info is available for visible transaction rows.
-    const resolvedUserName = userNames && transaction.userId ? userNames[transaction.userId] : null;
-    const displayName = isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay(transaction)
-      ? "Auto"
-      : (resolvedUserName && resolvedUserName !== "Unknown" && resolvedUserName !== "N/A" ? resolvedUserName : null) ||
-        transaction.userDisplayName ||
-        transaction.userName ||
-        (transaction.userId === currentUserUid ? (currentUserDisplayName || "You") : null) ||
-        "N/A";
+    // User column — recurring BS-month = Auto; "Auto" snapshot se IC/payment flicker na ho
+    const displayName = resolveLedgerTransactionUserDisplayName(transaction, userNames, {
+      currentUserUid,
+      currentUserDisplayName,
+    });
     const names = { ...journalAccountNames, ...userNames, ...(accountNames || {}) };
     const hlQ = String(textSearchHighlight ?? "").trim();
     const hl = (s: string) =>
@@ -984,7 +998,8 @@ export const TransactionRow = React.memo(
               className={voucherTypePillClassName(
                 isNote || transaction.type === "note"
                   ? null
-                  : resolveTxnDrCrSide(debit, credit, balance)
+                  : resolveTxnDrCrSide(debit, credit, balance),
+                { interCompanyReversed: isInterCompanyReversedVoucher(transaction) }
               )}
             >
               {hl(getDisplayType(transaction))}
@@ -1186,10 +1201,15 @@ export const TransactionRow = React.memo(
                     Approve
                   </DropdownMenuItem>
                 )}
-              <DropdownMenuItem onClick={() => onRowClick?.(transaction)} className="flex items-center gap-2">
-                <Pencil className="h-3.5 w-3.5" />
-                Edit
-              </DropdownMenuItem>
+              {(() => {
+                const icViewOnly = isInterCompanyVoucherEditDeleteBlocked(transaction as Record<string, unknown>);
+                return (
+                  <DropdownMenuItem onClick={() => onRowClick?.(transaction)} className="flex items-center gap-2">
+                    <Pencil className="h-3.5 w-3.5" />
+                    {icViewOnly ? "View" : "Edit"}
+                  </DropdownMenuItem>
+                );
+              })()}
               {can('view_voucher_history') && onHistoryVoucher && (
                 <DropdownMenuItem onClick={() => onHistoryVoucher?.(transaction)} className="flex items-center gap-2">
                   <History className="h-3.5 w-3.5" />
@@ -1297,26 +1317,8 @@ export const TransactionRow = React.memo(
         : txnStripeMod === 0
           ? "[&>td]:!bg-muted/50"
           : "[&>td]:!bg-card";
-    /* Check mode: marked = green box; selected = orange box (list selection jaisa) — mark par orange na overlap. */
-    const txnRowSelectedChrome = isSelected && !isCheckModeMarked;
-    const checkMarkMainBorder = isCheckModeMarked
-      ? cn(
-          "[&>td]:!transition-none [&>td]:bg-green-50/70 dark:[&>td]:bg-green-950/30 [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden",
-          "[&>td]:[box-shadow:inset_0_2px_0_0_#16a34a]",
-          !showNarrationRow && "[&>td]:[box-shadow:inset_0_2px_0_0_#16a34a,inset_0_-2px_0_0_#16a34a]",
-          "[&>td:first-child]:[box-shadow:inset_2px_0_0_0_#16a34a,inset_0_2px_0_0_#16a34a]",
-          !showNarrationRow &&
-            "[&>td:first-child]:[box-shadow:inset_2px_0_0_0_#16a34a,inset_0_2px_0_0_#16a34a,inset_0_-2px_0_0_#16a34a]",
-          "[&>td:last-child]:[box-shadow:inset_-2px_0_0_0_#16a34a,inset_0_2px_0_0_#16a34a]",
-          !showNarrationRow &&
-            "[&>td:last-child]:[box-shadow:inset_-2px_0_0_0_#16a34a,inset_0_2px_0_0_#16a34a,inset_0_-2px_0_0_#16a34a]",
-          !showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-tr-xl [&>td:last-child]:rounded-br-xl",
-          showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl"
-        )
-      : "";
-    const checkMarkNarrBorder = isCheckModeMarked
-      ? "[&>td]:!transition-none [&>td]:bg-green-50/70 dark:[&>td]:bg-green-950/30 [&>td]:[box-shadow:inset_0_-2px_0_0_#16a34a] [&>td:first-child]:[box-shadow:inset_2px_0_0_0_#16a34a,inset_0_-2px_0_0_#16a34a] [&>td:last-child]:[box-shadow:inset_-2px_0_0_0_#16a34a,inset_0_-2px_0_0_#16a34a] [&>td:first-child]:rounded-bl-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:rounded-br-xl [&>td:last-child]:overflow-hidden"
-      : "";
+    /* Check mode: marked = green bg; focused (selected) row par orange border bhi rahe */
+    const txnRowSelectedChrome = isSelected;
     /* Spend-wise: theme CSS ko group color / inflow-outflow tint batane ke liye data attrs */
     const spendWiseEdgeAttr = hasSpendWiseColor
       ? [effSpendTop ? "top" : "", effSpendBottom ? "bottom" : "", !effSpendTop && !effSpendBottom && isSpendWiseInGroup ? "mid" : ""]
@@ -1345,6 +1347,7 @@ export const TransactionRow = React.memo(
         onMouseLeave={clearPairHoverIfLeavingBlock}
         data-pl-txn-hovered={pairHovered ? "" : undefined}
         data-pl-txn-selected={txnRowSelectedChrome ? "" : undefined}
+        data-pl-check-marked={isCheckModeMarked ? "" : undefined}
         data-check-focus={isCheckModeFocused ? "true" : undefined}
         data-pl-spend-wise-group={useRowSpendBorders ? swColor : undefined}
         data-pl-spend-edge={useRowSpendBorders ? spendWiseEdgeAttr : undefined}
@@ -1356,7 +1359,6 @@ export const TransactionRow = React.memo(
         className={cn(
           "transaction-main-row min-h-[28px] cursor-pointer",
           txnStripeBgClass,
-          checkMarkMainBorder,
           isSpendWiseChild && "pl-6 text-sm [&>td]:py-1",
           isSpendWiseChild && !isSelected && !isSpendWiseInflowRow && !isSpendWiseOutflowRow && !spendWiseChildNeedsIndent && "bg-muted/20 [&>td]:bg-muted/20",
           isSpendWiseInflowRow && !isSelected && "bg-green-100 dark:bg-green-900/30 [&>td]:bg-green-100 [&>td]:dark:bg-green-900/30 hover:bg-green-200 [&>td]:hover:bg-green-200 [&>td]:dark:hover:bg-green-900/40",
@@ -1429,6 +1431,7 @@ export const TransactionRow = React.memo(
         data-pl-pending-approval={isPendingApproval ? "" : undefined}
         data-pl-txn-hovered={pairHovered ? "" : undefined}
         data-pl-txn-selected={txnRowSelectedChrome ? "" : undefined}
+        data-pl-check-marked={isCheckModeMarked ? "" : undefined}
         data-pl-spend-wise-group={useRowSpendBorders ? swColor : undefined}
         data-pl-spend-edge={useRowSpendBorders ? spendWiseEdgeAttr : undefined}
         data-pl-spend-in-group-card={spendWiseInGroupCard ? "" : undefined}
@@ -1440,7 +1443,6 @@ export const TransactionRow = React.memo(
           "narration-row cursor-pointer",
           !spendWiseInGroupCard && "border-b",
           txnStripeBgClass,
-          checkMarkNarrBorder,
           /* Sirf neeche horizontal line — left/right vertical border mat ([&>td]:border-black se side line aa jati thi) */
           !inSpendWiseGroup && "border-b border-black [&>td]:border-x-0 [&>td]:border-t-0 [&>td]:border-b-0",
           isBillWise && "-mt-1.5",

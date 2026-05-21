@@ -1,7 +1,7 @@
 ﻿"use client";
 
 /**
- * Inter-company voucher — ribbon: Voucher | Invite | Join; linked save on both companies.
+ * Inter-company voucher � ribbon: Voucher | Invite | Join; linked save on both companies.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useForm, type Control, type FieldValues } from "react-hook-form";
@@ -39,28 +39,47 @@ import {
 } from "@/lib/interCompany/saveInterCompanyVoucherPair";
 import {
   inferInterCompanyEntity,
+  readInterCompanyBankLabelSnapshot,
+  readInterCompanyCompanyBankId,
   readInterCompanyEntityLabelSnapshot,
   readInterCompanyLink,
+  resolveInterCompanyBankIdsForEdit,
   resolveInterCompanyEditCompanyIds,
   interCompanyVoucherViewerSide,
+  isInterCompanyVoucherEditDeleteBlocked,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
+import { fetchInterCompanyBankEntityDetail } from "@/lib/interCompany/fetchInterCompanyEntities";
 import { getNextInterCompanyVoucherNumber } from "@/lib/interCompany/nextInterCompanyVoucherNumber";
 import type { InterCompanyEntityDetail } from "@/lib/interCompany/interCompanyEntityTypes";
 import { openPrintDirect } from "@/lib/printDirect";
 import type { InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
 import { useInterCompanyEntities } from "@/components/inter-company/useInterCompanyEntities";
 import { readCompanyInterCompanyAcNo } from "@/lib/interCompany/interCompanyAccountNo";
+import {
+  ensureCompanyInterCompanyCode,
+  readCompanyInterCompanyCode,
+} from "@/lib/interCompany/interCompanyCompanyCode";
 import { normalizeInterCompanyPhone } from "@/lib/interCompany/interCompanyPhone";
-import { useInterCompanyPartnerDirectory } from "@/lib/interCompany/useInterCompanyPartnerDirectory";
+import { useInterCompanyJoinedTargetPartners } from "@/lib/interCompany/useInterCompanyJoinedTargetPartners";
+import { subscribeInterCompanyJoinSettings } from "@/lib/interCompany/interCompanyJoinSettingsSync";
 import { ensureCompanyInterCompanyAcNo } from "@/lib/interCompany/ensureCompanyInterCompanyAcNo";
 import {
   interCompanyDateButtonClass,
+  interCompanyDateFieldColClass,
+  interCompanyDateFieldSizingClass,
+  interCompanyVoucherHeaderFieldColClass,
+  interCompanyVoucherHeaderLabelClass,
   interCompanyInputClass,
+  interCompanyVoucherNumberInputSizingClass,
   interCompanyNarrationCardClass,
   interCompanyNarrationTextareaInCardClass,
   interCompanyPageHeaderClass,
   interCompanyPanelClass,
+  interCompanyPanelScrollInnerClass,
+  interCompanyPanelScrollOuterClass,
+  interCompanyVoucherScrollAreaClass,
   interCompanyVoucherTabShellClass,
+  interCompanyReadOnlyCopyInputClass,
 } from "@/lib/interCompany/interCompanyVoucherChrome";
 import { InterCompanyVoucherAttachments } from "@/components/inter-company/InterCompanyVoucherAttachments";
 import { InterCompanyAmountDualFields } from "@/components/inter-company/InterCompanyAmountDualFields";
@@ -73,18 +92,17 @@ import {
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
 import {
-  canPartnersSearchTargetAccountsByName,
-  filterPartnersByJoined,
   readInterCompanyLocalSettings,
 } from "@/lib/interCompany/interCompanyLocalStore";
+import { readInterCompanyPartnerPrivacy } from "@/lib/interCompany/interCompanyPartnerPrivacy";
 import { InterCompanyTargetConnectSection } from "@/components/inter-company/InterCompanyTargetConnectSection";
 import { InterCompanySourcePaySection } from "@/components/inter-company/InterCompanySourcePaySection";
 import { InterCompanyVoucherIdentityStrip } from "@/components/inter-company/InterCompanyVoucherIdentityStrip";
+import { useStickyInterCompanyCompanyCode } from "@/components/inter-company/useStickyInterCompanyCompanyCode";
 import {
   InterCompanyRibbonNav,
   type InterCompanyRibbonTab,
 } from "@/components/inter-company/InterCompanyRibbonNav";
-import { InterCompanyInvitePanel } from "@/components/inter-company/InterCompanyInvitePanel";
 import { InterCompanyJoinSettingsPanel } from "@/components/inter-company/InterCompanyJoinSettingsPanel";
 import { InterCompanyVoucherFooter } from "@/components/inter-company/InterCompanyVoucherFooter";
 import { InterCompanyRequestReverseDialog } from "@/components/inter-company/InterCompanyRequestReverseDialog";
@@ -95,6 +113,10 @@ import {
   IC_REVERSE_REQUESTS_CHANGED,
   isSourceVoucherReversePendingOrDone,
 } from "@/lib/interCompany/interCompanyReverseRequests";
+import {
+  subscribeAcceptedSystemJoinLinksForRequester,
+} from "@/lib/interCompany/interCompanySystemJoinRequest";
+import { usePendingInterCompanySystemJoinCount } from "@/lib/interCompany/usePendingInterCompanySystemJoinCount";
 
 const interCompanySchema = z.object({
   voucherNumber: z.string().min(1, "Voucher number required"),
@@ -106,7 +128,7 @@ const interCompanySchema = z.object({
 
 type InterCompanyFormValues = z.infer<typeof interCompanySchema>;
 
-/** Edit par entity list me missing row — save-time label snapshot se card/combobox bhare */
+/** Edit par entity list me missing row � save-time label snapshot se card/combobox bhare */
 function mergeHydratedEntity(
   entities: InterCompanyEntityDetail[],
   kind: InterCompanyEntityKind,
@@ -121,18 +143,164 @@ function mergeHydratedEntity(
   return [...entities, { id, kind, label }];
 }
 
+/** Company bank combobox — id list me na ho to bhi naam/A/c fields bharen */
+function mergeHydratedBankEntity(
+  entities: InterCompanyEntityDetail[],
+  bankId: string,
+  voucher: Record<string, unknown> | null | undefined,
+  side: "source" | "target",
+  extra?: InterCompanyEntityDetail | null
+): InterCompanyEntityDetail[] {
+  const id = String(bankId || "").trim();
+  if (!id) return entities;
+  if (entities.some((e) => e.kind === "bank" && e.id === id)) return entities;
+  if (extra && extra.id === id) return [...entities, extra];
+  const label = readInterCompanyBankLabelSnapshot(voucher, side) || "Bank / Cash account";
+  return [...entities, { id, kind: "bank", label }];
+}
+
+/** Source/target card � ek horizontal scroll; poora panel content saath move */
+function InterCompanyPanelScroll({ children }: { children: ReactNode }) {
+  return (
+    <div className={interCompanyPanelScrollOuterClass}>
+      <div className={interCompanyPanelScrollInnerClass}>{children}</div>
+    </div>
+  );
+}
+
+/** Target card ke upar — BS/AD date; AD trigger BsDatePicker jaisa sky style */
+function InterCompanyDateFieldsHeader({
+  showBsDate,
+  showAdDate,
+  dateSystem,
+  value,
+  onChange,
+  fieldsDisabled,
+  viewOnlyAllowCopy,
+  isCalendarOpen,
+  setIsCalendarOpen,
+  formatDate,
+  formatDateBS,
+}: {
+  showBsDate: boolean;
+  showAdDate: boolean;
+  dateSystem: string;
+  value: Date;
+  onChange: (d: Date) => void;
+  fieldsDisabled: boolean;
+  /** Edit lock — date pickers ki jagah readOnly text (copy) */
+  viewOnlyAllowCopy?: boolean;
+  isCalendarOpen: boolean;
+  setIsCalendarOpen: (open: boolean) => void;
+  formatDate: (d: Date) => string;
+  formatDateBS: (d: Date) => string;
+}) {
+  if (!showBsDate && !showAdDate) return null;
+
+  return (
+    <div className="flex flex-wrap items-start gap-3">
+      {showBsDate ? (
+        <FormItem className={interCompanyVoucherHeaderFieldColClass}>
+          <FormLabel className={interCompanyVoucherHeaderLabelClass}>
+            {dateSystem === "Both" ? "Date (BS)" : "Date"}
+          </FormLabel>
+          <FormControl>
+            {viewOnlyAllowCopy ? (
+              <Input
+                readOnly
+                value={formatDateBS(value)}
+                className={cn(interCompanyDateButtonClass, interCompanyReadOnlyCopyInputClass)}
+              />
+            ) : (
+              <BsDatePicker
+                valueAD={value}
+                onChangeAD={(d) => {
+                  if (d) d.setHours(12, 0, 0, 0);
+                  onChange(d as Date);
+                  setIsCalendarOpen(false);
+                }}
+                isRange={false}
+                className={interCompanyDateButtonClass}
+                disabled={fieldsDisabled}
+              />
+            )}
+          </FormControl>
+        </FormItem>
+      ) : null}
+      {showAdDate ? (
+        <FormItem className={interCompanyVoucherHeaderFieldColClass}>
+          <FormLabel className={interCompanyVoucherHeaderLabelClass}>
+            {dateSystem === "Both" ? "Date (AD)" : "Date"}
+          </FormLabel>
+          <FormControl>
+            {viewOnlyAllowCopy ? (
+              <Input
+                readOnly
+                value={formatDate(value)}
+                className={cn(interCompanyDateButtonClass, interCompanyReadOnlyCopyInputClass)}
+              />
+            ) : (
+              <Popover modal open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={fieldsDisabled}
+                    data-theme-detail="date-range"
+                    className={cn(interCompanyDateButtonClass, !value && "text-black/45")}
+                    onClick={() => setIsCalendarOpen(true)}
+                  >
+                    <CalendarIcon className="h-4 w-4 shrink-0 opacity-50" />
+                    <span className="min-w-0 truncate">
+                      {value ? formatDate(value) : "Pick a date"}
+                    </span>
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="z-[102] w-auto p-0" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={value}
+                    onSelect={(date) => {
+                      if (date) date.setHours(12, 0, 0, 0);
+                      onChange(date);
+                      setIsCalendarOpen(false);
+                    }}
+                    initialFocus
+                  />
+                </PopoverContent>
+              </Popover>
+            )}
+          </FormControl>
+        </FormItem>
+      ) : null}
+    </div>
+  );
+}
+
 function TwoColumnEntityGrid({
+  leftHeader,
+  rightHeader,
   targetCompanyField,
   sourcePanel,
 }: {
+  leftHeader?: ReactNode;
+  rightHeader?: ReactNode;
   targetCompanyField: ReactNode;
   sourcePanel: ReactNode;
 }) {
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <div className={interCompanyPanelClass}>{sourcePanel}</div>
-      <div className={interCompanyPanelClass}>
-        <div className="flex flex-col gap-3 p-3">{targetCompanyField}</div>
+    <div className="grid gap-4 lg:grid-cols-2 lg:items-stretch">
+      <div className="flex min-h-0 flex-col gap-3">
+        {leftHeader}
+        <div className={cn(interCompanyPanelClass, "min-h-0 flex-1")}>
+          <InterCompanyPanelScroll>{sourcePanel}</InterCompanyPanelScroll>
+        </div>
+      </div>
+      <div className="flex min-h-0 flex-col gap-3">
+        {rightHeader}
+        <div className={cn(interCompanyPanelClass, "min-h-0 flex-1")}>
+          <InterCompanyPanelScroll>{targetCompanyField}</InterCompanyPanelScroll>
+        </div>
       </div>
     </div>
   );
@@ -151,6 +319,10 @@ export type InterCompanyVoucherFormProps = {
   isApproving?: boolean;
   voucher?: Record<string, unknown> | null;
   defaultVoucherData?: Record<string, unknown> | null;
+  /** Join / Invite ribbon — dialog footer Copy To hide ke liye */
+  onRibbonTabChange?: (tab: import("@/components/inter-company/InterCompanyRibbonNav").InterCompanyRibbonTab) => void;
+  /** Alerts deep link — `/inter-company?icTab=join` se Join ribbon khule */
+  initialRibbonTab?: InterCompanyRibbonTab;
 };
 
 export function InterCompanyVoucherForm({
@@ -165,33 +337,51 @@ export function InterCompanyVoucherForm({
   isApproving = false,
   voucher,
   defaultVoucherData,
+  onRibbonTabChange,
+  initialRibbonTab,
 }: InterCompanyVoucherFormProps) {
   const { user, customUser } = useAuth();
   const { can, canEditRecord, canPerformBackdatedAction, fileAttachmentLimits, allowAttachments, role } =
     usePermissions();
   const { company, companyId, allCompanies } = useCompany();
-  const { formatDate, formatCurrency, formatCurrencyForPrint, dateSystem } = useDate();
+  const { formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint, dateSystem } = useDate();
 
-  const [ribbonTab, setRibbonTab] = useState<InterCompanyRibbonTab>("voucher");
+  const [ribbonTab, setRibbonTab] = useState<InterCompanyRibbonTab>(initialRibbonTab ?? "voucher");
+
+  useEffect(() => {
+    onRibbonTabChange?.(ribbonTab);
+  }, [ribbonTab, onRibbonTabChange]);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [sourcePayeeKind, setSourcePayeeKind] = useState<InterCompanyEntityKind>("party");
   const [sourcePayeeId, setSourcePayeeId] = useState("");
   const [targetPayeeKind, setTargetPayeeKind] = useState<InterCompanyEntityKind>("party");
   const [targetPayeeId, setTargetPayeeId] = useState("");
+  /** Source/target company bank � entity account se alag (compound IC legs). */
+  const [sourceCompanyBankId, setSourceCompanyBankId] = useState("");
+  const [targetCompanyBankId, setTargetCompanyBankId] = useState("");
+  /** Edit: bank id entities list me missing ho to Firestore row */
+  const [hydratedSourceBankExtra, setHydratedSourceBankExtra] = useState<InterCompanyEntityDetail | null>(null);
+  const [hydratedTargetBankExtra, setHydratedTargetBankExtra] = useState<InterCompanyEntityDetail | null>(null);
   const [icSettingsTick, setIcSettingsTick] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [savedSourceId, setSavedSourceId] = useState<string | null>(null);
   const [peerTargetVoucherId, setPeerTargetVoucherId] = useState<string | null>(null);
+  /** Linked target copy — source approve tab tak approved? */
+  const [peerVoucherRow, setPeerVoucherRow] = useState<Record<string, unknown> | null>(null);
   const [linkId, setLinkId] = useState<string | null>(null);
   const [files, setFiles] = useState<(File | string)[]>([]);
   const [reverseDialogOpen, setReverseDialogOpen] = useState(false);
   const [reverseTick, setReverseTick] = useState(0);
   const lastHydratedVoucherIdRef = useRef<string | null>(null);
-  /** Async next-no fetch — hydrate ke baad overwrite na ho */
+  /** Async next-no fetch � hydrate ke baad overwrite na ho */
   const voucherNumberFetchGenRef = useRef(0);
   const seed = (voucher || defaultVoucherData) as Record<string, unknown> | null | undefined;
 
-  const isInterCompanyEditLocked = !!(voucher?.id || savedSourceId);
+  const hasPersistedIc = !!(voucher?.id || savedSourceId);
+  const voucherRowForLock = (voucher || seed) as Record<string, unknown> | null;
+  // Target: hamesha read-only; source: sirf unapproved par edit/delete; source approve ke baad dono side lock
+  const isInterCompanyEditLocked =
+    hasPersistedIc && isInterCompanyVoucherEditDeleteBlocked(voucherRowForLock);
   const isCompanyAdmin =
     role === "owner" || customUser?.role === "CompanyAdmin" || customUser?.role === "SuperAdmin";
   const fieldsDisabled = editingDisabled || isInterCompanyEditLocked;
@@ -225,7 +415,7 @@ export function InterCompanyVoucherForm({
     }
   }, [company, companyId, form, isAutoVoucherEnabled, savedSourceId, voucher?.id]);
 
-  /** Attachments upload — save se pehle URL list */
+  /** Attachments upload � save se pehle URL list */
   const resolveFileUrlsForSave = useCallback(
     async (existingVoucherId: string | null): Promise<string[]> => {
       if (!companyId || !allowAttachments) {
@@ -290,6 +480,10 @@ export function InterCompanyVoucherForm({
   useEffect(() => {
     if (!voucher?.id) {
       lastHydratedVoucherIdRef.current = null;
+      setSourceCompanyBankId("");
+      setTargetCompanyBankId("");
+      setHydratedSourceBankExtra(null);
+      setHydratedTargetBankExtra(null);
       if (!savedSourceId) void fetchVoucherNumber();
       return;
     }
@@ -324,12 +518,53 @@ export function InterCompanyVoucherForm({
       setTargetPayeeKind(targetEntity.kind);
       setTargetPayeeId(targetEntity.id);
     }
-    setSavedSourceId(vid);
     const link = readInterCompanyLink(row);
-    if (link) {
-      setPeerTargetVoucherId(link.peerVoucherId);
-      setLinkId(link.linkId || null);
+    // Target copy edit: `savedSourceId` = source voucher id (save pair ke liye)
+    if (link?.role === "target") {
+      setSavedSourceId(String(link.peerVoucherId || "").trim() || null);
+      setPeerTargetVoucherId(vid);
+    } else {
+      setSavedSourceId(vid);
+      setPeerTargetVoucherId(link?.peerVoucherId ? String(link.peerVoucherId).trim() : null);
     }
+    if (link) setLinkId(link.linkId || null);
+
+    // Edit: company bank — pehle is doc par denormalized ids; phir peer se missing side
+    let bankHydrateCancelled = false;
+    void (async () => {
+      const denorm = resolveInterCompanyBankIdsForEdit(row);
+      let srcBank = denorm.sourceCompanyBankAccountId;
+      let tgtBank = denorm.targetCompanyBankAccountId;
+      if ((!srcBank || !tgtBank) && link?.peerCompanyId && link?.peerVoucherId) {
+        try {
+          const snap = await getDoc(
+            doc(firestore, `companies/${link.peerCompanyId}/vouchers`, link.peerVoucherId),
+          );
+          if (snap.exists()) {
+            const peer = snap.data() as Record<string, unknown>;
+            const peerDenorm = resolveInterCompanyBankIdsForEdit(peer);
+            if (!srcBank) {
+              srcBank =
+                peerDenorm.sourceCompanyBankAccountId ||
+                (link.role === "target" ? readInterCompanyCompanyBankId(peer) : "");
+            }
+            if (!tgtBank) {
+              tgtBank =
+                peerDenorm.targetCompanyBankAccountId ||
+                (link.role === "source" ? readInterCompanyCompanyBankId(peer) : "");
+            }
+          }
+        } catch {
+          /* offline */
+        }
+      }
+      if (!srcBank && !link) srcBank = readInterCompanyCompanyBankId(row);
+      if (!bankHydrateCancelled) {
+        if (srcBank) setSourceCompanyBankId(srcBank);
+        if (tgtBank) setTargetCompanyBankId(tgtBank);
+      }
+    })();
+
     const urls = row.fileUrls;
     const rev = row.interCompanyReversal as { attachmentUrls?: string[] } | undefined;
     const merged = [
@@ -345,7 +580,65 @@ export function InterCompanyVoucherForm({
         return true;
       })
     );
+
+    return () => {
+      bankHydrateCancelled = true;
+    };
   }, [voucher, form, fetchVoucherNumber, savedSourceId, companyId]);
+
+  // Live snapshot / table row baad me bank fields laaye — `lastHydratedVoucherIdRef` dubara hydrate nahi karta
+  useEffect(() => {
+    if (!voucher?.id) return;
+    const row = voucher as Record<string, unknown>;
+    const denorm = resolveInterCompanyBankIdsForEdit(row);
+    if (denorm.sourceCompanyBankAccountId) {
+      setSourceCompanyBankId((prev) =>
+        prev === denorm.sourceCompanyBankAccountId ? prev : denorm.sourceCompanyBankAccountId,
+      );
+    }
+    if (denorm.targetCompanyBankAccountId) {
+      setTargetCompanyBankId((prev) =>
+        prev === denorm.targetCompanyBankAccountId ? prev : denorm.targetCompanyBankAccountId,
+      );
+    }
+    if (denorm.sourceCompanyBankAccountId && denorm.targetCompanyBankAccountId) return;
+
+    const link = readInterCompanyLink(row);
+    if (!link?.peerCompanyId || !link?.peerVoucherId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const snap = await getDoc(
+          doc(firestore, `companies/${link.peerCompanyId}/vouchers`, link.peerVoucherId),
+        );
+        if (cancelled || !snap.exists()) return;
+        const peer = snap.data() as Record<string, unknown>;
+        const peerDenorm = resolveInterCompanyBankIdsForEdit(peer);
+        if (!denorm.sourceCompanyBankAccountId) {
+          const src =
+            peerDenorm.sourceCompanyBankAccountId ||
+            (link.role === "target" ? readInterCompanyCompanyBankId(peer) : "");
+          if (src) setSourceCompanyBankId(src);
+        }
+        if (!denorm.targetCompanyBankAccountId) {
+          const tgt =
+            peerDenorm.targetCompanyBankAccountId ||
+            (link.role === "source" ? readInterCompanyCompanyBankId(peer) : "");
+          if (tgt) setTargetCompanyBankId(tgt);
+        }
+      } catch {
+        /* offline */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    voucher?.id,
+    (voucher as Record<string, unknown> | undefined)?.sourceCompanyBankAccountId,
+    (voucher as Record<string, unknown> | undefined)?.targetCompanyBankAccountId,
+    (voucher as Record<string, unknown> | undefined)?.companyBankAccountId,
+  ]);
 
   useEffect(() => {
     const onRev = () => setReverseTick((n) => n + 1);
@@ -353,51 +646,64 @@ export function InterCompanyVoucherForm({
     return () => window.removeEventListener(IC_REVERSE_REQUESTS_CHANGED, onRev);
   }, []);
 
+  // Target dropdown — sirf joined partners; doosre user ki company public profile se
   const {
-    partners,
-    comboboxOptions,
-    comboboxOptionsIncluding,
-    resolveCompanyIdByAcNo,
-    resolveCompaniesByMobile,
-    acNoForCompanyId,
-    mobileForCompanyId,
-    acNoForAnyCompanyId,
-    mobileForAnyCompanyId,
-  } = useInterCompanyPartnerDirectory(allCompanies, companyId);
+    joinedPartners: targetJoinedPartners,
+    comboboxOptionsIncluding: targetComboboxOptionsIncluding,
+    resolveCompanyIdByAcNo: resolveJoinedCompanyIdByAcNo,
+    resolveCompanyIdByCompanyCode: resolveJoinedCompanyIdByCompanyCode,
+    resolveCompaniesByMobile: resolveJoinedCompaniesByMobile,
+    resolveCompaniesByPan: resolveJoinedCompaniesByPan,
+    acNoForAnyCompanyId: joinedAcNoForAnyCompanyId,
+    companyCodeForAnyCompanyId: joinedCompanyCodeForAnyCompanyId,
+    mobileForAnyCompanyId: joinedMobileForAnyCompanyId,
+    panForAnyCompanyId: joinedPanForAnyCompanyId,
+    partnerRowById: joinedPartnerRowById,
+  } = useInterCompanyJoinedTargetPartners(allCompanies, companyId, user?.uid);
 
-  // Source company â€” joined list for cross-company search
+  // Firestore join settings — accept / shared user change par local cache + lookup refresh
+  useEffect(() => {
+    if (!companyId) return;
+    return subscribeInterCompanyJoinSettings(
+      companyId,
+      () => setIcSettingsTick((n) => n + 1),
+      (err) => console.warn("[IC voucher] join settings:", err)
+    );
+  }, [companyId]);
+
+  // Source company — joined list for cross-company search
   const icSettings = useMemo(
     () => (companyId ? readInterCompanyLocalSettings(companyId) : null),
     [companyId, icSettingsTick]
   );
 
-  // Target company â€” uski privacy: name list partners ko dikhe ya nahi
-  const targetAllowsNameLookup = useMemo(
-    () => canPartnersSearchTargetAccountsByName(targetCompanyId),
+  // Target company — Join tab privacy (search + masked view)
+  const targetPartnerPrivacy = useMemo(
+    () => readInterCompanyPartnerPrivacy(targetCompanyId),
     [targetCompanyId, icSettingsTick]
   );
 
-  // Target account search â€” joined partners + current company (rules-safe per-company reads)
-  const lookupPartners = useMemo(() => {
-    const all = (allCompanies || [])
-      .filter((c) => c?.id)
-      .map((c) => ({
-        id: c.id!,
-        name: String(c.name || c.id || "").trim(),
-        acNo: readCompanyInterCompanyAcNo(c),
-        mobile: normalizeInterCompanyPhone(c.phone),
-        isShared: c.isOwned === false,
-      }));
-    const joined = icSettings?.joinedCompanyIds ?? [];
-    return filterPartnersByJoined(all, joined);
-  }, [allCompanies, icSettings?.joinedCompanyIds]);
+  // Target account search — system cards ke joined partners (public profile rows included)
+  const lookupPartners = targetJoinedPartners;
 
-  // Current company par missing A/c No ho to backfill (inter-company picker ke liye).
+  // Current company par missing A/c No + Company Code backfill — sirf ek baar / companyId (blink loop avoid).
+  const icBackfillKeyRef = useRef("");
   useEffect(() => {
-    if (!companyId) return;
-    if (readCompanyInterCompanyAcNo(company)) return;
-    void ensureCompanyInterCompanyAcNo(companyId);
-  }, [company, companyId]);
+    if (!companyId || !company) return;
+    if (readCompanyInterCompanyAcNo(company) && readCompanyInterCompanyCode(company)) return;
+    if (icBackfillKeyRef.current === companyId) return;
+    icBackfillKeyRef.current = companyId;
+    void (async () => {
+      if (!readCompanyInterCompanyAcNo(company)) await ensureCompanyInterCompanyAcNo(companyId);
+      if (!readCompanyInterCompanyCode(company)) {
+        await ensureCompanyInterCompanyCode(companyId, company.name);
+      }
+    })();
+  }, [companyId, company]);
+
+  useEffect(() => {
+    icBackfillKeyRef.current = "";
+  }, [companyId]);
 
   const editEntityCompanyIds = useMemo(
     () => resolveInterCompanyEditCompanyIds(voucher as Record<string, unknown> | null, companyId || ""),
@@ -417,16 +723,71 @@ export function InterCompanyVoucherForm({
     useInterCompanyEntities(targetEntitiesCompanyId);
 
   const voucherRow = (voucher || null) as Record<string, unknown> | null;
-  const sourceEntities = useMemo(
-    () =>
-      mergeHydratedEntity(sourceEntitiesRaw, sourcePayeeKind, sourcePayeeId, voucherRow, "source"),
-    [sourceEntitiesRaw, sourcePayeeKind, sourcePayeeId, voucherRow]
-  );
-  const targetEntities = useMemo(
-    () =>
-      mergeHydratedEntity(targetEntitiesRaw, targetPayeeKind, targetPayeeId, voucherRow, "target"),
-    [targetEntitiesRaw, targetPayeeKind, targetPayeeId, voucherRow]
-  );
+  const sourceEntities = useMemo(() => {
+    let list = mergeHydratedEntity(sourceEntitiesRaw, sourcePayeeKind, sourcePayeeId, voucherRow, "source");
+    list = mergeHydratedBankEntity(list, sourceCompanyBankId, voucherRow, "source", hydratedSourceBankExtra);
+    return list;
+  }, [
+    sourceEntitiesRaw,
+    sourcePayeeKind,
+    sourcePayeeId,
+    voucherRow,
+    sourceCompanyBankId,
+    hydratedSourceBankExtra,
+  ]);
+  const targetEntities = useMemo(() => {
+    let list = mergeHydratedEntity(targetEntitiesRaw, targetPayeeKind, targetPayeeId, voucherRow, "target");
+    list = mergeHydratedBankEntity(list, targetCompanyBankId, voucherRow, "target", hydratedTargetBankExtra);
+    return list;
+  }, [
+    targetEntitiesRaw,
+    targetPayeeKind,
+    targetPayeeId,
+    voucherRow,
+    targetCompanyBankId,
+    hydratedTargetBankExtra,
+  ]);
+
+  // Edit: saved bank id entities list me na ho to Firestore se naam/A/c No combobox ke liye
+  useEffect(() => {
+    const bid = String(sourceCompanyBankId || "").trim();
+    const cid = String(sourceEntitiesCompanyId || "").trim();
+    if (!bid || !cid) {
+      setHydratedSourceBankExtra(null);
+      return;
+    }
+    if (sourceEntities.some((e) => e.kind === "bank" && e.id === bid)) {
+      setHydratedSourceBankExtra(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchInterCompanyBankEntityDetail(cid, bid).then((row) => {
+      if (!cancelled) setHydratedSourceBankExtra(row);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceCompanyBankId, sourceEntitiesCompanyId, sourceEntities]);
+
+  useEffect(() => {
+    const bid = String(targetCompanyBankId || "").trim();
+    const cid = String(targetEntitiesCompanyId || "").trim();
+    if (!bid || !cid) {
+      setHydratedTargetBankExtra(null);
+      return;
+    }
+    if (targetEntities.some((e) => e.kind === "bank" && e.id === bid)) {
+      setHydratedTargetBankExtra(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchInterCompanyBankEntityDetail(cid, bid).then((row) => {
+      if (!cancelled) setHydratedTargetBankExtra(row);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [targetCompanyBankId, targetEntitiesCompanyId, targetEntities]);
 
   const displayTargetCompanyId =
     targetCompanyId || editEntityCompanyIds.targetCompanyFieldId || "";
@@ -436,7 +797,7 @@ export function InterCompanyVoucherForm({
     [allCompanies, displayTargetCompanyId]
   );
 
-  // Edit: source column — peer company ka real row (target-copy se kholo to current company source nahi)
+  // Edit: source column � peer company ka real row (target-copy se kholo to current company source nahi)
   const sourceCompanyForDisplay = useMemo(() => {
     const sid = isInterCompanyEditLocked
       ? editEntityCompanyIds.sourceEntitiesCompanyId
@@ -455,16 +816,31 @@ export function InterCompanyVoucherForm({
     !!editEntityCompanyIds.sourceEntitiesCompanyId &&
     editEntityCompanyIds.sourceEntitiesCompanyId !== companyId;
 
-  // Edit: interCompanyLink.role — source copy = Payment Out; target copy = Payment In
+  const sourceStickyCompanyCode = useStickyInterCompanyCompanyCode(sourceCompanyForDisplay);
+  const targetStickyCompanyCode = useStickyInterCompanyCompanyCode(targetCompany);
+
+  // Edit: interCompanyLink.role � source copy = Payment Out; target copy = Payment In
   const icViewerSide = interCompanyVoucherViewerSide(voucherRow);
-  const showSourcePaymentOutBadge = isInterCompanyEditLocked && icViewerSide === "source";
-  const showTargetPaymentInBadge = isInterCompanyEditLocked && icViewerSide === "target";
+  const showSourcePaymentOutBadge = hasPersistedIc && icViewerSide === "source";
+  const showTargetPaymentInBadge = hasPersistedIc && icViewerSide === "target";
   const icLink = readInterCompanyLink(voucherRow);
 
   const pendingRevertCount = useMemo(
     () => (companyId ? countPendingReverseInbox(companyId) : 0),
     [companyId, reverseTick]
   );
+  const pendingSystemJoinCount = usePendingInterCompanySystemJoinCount({
+    ownerUserId: user?.uid,
+    companyId,
+  });
+
+  // Requester side — accepted join par apni company me link apply + dropdown refresh
+  useEffect(() => {
+    if (!user?.uid) return;
+    return subscribeAcceptedSystemJoinLinksForRequester(user.uid, () => {
+      setIcSettingsTick((n) => n + 1);
+    });
+  }, [user?.uid]);
 
   const sourceVoucherIdForReverse = icViewerSide === "source" ? String(voucher?.id || savedSourceId || "") : "";
   const reverseFlowState = useMemo(() => {
@@ -474,21 +850,31 @@ export function InterCompanyVoucherForm({
     return isSourceVoucherReversePendingOrDone(companyId, sourceVoucherIdForReverse);
   }, [companyId, sourceVoucherIdForReverse, voucherRow, reverseTick]);
 
-  /** Target dropdown — edit par current/target company partners list me missing ho to bhi option add */
+  /** Reverted — source/target header par blue pill (ledger type pill jaisa) */
+  const showIcRevertedBadge =
+    !!(voucherRow as { interCompanyReversed?: boolean })?.interCompanyReversed ||
+    reverseFlowState.accepted;
+
+  /** Target dropdown — joined partners; edit par saved target id missing ho to option add */
   const targetComboboxOptions = useMemo(
     () =>
-      comboboxOptionsIncluding([
+      targetComboboxOptionsIncluding([
         displayTargetCompanyId,
         editEntityCompanyIds.targetCompanyFieldId,
       ]),
     [
-      comboboxOptionsIncluding,
+      targetComboboxOptionsIncluding,
       displayTargetCompanyId,
       editEntityCompanyIds.targetCompanyFieldId,
     ]
   );
 
-  // Edit: peer source / target company ka Inter Co. A/c — real company row se display
+  const targetCompanyDisplayName =
+    targetCompany?.name ||
+    joinedPartnerRowById.get(displayTargetCompanyId)?.name ||
+    "";
+
+  // Edit: peer source / target company ka Inter Co. A/c � real company row se display
   useEffect(() => {
     if (!isInterCompanyEditLocked) return;
     const ids = new Set(
@@ -573,11 +959,20 @@ export function InterCompanyVoucherForm({
       return false;
     }
     if (!sourcePayeeId) {
-      toast.error("Source: select account (party, bank, â€¦)");
+      toast.error("Source: select account (party, bank, …)");
       return false;
     }
     if (!targetPayeeId) {
-      toast.error("Target: select account (party, bank, â€¦)");
+      toast.error("Target: select account (party, bank, …)");
+      return false;
+    }
+    // Company bank — approve + bank ledger ke liye zaroori; khali save par account me entry nahi dikhti
+    if (!String(sourceCompanyBankId || "").trim()) {
+      toast.error("Source: select Company bank (Bank/Cash)");
+      return false;
+    }
+    if (!String(targetCompanyBankId || "").trim()) {
+      toast.error("Target: select Company bank (Bank/Cash)");
       return false;
     }
     return true;
@@ -596,7 +991,7 @@ export function InterCompanyVoucherForm({
     if (!validateEntities()) return;
 
     const values = form.getValues();
-    const toastId = toast.loading(savedSourceId ? "Updating…" : "Saving…");
+    const toastId = toast.loading(savedSourceId ? "Updating�" : "Saving�");
     setIsLoading(true);
     try {
       const isEdit = !!savedSourceId;
@@ -635,7 +1030,7 @@ export function InterCompanyVoucherForm({
         sourceCompanyId: companyId,
         targetCompanyId: values.targetCompanyId,
         userId: user.uid,
-        approverName: user.displayName || user.email || user.uid,
+        approverName: customUser?.displayName || user.displayName || user.email || user.uid,
         voucherNumber: values.voucherNumber,
         date: voucherDate,
         amount: values.amount,
@@ -644,6 +1039,14 @@ export function InterCompanyVoucherForm({
         sourceEntityId: sourcePayeeId,
         targetEntityKind: targetPayeeKind,
         targetEntityId: targetPayeeId,
+        sourceCompanyBankAccountId: sourceCompanyBankId,
+        targetCompanyBankAccountId: targetCompanyBankId,
+        sourceCompanyBankLabel:
+          sourceEntities.find((e) => e.kind === "bank" && e.id === sourceCompanyBankId)?.label ||
+          readInterCompanyBankLabelSnapshot(voucherRow, "source"),
+        targetCompanyBankLabel:
+          targetEntities.find((e) => e.kind === "bank" && e.id === targetCompanyBankId)?.label ||
+          readInterCompanyBankLabelSnapshot(voucherRow, "target"),
         sourceEntityLabel: sourceSelected?.label,
         targetEntityLabel: targetSelected?.label,
         sourceCompanyName: company?.name,
@@ -693,7 +1096,7 @@ export function InterCompanyVoucherForm({
                     ["Date", dateStr],
                     ["Amount", formatCurrency(values.amount)],
                     ["Target company", targetCompany?.name || values.targetCompanyId],
-                    ["Narration", values.narration || "—"],
+                    ["Narration", values.narration || "�"],
                   ],
                 },
                 layout: "lightHorizontalLines",
@@ -702,7 +1105,7 @@ export function InterCompanyVoucherForm({
             ],
           });
         } catch {
-          toast.info("Saved — print could not open");
+          toast.info("Saved � print could not open");
         }
       }
 
@@ -739,13 +1142,27 @@ export function InterCompanyVoucherForm({
   };
 
   const handleDelete = async () => {
-    if (!savedSourceId || !companyId || !user?.uid || editingDisabled) return;
-    const toastId = toast.loading("Deleting…");
+    if (
+      !savedSourceId ||
+      !companyId ||
+      !user?.uid ||
+      editingDisabled ||
+      isInterCompanyEditLocked
+    ) {
+      return;
+    }
+    if (interCompanyVoucherViewerSide(voucherRow) !== "source") {
+      toast.error("Delete from source company", {
+        description: "Inter Company delete is only allowed on the source company copy.",
+      });
+      return;
+    }
+    const toastId = toast.loading("Deleting�");
     setIsLoading(true);
     try {
       await deleteInterCompanyVoucherPair({
         sourceCompanyId: companyId,
-        sourceVoucherId: savedSourceId,
+        sourceVoucherId: String(voucher?.id || savedSourceId),
         peerCompanyId: targetCompanyId || readInterCompanyLink(voucher as Record<string, unknown>)?.peerCompanyId,
         peerVoucherId: peerTargetVoucherId,
         deletedByUid: user.uid,
@@ -766,92 +1183,57 @@ export function InterCompanyVoucherForm({
 
   const showBsDate = dateSystem === "BS" || dateSystem === "Both";
   const showAdDate = dateSystem === "AD" || dateSystem === "Both";
-  const identityColCount = 1 + (showBsDate ? 1 : 0) + (showAdDate ? 1 : 0);
 
   const voucherTabBody = (
-    <div className={cn("pl-inter-company-voucher", interCompanyVoucherTabShellClass)}>
-      <div
-        className="grid w-full min-w-0 items-end gap-3"
-        style={{ gridTemplateColumns: `repeat(${identityColCount}, minmax(0, 1fr))` }}
-      >
-        <FormField
-          control={form.control}
-          name="voucherNumber"
-          render={({ field }) => (
-            <FormItem className="min-w-0 space-y-1.5">
-              <FormLabel>Voucher No.</FormLabel>
-              <FormControl>
-                <Input {...field} className={interCompanyInputClass} disabled={fieldsDisabled} readOnly={isInterCompanyEditLocked} />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        <FormField
-          control={form.control}
-          name="date"
-          render={({ field }) => (
-            <>
-              {showBsDate && (
-                <FormItem className="min-w-0 space-y-1.5">
-                  <FormLabel>{dateSystem === "Both" ? "Date (BS)" : "Date"}</FormLabel>
-                  <BsDatePicker
-                    valueAD={field.value}
-                    onChangeAD={(d) => {
-                      if (d) d.setHours(12, 0, 0, 0);
-                      field.onChange(d as Date);
-                      setIsCalendarOpen(false);
-                    }}
-                    isRange={false}
-                    className={cn(interCompanyInputClass, "w-full text-xs")}
-                    disabled={fieldsDisabled}
-                  />
-                </FormItem>
-              )}
-              {showAdDate && (
-                <FormItem className="min-w-0 space-y-1.5">
-                  <FormLabel>{dateSystem === "Both" ? "Date (AD)" : "Date"}</FormLabel>
-                  <Popover modal open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
-                    <PopoverTrigger asChild>
-                      <FormControl>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          disabled={fieldsDisabled}
-                          className={cn(
-                            interCompanyDateButtonClass,
-                            !field.value && "text-muted-foreground"
-                          )}
-                        >
-                          {field.value ? formatDate(field.value) : (
-                            <span>Pick a date</span>
-                          )}
-                          <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
-                        </Button>
-                      </FormControl>
-                    </PopoverTrigger>
-                    <PopoverContent className="z-[102] w-auto p-0" align="start">
-                      <Calendar
-                        mode="single"
-                        selected={field.value}
-                        onSelect={(date) => {
-                          if (date) date.setHours(12, 0, 0, 0);
-                          field.onChange(date);
-                          setIsCalendarOpen(false);
-                        }}
-                        initialFocus
-                      />
-                    </PopoverContent>
-                  </Popover>
-                </FormItem>
-              )}
-            </>
-          )}
-        />
-      </div>
+    <div className={cn("pl-inter-company-voucher select-text", interCompanyVoucherTabShellClass)}>
       <FormField control={form.control} name="date" render={() => <FormMessage />} />
 
       <TwoColumnEntityGrid
+        leftHeader={
+          <FormField
+            control={form.control}
+            name="voucherNumber"
+            render={({ field }) => (
+              <FormItem className={interCompanyVoucherHeaderFieldColClass}>
+                <FormLabel className={interCompanyVoucherHeaderLabelClass}>Voucher No.</FormLabel>
+                <FormControl>
+                  <Input
+                    {...field}
+                    className={cn(
+                      interCompanyInputClass,
+                      interCompanyVoucherNumberInputSizingClass,
+                      isInterCompanyEditLocked && interCompanyReadOnlyCopyInputClass
+                    )}
+                    readOnly={isInterCompanyEditLocked}
+                    disabled={editingDisabled}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        }
+        rightHeader={
+          <FormField
+            control={form.control}
+            name="date"
+            render={({ field }) => (
+              <InterCompanyDateFieldsHeader
+                showBsDate={showBsDate}
+                showAdDate={showAdDate}
+                dateSystem={dateSystem}
+                value={field.value}
+                onChange={field.onChange}
+                fieldsDisabled={fieldsDisabled}
+                viewOnlyAllowCopy={isInterCompanyEditLocked}
+                isCalendarOpen={isCalendarOpen}
+                setIsCalendarOpen={setIsCalendarOpen}
+                formatDate={formatDate}
+                formatDateBS={formatDateBS}
+              />
+            )}
+          />
+        }
         targetCompanyField={
           <FormField
             control={form.control}
@@ -864,16 +1246,21 @@ export function InterCompanyVoucherForm({
                     if (isInterCompanyEditLocked) return;
                     field.onChange(id);
                     setTargetPayeeId("");
+                    setTargetCompanyBankId("");
                   }}
                   fieldsDisabled={fieldsDisabled}
                   comboboxOptions={targetComboboxOptions}
-                  resolveCompanyIdByAcNo={resolveCompanyIdByAcNo}
-                  resolveCompaniesByMobile={resolveCompaniesByMobile}
-                  acNoForCompanyId={acNoForAnyCompanyId}
-                  mobileForCompanyId={mobileForAnyCompanyId}
-                  partners={partners}
+                  resolveCompanyIdByAcNo={resolveJoinedCompanyIdByAcNo}
+                  resolveCompanyIdByCompanyCode={resolveJoinedCompanyIdByCompanyCode}
+                  resolveCompaniesByMobile={resolveJoinedCompaniesByMobile}
+                  resolveCompaniesByPan={resolveJoinedCompaniesByPan}
+                  companyCodeForCompanyId={joinedCompanyCodeForAnyCompanyId}
+                  acNoForCompanyId={joinedAcNoForAnyCompanyId}
+                  panForCompanyId={joinedPanForAnyCompanyId}
+                  mobileForCompanyId={joinedMobileForAnyCompanyId}
+                  partners={targetJoinedPartners}
                   lookupPartners={lookupPartners}
-                  allowTargetAccountSearchByName={targetAllowsNameLookup}
+                  targetPartnerPrivacy={targetPartnerPrivacy}
                   entities={targetEntities}
                   entitiesLoading={targetEntitiesLoading}
                   payeeKind={targetPayeeKind}
@@ -886,8 +1273,14 @@ export function InterCompanyVoucherForm({
                     if (isInterCompanyEditLocked) return;
                     setTargetPayeeId(id);
                   }}
-                  targetCompanyDisplayName={targetCompany?.name || ""}
+                  targetCompanyDisplayName={targetCompanyDisplayName}
                   showPaymentInBadge={showTargetPaymentInBadge}
+                  showRevertedBadge={showIcRevertedBadge}
+                  companyBankAccountId={targetCompanyBankId}
+                  onCompanyBankAccountIdChange={(id) => {
+                    if (isInterCompanyEditLocked) return;
+                    setTargetCompanyBankId(id);
+                  }}
                   formMessage={<FormMessage />}
                 />
               </FormItem>
@@ -914,7 +1307,13 @@ export function InterCompanyVoucherForm({
             showPaymentOutBadge={showSourcePaymentOutBadge}
             onRequestReverse={() => setReverseDialogOpen(true)}
             reverseRequestPending={reverseFlowState.pending}
-            reverseRequestDone={reverseFlowState.accepted || !!(voucherRow as { interCompanyReversed?: boolean })?.interCompanyReversed}
+            reverseRequestDone={showIcRevertedBadge}
+            showRevertedBadge={showIcRevertedBadge}
+            companyBankAccountId={sourceCompanyBankId}
+            onCompanyBankAccountIdChange={(id) => {
+              if (isInterCompanyEditLocked) return;
+              setSourceCompanyBankId(id);
+            }}
           />
         }
       />
@@ -923,18 +1322,18 @@ export function InterCompanyVoucherForm({
         source={{
           title: "Source",
           companyName: sourceCompanyForDisplay?.name,
-          companyAcNo: readCompanyInterCompanyAcNo(sourceCompanyForDisplay),
+          companyCode: sourceStickyCompanyCode,
           companyMobile: normalizeInterCompanyPhone(sourceCompanyForDisplay?.phone),
           entity: sourceSelected,
         }}
         target={{
           title: "Target",
-          companyName: targetCompany?.name,
-          companyAcNo: displayTargetCompanyId
-            ? acNoForAnyCompanyId(displayTargetCompanyId)
-            : "",
+          companyName: targetCompanyDisplayName || targetCompany?.name,
+          companyCode:
+            targetStickyCompanyCode ||
+            (displayTargetCompanyId ? joinedCompanyCodeForAnyCompanyId(displayTargetCompanyId) : ""),
           companyMobile: displayTargetCompanyId
-            ? mobileForAnyCompanyId(displayTargetCompanyId)
+            ? joinedMobileForAnyCompanyId(displayTargetCompanyId)
             : "",
           entity: targetSelected,
         }}
@@ -965,10 +1364,13 @@ export function InterCompanyVoucherForm({
                 <FormControl className="min-h-0 flex-1">
                   <Textarea
                     {...field}
-                    disabled={fieldsDisabled}
                     readOnly={isInterCompanyEditLocked}
+                    disabled={editingDisabled}
                     rows={3}
-                    className={interCompanyNarrationTextareaInCardClass}
+                    className={cn(
+                      interCompanyNarrationTextareaInCardClass,
+                      isInterCompanyEditLocked && interCompanyReadOnlyCopyInputClass
+                    )}
                     placeholder="Same on both companies + auto inter-company line"
                   />
                 </FormControl>
@@ -991,7 +1393,10 @@ export function InterCompanyVoucherForm({
         className="flex min-h-0 flex-1 flex-col"
         onSubmit={form.handleSubmit(() => void processAndSave())}
       >
-        <ScrollArea className="min-h-0 flex-1 pr-2">
+        <ScrollArea
+          icVoucherChrome
+          className={cn("min-h-0 flex-1 pr-2", interCompanyVoucherScrollAreaClass)}
+        >
           <div className="space-y-4 pb-2">
             {!inDialog ? (
               <div className="flex flex-wrap items-center gap-2">
@@ -1006,24 +1411,19 @@ export function InterCompanyVoucherForm({
             ) : null}
 
             {ribbonTab === "voucher" ? voucherTabBody : null}
-            {ribbonTab === "invite" && companyId ? (
-              <InterCompanyInvitePanel
-                companyId={companyId}
-                sourceCompanyName={company?.name || "Company"}
-              />
-            ) : null}
             {ribbonTab === "join" && companyId ? (
               <InterCompanyJoinSettingsPanel
                 companyId={companyId}
-                partners={partners}
                 onSettingsChange={() => setIcSettingsTick((n) => n + 1)}
               />
             ) : null}
             {ribbonTab === "revert_requests" && companyId ? (
               <InterCompanyReverseRequestsPanel
                 companyId={companyId}
-                filterTargetVoucherId={
-                  icViewerSide === "target" ? String(voucher?.id || savedSourceId || "") : undefined
+                highlightTargetVoucherId={
+                  icViewerSide === "target"
+                    ? String(peerTargetVoucherId || voucher?.id || "").trim() || undefined
+                    : undefined
                 }
                 onAccepted={() => {
                   setReverseTick((n) => n + 1);
@@ -1044,7 +1444,7 @@ export function InterCompanyVoucherForm({
             }
             editingDisabled={fieldsDisabled}
             isEditViewOnly={isInterCompanyEditLocked}
-            isCompanyAdmin={isCompanyAdmin}
+            isCompanyAdmin={isCompanyAdmin && !isInterCompanyEditLocked}
             deleteDisabledWhenLinked={deleteDisabledWhenLinked}
             showHistoryButton={showHistoryButton}
             showApproveButton={showApproveButton}
@@ -1075,12 +1475,14 @@ export function InterCompanyVoucherForm({
       />
     ) : null;
 
+  // auto column = ribbon collapse par icon-only width; content column baaki width le
   const ribbonLayout = (
-    <div className="grid min-h-0 flex-1 gap-3 md:grid-cols-[minmax(10rem,12rem)_1fr] md:gap-4">
+    <div className="grid min-h-0 flex-1 gap-3 md:grid-cols-[auto_1fr] md:gap-4">
       <InterCompanyRibbonNav
         active={ribbonTab}
         onChange={setRibbonTab}
         pendingRevertCount={pendingRevertCount}
+        pendingSystemJoinCount={pendingSystemJoinCount}
       />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">{formInner}</div>
     </div>
@@ -1102,7 +1504,7 @@ export function InterCompanyVoucherForm({
         <div className="min-w-0 flex-1">
           <h1 className="text-lg font-semibold text-emerald-950 dark:text-emerald-50">Inter Company</h1>
           <p className="text-xs text-emerald-900/75 dark:text-emerald-200/80">
-            Voucher · Invite · Join — company A/c No se connect
+            Voucher · Inter Com System · connect via company A/c No
           </p>
         </div>
       </div>

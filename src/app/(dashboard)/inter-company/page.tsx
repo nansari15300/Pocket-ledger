@@ -2,15 +2,52 @@
 
 /**
  * Inter Company — New Trxn dialog me same UI (default tab inter_company).
+ * Alerts "Go to" se `?icTab=join&companyId=` par Join ribbon khulta hai.
  */
-import { useState } from "react";
+import { useEffect, useMemo, useState, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
+import type { InterCompanyRibbonTab } from "@/components/inter-company/InterCompanyRibbonNav";
 import { useCompany } from "@/hooks/useCompany";
 import { Loader2 } from "lucide-react";
 
 export default function InterCompanyPage() {
-  const { companyId, loading } = useCompany();
+  return (
+    // `useSearchParams` — Next.js static prerender ke liye Suspense boundary
+    <Suspense
+      fallback={
+        <div className="flex min-h-[40vh] items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      }
+    >
+      <InterCompanyPageContent />
+    </Suspense>
+  );
+}
+
+function InterCompanyPageContent() {
+  const searchParams = useSearchParams();
+  const { companyId, loading, setCompanyId, allCompanies } = useCompany();
   const [open, setOpen] = useState(true);
+
+  const urlCompanyId = String(searchParams.get("companyId") || "").trim();
+  const urlIcTab = String(searchParams.get("icTab") || "").trim();
+
+  const initialInterCompanyRibbonTab = useMemo((): InterCompanyRibbonTab | undefined => {
+    if (urlIcTab === "join" || urlIcTab === "revert_requests" || urlIcTab === "voucher") {
+      return urlIcTab;
+    }
+    return undefined;
+  }, [urlIcTab]);
+
+  // Alert deep link — target company select karo taaki Join requests sahi company ke liye dikhein
+  useEffect(() => {
+    if (!urlCompanyId) return;
+    if (allCompanies.some((c) => c.id === urlCompanyId) && companyId !== urlCompanyId) {
+      setCompanyId(urlCompanyId);
+    }
+  }, [urlCompanyId, allCompanies, companyId, setCompanyId]);
 
   if (loading && !companyId) {
     return (
@@ -33,6 +70,7 @@ export default function InterCompanyPage() {
       isOpen={open}
       onOpenChange={setOpen}
       defaultTab="inter_company"
+      initialInterCompanyRibbonTab={initialInterCompanyRibbonTab}
       onVoucherAction={() => setOpen(false)}
     />
   );

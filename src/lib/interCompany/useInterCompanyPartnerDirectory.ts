@@ -9,6 +9,11 @@ import {
   readCompanyInterCompanyAcNo,
 } from "@/lib/interCompany/interCompanyAccountNo";
 import {
+  isValidInterCompanyCompanyCode,
+  normalizeInterCompanyCompanyCode,
+  readCompanyInterCompanyCode,
+} from "@/lib/interCompany/interCompanyCompanyCode";
+import {
   interCompanyPhonesMatch,
   normalizeInterCompanyPhone,
 } from "@/lib/interCompany/interCompanyPhone";
@@ -18,8 +23,13 @@ export type InterCompanyPartnerRow = {
   id: string;
   name: string;
   acNo: string;
+  /** SWIFT-style company code — voucher company row */
+  companyCode: string;
+  pan: string;
   mobile: string;
   isShared: boolean;
+  /** Target dropdown — system card name(s) bracket me */
+  systemNames?: string[];
 };
 
 /** Partner label — join settings display mode ke hisaab se. */
@@ -33,13 +43,125 @@ export function formatInterCompanyPartnerLabel(
   return row.mobile ? `${row.name} · ${row.mobile}` : row.name;
 }
 
-function mapCompanyToPartnerRow(c: Company): InterCompanyPartnerRow {
+export function mapCompanyToPartnerRow(c: Company): InterCompanyPartnerRow {
   return {
     id: c.id!,
     name: String(c.name || c.id || "").trim(),
     acNo: readCompanyInterCompanyAcNo(c),
+    companyCode: readCompanyInterCompanyCode(c),
+    pan: String(c.pan || "")
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, ""),
     mobile: normalizeInterCompanyPhone(c.phone),
     isShared: c.isOwned === false,
+  };
+}
+
+/** Joined target list / edit extras — rows se directory helpers (public profile rows bhi) */
+export function buildInterCompanyPartnerDirectoryFromRows(
+  allCompanyRows: InterCompanyPartnerRow[],
+  partners: InterCompanyPartnerRow[] = allCompanyRows
+) {
+  const byAcNo = new Map<string, string>();
+  const byCompanyCode = new Map<string, string>();
+  for (const p of partners) {
+    if (p.acNo) byAcNo.set(p.acNo, p.id);
+    if (p.companyCode) byCompanyCode.set(p.companyCode, p.id);
+  }
+
+  // Target dropdown — sirf company name (system name bracket me nahi)
+  const optionLabel = (p: InterCompanyPartnerRow) => p.name;
+
+  const comboboxOptions = partners.map((p) => ({
+    value: p.id,
+    label: optionLabel(p),
+  }));
+
+  /** Edit: saved target id list me missing ho to merged rows se option add */
+  const comboboxOptionsIncluding = (extraCompanyIds: string[]) => {
+    const opts = [...comboboxOptions];
+    const seen = new Set(opts.map((o) => o.value));
+    for (const id of extraCompanyIds) {
+      if (!id || seen.has(id)) continue;
+      const row = allCompanyRows.find((p) => p.id === id);
+      if (!row) continue;
+      opts.unshift({ value: row.id, label: optionLabel(row) });
+      seen.add(id);
+    }
+    return opts;
+  };
+
+  const resolveCompanyIdByAcNo = (typed: string): string | null => {
+    const norm = normalizeInterCompanyAcNo(typed);
+    if (!isValidInterCompanyAcNo(norm)) return null;
+    const p = interCompanyAcNoPrefix(norm);
+    if (p && p !== "C") return null;
+    return byAcNo.get(norm) ?? null;
+  };
+
+  const resolveCompanyIdByCompanyCode = (typed: string): string | null => {
+    const norm = normalizeInterCompanyCompanyCode(typed);
+    if (!isValidInterCompanyCompanyCode(norm)) return null;
+    return byCompanyCode.get(norm) ?? null;
+  };
+
+  const resolveCompaniesByMobile = (typed: string): InterCompanyPartnerRow[] => {
+    const digits = normalizeInterCompanyPhone(typed);
+    if (digits.length < 7) return [];
+    return partners.filter((p) => p.mobile && interCompanyPhonesMatch(p.mobile, digits));
+  };
+
+  const resolveCompaniesByPan = (typed: string): InterCompanyPartnerRow[] => {
+    const pan = String(typed || "")
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
+    if (pan.length < 4) return [];
+    return partners.filter((p) => p.pan && (p.pan === pan || p.pan.includes(pan)));
+  };
+
+  const acNoForCompanyId = (id: string): string =>
+    partners.find((p) => p.id === id)?.acNo ?? "";
+
+  const panForCompanyId = (id: string): string =>
+    partners.find((p) => p.id === id)?.pan ?? "";
+
+  const mobileForCompanyId = (id: string): string =>
+    partners.find((p) => p.id === id)?.mobile ?? "";
+
+  const acNoForAnyCompanyId = (id: string): string =>
+    allCompanyRows.find((p) => p.id === id)?.acNo ?? "";
+
+  const companyCodeForCompanyId = (id: string): string =>
+    partners.find((p) => p.id === id)?.companyCode ?? "";
+
+  const companyCodeForAnyCompanyId = (id: string): string =>
+    allCompanyRows.find((p) => p.id === id)?.companyCode ?? "";
+
+  const mobileForAnyCompanyId = (id: string): string =>
+    allCompanyRows.find((p) => p.id === id)?.mobile ?? "";
+
+  const panForAnyCompanyId = (id: string): string =>
+    allCompanyRows.find((p) => p.id === id)?.pan ?? "";
+
+  return {
+    partners,
+    allCompanyRows,
+    comboboxOptions,
+    comboboxOptionsIncluding,
+    resolveCompanyIdByAcNo,
+    resolveCompanyIdByCompanyCode,
+    resolveCompaniesByMobile,
+    resolveCompaniesByPan,
+    acNoForCompanyId,
+    panForCompanyId,
+    companyCodeForCompanyId,
+    mobileForCompanyId,
+    acNoForAnyCompanyId,
+    companyCodeForAnyCompanyId,
+    mobileForAnyCompanyId,
+    panForAnyCompanyId,
   };
 }
 
@@ -65,72 +187,6 @@ export function useInterCompanyPartnerDirectory(
 
     const partners: InterCompanyPartnerRow[] = allCompanyRows.filter((c) => c.id !== excludeCompanyId);
 
-    const byAcNo = new Map<string, string>();
-    for (const p of partners) {
-      if (p.acNo) byAcNo.set(p.acNo, p.id);
-    }
-
-    const optionLabel = (p: InterCompanyPartnerRow) =>
-      p.isShared ? `${p.name} (shared)` : p.name;
-
-    // Dropdown: sirf company name — A/c No / mobile alag fields me
-    const comboboxOptions = partners.map((p) => ({
-      value: p.id,
-      label: optionLabel(p),
-    }));
-
-    /** Edit mode: current/target company partners list me nahi hoti — real row se option add karo */
-    const comboboxOptionsIncluding = (extraCompanyIds: string[]) => {
-      const opts = [...comboboxOptions];
-      const seen = new Set(opts.map((o) => o.value));
-      for (const id of extraCompanyIds) {
-        if (!id || seen.has(id)) continue;
-        const row = allCompanyRows.find((p) => p.id === id);
-        if (!row) continue;
-        opts.unshift({ value: row.id, label: optionLabel(row) });
-        seen.add(id);
-      }
-      return opts;
-    };
-
-    const resolveCompanyIdByAcNo = (typed: string): string | null => {
-      const norm = normalizeInterCompanyAcNo(typed);
-      if (!isValidInterCompanyAcNo(norm)) return null;
-      const p = interCompanyAcNoPrefix(norm);
-      if (p && p !== "C") return null;
-      return byAcNo.get(norm) ?? null;
-    };
-
-    const resolveCompaniesByMobile = (typed: string): InterCompanyPartnerRow[] => {
-      const digits = normalizeInterCompanyPhone(typed);
-      if (digits.length < 7) return [];
-      return partners.filter((p) => p.mobile && interCompanyPhonesMatch(p.mobile, digits));
-    };
-
-    const acNoForCompanyId = (id: string): string =>
-      partners.find((p) => p.id === id)?.acNo ?? "";
-
-    const mobileForCompanyId = (id: string): string =>
-      partners.find((p) => p.id === id)?.mobile ?? "";
-
-    /** Display / edit — logged-in company ko bhi resolve kare */
-    const acNoForAnyCompanyId = (id: string): string =>
-      allCompanyRows.find((p) => p.id === id)?.acNo ?? "";
-
-    const mobileForAnyCompanyId = (id: string): string =>
-      allCompanyRows.find((p) => p.id === id)?.mobile ?? "";
-
-    return {
-      partners,
-      allCompanyRows,
-      comboboxOptions,
-      comboboxOptionsIncluding,
-      resolveCompanyIdByAcNo,
-      resolveCompaniesByMobile,
-      acNoForCompanyId,
-      mobileForCompanyId,
-      acNoForAnyCompanyId,
-      mobileForAnyCompanyId,
-    };
+    return buildInterCompanyPartnerDirectoryFromRows(allCompanyRows, partners);
   }, [allCompanies, excludeCompanyId]);
 }

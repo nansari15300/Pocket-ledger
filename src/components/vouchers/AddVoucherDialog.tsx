@@ -42,6 +42,8 @@ import { CreateNoteForm } from "./CreateNoteForm";
 import { SalaryForm } from "./SalaryForm";
 import { CreateProductionForm } from "./CreateProductionForm";
 import { InterCompanyVoucherForm } from "@/components/inter-company/InterCompanyVoucherForm";
+import type { InterCompanyRibbonTab } from "@/components/inter-company/InterCompanyRibbonNav";
+import { isInterCompanyVoucherEditDeleteBlocked } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { useCompany, CompanyContext } from "@/hooks/useCompany";
 import usePermissions from "@/hooks/usePermissions";
 import { useVouchers, VoucherProvider } from "@/hooks/useVouchers";
@@ -869,6 +871,8 @@ function VoucherDialogContent({
   onRefreshCopyMismatch,
   /** Parent `AddVoucherDialog` ko current tab batao — header Auto Monthly sirf journal pe. */
   onActiveTabChange,
+  onInterCompanyRibbonTabChange,
+  initialInterCompanyRibbonTab,
   recurringVoucherSaveBlocked = false,
   recurringVoucherAuxiliaryDirty = false,
 }: { 
@@ -901,6 +905,9 @@ function VoucherDialogContent({
   onCashflowQuadTabNavigate?: () => void;
   onRefreshCopyMismatch?: () => void | Promise<void>;
   onActiveTabChange?: (tab: VoucherType) => void;
+  onInterCompanyRibbonTabChange?: (tab: InterCompanyRibbonTab) => void;
+  /** `/inter-company?icTab=join` — dialog open par Join ribbon */
+  initialInterCompanyRibbonTab?: InterCompanyRibbonTab;
   /** `true` jab account me 1 se zyada company — header company dropdown dikhane ke liye. */
   showHeaderCompanySelector?: boolean;
   headerCompanyReadOnlyLabel?: string;
@@ -1177,6 +1184,14 @@ function VoucherDialogContent({
               {...(onRefreshCopyMismatch ? { onRefreshCopyMismatch } : {})}
               recurringVoucherSaveBlocked={recurringVoucherSaveBlocked}
               recurringVoucherAuxiliaryDirty={recurringVoucherAuxiliaryDirty}
+              {...(activeTab === "inter_company"
+                ? {
+                    onRibbonTabChange: onInterCompanyRibbonTabChange,
+                    ...(initialInterCompanyRibbonTab
+                      ? { initialRibbonTab: initialInterCompanyRibbonTab }
+                      : {}),
+                  }
+                : {})}
             />
           ) : null}
         </Suspense>
@@ -1333,13 +1348,22 @@ export function AddVoucherDialog(props: any) {
   const [missedRecurringGap, setMissedRecurringGap] = useState<{ periodKey: string; bsY: number; bsM: number } | null>(null);
   const [missedRecurringGapScanning, setMissedRecurringGapScanning] = useState(false);
   const [skippingMissedRecurring, setSkippingMissedRecurring] = useState(false);
-  /** `VoucherDialogContent` se sync — yahan `activeTab` nahi hai; recurring strip sirf journal tab pe dikhao. */
-  const [voucherFormActiveTab, setVoucherFormActiveTab] = useState<VoucherType>("sale");
+  /** `VoucherDialogContent` se sync — Inter Company open/edit par header lock turant (child mount se pehle flash na ho). */
+  const [voucherFormActiveTab, setVoucherFormActiveTab] = useState<VoucherType>(() =>
+    getVoucherType(voucher, defaultVoucherData, (rest as { defaultTab?: string }).defaultTab ?? "sale")
+  );
   /** Auto recurring UI + Firestore: inner form ka current tab journal ho tab hi. */
   const showVoucherAutoRecurringUi = voucherFormActiveTab === "journal";
-  /** Inter Company saved voucher — edit read-only; Copy To band */
+  /** Inter Company ribbon sub-tab — Join/Invite par Save & Copy To mat dikhao */
+  const [interCompanyRibbonTab, setInterCompanyRibbonTab] = useState<InterCompanyRibbonTab>(
+    () => (rest as { initialInterCompanyRibbonTab?: InterCompanyRibbonTab }).initialInterCompanyRibbonTab ?? "voucher"
+  );
+  /** Inter Company saved voucher — edit read-only; Copy To band; Join/Invite/Revert par bhi band */
   const copyToDisabledForInterCompany =
-    !!voucher?.id && String((voucher as { type?: string })?.type || voucherFormActiveTab) === "inter_company";
+    voucherFormActiveTab === "inter_company" &&
+    ((!!voucher?.id &&
+      String((voucher as { type?: string })?.type || voucherFormActiveTab) === "inter_company") ||
+      interCompanyRibbonTab !== "voucher");
   const recurringEditorsEffective = canViewRecurringOnVoucher && showVoucherAutoRecurringUi;
   /** Switch / dirty: view strip alag; toggle ON/OFF alag permission. */
   const recurringVoucherControlsEditable = recurringEditorsEffective && canToggleAutoMonthlySwitch;
@@ -1361,19 +1385,29 @@ export function AddVoucherDialog(props: any) {
   /** Create / edit / copy: header company dropdown jab account me 1 se zyada company ho. */
   const showHeaderCompanySelector = allCompanies.length > 1;
 
-  /** Inter Company saved voucher edit — ribbon par current company naam read-only. */
+  /** Inter Company tab — header company sirf current (sidebar / edit) company; dropdown lock. */
+  const interCompanyHeaderLockedCompanyId = useMemo(() => {
+    if (voucherFormActiveTab !== "inter_company") return "";
+    return String(editCompanyId?.trim() || ctxCompanyId || companyId || "").trim();
+  }, [voucherFormActiveTab, editCompanyId, ctxCompanyId, companyId]);
+
+  useEffect(() => {
+    if (voucherFormActiveTab !== "inter_company") {
+      setInterCompanyRibbonTab("voucher");
+    }
+  }, [voucherFormActiveTab]);
+
   const interCompanyRibbonCompanyReadOnly = useMemo(() => {
-    if (!copyToDisabledForInterCompany) return undefined;
-    const cid = String(editCompanyId?.trim() || ctxCompanyId || companyId || "").trim();
+    if (voucherFormActiveTab !== "inter_company") return undefined;
+    const cid = interCompanyHeaderLockedCompanyId;
+    if (!cid) return undefined;
     const c =
       allCompanies.find((x) => x.id === cid) ?? (company?.id === cid ? company : null);
     const name = String(c?.name ?? company?.name ?? "").trim();
     return name || undefined;
   }, [
-    copyToDisabledForInterCompany,
-    editCompanyId,
-    ctxCompanyId,
-    companyId,
+    voucherFormActiveTab,
+    interCompanyHeaderLockedCompanyId,
     allCompanies,
     company,
   ]);
@@ -1384,6 +1418,8 @@ export function AddVoucherDialog(props: any) {
   /** Header company Select: copy-draft = sirf targetCompanyId; APK shell = global setCompanyId + storage pin. */
   const handleLedgerHeaderCompanyChange = useCallback(
     (v: string) => {
+      // Inter Company: target company change nahi — sirf read-only current company.
+      if (voucherFormActiveTab === "inter_company") return;
       if (postCopyNewFormSeed) {
         setTargetCompanyId(v);
         return;
@@ -1396,8 +1432,15 @@ export function AddVoucherDialog(props: any) {
       }
       setTargetCompanyId(v);
     },
-    [postCopyNewFormSeed, apkLedgerPinsShellCompanyContext, setCompanyId]
+    [voucherFormActiveTab, postCopyNewFormSeed, apkLedgerPinsShellCompanyContext, setCompanyId]
   );
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (voucherFormActiveTab !== "inter_company") return;
+    const cid = interCompanyHeaderLockedCompanyId;
+    if (cid && targetCompanyId !== cid) setTargetCompanyId(cid);
+  }, [isOpen, voucherFormActiveTab, interCompanyHeaderLockedCompanyId, targetCompanyId]);
 
   /** VoucherDialogContent tab switch par call — stale link flags hatao (file upload dubara chale). */
   const clearEffectiveLinksOnTabChange = useCallback(() => {
@@ -1586,13 +1629,25 @@ export function AddVoucherDialog(props: any) {
       setRecurringLastGeneratedAtMs(null);
       return;
     }
+    const rawLp =
+      recurringTemplateSnapshot?.lastGeneratedPeriodKey != null &&
+      String(recurringTemplateSnapshot.lastGeneratedPeriodKey).trim()
+        ? String(recurringTemplateSnapshot.lastGeneratedPeriodKey).trim()
+        : null;
     void getDoc(doc(firestore, `companies/${companyId}/vouchers`, vid)).then((snap) => {
       if (cancelled) return;
       if (!snap.exists()) {
         setRecurringLastGeneratedAtMs(null);
+        setRecurringTemplateLastPeriodKey(null);
         return;
       }
       const d = snap.data() as Record<string, unknown>;
+      if (d.isDeleted === true) {
+        setRecurringLastGeneratedAtMs(null);
+        setRecurringTemplateLastPeriodKey(null);
+        return;
+      }
+      setRecurringTemplateLastPeriodKey(rawLp);
       const meta = d.recurringMeta;
       if (meta && typeof meta === "object") {
         const g = (meta as Record<string, unknown>).generatedAtMs;
@@ -1611,7 +1666,11 @@ export function AddVoucherDialog(props: any) {
     return () => {
       cancelled = true;
     };
-  }, [companyId, recurringTemplateSnapshot?.lastGeneratedVoucherId]);
+  }, [
+    companyId,
+    recurringTemplateSnapshot?.lastGeneratedVoucherId,
+    recurringTemplateSnapshot?.lastGeneratedPeriodKey,
+  ]);
 
   // Re-seed-on-target-change tracker: avoid loop when same target is auto-applied.
   const lastReseededTargetRef = useRef<string | null>(null);
@@ -1995,16 +2054,25 @@ export function AddVoucherDialog(props: any) {
    */
   const isEditLockedByLinks = !!voucherForDialogChrome?.id && hasLinks;
 
+  /** IC: target copy / source approved — dialog bhi view-only (ledger "View" jaisa). */
+  const interCompanyViewOnly = useMemo(() => {
+    if (!voucherForDialogChrome?.id) return false;
+    if (String(voucherForDialogChrome.type || "") !== "inter_company") return false;
+    return isInterCompanyVoucherEditDeleteBlocked(voucherForDialogChrome as Record<string, unknown>);
+  }, [voucherForDialogChrome]);
+
+  const effectiveForceViewOnly = forceViewOnly || interCompanyViewOnly;
+
   // Recycle bin view: hamesha read-only — permission check skip
   useEffect(() => {
-    if (forceViewOnly) {
+    if (effectiveForceViewOnly) {
       setEditingDisabled(true);
     }
-  }, [forceViewOnly, isOpen]);
+  }, [effectiveForceViewOnly, isOpen]);
 
   // Permission-based: disable edit when user cannot edit this voucher (role + ownership)
   useEffect(() => {
-    if (forceViewOnly) return;
+    if (effectiveForceViewOnly) return;
     if (!voucherForDialogChrome?.id) {
       setEditingDisabled(false);
       return;
@@ -2033,15 +2101,30 @@ export function AddVoucherDialog(props: any) {
       fetchVoucher
     ).then((isOwnRecord) => {
       if (!cancelled) {
+        const icLocked =
+          String(voucherForDialogChrome.type || "") === "inter_company" &&
+          isInterCompanyVoucherEditDeleteBlocked(voucherForDialogChrome as Record<string, unknown>);
         const canEdit = canEditRecord(isOwnRecord, voucherForDialogChrome);
-        setEditingDisabled(!canEdit);
+        setEditingDisabled(!canEdit || icLocked);
       }
     });
     return () => { cancelled = true; };
-  }, [voucherForDialogChrome?.id, voucherForDialogChrome?.isApproved, companyId, user?.uid, vouchers, canEditRecord, ctxCompanyId, allCompanies, company, forceViewOnly]);
+  }, [
+    voucherForDialogChrome?.id,
+    voucherForDialogChrome?.isApproved,
+    voucherForDialogChrome?.type,
+    companyId,
+    user?.uid,
+    vouchers,
+    canEditRecord,
+    ctxCompanyId,
+    allCompanies,
+    company,
+    effectiveForceViewOnly,
+  ]);
 
   const voucherDialogTitle =
-    forceViewOnly && !!voucher?.id ? "View Trxn" : !!voucher?.id ? "Edit Trxn" : "New Trxn";
+    effectiveForceViewOnly && !!voucher?.id ? "View Trxn" : !!voucher?.id ? "Edit Trxn" : "New Trxn";
 
   // Block edit rule: when history full + setting "Block edit", disable Save (user must clear history first)
   // Re-run when company changes so live voucher settings (from Settings) apply immediately
@@ -2588,8 +2671,14 @@ export function AddVoucherDialog(props: any) {
       recurringTemplateForProjection,
       autoVoucherNextDueAd,
       recurringLastGeneratedAtMs,
+      recurringTemplateLastPeriodKey,
     );
-  }, [autoVoucherNextDueAd, recurringTemplateForProjection, recurringLastGeneratedAtMs]);
+  }, [
+    autoVoucherNextDueAd,
+    recurringTemplateForProjection,
+    recurringLastGeneratedAtMs,
+    recurringTemplateLastPeriodKey,
+  ]);
 
   /** Agle due par banne wali (rate-adjusted) rashi — form + live voucher se. */
   const autoVoucherProjectedNextTotal = useMemo(() => {
@@ -3688,7 +3777,7 @@ export function AddVoucherDialog(props: any) {
               : undefined
           }
           showHistoryButton={!!voucherForDialogChrome?.id && can("view_voucher_history")}
-          editingDisabled={editingDisabled || historyBlocksEdit || apkOfflineViewOnly || forceViewOnly}
+          editingDisabled={editingDisabled || historyBlocksEdit || apkOfflineViewOnly || effectiveForceViewOnly}
           restrictConvertWhenLinked={hasLinks}
           deleteDisabledWhenLinked={isEditLockedByLinks}
           showApproveButton={showApproveButton}
@@ -3718,6 +3807,7 @@ export function AddVoucherDialog(props: any) {
           onCashflowQuadTabNavigate={postCopyNewFormSeed ? onCashflowQuadTabNavigate : undefined}
           onRefreshCopyMismatch={postCopyNewFormSeed ? refreshCopyMismatchAfterMasterSave : undefined}
           onActiveTabChange={setVoucherFormActiveTab}
+          onInterCompanyRibbonTabChange={setInterCompanyRibbonTab}
           recurringVoucherSaveBlocked={recurringVoucherSaveBlocked}
           recurringVoucherAuxiliaryDirty={recurringVoucherAuxiliaryDirty}
         />
@@ -3856,7 +3946,7 @@ export function AddVoucherDialog(props: any) {
           </div>
         </DialogContent>
       )}
-      {copyButtonMountNode && !forceViewOnly && !copyToDisabledForInterCompany &&
+      {copyButtonMountNode && !effectiveForceViewOnly && !copyToDisabledForInterCompany &&
         createPortal(
           <Button
             type="button"

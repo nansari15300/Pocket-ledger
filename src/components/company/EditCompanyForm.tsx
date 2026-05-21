@@ -23,7 +23,7 @@ import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage
 import { storage } from "@/lib/firebase";
 import { compressFile } from "@/lib/compression";
 import { FilePreview } from "../vouchers/FilePreview";
-import { CompanyInterCompanyAcNoField } from "@/components/inter-company/CompanyInterCompanyAcNoField";
+import { CompanyInterCompanyCodeField } from "@/components/inter-company/CompanyInterCompanyCodeField";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -676,6 +676,7 @@ export function EditCompanyForm() {
 
     } catch (error) {
       console.error("Error updating company:", error);
+      const code = (error as { code?: string })?.code;
       const msg =
         error instanceof Error && error.message === "company_not_on_server"
           ? "This company is not on the server yet. Connect and sync, then try again."
@@ -683,7 +684,9 @@ export function EditCompanyForm() {
             ? "Set a password for a new invite."
             : isCompanyNotFoundError(error)
               ? COMPANY_NOT_SYNCED_MESSAGE
-              : "Failed to update company details. Please try again.";
+              : code === "permission-denied"
+                ? "Firestore permission denied — deploy firestore.rules, or ask the company owner to save."
+                : "Failed to update company details. Please try again.";
       toast({
         variant: "destructive",
         title: "Error",
@@ -870,7 +873,7 @@ export function EditCompanyForm() {
                     </FormItem>
                 )}
                 />
-                <CompanyInterCompanyAcNoField mode="edit" />
+                <CompanyInterCompanyCodeField mode="edit" />
                 <FormField
                 control={form.control}
                 name="pan"

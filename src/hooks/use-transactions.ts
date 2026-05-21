@@ -26,13 +26,19 @@ import {
   getAllocationTotal,
   OPENING_BALANCE_VOUCHER_ID,
 } from "@/lib/payment-allocation-utils";
-import { isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay } from "@/lib/ledgerUserColumnDisplay";
+import { resolveLedgerTransactionUserDisplayName } from "@/lib/ledgerUserColumnDisplay";
 import {
   getInterCompanyLedgerAmounts,
+  hideUnapprovedTargetInterCompanyEntityLedger,
   interCompanyKindForContext,
   interCompanyVoucherTouchesEntity,
+  keepUnapprovedInterCompanyLedgerPlaceholderRow,
 } from "@/lib/interCompany/interCompanyLedgerAmounts";
-import { interCompanyVoucherViewerSide } from "@/lib/interCompany/interCompanyVoucherHydrate";
+import {
+  interCompanyVoucherViewerSide,
+  shouldShowInterCompanyInDaybookOrRecent,
+} from "@/lib/interCompany/interCompanyVoucherHydrate";
+import { sumJournalAmountsForAccount } from "@/lib/journalLedgerAmounts";
 
 
 type EntityWithItems = { id: string; items: (Item | Staff | Account | ExpenseAccount | Party)[], openingBalance?: number, [key: string]: any };
@@ -155,12 +161,10 @@ export const getTransactionAmounts = (
                 if (transaction.fromAccountId === entity.id) credit += amount;
             }
             
-            if (transaction.type === "journal" && Array.isArray(transaction.entries)) {
-                const entry = transaction.entries.find((e: any) => e.accountId === entity?.id);
-                if (entry) {
-                    debit += Number(entry.debit || 0);
-                    credit += Number(entry.credit || 0);
-                }
+            if (transaction.type === "journal" && Array.isArray(transaction.entries) && entity?.id) {
+                const journalAmt = sumJournalAmountsForAccount(transaction.entries, entity.id);
+                debit += journalAmt.debit;
+                credit += journalAmt.credit;
             }
             break;
             
@@ -189,11 +193,9 @@ export const getTransactionAmounts = (
                 if (transaction.toAccountId === entity.id) debit = amount; 
                 if (transaction.fromAccountId === entity.id) credit = amount; 
             } else if (transaction.type === "journal" && Array.isArray(transaction.entries)) {
-                const entry = transaction.entries.find((e: any) => e.accountId === entity.id);
-                if (entry) {
-                    debit += Number(entry.debit || 0);
-                    credit += Number(entry.credit || 0);
-                }
+                const journalAmt = sumJournalAmountsForAccount(transaction.entries, entity.id);
+                debit += journalAmt.debit;
+                credit += journalAmt.credit;
             }
             break;
 
@@ -277,11 +279,9 @@ export const getTransactionAmounts = (
             }
             
             if (transaction.type === "journal" && transaction.subType !== 'add_salary' && Array.isArray(transaction.entries)) {
-                const entry = transaction.entries.find((e: any) => e.accountId === entity.id);
-                if (entry) {
-                    debit += Number(entry.debit || 0);
-                    credit += Number(entry.credit || 0);
-                }
+                const journalAmt = sumJournalAmountsForAccount(transaction.entries, entity.id);
+                debit += journalAmt.debit;
+                credit += journalAmt.credit;
             }
             break;
         
@@ -519,9 +519,25 @@ export const getTransactionAmounts = (
         } else if (['purchase', 'payment_out', 'direct_expense'].includes(transaction.type)) {
           debit = amount; // Money going out = Debit
         } else if (transaction.type === 'inter_company') {
-          const side = interCompanyVoucherViewerSide(transaction);
-          if (side === 'source') debit = amount;
-          else if (side === 'target') credit = amount;
+          if (!shouldShowInterCompanyInDaybookOrRecent(transaction)) {
+            debit = 0;
+            credit = 0;
+          } else {
+            const ic = getInterCompanyLedgerAmounts(
+              transaction,
+              "account",
+              String(transaction.companyBankAccountId || "").trim(),
+              amount
+            );
+            if (ic.touched) {
+              debit = ic.debit;
+              credit = ic.credit;
+            } else {
+              const side = interCompanyVoucherViewerSide(transaction);
+              if (side === "source") debit = amount;
+              else if (side === "target") debit = amount;
+            }
+          }
         }
         break;
         
@@ -700,14 +716,11 @@ export const getTaxTransactionAmounts = (transaction: any, taxAccountId: string,
             taxRate = (taxAmount / taxableAmount) * 100;
         }
     } else if (Array.isArray(transaction.entries)) {
-        const taxEntry = transaction.entries.find((e: any) => e.accountId === taxAccountId);
-        if (taxEntry) {
-            const entryDebit = Number(taxEntry.debit || 0);
-            const entryCredit = Number(taxEntry.credit || 0);
-            taxAmount = entryDebit || entryCredit;
-
-            debit += entryDebit;
-            credit += entryCredit;
+        const journalAmt = sumJournalAmountsForAccount(transaction.entries, taxAccountId);
+        if (journalAmt.debit > 0 || journalAmt.credit > 0) {
+            taxAmount = journalAmt.debit || journalAmt.credit;
+            debit += journalAmt.debit;
+            credit += journalAmt.credit;
             
             if (transaction.subType === 'add_salary') {
                 const staffEntry = transaction.entries.find((e: any) => e.credit > 0 && e.accountId !== taxAccountId);
@@ -870,7 +883,10 @@ export function useTransactions(
                 });
             }
         } else if (context === 'daybook') {
-            entityTransactions = transactionsToProcess;
+            entityTransactions = transactionsToProcess.filter((v: any) => {
+              if (v?.type !== "inter_company") return true;
+              return shouldShowInterCompanyInDaybookOrRecent(v as Record<string, unknown>);
+            });
         } else if (context === 'other') {
              entityTransactions = transactionsToProcess.filter((v: any) => v.payeeName === entity.id);
         } else if (context === 'item') {
@@ -903,6 +919,12 @@ export function useTransactions(
             }
         } else {
             entityTransactions = transactionsToProcess.filter((v: any) => {
+                const entityIdStr = String(entity.id || "");
+                if (
+                  hideUnapprovedTargetInterCompanyEntityLedger(v, context, entityIdStr)
+                ) {
+                  return false;
+                }
                 // Standard filters
                 if (v.partyId === entity.id ||
                 v.accountId === entity.id ||
@@ -916,7 +938,14 @@ export function useTransactions(
                 v.items?.some((li: any) => li.itemId === entity.id) || 
                 v.entries?.some((e: any) => e.accountId === entity.id) ||
                 (v.type === 'note' && v.entityId === entity.id) ||
-                    (v.type === 'contra' && (v.fromAccountId === entity.id || v.toAccountId === entity.id))) {
+                    (v.type === 'contra' && (v.fromAccountId === entity.id || v.toAccountId === entity.id)) ||
+                // IC: `companyBankAccountId` + target/source entity ids — sirf staffId se kaafi nahi
+                (v.type === "inter_company" &&
+                    ((context === "party" && interCompanyVoucherTouchesEntity(v, entity.id, "party")) ||
+                        (context === "staff" && interCompanyVoucherTouchesEntity(v, entity.id, "staff")) ||
+                        (context === "account" && interCompanyVoucherTouchesEntity(v, entity.id, "bank")) ||
+                        (context === "tax" && interCompanyVoucherTouchesEntity(v, entity.id, "tax")) ||
+                        (context === "expense" && interCompanyVoucherTouchesEntity(v, entity.id, "expense"))))) {
                     return true;
                 }
                 
@@ -988,13 +1017,8 @@ export function useTransactions(
                     allSearchableFields.push(String(vn).toLowerCase());
                 }
                 
-                // User
-                const uId = t.userId;
-                const userName = isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay(t)
-                  ? "Auto"
-                  : (userNames && uId && userNames[uId])
-                    ? userNames[uId]
-                    : (t.userId || "");
+                // User — same resolver as table column (Auto flicker fix)
+                const userName = resolveLedgerTransactionUserDisplayName(t, userNames);
                 allSearchableFields.push(String(userName).toLowerCase());
                 
                 // Accounts/Particulars
@@ -1293,9 +1317,14 @@ export function useTransactions(
                 const amounts = getTransactionAmounts(t, context, entity, stockView, entityList, processedTaxes);
                 
                 // Filter out transactions with zero amounts for individual accounts/groups (so irrelevant txns don't show)
-                // Exception: Note vouchers have no debit/credit; keep them so they show on party, bank, staff, tax, item, expense pages
+                // Exception: Note vouchers; unapproved IC placeholder (pink row, balance 0) — bank approve se pehle
                 if (context !== 'daybook' && context !== 'other' && amounts.debit === 0 && amounts.credit === 0 && t.type !== 'note') {
-                    return null;
+                    const entityIdForIc =
+                      entity && typeof entity === 'object' && 'id' in entity ? String((entity as { id?: string }).id || '') : '';
+                    const keepIcPlaceholder =
+                      entityIdForIc &&
+                      keepUnapprovedInterCompanyLedgerPlaceholderRow(t as Record<string, unknown>, context, entityIdForIc);
+                    if (!keepIcPlaceholder) return null;
                 }
                 
                 if (isJournalAllView && t.type === 'journal') {

@@ -29,6 +29,14 @@ import { useCompany } from "@/hooks/useCompany";
 import { useDate } from "@/hooks/useDate";
 import { resetVoucherHistory, deleteHistoryEntries } from "@/lib/voucherActionsClient";
 import { SPEND_WISE_OPENING_BALANCE_ID, SPEND_WISE_OPENING_BALANCE_HISTORY_LABEL } from "@/lib/spendWiseOpeningBalance";
+import {
+  IC_HISTORY_KEYS,
+  isInterCompanyCreateHistoryEntry,
+  isRecurringAutoUserDisplayLabel,
+  resolveHumanActorDisplayLabel,
+  synthesizeInterCompanyCreateHistoryChanges,
+  voucherHasInterCompanyCreateHistoryFields,
+} from "@/lib/interCompany/interCompanyVoucherHistory";
 import { Trash2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
@@ -156,6 +164,14 @@ const APPROVAL_FIELDS = new Set([
  * Unknown fields get order 999.
  */
 const FIELD_ORDER: Record<string, number> = {
+  // Inter Company create — sabse upar (pehli history card)
+  [IC_HISTORY_KEYS.addedByUser]: 0.1,
+  [IC_HISTORY_KEYS.userEmail]: 0.2,
+  [IC_HISTORY_KEYS.userPhone]: 0.3,
+  [IC_HISTORY_KEYS.voucherDate]: 0.4,
+  [IC_HISTORY_KEYS.voucherTime]: 0.5,
+  [IC_HISTORY_KEYS.fromCompany]: 0.6,
+  [IC_HISTORY_KEYS.toCompany]: 0.7,
   // 1. Voucher identifiers
   voucherNumber: 1,
   date: 2,
@@ -217,6 +233,13 @@ function getEntityLabelForField(field: string, voucherType: string | undefined):
 
 /** Human-readable labels for history fields. */
 const FIELD_LABELS: Record<string, string> = {
+  [IC_HISTORY_KEYS.addedByUser]: "Added by user",
+  [IC_HISTORY_KEYS.userEmail]: "Email",
+  [IC_HISTORY_KEYS.userPhone]: "Phone",
+  [IC_HISTORY_KEYS.voucherDate]: "Date",
+  [IC_HISTORY_KEYS.voucherTime]: "Time",
+  [IC_HISTORY_KEYS.fromCompany]: "From company",
+  [IC_HISTORY_KEYS.toCompany]: "To company",
   voucherNumber: 'Voucher No',
   date: 'Voucher Date',
   partyId: 'Party',
@@ -678,6 +701,8 @@ export function HistoryDialog({
   onMarkAsReadFromAlert?: () => Promise<void> | void;
 }) {
   const [historyUserNames, setHistoryUserNames] = useState<Record<string, string>>({});
+  /** Inter Company create rows: creator email / phone (users collection). */
+  const [historyUserMeta, setHistoryUserMeta] = useState<Record<string, { email?: string; phone?: string }>>({});
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [isMarkingAlertRead, setIsMarkingAlertRead] = useState(false);
@@ -687,7 +712,7 @@ export function HistoryDialog({
   const [deletedMs, setDeletedMs] = useState<Set<number>>(new Set());
   const { processedParties, processedAccounts, processedStaff, processedTaxes, processedItems, expenseAccounts, userNames: vouchersUserNames, vouchers } = useVouchers();
   const { can } = usePermissions();
-  const { companyId } = useCompany();
+  const { companyId, company } = useCompany();
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const highlightRef = useRef<HTMLDivElement | null>(null);
 
@@ -721,24 +746,66 @@ export function HistoryDialog({
         return 0;
     });
 
-  const fetchUserName = useCallback(async (userId: string): Promise<string> => {
-    if (historyUserNames[userId]) return historyUserNames[userId];
-    if (vouchersUserNames?.[userId]) return vouchersUserNames[userId];
-    try {
+  const fetchUserProfile = useCallback(
+    async (userId: string): Promise<{ name: string; email?: string; phone?: string }> => {
+      const cachedName = historyUserNames[userId] || vouchersUserNames?.[userId];
+      const cachedMeta = historyUserMeta[userId];
+      const cachedEmail =
+        cachedMeta?.email ||
+        (typeof voucher?.userEmail === "string" ? voucher.userEmail : undefined);
+      // "Auto" cache se mat ruko — Firestore se asli naam lao (recurring ke alawa)
+      if (cachedName && cachedMeta && !isRecurringAutoUserDisplayLabel(cachedName)) {
+        return {
+          name: resolveHumanActorDisplayLabel({ candidate: cachedName, email: cachedEmail, userId }),
+          email: cachedMeta.email,
+          phone: cachedMeta.phone,
+        };
+      }
+      try {
         const q = query(collection(firestore, "users"), where("uid", "==", userId));
         const snap = await getDocs(q);
-        const byUid = snap.docs[0]?.data();
+        const byUid = snap.docs[0]?.data() as { displayName?: string; name?: string; email?: string; phone?: string; mobile?: string } | undefined;
         if (byUid) {
-            return byUid.displayName || byUid.name || byUid.email || userId;
+          const email = String(byUid.email || cachedEmail || "").trim() || undefined;
+          const name = resolveHumanActorDisplayLabel({
+            candidate: byUid.displayName || byUid.name,
+            email,
+            userId,
+          });
+          const phone = String(byUid.phone || byUid.mobile || "").trim() || undefined;
+          return { name, email, phone };
         }
-        const userDoc = await getDoc(doc(firestore, 'users', userId));
+        const userDoc = await getDoc(doc(firestore, "users", userId));
         if (userDoc.exists()) {
-            const data = userDoc.data();
-            return data.displayName || data.name || data.email || userId;
+          const data = userDoc.data() as { displayName?: string; name?: string; email?: string; phone?: string; mobile?: string };
+          const email = String(data.email || cachedEmail || "").trim() || undefined;
+          const name = resolveHumanActorDisplayLabel({
+            candidate: data.displayName || data.name,
+            email,
+            userId,
+          });
+          const phone = String(data.phone || data.mobile || "").trim() || undefined;
+          return { name, email, phone };
         }
-    } catch (e) {}
-    return userId;
-  }, [historyUserNames, vouchersUserNames]);
+      } catch {
+        /* offline */
+      }
+      return {
+        name: resolveHumanActorDisplayLabel({ candidate: cachedName, email: cachedEmail, userId }),
+        email: cachedEmail,
+        phone: cachedMeta?.phone,
+      };
+    },
+    [historyUserNames, historyUserMeta, vouchersUserNames],
+  );
+
+  const fetchUserName = useCallback(
+    async (userId: string): Promise<string> => {
+      const p = await fetchUserProfile(userId);
+      return p.name;
+    },
+    [fetchUserProfile],
+  );
 
   useEffect(() => {
     if (!isOpen) return;
@@ -753,18 +820,35 @@ export function HistoryDialog({
       });
     });
 
-    const missing = Array.from(uids).filter((uid) => !historyUserNames[uid] && !vouchersUserNames?.[uid]);
+    const missing = Array.from(uids).filter((uid) => {
+      const cached = historyUserNames[uid] || vouchersUserNames?.[uid];
+      if (!cached) return true;
+      if (isRecurringAutoUserDisplayLabel(cached)) return true;
+      return !historyUserNames[uid];
+    });
     if (missing.length === 0) return;
 
     let cancelled = false;
-    Promise.all(missing.map(async (uid) => ({ uid, name: await fetchUserName(uid) }))).then((results) => {
+    Promise.all(missing.map(async (uid) => ({ uid, ...(await fetchUserProfile(uid)) }))).then((results) => {
       if (cancelled) return;
       setHistoryUserNames((prev) => {
         let changed = false;
         const next = { ...prev };
-        results.forEach(({ uid, name }) => {
-          if (!next[uid] && name) {
-            next[uid] = name;
+        results.forEach(({ uid, name, email }) => {
+          const resolved = resolveHumanActorDisplayLabel({ candidate: name, email, userId: uid });
+          if (!next[uid] || isRecurringAutoUserDisplayLabel(next[uid])) {
+            next[uid] = resolved;
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
+      });
+      setHistoryUserMeta((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        results.forEach(({ uid, email, phone }) => {
+          if (!next[uid] && (email || phone)) {
+            next[uid] = { email, phone };
             changed = true;
           }
         });
@@ -774,7 +858,9 @@ export function HistoryDialog({
     return () => {
       cancelled = true;
     };
-  }, [history, isOpen, historyUserNames, vouchersUserNames, fetchUserName]);
+  }, [history, isOpen, historyUserNames, vouchersUserNames, fetchUserProfile]);
+
+  const isInterCompanyVoucher = String(voucher?.type || "").toLowerCase() === "inter_company";
 
   const getNameById = (id: string, type: string) => {
     if (!id) return id;
@@ -862,6 +948,45 @@ export function HistoryDialog({
     const parsed = new Date(changedAt);
     return isNaN(parsed.getTime()) ? null : parsed;
   }, []);
+
+  /** IC create card: legacy `created` ko alag rows me badal do; generic lastEdited rows hatao. */
+  const resolveDisplayHistoryChanges = useCallback(
+    (entry: { changedBy?: string; changedAt?: unknown; changes?: Record<string, { from: unknown; to: unknown }> }) => {
+      const raw = { ...(entry.changes || {}) } as Record<string, { from: unknown; to: unknown }>;
+      if (!isInterCompanyVoucher || !isInterCompanyCreateHistoryEntry(raw)) return raw;
+
+      let changes = raw;
+      if (!voucherHasInterCompanyCreateHistoryFields(raw)) {
+        const at = getHistoryChangedAt(entry.changedAt) || new Date();
+        const uid = String(entry.changedBy || "");
+        const meta = historyUserMeta[uid];
+        const email = meta?.email ?? (typeof voucher?.userEmail === "string" ? voucher.userEmail : null);
+        const name = resolveHumanActorDisplayLabel({
+          candidate: historyUserNames[uid] || vouchersUserNames?.[uid],
+          email,
+          userId: uid,
+        });
+        const synth = synthesizeInterCompanyCreateHistoryChanges({
+          voucher: (voucher || {}) as Record<string, unknown>,
+          changedByName: name,
+          userEmail: email,
+          userPhone: meta?.phone ?? null,
+          changedAt: at,
+        });
+        if (!synth[IC_HISTORY_KEYS.fromCompany]?.to && company?.name) {
+          synth[IC_HISTORY_KEYS.fromCompany] = { from: "N/A", to: company.name };
+        }
+        changes = { ...synth, ...raw };
+      }
+
+      const cleaned = { ...changes };
+      delete cleaned.created;
+      delete cleaned.lastEditedByUserName;
+      delete cleaned.lastEditedAt;
+      return cleaned;
+    },
+    [isInterCompanyVoucher, voucher, historyUserMeta, historyUserNames, vouchersUserNames, company?.name, getHistoryChangedAt],
+  );
 
   /**
    * Group consecutive history entries by same user + timestamps within 15 seconds,
@@ -965,6 +1090,29 @@ export function HistoryDialog({
     [formatHistoryDateTime],
   );
 
+  /** IC history: Date row — sirf calendar date (time alag row). */
+  const renderIcDateOnly = useCallback(
+    (value: unknown): React.ReactNode => {
+      const d =
+        firestoreTimestampLikeToDate(value) ||
+        (value instanceof Date && !Number.isNaN(value.getTime()) ? value : null) ||
+        (typeof value === "string" && value.trim() ? new Date(value) : null);
+      if (!d || Number.isNaN(d.getTime())) return <span className="text-muted-foreground">N/A</span>;
+      const dateStr = dateSystem === "BS" || dateSystem === "Both" ? formatDateBS(d) : formatDate(d);
+      return <span className="break-words whitespace-normal">{dateStr}</span>;
+    },
+    [dateSystem, formatDate, formatDateBS],
+  );
+
+  /** IC history: Time row — sirf clock time. */
+  const renderIcTimeOnly = useCallback((value: unknown): React.ReactNode => {
+    const d =
+      firestoreTimestampLikeToDate(value) ||
+      (value instanceof Date && !Number.isNaN(value.getTime()) ? value : null);
+    if (!d || Number.isNaN(d.getTime())) return <span className="text-muted-foreground">N/A</span>;
+    return <span className="break-words whitespace-normal">{formatFns(d, "h:mm a")}</span>;
+  }, []);
+
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent className="rounded-lg sm:rounded-xl left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[calc(100vw-4px)] sm:w-[calc(100vw-30px)] max-w-[calc(100vw-4px)] sm:max-w-[12in] py-6 pl-[2px] pr-[2px] sm:pl-[15px] sm:pr-[15px] h-[90vh] flex flex-col min-w-0">
@@ -1002,7 +1150,16 @@ export function HistoryDialog({
                       <span className={cn("inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold shrink-0", badgeClass)}>
                         {badgeLabel}
                       </span>
-                      <p className="min-w-0 break-words"><b>User:</b> {historyUserNames[entry.changedBy] || vouchersUserNames?.[entry.changedBy] || entry.changedBy}</p>
+                      <p className="min-w-0 break-words">
+                        <b>User:</b>{" "}
+                        {resolveHumanActorDisplayLabel({
+                          candidate: historyUserNames[entry.changedBy] || vouchersUserNames?.[entry.changedBy],
+                          email:
+                            historyUserMeta[entry.changedBy]?.email ??
+                            (typeof voucher?.userEmail === "string" ? voucher.userEmail : null),
+                          userId: entry.changedBy,
+                        })}
+                      </p>
                     </div>
                     <div className="flex items-start gap-3 shrink-0">
                       <div className="text-right">
@@ -1062,7 +1219,8 @@ export function HistoryDialog({
                     </TableHeader>
                     <TableBody>
                       {(() => {
-                        const baseEntries = Object.entries(entry.changes) as [string, any][];
+                        const displayChanges = resolveDisplayHistoryChanges(entry);
+                        const baseEntries = Object.entries(displayChanges) as [string, any][];
                         // Inject __entries_ids__ and __entries_narration__ slots so they render after Total
                         const entriesField = baseEntries.find(([f]) => f === 'entries' || f === 'Entries');
                         const withSlot: [string, any][] = entriesField
@@ -1131,6 +1289,14 @@ export function HistoryDialog({
                           field === 'companyId' || field === 'CompanyId' ||
                           field === 'UserEmail' || field === 'userEmail'
                         ) return null;
+                        // Inter Company create: generic Created / lastEdited rows duplicate — mat dikhao
+                        if (
+                          isInterCompanyVoucher &&
+                          isInterCompanyCreateHistoryEntry(displayChanges) &&
+                          (field === "created" || field === "lastEditedBy" || field === "lastEditedAt")
+                        ) {
+                          return null;
+                        }
                         // Direct expense etc.: when both accountId and fromAccountId exist, show only From Account to avoid duplicate row
                         if (field === 'accountId' && entry.changes && 'fromAccountId' in entry.changes) return null;
 
@@ -1184,6 +1350,46 @@ export function HistoryDialog({
                               <TableCell className="font-medium min-w-[160px] w-1/3 align-top text-left pr-2.5 whitespace-normal break-words">{linkLabel}</TableCell>
                               <TableCell className="min-w-[140px] w-1/3 align-top text-left px-2.5 whitespace-normal break-words">{oldText}</TableCell>
                               <TableCell className="min-w-[140px] w-1/3 align-top text-left pl-2.5 whitespace-normal break-words">{newText}</TableCell>
+                            </TableRow>
+                          );
+                        }
+
+                        // --- Inter Company: Date / Time alag format ---
+                        if (field === IC_HISTORY_KEYS.voucherDate) {
+                          return (
+                            <TableRow key={field} className="even:bg-muted/30">
+                              <TableCell className="font-medium min-w-[160px] w-1/3 align-top text-left pr-2.5 whitespace-normal break-words">{fieldLabel}</TableCell>
+                              <TableCell className="min-w-[140px] w-1/3 align-top text-left px-2.5 whitespace-normal break-words">{renderIcDateOnly(values.from)}</TableCell>
+                              <TableCell className="min-w-[140px] w-1/3 align-top text-left pl-2.5 whitespace-normal break-words">{renderIcDateOnly(displayTo)}</TableCell>
+                            </TableRow>
+                          );
+                        }
+                        if (field === IC_HISTORY_KEYS.voucherTime) {
+                          return (
+                            <TableRow key={field} className="even:bg-muted/30">
+                              <TableCell className="font-medium min-w-[160px] w-1/3 align-top text-left pr-2.5 whitespace-normal break-words">{fieldLabel}</TableCell>
+                              <TableCell className="min-w-[140px] w-1/3 align-top text-left px-2.5 whitespace-normal break-words">{renderIcTimeOnly(values.from)}</TableCell>
+                              <TableCell className="min-w-[140px] w-1/3 align-top text-left pl-2.5 whitespace-normal break-words">{renderIcTimeOnly(displayTo)}</TableCell>
+                            </TableRow>
+                          );
+                        }
+                        // IC create: purani history me "Auto" save ho to email / Firestore se asli naam dikhao
+                        if (field === IC_HISTORY_KEYS.addedByUser) {
+                          const icEmail =
+                            displayChanges[IC_HISTORY_KEYS.userEmail]?.to ??
+                            historyUserMeta[entry.changedBy]?.email ??
+                            (typeof voucher?.userEmail === "string" ? voucher.userEmail : null);
+                          const fmtActor = (v: unknown) =>
+                            resolveHumanActorDisplayLabel({
+                              candidate: typeof v === "string" ? v : String(v ?? ""),
+                              email: icEmail,
+                              userId: entry.changedBy,
+                            });
+                          return (
+                            <TableRow key={field} className="even:bg-muted/30">
+                              <TableCell className="font-medium min-w-[160px] w-1/3 align-top text-left pr-2.5 whitespace-normal break-words">{fieldLabel}</TableCell>
+                              <TableCell className="min-w-[140px] w-1/3 align-top text-left px-2.5 whitespace-normal break-words">{fmtActor(values.from)}</TableCell>
+                              <TableCell className="min-w-[140px] w-1/3 align-top text-left pl-2.5 whitespace-normal break-words">{fmtActor(displayTo)}</TableCell>
                             </TableRow>
                           );
                         }

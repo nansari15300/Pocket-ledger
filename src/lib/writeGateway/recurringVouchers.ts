@@ -387,6 +387,8 @@ async function pickManualRecurringGenerateTarget(
       : [],
   );
   const minPk = effectiveMinPeriodKeyForRecurringScan(template, sourceMinDay);
+  const sourceOccupiedPk = sourceVoucherBsPeriodKey(sourceMinDay);
+  if (sourceOccupiedPk) activePks.add(sourceOccupiedPk);
 
   const tryPick = (y: number, m: number): { periodKey: string; bsY: number; bsM: number } | null => {
     const pk = toPeriodKey(y, m);
@@ -394,6 +396,7 @@ async function pickManualRecurringGenerateTarget(
     if (comparePeriodKeysAsc(pk, todayPk) > 0) return null;
     if (activePks.has(pk) || suppressed.has(pk)) return null;
     if (!periodScheduleDueNotBeforeSourceVoucher(template, y, m, sourceMinDay)) return null;
+    if (!periodScheduleDueHasArrived(template, y, m, now)) return null;
     return { periodKey: pk, bsY: y, bsM: m };
   };
 
@@ -440,6 +443,8 @@ export async function listMissingRecurringPeriodSlotsAscending(
       : [],
   );
   const minPk = effectiveMinPeriodKeyForRecurringScan(template, sourceMinDay);
+  const sourceOccupiedPk = sourceVoucherBsPeriodKey(sourceMinDay);
+  if (sourceOccupiedPk) activePks.add(sourceOccupiedPk);
 
   const tryPick = (y: number, m: number): { periodKey: string; bsY: number; bsM: number } | null => {
     const pk = toPeriodKey(y, m);
@@ -447,6 +452,7 @@ export async function listMissingRecurringPeriodSlotsAscending(
     if (comparePeriodKeysAsc(pk, todayPk) > 0) return null;
     if (activePks.has(pk) || suppressed.has(pk)) return null;
     if (!periodScheduleDueNotBeforeSourceVoucher(template, y, m, sourceMinDay)) return null;
+    if (!periodScheduleDueHasArrived(template, y, m, now)) return null;
     return { periodKey: pk, bsY: y, bsM: m };
   };
 
@@ -576,6 +582,30 @@ async function loadSourceMinLocalDayForTemplate(companyId: string, template: Rec
   const snap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, vid));
   if (!snap.exists()) return null;
   return sourceVoucherMinLocalDayStartFromData(snap.data() as Record<string, unknown>);
+}
+
+/** Source voucher ki BS mahina — manual voucher pehle se hai; ask / batch list me dubara mat dikhao. */
+function sourceVoucherBsPeriodKey(sourceMinDay: Date | null): string | null {
+  if (!sourceMinDay) return null;
+  const bs = adToBs(
+    new Date(sourceMinDay.getFullYear(), sourceMinDay.getMonth(), sourceMinDay.getDate(), 12, 0, 0, 0),
+  );
+  return toPeriodKey(bs.y, bs.m);
+}
+
+/**
+ * Schedule due din aaj ya pehle — current mahine ka “last day” abhi nahi aaya to ask list / generate me mat lao.
+ * (`getPastDueRecurringGapIfAny` jaisa rule — batch list me pehle missing tha.)
+ */
+function periodScheduleDueHasArrived(
+  template: RecurringVoucherTemplate,
+  bsY: number,
+  bsM: number,
+  now: Date,
+): boolean {
+  const dueStart = scheduleDueLocalStartForPeriod(template, bsY, bsM);
+  if (!dueStart) return false;
+  return dueStart.getTime() <= startOfLocalDay(now).getTime();
 }
 
 /** Us BS mahine me template ka scheduled due (local calendar day start) — delete-before-due vs suppress decide karne ke liye. */
@@ -809,25 +839,43 @@ export function applyRecurringRateAdjustment(
   return out;
 }
 
+/** Journal lines se Dr jod — saved (`debit`) + draft (`type`+`amount`); accrual / projected amount yahi. */
+function journalDebitTotalFromEntries(entries: unknown): number {
+  if (!Array.isArray(entries)) return 0;
+  let debitSum = 0;
+  for (const raw of entries) {
+    if (!raw || typeof raw !== "object") continue;
+    const e = raw as Record<string, unknown>;
+    const dr = Number(e.debit);
+    if (Number.isFinite(dr) && dr > 0) {
+      debitSum += dr;
+      continue;
+    }
+    const t = String(e.type || "").toLowerCase();
+    const amt = Number(e.amount);
+    if (t === "debit" && Number.isFinite(amt) && amt > 0) debitSum += amt;
+  }
+  return debitSum;
+}
+
 /**
  * UI accrual strip: voucher se “main” rashi — total / amount / journal Dr jod / lineItems.
  * `createOne` ke baad wala projected body isi shape par rate adjust hota hai.
  */
 export function primaryMonetaryTotalFromVoucher(v: Record<string, unknown>): number {
+  const typ = String(v.type || "").toLowerCase();
+  // Journal: pehle entries — header `total` purana/chhota reh sakta hai (10,000 lines par accrued ~31 aata tha)
+  if (typ === "journal") {
+    const fromEntries = journalDebitTotalFromEntries(v.entries);
+    if (fromEntries > 0) return fromEntries;
+  }
   const total = v.total;
   if (typeof total === "number" && Number.isFinite(total) && total !== 0) return Math.abs(total);
   const amount = v.amount;
   if (typeof amount === "number" && Number.isFinite(amount) && amount !== 0) return Math.abs(amount);
-  const typ = String(v.type || "").toLowerCase();
   const entries = v.entries;
   if (typ === "journal" && Array.isArray(entries)) {
-    let debitSum = 0;
-    for (const raw of entries) {
-      if (!raw || typeof raw !== "object") continue;
-      const e = raw as Record<string, unknown>;
-      const dr = Number(e.debit);
-      if (Number.isFinite(dr) && dr > 0) debitSum += dr;
-    }
+    const debitSum = journalDebitTotalFromEntries(entries);
     if (debitSum > 0) return debitSum;
   }
   const lineItems = v.lineItems;
@@ -875,20 +923,36 @@ export function projectNextRecurringMonetaryTotal(
 }
 
 /**
- * Linear accrual start: pehle last auto `generatedAtMs` / `createdAt`; nahi to pichhle BS period ka scheduled due (local start).
+ * Linear accrual start: agle due wale BS mahine ka window — pichhle mahine ke schedule due se.
+ * `lastGeneratedAtMs` sirf jab last auto **usi** mahine (next due period) ka ho; warna timestamp se 5 din ≈ Rs 5 dikhta.
  */
 export function computeRecurringAccrualPeriodStartMs(
   template: RecurringVoucherTemplate,
   nextDueAd: Date,
   lastGeneratedAtMs: number | null | undefined,
+  effectiveLastPeriodKey?: string | null,
 ): number {
-  if (lastGeneratedAtMs != null && Number.isFinite(lastGeneratedAtMs)) {
+  const bsDue = adToBs(atNoonLocal(nextDueAd));
+  const prev = addBsMonths(bsDue.y, bsDue.m, -1);
+  const prevDueStart = scheduleDueLocalStartForPeriod(template, prev.y, prev.m);
+  const prevStartMs = prevDueStart?.getTime() ?? null;
+  const accrualPeriodKey = toPeriodKey(bsDue.y, bsDue.m);
+
+  const lastPk =
+    effectiveLastPeriodKey !== undefined
+      ? effectiveLastPeriodKey != null && String(effectiveLastPeriodKey).trim()
+        ? String(effectiveLastPeriodKey).trim()
+        : null
+      : template.lastGeneratedPeriodKey != null && String(template.lastGeneratedPeriodKey).trim()
+        ? String(template.lastGeneratedPeriodKey).trim()
+        : null;
+
+  if (lastGeneratedAtMs != null && Number.isFinite(lastGeneratedAtMs) && lastPk === accrualPeriodKey) {
+    if (prevStartMs != null) return Math.max(lastGeneratedAtMs, prevStartMs);
     return lastGeneratedAtMs;
   }
-  const bs = adToBs(atNoonLocal(nextDueAd));
-  const prev = addBsMonths(bs.y, bs.m, -1);
-  const start = scheduleDueLocalStartForPeriod(template, prev.y, prev.m);
-  if (start) return start.getTime();
+  if (prevStartMs != null) return prevStartMs;
+  if (lastGeneratedAtMs != null && Number.isFinite(lastGeneratedAtMs)) return lastGeneratedAtMs;
   return startOfLocalDay(nextDueAd).getTime() - 35 * 86400000;
 }
 
@@ -1027,6 +1091,13 @@ export async function setRecurringTemplateForVoucher(
     chainKey = keyFromManualOnNo;
   }
 
+  // Recycle / clone move: stale `lastGenerated*` mat rakho — dashboard accrual + next-due skip galat rehte hain.
+  const progressResolved = await resolveLastGeneratedForTemplateSave(
+    companyId,
+    existingData,
+    payload.sourceVoucherId,
+  );
+
   const next: RecurringVoucherTemplate = {
     sourceVoucherId: payload.sourceVoucherId,
     recurringSeriesKey: seriesKey ?? null,
@@ -1059,8 +1130,8 @@ export async function setRecurringTemplateForVoucher(
     seriesBaseAnchorIso: seriesKey ? seriesBaseMerged : null,
     createdByUserId: existing.exists() ? existingData.createdByUserId ?? payload.actorUserId ?? null : payload.actorUserId ?? null,
     createdByName: existing.exists() ? existingData.createdByName ?? payload.actorName ?? null : payload.actorName ?? null,
-    lastGeneratedPeriodKey: existingData.lastGeneratedPeriodKey ?? null,
-    lastGeneratedVoucherId: existingData.lastGeneratedVoucherId ?? null,
+    lastGeneratedPeriodKey: progressResolved.lastGeneratedPeriodKey,
+    lastGeneratedVoucherId: progressResolved.lastGeneratedVoucherId,
     suppressedPeriodKeys: Array.isArray(existingData.suppressedPeriodKeys) ? existingData.suppressedPeriodKeys : [],
     createdAt: existing.exists() ? existingData.createdAt ?? serverTimestamp() : serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -1105,6 +1176,108 @@ export function canRunRecurringAutoOnAppOpen(
  * Return `true` = is period ab `suppressed` — Generate now / app-open is mahine dubara nahi (due date ke baad wala delete).
  * Return `false` = sirf early test delete (due se pehle) ya kuch nahi — scheduled din par phir generate ho sakta hai.
  */
+/**
+ * Template save / UI: deleted ya missing last auto → period skip + accrual start dono reset.
+ * Zinda last auto ho to Firestore `lastGeneratedPeriodKey` + voucher timestamp wapas.
+ */
+export function resolveRecurringTemplateProgress(
+  template: RecurringVoucherTemplate,
+  lastGeneratedVoucher: Record<string, unknown> | null | undefined,
+): {
+  lastGeneratedPeriodKey: string | null;
+  lastGeneratedVoucherId: string | null;
+  lastGeneratedAtMs: number | null;
+} {
+  const lastVid = String(template.lastGeneratedVoucherId || "").trim();
+  const rawPk =
+    template.lastGeneratedPeriodKey != null && String(template.lastGeneratedPeriodKey).trim()
+      ? String(template.lastGeneratedPeriodKey).trim()
+      : null;
+  if (!lastVid) {
+    return { lastGeneratedPeriodKey: rawPk, lastGeneratedVoucherId: null, lastGeneratedAtMs: null };
+  }
+  const stale =
+    !lastGeneratedVoucher || lastGeneratedVoucher.isDeleted === true;
+  if (stale) {
+    return { lastGeneratedPeriodKey: null, lastGeneratedVoucherId: null, lastGeneratedAtMs: null };
+  }
+  let lastMs: number | null = null;
+  const meta = lastGeneratedVoucher.recurringMeta;
+  if (meta && typeof meta === "object") {
+    const g = (meta as Record<string, unknown>).generatedAtMs;
+    if (typeof g === "number" && Number.isFinite(g)) lastMs = g;
+  }
+  if (lastMs == null) {
+    const ca = lastGeneratedVoucher.createdAt as { toDate?: () => Date } | undefined;
+    if (ca && typeof ca.toDate === "function") {
+      const d = ca.toDate();
+      if (!Number.isNaN(d.getTime())) lastMs = d.getTime();
+    }
+  }
+  return {
+    lastGeneratedPeriodKey: rawPk,
+    lastGeneratedVoucherId: lastVid,
+    lastGeneratedAtMs: lastMs,
+  };
+}
+
+/** Firestore template save: recycle-bin last auto ya recurring source voucher badal gaya ho to pointers clear. */
+async function resolveLastGeneratedForTemplateSave(
+  companyId: string,
+  existingData: Partial<RecurringVoucherTemplate>,
+  newCloneSourceVoucherId: string,
+): Promise<{ lastGeneratedPeriodKey: string | null; lastGeneratedVoucherId: string | null }> {
+  const prevClone = String(existingData.cloneSourceVoucherId || existingData.sourceVoucherId || "").trim();
+  if (prevClone && newCloneSourceVoucherId && prevClone !== newCloneSourceVoucherId) {
+    return { lastGeneratedPeriodKey: null, lastGeneratedVoucherId: null };
+  }
+  const lastVid = String(existingData.lastGeneratedVoucherId || "").trim();
+  const lastPk =
+    existingData.lastGeneratedPeriodKey != null && String(existingData.lastGeneratedPeriodKey).trim()
+      ? String(existingData.lastGeneratedPeriodKey).trim()
+      : null;
+  if (!lastVid) {
+    return { lastGeneratedPeriodKey: lastPk, lastGeneratedVoucherId: null };
+  }
+  const vSnap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, lastVid));
+  if (!vSnap.exists() || (vSnap.data() as Record<string, unknown>)?.isDeleted === true) {
+    return { lastGeneratedPeriodKey: null, lastGeneratedVoucherId: null };
+  }
+  return { lastGeneratedPeriodKey: lastPk, lastGeneratedVoucherId: lastVid };
+}
+
+/**
+ * Recycler: jab last auto voucher delete ho — template pointers clear (due se pehle/baad suppress rule same).
+ */
+export async function reconcileRecurringTemplateAfterAutoVoucherRecycle(
+  companyId: string,
+  recycledVoucherId: string,
+): Promise<void> {
+  if (!companyId?.trim() || !recycledVoucherId?.trim()) return;
+  const vSnap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, recycledVoucherId));
+  if (!vSnap.exists()) return;
+  const v = vSnap.data() as Record<string, unknown>;
+  const meta = v.recurringMeta;
+  if (!meta || typeof meta !== "object") return;
+  const templateId = String((meta as Record<string, unknown>).templateId || "").trim();
+  if (!templateId) return;
+  const tplRef = doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateId);
+  const tplSnap = await getDoc(tplRef);
+  if (!tplSnap.exists()) return;
+  const tpl = tplSnap.data() as RecurringVoucherTemplate;
+  if (String(tpl.lastGeneratedVoucherId || "").trim() !== recycledVoucherId) return;
+  const periodKey = String(tpl.lastGeneratedPeriodKey || "").trim();
+  if (!periodKey) {
+    await updateDoc(tplRef, {
+      lastGeneratedPeriodKey: null,
+      lastGeneratedVoucherId: null,
+      updatedAt: serverTimestamp(),
+    });
+    return;
+  }
+  await maybeMarkDeletedAutoVoucherSuppressed(companyId, templateId, tpl, periodKey);
+}
+
 async function maybeMarkDeletedAutoVoucherSuppressed(
   companyId: string,
   templateId: string,
@@ -1642,6 +1815,7 @@ export function getNextBsPeriodFromCurrent(y: number, m: number): { y: number; m
 /**
  * Next AD calendar day when the scheduler would try to create an auto voucher (BS schedule day in a period).
  * Skips periods already generated (`lastGeneratedPeriodKey`) or suppressed (deleted auto voucher).
+ * Caller: `resolveRecurringTemplateProgress` se effective period key lo — recycle-bin last auto ko mat skip karo.
  */
 export function getNextRecurringDueAd(
   scheduleBsDay: number,

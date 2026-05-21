@@ -67,7 +67,7 @@ import {
 } from "@/lib/fiscalPartitionRows";
 import { buildFiscalMergePartitionBannerLabel } from "@/lib/fiscalYearLabel";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
-import { isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay } from "@/lib/ledgerUserColumnDisplay";
+import { resolveLedgerTransactionUserDisplayName } from "@/lib/ledgerUserColumnDisplay";
 import { prewarmHoverPreviewHttpsUrls } from "@/components/vouchers/attachmentHoverPreviewBody";
 import { updateAttachmentPrefetchPriorityFromVisibleRows } from "@/lib/attachmentPrefetchPriorityBuffer";
 import { statementCheckTxnId } from "@/lib/statementCheckModeStorage";
@@ -1122,14 +1122,10 @@ export function TransactionsTable({
       const entryClock = formatVoucherEntryTimeLocal(t as Record<string, unknown>);
       const balanceSuffix = balance >= 0 ? "Dr" : "Cr";
       const balanceAbs = Math.abs(balance);
-      const resolvedUserName = userNames && t.userId ? userNames[t.userId] : null;
-      const userName = isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay(t)
-        ? "Auto"
-        : (resolvedUserName && resolvedUserName !== "Unknown" && resolvedUserName !== "N/A" ? resolvedUserName : null) ||
-          t.userDisplayName ||
-          t.userName ||
-          (t.userId === currentUserUid ? (currentUserDisplayName || "You") : null) ||
-          "N/A";
+      const userName = resolveLedgerTransactionUserDisplayName(t, userNames, {
+        currentUserUid,
+        currentUserDisplayName,
+      });
       const isItemQty = context === "item" && stockView === "qty";
       const formatAmountOrQty = (val: number) =>
         isItemQty && item ? `${formatQuantity(val)} ${displayUnit || ""}` : formatCurrency(val, { noSuffix: true, context: "transaction", noAnimation: true });

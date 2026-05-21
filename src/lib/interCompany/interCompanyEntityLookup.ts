@@ -40,6 +40,14 @@ export function filterInterCompanyEntitiesByName(
   return entities.filter((e) => e.label.toLowerCase().includes(needle));
 }
 
+/** Type dropdown (Party/Staff/…) — account naam / A/c / mobile sirf isi kind par */
+export function filterInterCompanyEntitiesByKind(
+  entities: InterCompanyEntityDetail[],
+  kind: InterCompanyEntityDetail["kind"]
+): InterCompanyEntityDetail[] {
+  return entities.filter((e) => e.kind === kind);
+}
+
 /** Bank ledger A/c number (party ke paas bank account number) */
 export function filterInterCompanyEntitiesByBankAcNo(
   entities: InterCompanyEntityDetail[],
@@ -82,6 +90,30 @@ export function filterInterCompanyEntitiesByPhone(
 ): InterCompanyEntityDetail[] {
   if (!phoneDigits) return [];
   return entities.filter((e) => e.phone && interCompanyPhonesMatch(e.phone, phoneDigits));
+}
+
+/** PAN normalize — uppercase alphanumeric */
+export function normalizeInterCompanyPan(input: string | null | undefined): string {
+  return String(input ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+}
+
+export function filterInterCompanyEntitiesByPan(
+  entities: InterCompanyEntityDetail[],
+  rawPan: string
+): InterCompanyEntityDetail[] {
+  const needle = normalizeInterCompanyPan(rawPan);
+  if (needle.length < 4) return [];
+  return entities.filter((e) => {
+    const pan = normalizeInterCompanyPan(e.pan);
+    return pan && (pan === needle || pan.includes(needle));
+  });
+}
+
+export function readEntityPan(entity: InterCompanyEntityDetail): string {
+  return normalizeInterCompanyPan(entity.pan);
 }
 
 /** C / legacy 15 = company; P/B/S/T/E = entity; warna bank ledger A/c */

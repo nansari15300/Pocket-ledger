@@ -19,6 +19,8 @@ type Props = {
   /** Bank/Cash jaisa: Crown/Landmark icon — text initials ke bajay */
   fallbackSlot?: React.ReactNode;
   className?: string;
+  /** Initials fallback — e.g. Inter Company sky pill */
+  fallbackClassName?: string;
 };
 
 /**
@@ -31,6 +33,7 @@ export function ResolvedEntityAvatar({
   fallbackText = "?",
   fallbackSlot,
   className,
+  fallbackClassName,
 }: Props) {
   const [localBlobUrl, setLocalBlobUrl] = React.useState<string | null>(null);
   const blobUrlRef = React.useRef<string | null>(null);
@@ -152,7 +155,7 @@ export function ResolvedEntityAvatar({
   return (
     <Avatar className={className}>
       <AvatarImage src={imageSrc} alt={alt} />
-      <AvatarFallback>{fallbackSlot ?? fallbackText}</AvatarFallback>
+      <AvatarFallback className={fallbackClassName}>{fallbackSlot ?? fallbackText}</AvatarFallback>
     </Avatar>
   );
 }

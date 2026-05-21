@@ -65,7 +65,7 @@ export function StatementCheckModeFooterControls({
           <p className="mb-2 font-semibold">Check mode</p>
           <ul className="list-disc space-y-1.5 pl-4 text-muted-foreground">
             <li><kbd className="rounded border bg-muted px-1 text-foreground">↑</kbd> / <kbd className="rounded border bg-muted px-1 text-foreground">↓</kbd> — move between transactions</li>
-            <li><kbd className="rounded border bg-muted px-1 text-foreground">Space</kbd> — mark / unmark row (green border)</li>
+            <li><kbd className="rounded border bg-muted px-1 text-foreground">Space</kbd> — mark / unmark row (soft green highlight)</li>
             <li><kbd className="rounded border bg-muted px-1 text-foreground">Ctrl</kbd>+<kbd className="rounded border bg-muted px-1 text-foreground">H</kbd> — hide focused row (excluded from totals)</li>
             <li><kbd className="rounded border bg-muted px-1 text-foreground">Ctrl</kbd>+<kbd className="rounded border bg-muted px-1 text-foreground">Alt</kbd>+<kbd className="rounded border bg-muted px-1 text-foreground">H</kbd> — hide all marked rows</li>
             <li><kbd className="rounded border bg-muted px-1 text-foreground">Ctrl</kbd>+<kbd className="rounded border bg-muted px-1 text-foreground">U</kbd> — unhide one row</li>
