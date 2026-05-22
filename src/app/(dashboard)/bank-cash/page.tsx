@@ -256,7 +256,7 @@ function BankCashPageContent() {
     setSelected,              
     activeView === 'accounts' ? processedAccounts : processedAccountGroups, 
     vouchersLoading,
-    useQueryNav,
+    isMobile, // static PC: pehli account auto-select — `useQueryNav` URL sync ke liye alag
     selectedIdFromUrl
   );
   // ==================================
@@ -536,7 +536,7 @@ function BankCashPageContent() {
       }
       listView={listView}
       detailView={detailView}
-      isMobile={useQueryNav}
+      isMobile={isMobile}
       mobileListOnly={true}
       hasSelectedItem={!!selected}
       onBackToList={onBackToList}

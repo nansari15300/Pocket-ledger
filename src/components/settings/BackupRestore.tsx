@@ -39,8 +39,6 @@ import { PermissionButton } from "@/components/permission";
 import { assertCan, PermissionDeniedError } from "@/lib/permissions/enforcePermission";
 import { decryptData, encryptData } from "@/lib/encryption";
 import Link from "next/link";
-import { getGoogleDriveAuthUrl } from "@/lib/driveAuthClient";
-import { ToastAction } from "../ui/toast";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { flushBrowserDbToIndexedDB } from "@/lib/localSqlite";
 import {
@@ -491,6 +489,8 @@ export function BackupRestore() {
   const [restoreToLocalSqlite, setRestoreToLocalSqlite] = useState(true);
   /** Restore ke baad `companies.name`: default = jis slot mein restore ho raha hai (target); alternate = backup file ka naam */
   const [restoreCompanyNameChoice, setRestoreCompanyNameChoice] = useState<"target" | "backup">("target");
+  /** Create Backup bina company password — popup (mobile layout safe); user Close kare tab tak. */
+  const [backupPasswordHintOpen, setBackupPasswordHintOpen] = useState(false);
 
   useEffect(() => {
     if (isOverwriteConfirmOpen) {
@@ -517,6 +517,13 @@ export function BackupRestore() {
       setBackupLocationDialogOpen(true);
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    // Password set ho gayi to inline hint auto band — dubara Create Backup try kar sake.
+    if (company?.password && String(company.password).trim()) {
+      setBackupPasswordHintOpen(false);
+    }
+  }, [company?.password]);
 
   const closeBackupLocationDialog = () => {
     setBackupLocationDialogOpen(false);
@@ -747,20 +754,11 @@ export function BackupRestore() {
 
   const handleBackupClick = () => {
     if (company?.password) {
+      setBackupPasswordHintOpen(false);
       setIsEncryptedBackupConfirmOpen(true);
     } else {
-      toast({
-        variant: "destructive",
-        title: "Password Required to Create Backup",
-        description: "To create a backup, you must first set a password for this company in the settings.",
-        action: (
-          <ToastAction asChild altText="Go to Settings">
-            <Link href="/settings?view=company">
-                Go to Settings
-            </Link>
-          </ToastAction>
-        ),
-      });
+      // Mobile par inline alert layout bigadta tha — Dialog/AlertDialog se band kare tab tak dikhe.
+      setBackupPasswordHintOpen(true);
     }
   };
 
@@ -1538,18 +1536,6 @@ export function BackupRestore() {
               <Folder className="h-5 w-5" />
               Data save location
             </CardTitle>
-            <CardDescription>
-              Files go under{" "}
-              <code className="text-xs">
-                {POCKET_LEDGER_MIRROR_DIR}/{COMPANIES_DIR_SEGMENT}/&lt;CompanyName&gt;__&lt;companyId&gt;/
-              </code>{" "}
-              inside the folder you pick — one <strong>AES-GCM encrypted</strong> mirror per device-local company (
-              <code className="text-xs">pl-local-company-*.json</code>, Firestore tree jaisa company scope). Old flat files
-              in <code className="text-xs">{POCKET_LEDGER_MIRROR_DIR}/</code> root are moved here on next sync. Encryption
-              uses an automatic key in this browser profile. The live database stays in SQLite (IndexedDB). If someone
-              deletes <code className="text-xs">{POCKET_LEDGER_MIRROR_DIR}/</code>, the app will ask to recreate it or
-              remove the company. Uploading a local company to the cloud removes its mirror on web.
-            </CardDescription>
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground space-y-1">
             <p>
@@ -1727,6 +1713,25 @@ export function BackupRestore() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+       <AlertDialog open={backupPasswordHintOpen} onOpenChange={setBackupPasswordHintOpen}>
+        <AlertDialogContent className="w-auto max-w-[min(calc(100vw-1.5rem),22rem)] gap-3 p-4 sm:max-w-sm">
+          <AlertDialogHeader className="space-y-1.5">
+            <AlertDialogTitle className="text-base text-destructive">Password Required to Create Backup</AlertDialogTitle>
+            <AlertDialogDescription className="text-xs leading-relaxed">
+              To create a backup, you must first set a password for this company in Company Profile settings.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2 sm:gap-2">
+            <AlertDialogCancel className="h-9 px-3 text-sm">Close</AlertDialogCancel>
+            <AlertDialogAction asChild className="h-9 px-3 text-sm">
+              <Link href="/settings?view=company" onClick={() => setBackupPasswordHintOpen(false)}>
+                Go to Settings
+              </Link>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
        <AlertDialog open={isEncryptedBackupConfirmOpen} onOpenChange={setIsEncryptedBackupConfirmOpen}>
         <AlertDialogContent>

@@ -449,7 +449,7 @@ function PartyPageContent() {
     setSelected,
     activeView === "parties" ? partiesForPageMemory : processedGroups,
     pageDataLoading,
-    useQueryNav,
+    isMobile, // static PC: auto-select chalu — `useQueryNav` sirf URL/mobile list-first ke liye
     partyUrlState.selectedId,
     undefined,
     [OVERDUE_ACCOUNT_ID]
@@ -561,8 +561,8 @@ function PartyPageContent() {
   /** Refresh / bare `/party`: URL na ho to partyPageState ya selectedItemId se party restore — Overdue default na kholo */
   useEffect(() => {
     if (pageDataLoading) return;
-    // Mobile/APK list-first: back ke baad memory se detail mat kholo (desktop refresh restore chalu)
-    if (mobileMasterDetail) return;
+    // Mobile list-first: back ke baad memory se detail mat kholo (static PC refresh restore chalu)
+    if (isMobile) return;
     if (suppressPartyListRestoreRef.current) return;
     const { view, selectedId } = readPartyPageUrlState(viewFromUrl, selectedIdFromUrl);
     if (selectedId) return;
@@ -1170,7 +1170,7 @@ function PartyPageContent() {
         }
         listView={listView}
         detailView={detailView}
-        isMobile={mobileMasterDetail}
+        isMobile={isMobile}
         mobileListOnly={true}
         hasSelectedItem={!!selected}
         onBackToList={onBackToList}

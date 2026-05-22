@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { useAuth } from "@/hooks/useAuth";
@@ -57,6 +57,12 @@ import { RECON_PAIR_OPENING_KEY, useReconPairRowHeightSync } from "@/hooks/useRe
 import { scrollReconciliationSelectedRowIntoView } from "@/lib/ledgerScrollToSelection";
 import { cn } from "@/lib/utils";
 import { RECON_PAGE_TITLE } from "@/lib/reconciliation/labels";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { reconciliationPagePath } from "@/lib/reconciliation/reconciliationChat";
+import {
+  parseReconciliationShareIdFromPathname,
+  resolveReconciliationShareIdFromRoute,
+} from "@/lib/reconciliation/resolveReconciliationShareId";
 import { txnSelectedMainRowCn, txnSelectedNarrationRowCn } from "@/lib/listSelectionChrome";
 import { ArrowLeft, Info, Loader2 } from "lucide-react";
 
@@ -859,7 +865,11 @@ function LedgerSideTable({
 
 export default function ReconciliationPage() {
   const params = useParams();
-  const shareId = String(params?.shareId || "");
+  const searchParams = useSearchParams();
+  const shareId = resolveReconciliationShareIdFromRoute({
+    paramShareId: params?.shareId,
+    searchShareId: searchParams.get("shareId"),
+  });
   const router = useRouter();
   const { user } = useAuth();
   const { companyId, company } = useCompany();
@@ -895,6 +905,16 @@ export default function ReconciliationPage() {
   const [voucherDialogSeedKey, setVoucherDialogSeedKey] = React.useState(0);
   /** Party page jaisa — ek time pe ek row select (filled + blank); key = side:index */
   const [selectedRowKey, setSelectedRowKey] = React.useState<string | null>(null);
+
+  /** Static/EXE: purana `/reconciliation/{id}/` → `?shareId=` (full reload 404 → root → dashboard band) */
+  React.useEffect(() => {
+    if (!isStaticAppBuild() || typeof window === "undefined") return;
+    const q = new URLSearchParams(window.location.search).get("shareId");
+    if (q?.trim()) return;
+    const fromPath = parseReconciliationShareIdFromPathname(window.location.pathname);
+    if (!fromPath) return;
+    router.replace(reconciliationPagePath(fromPath), { scroll: false });
+  }, [router]);
 
   // Reconciling page — zyada width: sidebar collapse + refresh par bhi band rahe
   React.useEffect(() => {

@@ -37,8 +37,11 @@ try {
   console.warn("[dev-stable] Cache cleanup skipped:", error?.message || error);
 }
 
-const devPort = String(process.env.PORT || "3000");
+// Default 5000 — Electron/EXE static server 3000 par rehta hai; dono saath chalne par browser galat origin na khole.
+const devPort = String(process.env.PORT || "5000");
 const lanIps = listLanIPv4Addresses();
+// eslint-disable-next-line no-console
+console.log(`[dev-stable] Local dev → http://localhost:${devPort} (EXE usually http://localhost:3000)`);
 if (lanIps.length) {
   // eslint-disable-next-line no-console
   console.log("[dev-stable] LAN — same Wi‑Fi / cable devices par yeh URL use karo (Next ka 0.0.0.0 yahan replace):");
@@ -53,11 +56,20 @@ if (lanIps.length) {
 
 const nextBin = path.join(projectRoot, "node_modules", "next", "dist", "bin", "next");
 // Explicit `--turbopack` (Next 16 default bhi yahi); `--webpack` mat — user/Turbopack-first
-const args = [nextBin, "dev", "--turbopack", "--disable-source-maps", "--hostname", "0.0.0.0"];
+const args = [
+  nextBin,
+  "dev",
+  "--turbopack",
+  "--disable-source-maps",
+  "--hostname",
+  "0.0.0.0",
+  "--port",
+  devPort,
+];
 
 const child = spawn(process.execPath, args, {
   stdio: "inherit",
-  env: { ...process.env },
+  env: { ...process.env, PORT: devPort },
 });
 
 child.on("exit", (code, signal) => {

@@ -12,6 +12,7 @@ import type { ReconciliationShare } from "@/lib/reconciliation/types";
 import { LEDGER_HEADER_PILL_CN } from "@/lib/ledgerHeaderChrome";
 import { cn } from "@/lib/utils";
 import { RECON_ACCOUNT_BUTTON_LABEL } from "@/lib/reconciliation/labels";
+import { reconciliationPagePath } from "@/lib/reconciliation/reconciliationChat";
 
 type ReconciliationAccountButtonProps = {
   accountId: string;
@@ -49,7 +50,7 @@ export function ReconciliationAccountButton({ accountId, className }: Reconcilia
         "whitespace-nowrap",
         className
       )}
-      onClick={() => router.push(`/reconciliation/${primary.id}`)}
+      onClick={() => router.push(reconciliationPagePath(primary.id), { scroll: false })}
       title="Compare your ledger with linked remote account"
       data-theme-detail="reconciliation"
     >

@@ -68,7 +68,7 @@ import {
 import { useDate } from "@/hooks/useDate";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
-import { LedgerViewModePills } from "@/components/ui/LedgerViewModePills";
+import { LedgerViewModePills, LedgerViewModeToggleButton } from "@/components/ui/LedgerViewModePills";
 
 import { perfDebugLog, perfNow } from "@/lib/perfDebug";
 import { ScrollArea } from "../ui/scroll-area";
@@ -1375,10 +1375,8 @@ export function AccountDetails({
       />
       
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
-          {/* Mobile: Group details jaisa Statement | Spend wise do pill */}
-          <LedgerViewModePills
-            className="flex-1 min-w-0"
-            buttonClassName="h-6 flex-1 min-w-0 px-1 text-xs"
+          {/* Mobile footer: ek button — Statement ↔ Spend wise toggle */}
+          <LedgerViewModeToggleButton
             value={spendWiseView ? "spend_wise" : "statement"}
             onChange={(v) => setSpendWiseView(v === "spend_wise")}
             options={[

@@ -9,7 +9,7 @@ import type { Party, Group } from "@/components/party/types";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { Button } from "@/components/ui/button";
-import { LedgerViewModePills } from "@/components/ui/LedgerViewModePills";
+import { LedgerViewModePills, LedgerViewModeToggleButton } from "@/components/ui/LedgerViewModePills";
 import {
   Card,
   CardHeader,
@@ -1107,9 +1107,8 @@ export function PartyDetails({
           />
         ) : (
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
-          <LedgerViewModePills
-            className="flex-1 min-w-0"
-            buttonClassName="h-6 flex-1 min-w-0 px-1 text-xs"
+          {/* Mobile footer: ek button — Statement ↔ Bill wise toggle */}
+          <LedgerViewModeToggleButton
             value={balanceMode}
             onChange={setBalanceMode}
             options={[

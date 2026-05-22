@@ -2,11 +2,20 @@
 
 import { addDoc, collection, doc, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
+import { appNavHref } from "@/lib/appNavHref";
 import { RECON_PAGE_TITLE, RECON_SHARE_HEADER_LABEL } from "@/lib/reconciliation/labels";
 
-/** Chat message me reconciling page ka path — user copy/open kar sake. */
+/**
+ * Reconciling page URL — static/EXE/APK: `?shareId=` (export me `reconciliation/index.html` fixed).
+ * Dev: segment URL bhi chal sakta hai; static build hamesha query use karti hai (404 → dashboard band).
+ */
 export function reconciliationPagePath(shareId: string): string {
-  return `/reconciliation/${shareId}`;
+  const id = String(shareId || "").trim();
+  if (!id) return appNavHref("/dashboard");
+  if (process.env.NEXT_PUBLIC_STATIC_BUILD === "1") {
+    return appNavHref(`/reconciliation/?shareId=${encodeURIComponent(id)}`);
+  }
+  return appNavHref(`/reconciliation/${encodeURIComponent(id)}`);
 }
 
 /** 1:1 chat — reconciliation events (request / accept / unlink / request again). */

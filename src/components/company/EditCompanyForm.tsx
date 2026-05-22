@@ -150,6 +150,8 @@ export function EditCompanyForm() {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [showConfirmPasswordToSave, setShowConfirmPasswordToSave] = useState(false);
+  /** Online edit: Protect company checkbox jab abhi password set nahi; pehle se ho to UI "Change" mode. */
+  const [passwordEnabled, setPasswordEnabled] = useState(false);
   const [passwordConfirmation, setPasswordConfirmation] = useState<{
     newPasswordValue: string;
     usersToUpdate: any[];
@@ -293,6 +295,8 @@ export function EditCompanyForm() {
             companyUserPassword: "",
         });
         setEncryptCompanyEnabled(company.encryptServerBackup === true);
+        // Saved password ho to toggle ON; nahi to user edit se naya password add kar sake.
+        setPasswordEnabled(!!(company.password && String(company.password).trim()));
         currencyPickedManuallyRef.current = false;
         // Edit open par add-user section default बंद रखो to avoid accidental duplicate user create.
         setAddCompanyUserEnabled(false);
@@ -479,7 +483,7 @@ export function EditCompanyForm() {
         localStorage.setItem("dateSystem", "AD");
       }
 
-      // New password only when user typed one — never auto-clear company.password (Protect toggle removed).
+      // Online protect / change: naya password typed ho to save; khali = purana rehne do (auto-clear nahi).
       if (values.password && String(values.password).trim()) {
         updateData.password = String(values.password).trim();
       }
@@ -705,8 +709,9 @@ export function EditCompanyForm() {
       return;
     }
     
-    // Protect company: current password zaroor — warna save silently fail jaisa lagega (local server nahi, yeh rule hai)
-    if (company.password) {
+    // Protect company: purana password set ho to save/change/disable ke liye confirm zaroor.
+    const hadProtectPassword = !!(company.password && String(company.password).trim());
+    if (hadProtectPassword) {
       const entered = String(values.confirmPasswordToSave ?? "").trim();
       const expected = String(company.password).trim();
       if (entered !== expected) {
@@ -719,6 +724,18 @@ export function EditCompanyForm() {
                 : "That password does not match your current company password.",
           }
         );
+        return;
+      }
+    }
+    // Pehli baar Protect ON — password + confirm zaroori (web / exe / apk Edit tab).
+    if (passwordEnabled && !hadProtectPassword) {
+      const newPw = (values.password || "").trim();
+      if (!newPw) {
+        toast({
+          variant: "destructive",
+          title: "Password required",
+          description: "Turn on protection and enter a password (and confirm it) before saving.",
+        });
         return;
       }
     }
@@ -784,8 +801,8 @@ export function EditCompanyForm() {
       }
     }
     
-    // Check if new password is set
-    if (values.password) {
+    // Naya company password: shared users bina password ke ho to confirm dialog.
+    if (values.password && String(values.password).trim()) {
         const usersToUpdate = (company.sharedWith || []).filter(u => !u.password);
         if (usersToUpdate.length > 0) {
             setPasswordConfirmation({ newPasswordValue: values.password, usersToUpdate });
@@ -834,6 +851,8 @@ export function EditCompanyForm() {
   };
 
   const deviceLocalCoForUi = company ? isOfflineCompanyStorage(company) : true;
+  // Online cloud company: Protect / Change password UI (local company apna login block use karti hai).
+  const hasProtectPassword = !!(company?.password && String(company.password).trim());
   // Local company: sirf company login (admin username + password) — multi "Add user" nahi
   const showAddUserCard = !!company && !deviceLocalCoForUi;
 
@@ -1067,10 +1086,127 @@ export function EditCompanyForm() {
                   )}
               />
             </div>
-            
+
+            {/* Add New Company jaisi jagah (currency ke baad): web / exe / apk — Edit tab par hamesha dikhe. */}
+            <div className="space-y-4 rounded-md border border-black bg-muted/25 p-3 dark:border-black dark:bg-muted/15">
+              <FormItem>
+                <div className="flex items-center justify-between rounded-md border border-black p-3">
+                  <div>
+                    <FormLabel>
+                      {hasProtectPassword ? "Change Company Password" : "Protect Company With Password"}
+                    </FormLabel>
+                    <FormDescription>
+                      {hasProtectPassword
+                        ? "Enter a new password below to change protection. Confirm current password before Save."
+                        : "Turn on to require password when opening this company."}
+                    </FormDescription>
+                  </div>
+                  {!hasProtectPassword && (
+                    <input
+                      type="checkbox"
+                      checked={passwordEnabled}
+                      onChange={(e) => {
+                        const enabled = e.target.checked;
+                        setPasswordEnabled(enabled);
+                        if (!enabled) {
+                          form.setValue("password", "");
+                          form.setValue("confirmPassword", "");
+                        }
+                      }}
+                      className="h-4 w-4 rounded border-input"
+                    />
+                  )}
+                </div>
+              </FormItem>
+              {(hasProtectPassword || passwordEnabled) && (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <FormField
+                      control={form.control}
+                      name="password"
+                      render={({ field }: any) => (
+                        <FormItem>
+                          <FormLabel>{hasProtectPassword ? "New Password" : "Password"}</FormLabel>
+                          <div className="relative">
+                            <FormControl>
+                              <Input
+                                type={showNewPassword ? "text" : "password"}
+                                placeholder={hasProtectPassword ? "Enter new password" : "Set password"}
+                                autoComplete="new-password"
+                                {...field}
+                                value={field.value ?? ""}
+                              />
+                            </FormControl>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                              onClick={() => setShowNewPassword(!showNewPassword)}
+                            >
+                              {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                            </Button>
+                          </div>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="confirmPassword"
+                      render={({ field }: any) => (
+                        <FormItem>
+                          <FormLabel>Confirm Password</FormLabel>
+                          <div className="relative">
+                            <FormControl>
+                              <Input
+                                type={showConfirmPassword ? "text" : "password"}
+                                placeholder="Confirm password"
+                                autoComplete="new-password"
+                                {...field}
+                                value={field.value ?? ""}
+                              />
+                            </FormControl>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                              onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                            >
+                              {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                            </Button>
+                          </div>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                  {deviceLocalCoForUi && (
+                    <FormField
+                      control={form.control}
+                      name="adminUsername"
+                      render={({ field }: any) => (
+                        <FormItem>
+                          <FormLabel>Username (Company Login)</FormLabel>
+                          <FormControl>
+                            <Input placeholder="e.g., admin_user" {...field} value={field.value ?? ""} />
+                          </FormControl>
+                          <FormDescription>
+                            Open this company with this username and the password above.
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+                </>
+              )}
+            </div>
+
             {deviceLocalCoForUi && (
             <div className="space-y-4 rounded-md border border-black bg-muted/25 p-3 dark:border-black dark:bg-muted/15">
-                {/* Local company: ek hi login (username + password); multi-user Add Company User alag section me nahi. */}
+                {/* Local-only: encrypt backup — login password upar Protect section me. */}
                 {isLocalOnlyMode() && (
                 <FormItem>
                   <div className="flex items-center justify-between rounded-md border border-black p-3">
@@ -1090,72 +1226,6 @@ export function EditCompanyForm() {
                   </div>
                 </FormItem>
                 )}
-                  <FormField
-                    control={form.control}
-                    name="adminUsername"
-                    render={({ field }: any) => (
-                      <FormItem>
-                        <FormLabel>Username (Company Login)</FormLabel>
-                        <FormControl>
-                          <Input placeholder="e.g., admin_user" {...field} value={field.value ?? ""} />
-                        </FormControl>
-                        <FormDescription>
-                          Open this company with this username and the password below — rules apply only inside this company.
-                        </FormDescription>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <FormField
-                        control={form.control}
-                        name="password"
-                        render={({ field }: any) => (
-                            <FormItem>
-                            <FormLabel>{company?.password ? "New Password" : "Set Password"}</FormLabel>
-                            <div className="relative">
-                                <FormControl>
-                                    <Input
-                                      type={showNewPassword ? "text" : "password"}
-                                      placeholder="Company login password"
-                                      autoComplete="new-password"
-                                      {...field}
-                                      value={field.value ?? ""}
-                                    />
-                                </FormControl>
-                                <Button type="button" variant="ghost" size="icon" className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7" onClick={() => setShowNewPassword(!showNewPassword)}>
-                                    {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                                </Button>
-                            </div>
-                            <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                    <FormField
-                        control={form.control}
-                        name="confirmPassword"
-                        render={({ field }: any) => (
-                            <FormItem>
-                            <FormLabel>Confirm Password</FormLabel>
-                            <div className="relative">
-                                <FormControl>
-                                    <Input
-                                      type={showConfirmPassword ? "text" : "password"}
-                                      placeholder="Confirm password"
-                                      autoComplete="new-password"
-                                      {...field}
-                                      value={field.value ?? ""}
-                                    />
-                                </FormControl>
-                                <Button type="button" variant="ghost" size="icon" className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7" onClick={() => setShowConfirmPassword(!showConfirmPassword)}>
-                                    {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                                </Button>
-                            </div>
-                            <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                </div>
             </div>
             )}
 
@@ -1459,8 +1529,8 @@ export function EditCompanyForm() {
             {company?.id && deviceLocalCoForUi ? (
               <LocalCompanyCloudSyncSettings companyId={company.id} company={company} />
             ) : null}
-            
-            {company?.password && (
+
+            {hasProtectPassword && (
                 <>
                     <Separator />
                     <div className="space-y-4 pt-4">

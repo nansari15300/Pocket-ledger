@@ -38,6 +38,7 @@ import { RECON_ENTITY_OPTIONS_UI } from "@/lib/reconciliation/types";
 /** Abhi reconcile UI me sirf Party — bank/staff/tax/expense baad me enable karenge. */
 const RECON_UI_ENTITY_TYPE: ReconciliationEntityType = "party";
 import { RECON_SHARE_HEADER_LABEL, RECON_PAGE_TITLE } from "@/lib/reconciliation/labels";
+import { reconciliationPagePath } from "@/lib/reconciliation/reconciliationChat";
 import { getReconShareSidesForViewer, getReconShareRoleLabelForViewer, reconciliationShareInvolvesCompany, type ReconSideMeta } from "@/lib/reconciliation/sideMeta";
 import {
   getLinkedReceiverAccountKeysForCompany,
@@ -897,7 +898,7 @@ export function ShareForReconciliationDialog({
                                   className={reconDialogCompactPillCn}
                                   onClick={() => {
                                     onOpenChange(false);
-                                    router.push(`/reconciliation/${s.id}`);
+                                    router.push(reconciliationPagePath(s.id), { scroll: false });
                                   }}
                                 >
                                   {RECON_PAGE_TITLE}

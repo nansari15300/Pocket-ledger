@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "concurrently \"npm:dev:web\" \"npm:dev:electron\"",
     "dev:web": "cd .. && npm run dev",
-    "dev:electron": "wait-on http://localhost:3000 && electron .",
+    "dev:electron": "wait-on http://localhost:5000 && electron .",
     "build:web": "cd .. && npm run build:static",
     "gen-icon": "node scripts/gen-win-icon.mjs",
     "clean-dist": "node scripts/clean-dist.cjs",

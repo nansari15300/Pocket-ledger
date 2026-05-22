@@ -38,6 +38,7 @@ import {
   openShareForReconciliationDialog,
   RECON_CHAT_SHARED_LIST_LINK_LABEL,
 } from "@/lib/reconciliation/openShareDialog";
+import { reconciliationPagePath } from "@/lib/reconciliation/reconciliationChat";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -581,7 +582,7 @@ export function ChatTab({ conversations, allPotentialContacts, onConversationSel
                                               )}
                                               onClick={(e) => {
                                                 e.stopPropagation();
-                                                router.push(`/reconciliation/${msg.shareId}`);
+                                                router.push(reconciliationPagePath(String(msg.shareId)), { scroll: false });
                                               }}
                                             >
                                               Go to reconciling page

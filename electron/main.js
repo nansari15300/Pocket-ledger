@@ -122,6 +122,25 @@ function isAllowedFirebaseProxyTarget(targetUrl) {
   }
 }
 
+/**
+ * Static `out/`: sirf `reconciliation/index.html` + `?shareId=` — `/reconciliation/{id}/` 404 par root → dashboard.
+ * Document requests ko query page shell par map karo (assets/_next chhod kar).
+ */
+function rewriteReconciliationDocumentUrl(requestUrl) {
+  const pathname = (requestUrl.pathname || "/").replace(/\/+$/, "") || "/";
+  if (pathname.includes("/_next/") || /\.[a-z0-9]+$/i.test(pathname)) {
+    return null;
+  }
+  if (pathname === "/reconciliation") {
+    return `/reconciliation/index.html${requestUrl.search || ""}`;
+  }
+  const legacy = pathname.match(/^\/reconciliation\/([^/]+)$/);
+  if (legacy && legacy[1] !== "__placeholder__") {
+    return `/reconciliation/index.html${requestUrl.search || ""}`;
+  }
+  return null;
+}
+
 // Production Electron should serve static Next files over localhost instead of file://.
 function startStaticServer() {
   if (staticServer && staticServerPort) {
@@ -160,6 +179,16 @@ function startStaticServer() {
       }
     } catch {
       // fall through to static handler for normal routes
+    }
+    // Reconciling deep link — galat HTML (root) load hone se login → dashboard redirect
+    try {
+      const requestUrl = new URL(request.url || "/", "http://localhost");
+      const rewritten = rewriteReconciliationDocumentUrl(requestUrl);
+      if (rewritten) {
+        request = Object.assign({}, request, { url: rewritten });
+      }
+    } catch {
+      /* fall through */
     }
     // Keep asset files untouched; only clean route URLs like /company -> /company/index.html.
     return handler(request, response, {
@@ -498,7 +527,8 @@ function previousTab(win) {
 }
 
 async function getAppEntryUrl() {
-  if (isDevMode()) return "http://localhost:3000";
+  // Dev Next (`npm run dev`) port 5000 — packaged EXE static server 3000 par alag rehta hai.
+  if (isDevMode()) return "http://localhost:5000";
   const port = await startStaticServer();
   // Packaged app route loading must be HTTP to avoid file:// local-resource blocking.
   return `http://localhost:${port}/`;

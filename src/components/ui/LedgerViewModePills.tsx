@@ -55,3 +55,44 @@ export function LedgerViewModePills<T extends string>({
     </div>
   );
 }
+
+type ToggleProps<T extends string> = {
+  value: T;
+  /** Do options — mobile footer par ek button se toggle */
+  options: [Option<T>, Option<T>];
+  onChange: (value: T) => void;
+  className?: string;
+};
+
+/**
+ * Mobile ledger footer — Statement / Bill wise (ya Spend wise) ek button:
+ * label = switch karne wala mode; click par `onChange(alternate)`.
+ */
+export function LedgerViewModeToggleButton<T extends string>({
+  value,
+  options,
+  onChange,
+  className,
+}: ToggleProps<T>) {
+  const alternate = options.find((o) => o.value !== value) ?? options[1];
+  // Non-default mode (bill_wise / spend_wise) active → orange; statement par violet
+  const primaryMode = options[0].value;
+  const onAlternateMode = value !== primaryMode;
+
+  return (
+    <Button
+      type="button"
+      className={cn(
+        "flex-1 h-6 min-w-0 rounded-md text-xs font-medium",
+        onAlternateMode
+          ? "bg-orange-600 hover:bg-orange-700 text-white"
+          : "bg-violet-600 hover:bg-violet-700 text-white",
+        className
+      )}
+      aria-label={`Switch to ${alternate.label}`}
+      onClick={() => onChange(alternate.value)}
+    >
+      {alternate.label}
+    </Button>
+  );
+}

@@ -412,6 +412,8 @@ function pathExemptFromAutoSelectCompanyPush(t: string): boolean {
   if (p.startsWith("/recycle-bin")) return true;
   if (p.startsWith("/distributor-signup")) return true;
   if (p.startsWith("/embed")) return true;
+  // Reconciling compare — static refresh par company picker push na ho
+  if (p.startsWith("/reconciliation")) return true;
   return false;
 }
 
