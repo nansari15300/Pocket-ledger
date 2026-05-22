@@ -16,7 +16,8 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, PlusCircle, RefreshCw, X } from "lucide-react";
+import { RECON_SHARE_HEADER_LABEL } from "@/lib/reconciliation/labels";
+import { Loader2, PlusCircle, RefreshCw, Scale, X } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   DropdownMenu,
@@ -183,6 +184,8 @@ const voucherSettingsSchema = z.object({
   enableLinkPaymentToTxns: z.boolean(),
   /** Company-level: header Copy ledger + cross-company copy (permission `copy_ledger_cross_company` alag). */
   enableCrossCompanyLedgerCopy: z.boolean(),
+  /** Company-level: header Share for Reconciliation (plan + role permissions alag). */
+  enableShareForReconciliation: z.boolean(),
   spendWiseEnabled: z.boolean(),
   /** Role + voucher-type: when Spend Wise is on, require Payment In link to save. */
   requirePaymentLinkByRole: requireLinkByRoleSchema.optional(),
@@ -243,6 +246,7 @@ export function VoucherSettings() {
         },
         enableLinkPaymentToTxns: true,
         enableCrossCompanyLedgerCopy: false,
+        enableShareForReconciliation: false,
         spendWiseEnabled: false,
         spendWiseOppositeVoucherEditable: false,
         // Spend-wise opposite voucher default OFF ⇒ role matrix bhi sab OFF — user ne bola by default sab band
@@ -250,7 +254,7 @@ export function VoucherSettings() {
         voucherHistoryEnabled: true,
         voucherHistoryLimit: 10,
         voucherHistoryFullBehavior: 'allow_edit_delete_last' as const,
-        recurringVoucherSettingsEnabled: false,
+        recurringVoucherSettingsEnabled: true, // naya form: recurring generation default ON
         recurringVoucherRunScope: "owner_only",
     },
   });
@@ -293,6 +297,7 @@ export function VoucherSettings() {
         enableLinkPaymentToTxns: (company as any).enableLinkPaymentToTxns !== false,
         // `reset` me zaroor ho — warna RHF default `false` pe wapas, company Firestore se `true` ho to header switch mismatch
         enableCrossCompanyLedgerCopy: (company as any).enableCrossCompanyLedgerCopy === true,
+        enableShareForReconciliation: (company as any).enableShareForReconciliation === true,
         spendWiseEnabled: (company as any).spendWiseEnabled === true,
         spendWiseOppositeVoucherEditable: (company as any).spendWiseOppositeVoucherEditable === true,
         // Matrix Firestore se hamesha lao — main OFF sirf voucher par enforce band (Create* forms me); Save se granular choices na mitaao
@@ -311,7 +316,8 @@ export function VoucherSettings() {
         voucherHistoryLimit: Math.max(1, Math.min(planHistoryLimit, Number((company as any).voucherHistoryLimit) || 10)),
         // Company se aayi value ko enum + Select ke saath align karo (invalid string → default)
         voucherHistoryFullBehavior: normalizeVoucherHistoryFullBehavior((company as any).voucherHistoryFullBehavior),
-        recurringVoucherSettingsEnabled: (company as any)?.recurringVoucherSettings?.enabled === true,
+        // Missing field = ON; sirf explicit `enabled: false` se band
+        recurringVoucherSettingsEnabled: (company as any)?.recurringVoucherSettings?.enabled !== false,
         recurringVoucherRunScope: (() => {
           const raw = String((company as any)?.recurringVoucherSettings?.runScope || "owner_only");
           if (raw === "all_users") return "all_users";
@@ -362,6 +368,7 @@ export function VoucherSettings() {
         enableVoucherPrefixSelection: data.enableVoucherPrefixSelection,
         enableLinkPaymentToTxns: data.enableLinkPaymentToTxns,
         enableCrossCompanyLedgerCopy: data.enableCrossCompanyLedgerCopy,
+        enableShareForReconciliation: data.enableShareForReconciliation,
         spendWiseEnabled: data.spendWiseEnabled,
         spendWiseOppositeVoucherEditable: data.spendWiseOppositeVoucherEditable,
         requirePaymentLinkByRole: data.requirePaymentLinkByRole,
@@ -505,6 +512,28 @@ export function VoucherSettings() {
                           </FormLabel>
                           <FormDescription>
                             When ON, header shows &quot;Sync ledger&quot; with the sync icon. User role needs permission &quot;Copy Ledger to Another Company&quot;.
+                          </FormDescription>
+                        </div>
+                        <FormControl>
+                          <Switch checked={field.value} onCheckedChange={field.onChange} />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+                </Card>
+                <Card className={cn("p-4", VS_CARD_BORDER)}>
+                  <FormField
+                    control={form.control}
+                    name="enableShareForReconciliation"
+                    render={({ field }: any) => (
+                      <FormItem className="flex flex-row items-center justify-between gap-4">
+                        <div>
+                          <FormLabel className="flex items-center gap-2">
+                            <Scale className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                            {RECON_SHARE_HEADER_LABEL}
+                          </FormLabel>
+                          <FormDescription>
+                            When ON, header shows &quot;{RECON_SHARE_HEADER_LABEL}&quot;. Roles need Share / Link / View reconciling permissions.
                           </FormDescription>
                         </div>
                         <FormControl>

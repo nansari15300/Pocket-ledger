@@ -20,6 +20,7 @@ import { saveVoucher } from "./voucherActionsClient";
 import { sendTransactionAlert } from "@/lib/transactionAlerts";
 import type { Company } from "@/hooks/useCompany";
 import { formatVoucherNumber, normalizePrefix, parseVoucherNumberPart } from "@/lib/voucherNumberFormat";
+import { isRecurringVoucherGenerationEnabled } from "@/lib/recurringVoucherSettings";
 
 export type RecurringNarrationMode = "advance_bs_month";
 export type RecurringRunScope = "owner_only" | "all_users" | "selected_users";
@@ -1498,8 +1499,7 @@ export async function generateRecurringVoucherNow(
     };
   }
   const co = company as Record<string, unknown> | null | undefined;
-  const rs = co?.recurringVoucherSettings as Record<string, unknown> | undefined;
-  if (rs?.enabled !== true) {
+  if (!isRecurringVoucherGenerationEnabled(co as Company | null)) {
     return { ok: false, message: "Company auto recurring is off. Turn it on in Company Settings or the dashboard recurring card." };
   }
 
@@ -1610,8 +1610,7 @@ export async function generateRecurringVouchersForPeriodSlots(
     return { ok: false, message: "No periods selected.", created: 0 };
   }
   const co = company as Record<string, unknown> | null | undefined;
-  const rs = co?.recurringVoucherSettings as Record<string, unknown> | undefined;
-  if (rs?.enabled !== true) {
+  if (!isRecurringVoucherGenerationEnabled(co as Company | null)) {
     return { ok: false, message: "Company auto recurring is off.", created: 0 };
   }
 
@@ -1736,8 +1735,7 @@ export async function generateDueRecurringVouchersOnAppOpen(
   options?: { hasTriggerPermission?: boolean },
 ): Promise<void> {
   if (!companyId?.trim() || !actor?.uid) return;
-  const settings = (company as any)?.recurringVoucherSettings || {};
-  if (settings.enabled !== true) return;
+  if (!isRecurringVoucherGenerationEnabled(company)) return;
   if (!canRunRecurringAutoOnAppOpen(company, actor.uid, actor.email, options?.hasTriggerPermission === true)) return;
 
   const now = new Date();

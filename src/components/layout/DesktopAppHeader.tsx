@@ -92,6 +92,7 @@ import {
 } from "@/lib/companyOnlineSlots";
 import { GlobalFileHoverPreviewSwitch } from "@/components/layout/GlobalFileHoverPreviewSwitch";
 import { CopyLedgerHeaderButton } from "@/components/ledger/CopyLedgerHeaderButton";
+import { ShareForReconciliationHeaderButton } from "@/components/reconciliation/ShareForReconciliationHeaderButton";
 import { RenewProrationPills } from "@/components/billing/RenewProrationPills";
 import { useDisplayCurrency } from "@/hooks/useDisplayCurrency";
 import { getCompanyPlanExpiryMsFromDoc } from "@/lib/companyPlanExpiryMs";
@@ -1728,6 +1729,7 @@ export function DesktopAppHeader() {
               <AddNewButtonOnReportPage />
               <UserProfileButton />
               <CopyLedgerHeaderButton />
+              <ShareForReconciliationHeaderButton />
               <GlobalFileHoverPreviewSwitch />
               <ScreenControls />
             </div>

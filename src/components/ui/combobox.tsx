@@ -309,7 +309,11 @@ export function Combobox({
         )}
         sideOffset={4}
         onOpenAutoFocus={(e) => {
-          if (!autoFocusSearchOnOpen) e.preventDefault();
+          // Dialog ke andar popover: radix default focus search ko block karta hai — manual focus
+          e.preventDefault();
+          if (autoFocusSearchOnOpen) {
+            requestAnimationFrame(() => searchInputRef.current?.focus());
+          }
         }}
         onCloseAutoFocus={(e) => e.preventDefault()}
       >
@@ -327,6 +331,7 @@ export function Combobox({
             placeholder={searchPlaceholder}
             value={search}
             onValueChange={setSearch}
+            onKeyDown={(e) => e.stopPropagation()}
           />
           <CommandList
             onPointerDownCapture={(e) => {

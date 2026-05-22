@@ -38,6 +38,7 @@ import {
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
 import { toast as sonnerToast } from "sonner";
+import { replaceVoucherSaveLoadingWithShortSuccess } from "@/lib/voucherSaveUi";
 import BsDatePicker from "../ui/BsDatePicker";
 import { Combobox } from "@/components/ui/combobox";
 import { FilePreview } from "../vouchers/FilePreview";
@@ -1073,70 +1074,99 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           throw new Error("Failed to save voucher and get ID.");
       }
 
-        if (approveAfterSave && savedDoc?.id) {
-          if (!isEditForApprove) {
-            await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
-          }
-          sonnerToast.success(isEditForApprove ? "Contra updated and approved." : "Contra saved and approved.", { id: toastId });
+        const docId = savedDoc.id;
+        const approveBanner = !!(approveAfterSave && docId);
+        // Save & Close: dialog turant band — approve/alerts background (`postSaveTail`).
+        if (approveBanner) {
+          replaceVoucherSaveLoadingWithShortSuccess(
+            toastId,
+            isEditForApprove ? "Contra updated and approved." : "Contra saved and approved."
+          );
         } else {
-          sonnerToast.success(isEditForApprove ? "Contra updated!" : "Contra entry created!", { id: toastId });
+          replaceVoucherSaveLoadingWithShortSuccess(
+            toastId,
+            isEditForApprove ? "Contra updated!" : "Contra entry created!"
+          );
         }
-        if (companyId && company) {
-          const isEdit = !!voucher?.id;
-          const amount = Number(submissionData.amount) || 0;
-          const vid = savedVoucherId || voucher?.id;
-          if (isEdit) {
-            const oldV = voucher as any;
-            const changes = getChangedFieldLabels(
-              { amount: oldV?.amount, narration: oldV?.narration, date: oldV?.date, voucherNumber: oldV?.voucherNumber, voucherNumberOut: oldV?.voucherNumberOut, voucherNumberIn: oldV?.voucherNumberIn, fromAccountId: oldV?.fromAccountId, toAccountId: oldV?.toAccountId },
-              { amount: submissionData.amount, narration: submissionData.narration, date: submissionData.date, voucherNumber: submissionData.voucherNumber, voucherNumberOut: submissionData.voucherNumberOut, voucherNumberIn: submissionData.voucherNumberIn, fromAccountId: submissionData.fromAccountId, toAccountId: submissionData.toAccountId },
-              [
-                { key: "amount", label: "Amount" },
-                { key: "narration", label: "Narration" },
-                { key: "date", label: "Date" },
-                { key: "voucherNumber", label: "Voucher number" },
-                { key: "voucherNumberOut", label: "Voucher No. (Out)" },
-                { key: "voucherNumberIn", label: "Voucher No. (In)" },
-                { key: "fromAccountId", label: "From account" },
-                { key: "toAccountId", label: "To account" },
-              ]
-            );
-            await sendTransactionAlert(companyId, company, {
-              kind: "edited",
-              voucherId: vid,
-              voucherNumber: submissionData.voucherNumber,
-              voucherType: "contra",
-              performedByUserId: user?.uid,
-              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-              performedByEmail: user?.email ?? undefined,
-              changes: changes.length > 0 ? changes : undefined,
-            });
-          } else if (isAmountOverOneLakh(amount)) {
-            await sendTransactionAlert(companyId, company, {
-              kind: "large_amount",
-              voucherId: vid,
-              voucherNumber: submissionData.voucherNumber,
-              voucherType: "contra",
-              amount,
-              performedByUserId: user?.uid,
-              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-              performedByEmail: user?.email ?? undefined,
-            });
-          }
-        }
+        setIsLoading(false);
 
-        if (saveAndNew) {
+        const postSaveTail = async () => {
+          if (approveBanner && !isEditForApprove) {
+            await approveVoucherWithHistory(companyId, docId, user.uid, approverName);
+          }
+          if (companyId && company) {
+            const isEdit = !!voucher?.id;
+            const amount = Number(submissionData.amount) || 0;
+            const vid = docId || voucher?.id;
+            if (isEdit) {
+              const oldV = voucher as any;
+              const changes = getChangedFieldLabels(
+                { amount: oldV?.amount, narration: oldV?.narration, date: oldV?.date, voucherNumber: oldV?.voucherNumber, voucherNumberOut: oldV?.voucherNumberOut, voucherNumberIn: oldV?.voucherNumberIn, fromAccountId: oldV?.fromAccountId, toAccountId: oldV?.toAccountId },
+                { amount: submissionData.amount, narration: submissionData.narration, date: submissionData.date, voucherNumber: submissionData.voucherNumber, voucherNumberOut: submissionData.voucherNumberOut, voucherNumberIn: submissionData.voucherNumberIn, fromAccountId: submissionData.fromAccountId, toAccountId: submissionData.toAccountId },
+                [
+                  { key: "amount", label: "Amount" },
+                  { key: "narration", label: "Narration" },
+                  { key: "date", label: "Date" },
+                  { key: "voucherNumber", label: "Voucher number" },
+                  { key: "voucherNumberOut", label: "Voucher No. (Out)" },
+                  { key: "voucherNumberIn", label: "Voucher No. (In)" },
+                  { key: "fromAccountId", label: "From account" },
+                  { key: "toAccountId", label: "To account" },
+                ]
+              );
+              await sendTransactionAlert(companyId, company, {
+                kind: "edited",
+                voucherId: vid,
+                voucherNumber: submissionData.voucherNumber,
+                voucherType: "contra",
+                performedByUserId: user?.uid,
+                performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+                performedByEmail: user?.email ?? undefined,
+                changes: changes.length > 0 ? changes : undefined,
+              });
+            } else if (isAmountOverOneLakh(amount)) {
+              await sendTransactionAlert(companyId, company, {
+                kind: "large_amount",
+                voucherId: vid,
+                voucherNumber: submissionData.voucherNumber,
+                voucherType: "contra",
+                amount,
+                performedByUserId: user?.uid,
+                performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+                performedByEmail: user?.email ?? undefined,
+              });
+            }
+          }
+
+          if (saveAndNew) {
             form.reset({ fromAccountId: "", toAccountId: "", date: startOfDay(new Date()), voucherNumber: "", voucherNumberOut: "", voucherNumberIn: "", amount: 0, narration: "" });
             setFiles([]);
             setSavePdfAsImage(false);
             setSavedVoucherId(null);
             await fetchVoucherNumber();
+          }
+
+          if (approveAfterSave && voucher?.id) onSuccess?.();
+          else if (!approveAfterSave) onSuccess?.();
+
+          if (saveAndNew) {
+            onVoucherAction?.("saved", true, docId);
+          }
+        };
+
+        if (!saveAndNew) {
+          onVoucherAction?.("saved", false, docId);
+          void postSaveTail().catch((err) => {
+            console.error("[CreateContraForm] post-save tail", err);
+            sonnerToast.error("Contra saved — finishing steps pending", {
+              description: err instanceof Error ? err.message : "Alerts may still run.",
+              duration: 4500,
+            });
+          });
+          return;
         }
 
-        if (approveAfterSave && voucher?.id) onSuccess?.();
-        else if (!approveAfterSave) onSuccess?.();
-
-        onVoucherAction?.("saved", saveAndNew, savedDoc.id);
+        await postSaveTail();
   
     } catch (error: any) {
       if (error instanceof PermissionDeniedError) {

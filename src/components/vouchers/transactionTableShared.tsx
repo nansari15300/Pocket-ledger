@@ -84,6 +84,14 @@ export type Context =
 export type Transaction = Record<string, any>;
 
 /**
+ * Ledger row par attachment — File column filter (with / without / all).
+ */
+export function transactionRowHasFileAttachment(t: { fileUrls?: unknown } | null | undefined): boolean {
+  if (!t || !Array.isArray(t.fileUrls)) return false;
+  return t.fileUrls.some((u) => String(u ?? "").trim().length > 0);
+}
+
+/**
  * Opening balance row — File column: entity `documentFileUrls` par voucher jaisa hover preview + green tick (`local:` refs supported).
  */
 export function OpeningBalanceFileCellContent({

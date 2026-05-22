@@ -42,6 +42,8 @@ export type LedgerFooterPaginationBarProps = {
   afterCount?: number;
   totalCount: number;
   className?: string;
+  /** Reconciling footer: sort alag center pill me — pagination-only mode */
+  hideSort?: boolean;
 };
 
 /**
@@ -64,6 +66,7 @@ export function LedgerFooterPaginationBar({
   afterCount = 0,
   totalCount,
   className,
+  hideSort = false,
 }: LedgerFooterPaginationBarProps) {
   const options = rowsPerPageOptions as readonly number[];
 
@@ -71,18 +74,21 @@ export function LedgerFooterPaginationBar({
     <div
       className={cn(
         ledgerFooterRowCn,
-        "flex-shrink-0 justify-end overflow-x-auto scrollbar-slim-dim sm:ml-auto",
+        "flex-shrink-0 justify-end overflow-x-auto scrollbar-slim-dim",
+        !hideSort && "sm:ml-auto",
         className
       )}
     >
-      <TransactionTableSortDropdown
-        sortBy={sortBy}
-        sortOrder={sortOrder}
-        onSortChange={onSortChange}
-        viewMode={viewMode}
-        chromePill
-        className={ledgerFooterPillBtnCn}
-      />
+      {!hideSort ? (
+        <TransactionTableSortDropdown
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          onSortChange={onSortChange}
+          viewMode={viewMode}
+          chromePill
+          className={ledgerFooterPillBtnCn}
+        />
+      ) : null}
       <LedgerFooterParentPill>
         <LedgerFooterTextPill>({beforeCount})</LedgerFooterTextPill>
         <Button

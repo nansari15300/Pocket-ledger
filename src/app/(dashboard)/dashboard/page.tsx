@@ -48,6 +48,7 @@ import {
   Search,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { proDashboardRibbonClass } from '@/lib/proTheme';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
 import {
@@ -424,7 +425,10 @@ useEffect(() => {
             // Dashboard top cards: give each card a different soft ribbon tone.
             // Bold border requested for dashboard cards while preserving ribbon tint.
             // APK WebView compatibility: force same top ribbon class used by header/sidebar so stripe is always visible.
-            className="app-chrome-top-ribbon pl-dashboard-ribbon-sky flex-1 flex flex-col min-h-0 border-2 border-sky-300/70"
+            className={cn(
+              "app-chrome-top-ribbon flex-1 flex flex-col min-h-0",
+              proDashboardRibbonClass(1),
+            )}
         >
             <CardHeader className="py-3">
                 <div className="flex items-center justify-between">
@@ -1590,8 +1594,9 @@ function DashboardPageContent() {
     <div className="w-full max-w-full">
     <Card
       className={cn(
-        "border-2 w-full border-violet-300/70 pl-dashboard-ribbon-violet",
-        recentTransactionsCompact && "px-0"
+        "w-full max-w-full",
+        proDashboardRibbonClass(2),
+        recentTransactionsCompact && "px-0",
       )}
     >
       {/* Compact: CardHeader default `p-6` hata kar chhoti strip — sirf text jitni height */}
@@ -1857,7 +1862,7 @@ function DashboardPageContent() {
       {shouldShow('daybook') && can('view_daybook') && <div className="px-0.5"><DaybookReport /></div>}
       {shouldShow('recent-transactions') && can('view_recent_transactions') && renderRecentTransactions()}
       
-      <Card className="col-span-full border-2 border-amber-300/70 pl-dashboard-ribbon-amber p-2 overflow-hidden relative">
+      <Card className={cn("col-span-full p-2 overflow-hidden relative", proDashboardRibbonClass(3))}>
         {newYearInfo && !newYearInfo.isNewYear && (
           <div className="absolute top-0 right-0 bg-red-500 text-white text-xs font-bold px-4 py-1 rounded-bl-lg animate-pulse">
             {newYearInfo.daysLeft} days to {newYearInfo.year}!
@@ -2121,13 +2126,14 @@ function DashboardPageContent() {
                 variant="ghost"
                 className={cn(
                   // Height compact: footer ko approx 50% reduce karo without breaking alignment
-                  "h-full min-h-0 min-w-0 flex-1 rounded-md border-2 px-1 py-0.5 text-muted-foreground",
+                  "pl-dashboard-footer-tab h-full min-h-0 min-w-0 flex-1 rounded-md border-2 px-1 py-0.5 text-muted-foreground",
                   footerToneClassByCard[card.id] ?? "border-emerald-200/65 bg-white/55 dark:border-emerald-800/45 dark:bg-background/35",
                   isMobile ? "justify-center text-center" : "justify-center flex-row items-center gap-1.5",
                   // Active/focus state strong: selected button clearly pop kare
                   visibleCard === card.id && "ring-2 ring-primary/70 shadow-md saturate-125",
                   "focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1"
                 )}
+                data-pl-footer-tab={card.id}
                 onClick={() => {
                   if (card.id === "dashboard-charts") {
                     if (visibleCard === "dashboard-charts") {

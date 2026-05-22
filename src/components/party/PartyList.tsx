@@ -189,7 +189,12 @@ export const PartyList = React.memo(({
                   >
                     {href ? (
                       // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
-                      <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
+                      <Link
+                        prefetch={false}
+                        href={href}
+                        onClick={() => onSelectParty(party)}
+                        className="block min-w-0 max-w-full overflow-hidden"
+                      >
                         <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
                       </Link>
                     ) : (

@@ -43,6 +43,11 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { useDate } from "@/hooks/useDate";
 import { perfDebugLog, perfNow } from "@/lib/perfDebug";
 import BsDatePicker from "@/components/ui/BsDatePicker";
+import {
+  LEDGER_HEADER_PILL_CN,
+  LEDGER_HEADER_PILL_ICON_CN,
+  LEDGER_HEADER_PILL_ICON_SIZE_CN,
+} from "@/lib/ledgerHeaderChrome";
 import { useCompany } from "@/hooks/useCompany";
 import { EditAccountGroupDialog } from "@/components/bank-cash/EditAccountGroupDialog";
 import { AccountFilterDropdown } from "@/components/bank-cash/AccountFilterDropdown";
@@ -1518,7 +1523,7 @@ export function AccountGroupDetails({
                   valueAD={dateRange}
                   onChangeAD={handleBsDateRangeChange}
                   transactionDates={transactionDates}
-                  className="w-auto"
+                  className={cn("w-auto", LEDGER_HEADER_PILL_CN)}
                 />
               )}
               {(dateSystem === 'AD' || dateSystem === 'Both') && (
@@ -1527,9 +1532,9 @@ export function AccountGroupDetails({
                     <Button
                       id="date"
                       variant={"outline"}
-                      className={cn("justify-start text-left font-normal h-10 px-2 w-auto flex-shrink-0", !dateRange && "text-muted-foreground")}
+                      className={cn("justify-start text-left font-normal px-2 w-auto", LEDGER_HEADER_PILL_CN, !dateRange && "text-muted-foreground")}
                     >
-                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      <CalendarIcon className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} />
                       {dateRange?.from ? (
                         dateRange.to ? (
                           <>
@@ -1581,13 +1586,13 @@ export function AccountGroupDetails({
                 </Popover>
               )}
               {isFilterActive && (
-                <Button variant="ghost" size="icon" onClick={clearFilters} className="h-10 w-10 flex-shrink-0 text-muted-foreground hover:text-foreground" aria-label="Clear date filter">
-                  <XCircle className="h-4 w-4" />
+                <Button variant="ghost" size="icon" onClick={clearFilters} className={cn(LEDGER_HEADER_PILL_ICON_CN, "text-muted-foreground hover:text-foreground")} aria-label="Clear date filter">
+                  <XCircle className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
                 </Button>
               )}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="w-[200px] justify-between flex-shrink-0 h-10">
+                  <Button variant="outline" className={cn("w-[200px] justify-between", LEDGER_HEADER_PILL_CN)}>
                     <span className="truncate">Members ({accounts.length})</span>
                     <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                   </Button>
@@ -1618,11 +1623,11 @@ export function AccountGroupDetails({
                   { value: "spend_wise", label: "Spend wise" },
                 ]}
               />
-              <Button variant="chromePill" size="sm" onClick={() => handleOpenNoteDialog()} className="flex-shrink-0 h-10">
-                <FilePlus className="mr-2 h-4 w-4" /> Add Note
+              <Button variant="chromePill" size="sm" onClick={() => handleOpenNoteDialog()} className={LEDGER_HEADER_PILL_CN}>
+                <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
               </Button>
-              <Button variant="chromePill" size="icon" onClick={handlePrint} className="flex-shrink-0 h-10 w-10">
-                <Printer className="h-4 w-4" />
+              <Button variant="chromePill" size="icon" onClick={handlePrint} className={LEDGER_HEADER_PILL_ICON_CN}>
+                <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
               </Button>
             </div>
           </div>

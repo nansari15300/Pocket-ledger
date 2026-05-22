@@ -20,6 +20,7 @@ import {
 import type { AttachmentKindHint } from "@/lib/openAttachmentInApp";
 import { mountGalleryImageZoom, type GalleryImageZoomApi } from "@/lib/inAppGalleryImageZoom";
 import { dismissOpenInAppPdfPreviewIfPresent, showInAppPdfPreview } from "@/lib/inAppPdfPreview";
+import { shareAttachmentFromPreviewSrc } from "@/lib/shareAttachmentBlob";
 
 function pathLooksImage(pathLower: string): boolean {
   return /\.(jpe?g|png|gif|webp|bmp|svg)$/.test(pathLower);
@@ -525,7 +526,26 @@ export function openAttachmentGalleryInApp(
   const closeBtn = mkBarBtn("Close");
   attachPreviewCloseInteraction(closeBtn, safeClose);
 
-  bar.append(titleEl, counterEl, zoomOutBtn, zoomInBtn, fitWidthBtn, fitHeightBtn, closeBtn);
+  /** Gallery me bhi current file external app me share */
+  const shareBtn = mkBarBtn("Share");
+  shareBtn.onclick = () => {
+    shareBtn.disabled = true;
+    const url = list[idx]!;
+    void shareAttachmentFromPreviewSrc(url, `${baseTitle}-${idx + 1}`, { dialogTitle: "Share attachment" })
+      .catch((e) => {
+        const name = (e as Error)?.name;
+        if (name === "AbortError") return;
+        console.warn("[inAppAttachmentGallery] share failed", e);
+        if (typeof window !== "undefined") {
+          window.alert("Could not share this file.");
+        }
+      })
+      .finally(() => {
+        shareBtn.disabled = false;
+      });
+  };
+
+  bar.append(titleEl, counterEl, shareBtn, zoomOutBtn, zoomInBtn, fitWidthBtn, fitHeightBtn, closeBtn);
   root.append(slideHost, bar);
 
   root.addEventListener(

@@ -2,6 +2,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import {
@@ -33,6 +34,10 @@ import { format, formatDistanceToNow, isSameDay, isToday, isYesterday } from "da
 import { Button } from "@/components/ui/button";
 import { UserPlus, Send, Search, MoreVertical, Trash2, Loader2, Check, CheckCheck, MessageSquare, X, ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  openShareForReconciliationDialog,
+  RECON_CHAT_SHARED_LIST_LINK_LABEL,
+} from "@/lib/reconciliation/openShareDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -98,7 +103,15 @@ function formatLastSeen(lastChangedMs: number): string {
     return `Last seen ${format(date, "MMM d, yyyy 'at' p")}`;
 }
 
+/** Dashboard summary cards jaisa exact ribbon — chat sent/received tone match ke liye. */
+const CHAT_MSG_CARD_BASE =
+  "pl-chrome-card app-chrome-top-ribbon max-w-[85%] sm:max-w-md border-2 border-foreground/30 p-3 relative shadow-sm";
+const CHAT_MSG_SENT_CARD = cn(CHAT_MSG_CARD_BASE, "border-sky-300/70 pl-dashboard-ribbon-sky");
+const CHAT_MSG_RECEIVED_CARD = cn(CHAT_MSG_CARD_BASE, "border-emerald-300/70 pl-dashboard-ribbon-emerald");
+const CHAT_MSG_SYSTEM_CARD = cn(CHAT_MSG_CARD_BASE, "border-slate-300/70 pl-dashboard-ribbon-rose border-dashed opacity-90");
+
 export function ChatTab({ conversations, allPotentialContacts, onConversationSelect, selectedConversation, allAppUsers, messages, unreadCounts, handleSendInvite, statuses, unreadAlertsCount = 0, showAlertsOnList = false, onMobileViewChange }: any) {
+  const router = useRouter();
   const { user } = useAuth();
   const { effectiveNotificationSettings, company } = useCompany();
   const { dateSystem, formatDate, formatDateBS } = useDate();
@@ -499,31 +512,89 @@ export function ChatTab({ conversations, allPotentialContacts, onConversationSel
                         {messages.map((msg: any, index: number) => {
                           const separator = getMessageDateSeparator(msg, index > 0 ? messages[index - 1] : null);
                           const currentStatus = msg.status || (msg.read ? "read" : "delivered");
+                          const isSent = msg.senderId === user?.uid;
+                          const isSystem = msg.senderId === "system";
+                          const reconKind = String(msg.kind || "");
+                          const showSharedListLink =
+                            !!msg.shareId &&
+                            (reconKind === "reconciliation_request" ||
+                              reconKind === "reconciliation_request_again" ||
+                              String(msg.text || "").includes("Shared list"));
+                          const showReconcilePageLink =
+                            !!msg.shareId &&
+                            (reconKind === "reconciliation_accepted" ||
+                              String(msg.text || "").includes("/reconciliation/"));
 
                           return (
                             <React.Fragment key={msg.id}>
                               {separator && <div className="text-center my-6"><Badge variant="outline" className="bg-background/80 backdrop-blur-sm">{separator}</Badge></div>}
                                 <div 
-                                  className={cn("flex flex-col gap-1 w-full animate-in fade-in slide-in-from-bottom-1 cursor-pointer", msg.senderId === user?.uid ? "items-end" : "items-start", selectedMessages.has(msg.id) && "bg-blue-500/10 rounded-lg")}
+                                  className={cn(
+                                    "flex flex-col gap-1 w-full animate-in fade-in slide-in-from-bottom-1 cursor-pointer",
+                                    isSent ? "items-end" : "items-start",
+                                    selectedMessages.has(msg.id) && "rounded-lg bg-blue-500/10 ring-2 ring-blue-400/30",
+                                  )}
                                   onClick={() => handleMessageClick(msg.id)}
                                   onContextMenu={(e) => { e.preventDefault(); handleMessageLongPress(msg.id)}}
                                 >
-                                  <div className={cn("p-2.5 px-4 rounded-2xl max-w-[85%] sm:max-w-md shadow-sm relative", 
-                                    msg.senderId === user?.uid 
-                                      ? "bg-[#dcf8c6] dark:bg-green-900/40 text-foreground rounded-tr-none" 
-                                      : "bg-background dark:bg-muted text-foreground rounded-tl-none")}>
+                                  {/* FinancialSummaryCards / dashboard ribbon — sent sky, received emerald */}
+                                  <div
+                                    className={cn(
+                                      isSystem ? CHAT_MSG_SYSTEM_CARD : isSent ? CHAT_MSG_SENT_CARD : CHAT_MSG_RECEIVED_CARD,
+                                    )}
+                                  >
                                       
-                                      {msg.senderId === 'system' ? (
-                                        <p className="text-[11px] italic text-muted-foreground text-center px-4">{msg.text}</p>
+                                      {isSystem ? (
+                                        <p className="text-[11px] italic text-muted-foreground text-center px-2">{msg.text}</p>
                                       ) : (
-                                        <p className="text-[13px] leading-relaxed break-words">{msg.text}</p>
+                                        <>
+                                          <p className="text-[13px] leading-relaxed break-words text-foreground">{msg.text}</p>
+                                          {/* Reconcilink — request: Shared list popup; accept: reconcile page */}
+                                          {showSharedListLink ? (
+                                            <button
+                                              type="button"
+                                              className={cn(
+                                                "mt-2 text-[11px] font-semibold underline",
+                                                isSent
+                                                  ? "text-sky-800 hover:text-sky-950 dark:text-sky-200"
+                                                  : "text-emerald-800 hover:text-emerald-950 dark:text-emerald-200",
+                                              )}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                openShareForReconciliationDialog({
+                                                  tab: "list",
+                                                  highlightShareId: String(msg.shareId),
+                                                });
+                                              }}
+                                            >
+                                              {RECON_CHAT_SHARED_LIST_LINK_LABEL}
+                                            </button>
+                                          ) : null}
+                                          {showReconcilePageLink && !showSharedListLink ? (
+                                            <button
+                                              type="button"
+                                              className={cn(
+                                                "mt-2 text-[11px] font-semibold underline",
+                                                isSent
+                                                  ? "text-sky-800 hover:text-sky-950 dark:text-sky-200"
+                                                  : "text-emerald-800 hover:text-emerald-950 dark:text-emerald-200",
+                                              )}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                router.push(`/reconciliation/${msg.shareId}`);
+                                              }}
+                                            >
+                                              Go to reconciling page
+                                            </button>
+                                          ) : null}
+                                        </>
                                       )}
                                       
-                                      <div className="flex items-center justify-end gap-1.5 mt-1">
-                                          <p className="text-[9px] opacity-60 font-medium">
+                                      <div className="flex items-center justify-end gap-1.5 mt-2 pt-1 border-t border-black/5 dark:border-white/10">
+                                          <p className="text-[9px] opacity-70 font-medium">
                                             {format(msg.timestamp?.toDate() || new Date(), 'p')}
                                           </p>
-                                          {msg.senderId === user?.uid && msg.senderId !== 'system' && (
+                                          {isSent && !isSystem && (
                                             <MessageStatus status={currentStatus} />
                                           )}
                                       </div>

@@ -20,7 +20,7 @@ const buttonVariants = cva(
         /** Header + footer + list toolbar — pro pill; active = green border */
         chromePill: cn(
           chromeProPillCn,
-          "aria-pressed:border-green-600 aria-pressed:ring-2 aria-pressed:ring-green-600/40 aria-pressed:!bg-green-50/90 aria-pressed:!text-green-900 aria-pressed:odd:border-green-600 aria-pressed:even:border-green-600 data-[chrome-pill-active=true]:border-green-600 data-[chrome-pill-active=true]:ring-2 data-[chrome-pill-active=true]:ring-green-600/40 data-[chrome-pill-active=true]:!bg-green-50/90 data-[chrome-pill-active=true]:!text-green-900"
+          "aria-pressed:border-green-600 aria-pressed:ring-2 aria-pressed:ring-green-600/40 aria-pressed:!bg-green-50/90 aria-pressed:!text-green-900 data-[chrome-pill-active=true]:border-green-600 data-[chrome-pill-active=true]:ring-2 data-[chrome-pill-active=true]:ring-green-600/40 data-[chrome-pill-active=true]:!bg-green-50/90 data-[chrome-pill-active=true]:!text-green-900"
         ),
         secondary:
           "bg-sky-100/80 text-sky-900 hover:bg-sky-200/80",

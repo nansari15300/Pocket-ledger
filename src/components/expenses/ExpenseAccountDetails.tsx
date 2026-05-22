@@ -70,6 +70,11 @@ import { useDate } from "@/hooks/useDate";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { EditExpenseAccountDialog } from "./EditExpenseAccountDialog";
 import BsDatePicker from "@/components/ui/BsDatePicker";
+import {
+  LEDGER_HEADER_PILL_CN,
+  LEDGER_HEADER_PILL_ICON_CN,
+  LEDGER_HEADER_PILL_ICON_SIZE_CN,
+} from "@/lib/ledgerHeaderChrome";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
@@ -692,7 +697,7 @@ export function ExpenseAccountDetails({
                   valueAD={dateRange}
                   onChangeAD={onDateRangeChange || (() => {})}
                   transactionDates={transactionDates}
-                  className="w-auto"
+                  className={cn("w-auto", LEDGER_HEADER_PILL_CN)}
                 />
               )}
               {(dateSystem === "AD" || dateSystem === "Both") && (
@@ -701,9 +706,9 @@ export function ExpenseAccountDetails({
                     <Button
                       id="date"
                       variant={"outline"}
-                      className={cn("justify-start text-left font-normal h-10 px-2 w-auto flex-shrink-0", !dateRange && "text-muted-foreground")}
+                      className={cn("justify-start text-left font-normal px-2 w-auto", LEDGER_HEADER_PILL_CN, !dateRange && "text-muted-foreground")}
                     >
-                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      <CalendarIcon className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} />
                       {dateRange?.from ? (
                         dateRange.to ? (
                           <>
@@ -755,20 +760,20 @@ export function ExpenseAccountDetails({
                 </Popover>
               )}
               {isFilterActive && (
-                <Button variant="ghost" size="icon" onClick={clearFilters} className="h-10 w-10 flex-shrink-0 text-muted-foreground hover:text-foreground" aria-label="Clear date filter">
-                  <XCircle className="h-4 w-4" />
+                <Button variant="ghost" size="icon" onClick={clearFilters} className={cn(LEDGER_HEADER_PILL_ICON_CN, "text-muted-foreground hover:text-foreground")} aria-label="Clear date filter">
+                  <XCircle className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
                 </Button>
               )}
-              <Button variant="outline" size="sm" onClick={() => setIsNoteOpen(true)} className="flex-shrink-0 h-10">
-                <FilePlus className="mr-2 h-4 w-4" /> Add Note
+              <Button variant="outline" size="sm" onClick={() => setIsNoteOpen(true)} className={LEDGER_HEADER_PILL_CN}>
+                <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
               </Button>
               {onShowAll && (
-                <Button variant="outline" size="sm" onClick={onShowAll} className="flex-shrink-0 h-10">
+                <Button variant="outline" size="sm" onClick={onShowAll} className={LEDGER_HEADER_PILL_CN}>
                   All Vouchers
                 </Button>
               )}
-              <Button variant="outline" size="icon" onClick={handlePrint} className="flex-shrink-0 h-10 w-10">
-                <Printer className="h-4 w-4" />
+              <Button variant="outline" size="icon" onClick={handlePrint} className={LEDGER_HEADER_PILL_ICON_CN}>
+                <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
               </Button>
             </div>
           </div>

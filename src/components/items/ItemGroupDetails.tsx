@@ -69,6 +69,11 @@ import {
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
+import {
+  LEDGER_HEADER_PILL_CN,
+  LEDGER_HEADER_PILL_ICON_CN,
+  LEDGER_HEADER_PILL_ICON_SIZE_CN,
+} from "@/lib/ledgerHeaderChrome";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
@@ -931,7 +936,7 @@ export function ItemGroupDetails({
                   valueAD={dateRange}
                   onChangeAD={(range) => onDateRangeChangeWithUnapprovedReset(range as DateRange | undefined)}
                   transactionDates={transactionDates}
-                  className="w-auto"
+                  className={cn("w-auto", LEDGER_HEADER_PILL_CN)}
                 />
               )}
               {(dateSystem === "AD" || dateSystem === "Both") && (
@@ -940,9 +945,9 @@ export function ItemGroupDetails({
                     <Button
                       id="date"
                       variant={"outline"}
-                      className={cn("justify-start text-left font-normal h-10 px-2 w-auto flex-shrink-0", !dateRange && "text-muted-foreground")}
+                      className={cn("justify-start text-left font-normal px-2 w-auto", LEDGER_HEADER_PILL_CN, !dateRange && "text-muted-foreground")}
                     >
-                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      <CalendarIcon className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} />
                       {dateRange?.from ? (
                         dateRange.to ? (
                           <>
@@ -994,8 +999,8 @@ export function ItemGroupDetails({
                 </Popover>
               )}
               {isFilterActive && (
-                <Button variant="ghost" size="icon" onClick={clearFilters} className="h-10 w-10 flex-shrink-0 text-muted-foreground hover:text-foreground" aria-label="Clear date filter">
-                  <XCircle className="h-4 w-4" />
+                <Button variant="ghost" size="icon" onClick={clearFilters} className={cn(LEDGER_HEADER_PILL_ICON_CN, "text-muted-foreground hover:text-foreground")} aria-label="Clear date filter">
+                  <XCircle className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
                 </Button>
               )}
               {partiesWithTransactions && partiesWithTransactions.length > 0 && (
@@ -1007,7 +1012,7 @@ export function ItemGroupDetails({
               )}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="w-[200px] justify-between flex-shrink-0 h-10">
+                  <Button variant="outline" className={cn("w-[200px] justify-between", LEDGER_HEADER_PILL_CN)}>
                     <span className="truncate">Members ({items.length})</span>
                     <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                   </Button>
@@ -1034,12 +1039,12 @@ export function ItemGroupDetails({
                 variant="outline"
                 size="sm"
                 onClick={() => handleOpenNoteDialog()}
-                className="flex-shrink-0 h-10"
+                className={LEDGER_HEADER_PILL_CN}
               >
-                <FilePlus className="mr-2 h-4 w-4" /> Add Note
+                <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
               </Button>
-              <Button variant="outline" size="icon" onClick={handlePrint} className="flex-shrink-0 h-10 w-10">
-                <Printer className="h-4 w-4" />
+              <Button variant="outline" size="icon" onClick={handlePrint} className={LEDGER_HEADER_PILL_ICON_CN}>
+                <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
               </Button>
             </div>
           </div>

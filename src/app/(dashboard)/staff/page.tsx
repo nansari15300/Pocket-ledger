@@ -105,7 +105,7 @@ function StaffPageContent() {
     setSelected(null);
     router.replace(masterDetailListHref("staff"), { scroll: false });
   }, [setSelected, router]);
-  useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
+  useRegisterMasterDetailHardwareBack("staff", onBackToList);
   const useQueryNav = useMasterDetailQueryNav();
   
   const [searchTerm, setSearchTerm] = useState("");

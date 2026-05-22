@@ -116,9 +116,17 @@ function BankCashPageContent() {
   // Detail → list: replace + Android hardware back (push le history double hunchha)
   const onBackToList = useCallback(() => {
     setSelected(null);
-    router.replace(masterDetailListHref("bank-cash"), { scroll: false });
+    const href = masterDetailListHref("bank-cash");
+    if (typeof window !== "undefined") {
+      try {
+        window.history.replaceState(window.history.state, "", href);
+      } catch {
+        /* ignore */
+      }
+    }
+    router.replace(href, { scroll: false });
   }, [setSelected, router]);
-  useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
+  useRegisterMasterDetailHardwareBack("bank-cash", onBackToList);
 
   const [searchTerm, setSearchTerm] = useState("");
   /** Accounts tab: pink count click → sirf jinke paas pending approval */
@@ -248,7 +256,7 @@ function BankCashPageContent() {
     setSelected,              
     activeView === 'accounts' ? processedAccounts : processedAccountGroups, 
     vouchersLoading,
-    undefined,
+    useQueryNav,
     selectedIdFromUrl
   );
   // ==================================
@@ -528,7 +536,7 @@ function BankCashPageContent() {
       }
       listView={listView}
       detailView={detailView}
-      isMobile={isMobile}
+      isMobile={useQueryNav}
       mobileListOnly={true}
       hasSelectedItem={!!selected}
       onBackToList={onBackToList}

@@ -12,7 +12,7 @@ import { useVouchers } from "./useVouchers";
 import { useDate } from "./useDate";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import { type Context } from "@/components/vouchers/TransactionsTable";
-import { getNoteLinkedEntityLabel } from "@/components/vouchers/transactionTableShared";
+import { getNoteLinkedEntityLabel, transactionRowHasFileAttachment } from "@/components/vouchers/transactionTableShared";
 import {
   getAllocatedByVoucherId,
   getAllocatedByVoucherIdFromPaymentOuts,
@@ -990,10 +990,19 @@ export function useTransactions(
 
         let filteredByColumn = filteredByType;
         
-        if (filters && Object.values(filters).some((v) => v)) {
+        if (filters && Object.entries(filters).some(([_, v]) => v && v !== "all")) {
             filteredByColumn = filteredByType.filter((t: any) => {
               return Object.entries(filters).every(([key, value]) => {
-                if (!value) return true;
+                if (!value || value === "all") return true;
+
+                // File column — All / with attachment / without attachment
+                if (key === "file") {
+                  const hasFile = transactionRowHasFileAttachment(t);
+                  if (value === "with") return hasFile;
+                  if (value === "without") return !hasFile;
+                  return true;
+                }
+
                 const rawSearchTerm = String(value).toLowerCase().trim();
                 
                 const d = safeToDate(t.date);

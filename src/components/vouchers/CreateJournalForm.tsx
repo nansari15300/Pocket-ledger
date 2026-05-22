@@ -41,6 +41,7 @@ import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, A
 import { cn } from "@/lib/utils";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
+import { replaceVoucherSaveLoadingWithShortSuccess } from "@/lib/voucherSaveUi";
 
 import { useToast } from "@/hooks/use-toast";
 import { useCompany } from "@/hooks/useCompany";
@@ -209,12 +210,22 @@ function getInitialFormValues(voucher?: any): JournalFormValues {
         };
     }
 
-    const lines = (voucher.entries || []).map((entry: any, index: number) => ({
-        accountId: entry.accountId,
-        entityType: "", // Will be derived from accountId when form loads
-        type: entry.debit > 0 ? "debit" : "credit",
-        amount: entry.debit > 0 ? entry.debit : entry.credit,
-        isAutoLine: index === (voucher.entries || []).length - 1,
+    // Reconciliation sync draft `lines` bhejta hai; purane flows `entries` use karte hain
+    const lines = (Array.isArray(voucher.lines) && voucher.lines.length > 0
+        ? voucher.lines
+        : (voucher.entries || []).map((entry: any, index: number) => ({
+            accountId: entry.accountId,
+            entityType: "",
+            type: entry.debit > 0 ? "debit" : "credit",
+            amount: entry.debit > 0 ? entry.debit : entry.credit,
+            isAutoLine: index === (voucher.entries || []).length - 1,
+          }))
+    ).map((line: any, index: number, arr: any[]) => ({
+        accountId: String(line?.accountId ?? ""),
+        entityType: String(line?.entityType ?? ""),
+        type: line?.type === "credit" ? "credit" as const : "debit" as const,
+        amount: Number(line?.amount) || 0,
+        isAutoLine: line?.isAutoLine ?? index === arr.length - 1,
     }));
     
     if (lines.length < 2) {
@@ -344,20 +355,21 @@ export function CreateJournalForm({
     }
   }, [forcedLedgerScopeCompanyId]);
 
-  // Copy-draft target mode: scoped snapshot load se pehle old useVouchers fallback mat dikhao (stale previous-company options issue).
-  const pParties = copySaveTargetCompanyId
+  // Compare / recon sync: scoped company lists load hone tak header company fallback mat dikhao (galat id → blank combobox)
+  const useScopedLedgerLists = Boolean(copySaveTargetCompanyId || forcedLedgerScopeCompanyId);
+  const pParties = useScopedLedgerLists
     ? (scopedLedger?.processedPartiesForSelection ?? [])
     : (scopedLedger?.processedPartiesForSelection ?? processedPartiesForSelection);
-  const pStaff = copySaveTargetCompanyId
+  const pStaff = useScopedLedgerLists
     ? (scopedLedger?.processedStaff ?? [])
     : (scopedLedger?.processedStaff ?? processedStaff);
-  const pAccounts = copySaveTargetCompanyId
+  const pAccounts = useScopedLedgerLists
     ? (scopedLedger?.processedAccounts ?? [])
     : (scopedLedger?.processedAccounts ?? processedAccounts);
-  const pExpense = copySaveTargetCompanyId
+  const pExpense = useScopedLedgerLists
     ? (scopedLedger?.expenseAccounts ?? [])
     : (scopedLedger?.expenseAccounts ?? expenseAccounts);
-  const pTaxes = copySaveTargetCompanyId
+  const pTaxes = useScopedLedgerLists
     ? (scopedLedger?.processedTaxes ?? [])
     : (scopedLedger?.processedTaxes ?? processedTaxes);
 
@@ -428,9 +440,11 @@ export function CreateJournalForm({
     isCopiedDraftFirstInsert,
   } = useCopyDraftFirstSave(copySaveTargetCompanyId);
 
-  const isEditing = !!voucher;
+  // Sirf saved doc edit — sync/copy draft me `voucher` bina `id` ke aata hai; tab next voucher no auto fetch chahiye
+  const isEditing = !!voucher?.id;
   const isEditingAndConverting = voucher && voucher.type !== 'journal';
-  const isFormEditing = !voucher || isEditing;
+  // Sync draft: voucher hai par id nahi — fields editable rehne chahiye (account + narration manually bhar sake)
+  const isFormEditing = !voucher?.id || isEditing;
 
   const form = useForm<JournalFormValues>({
     resolver: zodResolver(formSchema) as Resolver<JournalFormValues>,
@@ -558,6 +572,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const isFirstNewJournalHydrate = lastResetVoucherIdRef.current !== NEW_JOURNAL;
         lastResetVoucherIdRef.current = NEW_JOURNAL;
         if (isFirstNewJournalHydrate) {
+          // Sync txn / gallery seed — lines + narration form me load (sirf defaultValues par depend mat karo)
+          const initialValues = getInitialFormValues(voucher);
+          form.reset(initialValues);
+          // entityType set ho to combobox label turant dikhe; warna account list load ke baad niche wala effect
+          (initialValues.lines || []).forEach((line: { accountId?: string; entityType?: string }, idx: number) => {
+            const accId = String(line?.accountId ?? "");
+            if (accId && line?.entityType) {
+              form.setValue(`lines.${idx}.entityType`, line.entityType, { shouldDirty: false });
+            }
+          });
           setJournalAllocationsBySide({ debit: [], credit: [] });
           initialJournalAllocationsRef.current = { debit: [], credit: [] };
           const urlsNew = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
@@ -574,6 +598,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         initialJournalAllocationsRef.current = { debit: [], credit: [] };
     }
 }, [voucher, form, isEditingAndConverting, isFormDirty, allAccountsWithEntity]);
+
+  /** Recon sync / compare: scoped accounts load hone ke baad pre-filled accountId ka label + entityType sync */
+  useEffect(() => {
+    if (voucher?.id || !voucher) return;
+    const lines = form.getValues("lines") || [];
+    lines.forEach((line: { accountId?: string; entityType?: string }, idx: number) => {
+      const accId = String(line?.accountId ?? "").trim();
+      if (!accId) return;
+      const acc = allAccountsWithEntity.find((a) => String(a.value) === accId);
+      if (!acc?.entityType) return;
+      const curEntity = String(form.getValues(`lines.${idx}.entityType`) || "");
+      if (curEntity !== acc.entityType) {
+        form.setValue(`lines.${idx}.entityType`, acc.entityType, { shouldDirty: false });
+      }
+    });
+  }, [allAccountsWithEntity, voucher, form]);
 
   useEffect(() => {
     if (!isEditing || isEditingAndConverting) {
@@ -1499,65 +1539,94 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           throw new Error("Failed to save voucher and get ID.");
       }
 
-        if (approveAfterSave && savedDoc?.id) {
-          if (!isEditForApprove) {
-            await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
-          }
-          sonnerToast.success(isEditForApprove ? "Journal updated and approved." : "Journal saved and approved.", { id: toastId });
+        const docId = savedDoc.id;
+        const approveBanner = !!(approveAfterSave && docId);
+        // Save & Close: dialog turant band — approve/alerts background (`postSaveTail`).
+        if (approveBanner) {
+          replaceVoucherSaveLoadingWithShortSuccess(
+            toastId,
+            isEditForApprove ? "Journal updated and approved." : "Journal saved and approved."
+          );
         } else {
-          sonnerToast.success(isEditForApprove ? "Journal updated!" : "Journal voucher created!", { id: toastId });
+          replaceVoucherSaveLoadingWithShortSuccess(
+            toastId,
+            isEditForApprove ? "Journal updated!" : "Journal voucher created!"
+          );
         }
-        if (companyId && company) {
-          const isEdit = !!voucher?.id;
-          const amount = Number(submissionData.total) || 0;
-          const vid = savedVoucherId || voucher?.id;
-          if (isEdit) {
-            const oldV = voucher as any;
-            const changes = getChangedFieldLabels(
-              { total: oldV?.total, narration: oldV?.narration, date: oldV?.date, voucherNumber: oldV?.voucherNumber },
-              { total: submissionData.total, narration: submissionData.narration, date: submissionData.date, voucherNumber: submissionData.voucherNumber },
-              [
-                { key: "total", label: "Amount" },
-                { key: "narration", label: "Narration" },
-                { key: "date", label: "Date" },
-                { key: "voucherNumber", label: "Voucher number" },
-              ]
-            );
-            await sendTransactionAlert(companyId, company, {
-              kind: "edited",
-              voucherId: vid,
-              voucherNumber: submissionData.voucherNumber,
-              voucherType: "journal",
-              performedByUserId: user?.uid,
-              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-              performedByEmail: user?.email ?? undefined,
-              changes: changes.length > 0 ? changes : undefined,
-            });
-          } else if (isAmountOverOneLakh(amount)) {
-            await sendTransactionAlert(companyId, company, {
-              kind: "large_amount",
-              voucherId: vid,
-              voucherNumber: submissionData.voucherNumber,
-              voucherType: "journal",
-              amount,
-              performedByUserId: user?.uid,
-              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-              performedByEmail: user?.email ?? undefined,
-            });
-          }
-        }
+        if (isMounted.current) setIsLoading(false);
 
-        if (saveAndNew && isMounted.current) {
+        const postSaveTail = async () => {
+          if (approveBanner && !isEditForApprove) {
+            await approveVoucherWithHistory(companyId, docId, user.uid, approverName);
+          }
+          if (companyId && company) {
+            const isEdit = !!voucher?.id;
+            const amount = Number(submissionData.total) || 0;
+            const vid = docId || voucher?.id;
+            if (isEdit) {
+              const oldV = voucher as any;
+              const changes = getChangedFieldLabels(
+                { total: oldV?.total, narration: oldV?.narration, date: oldV?.date, voucherNumber: oldV?.voucherNumber },
+                { total: submissionData.total, narration: submissionData.narration, date: submissionData.date, voucherNumber: submissionData.voucherNumber },
+                [
+                  { key: "total", label: "Amount" },
+                  { key: "narration", label: "Narration" },
+                  { key: "date", label: "Date" },
+                  { key: "voucherNumber", label: "Voucher number" },
+                ]
+              );
+              await sendTransactionAlert(companyId, company, {
+                kind: "edited",
+                voucherId: vid,
+                voucherNumber: submissionData.voucherNumber,
+                voucherType: "journal",
+                performedByUserId: user?.uid,
+                performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+                performedByEmail: user?.email ?? undefined,
+                changes: changes.length > 0 ? changes : undefined,
+              });
+            } else if (isAmountOverOneLakh(amount)) {
+              await sendTransactionAlert(companyId, company, {
+                kind: "large_amount",
+                voucherId: vid,
+                voucherNumber: submissionData.voucherNumber,
+                voucherType: "journal",
+                amount,
+                performedByUserId: user?.uid,
+                performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+                performedByEmail: user?.email ?? undefined,
+              });
+            }
+          }
+
+          if (saveAndNew && isMounted.current) {
             form.reset(getInitialFormValues());
             setFiles([]);
             setSavePdfAsImage(false);
             setSavedVoucherId(null);
             await fetchVoucherNumber();
+          }
+
+          if (approveAfterSave && voucher?.id) onApprove?.();
+
+          if (saveAndNew) {
+            onVoucherAction?.("saved", true, docId);
+          }
+        };
+
+        if (!saveAndNew) {
+          onVoucherAction?.("saved", false, docId);
+          void postSaveTail().catch((err) => {
+            console.error("[CreateJournalForm] post-save tail", err);
+            sonnerToast.error("Journal saved — finishing steps pending", {
+              description: err instanceof Error ? err.message : "Alerts may still run.",
+              duration: 4500,
+            });
+          });
+          return;
         }
 
-        if (approveAfterSave && voucher?.id) onApprove?.();
-
-        onVoucherAction?.("saved", saveAndNew, savedDoc.id);
+        await postSaveTail();
     } catch (error: any) {
       if (error instanceof PermissionDeniedError) {
         sonnerToast.error("Permission Denied", { id: toastId, description: error.message });

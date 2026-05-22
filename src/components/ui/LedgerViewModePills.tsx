@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import { LEDGER_HEADER_PILL_CN } from "@/lib/ledgerHeaderChrome";
 import { cn } from "@/lib/utils";
 
 type Option<T extends string> = { value: T; label: string };
@@ -13,7 +14,7 @@ type Props<T extends string> = {
   buttonClassName?: string;
 };
 
-/** Statement / Spend wise / Bill wise — do pill; jo select ho us par green border */
+/** Statement / Bill wise — blue pill; selected par sirf border green (bg blue hi) */
 export function LedgerViewModePills<T extends string>({
   value,
   options,
@@ -22,21 +23,35 @@ export function LedgerViewModePills<T extends string>({
   buttonClassName,
 }: Props<T>) {
   return (
-    <div className={cn("flex items-center gap-1 flex-shrink-0", className)} role="group" aria-label="View mode">
-      {options.map((opt) => (
+    <div
+      data-pl-ledger-view-pills
+      className={cn("flex items-center gap-1 flex-shrink-0", className)}
+      role="group"
+      aria-label="View mode"
+    >
+      {options.map((opt) => {
+        const isActive = value === opt.value;
+        return (
         <Button
           key={opt.value}
           type="button"
           variant="chromePill"
           size="sm"
-          aria-pressed={value === opt.value}
-          data-chrome-pill-active={value === opt.value ? "true" : undefined}
-          className={cn("h-10", buttonClassName)}
+          // aria-pressed mat — chromePill variant + pro CSS green lagata hai
+          aria-current={isActive ? "true" : undefined}
+          data-pl-ledger-view-active={isActive ? "true" : undefined}
+          className={cn(
+            LEDGER_HEADER_PILL_CN,
+            buttonClassName,
+            // Pro theme !important blue override se bachne ke liye
+            isActive && "!border-green-600 hover:!border-green-600"
+          )}
           onClick={() => onChange(opt.value)}
         >
           {opt.label}
         </Button>
-      ))}
+        );
+      })}
     </div>
   );
 }

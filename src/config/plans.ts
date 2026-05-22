@@ -88,7 +88,9 @@ export type EntitlementKey =
   /** Plan-wise: max history entries per voucher (1–100). 0 = use default 10. */
   | "voucherHistoryLimit"
   /** Max joined inter-company partner companies (Join tab). 0 = unlimited. */
-  | "maxInterCompanyPartners";
+  | "maxInterCompanyPartners"
+  /** Plan-wise: Share for Reconciliation (header + cross-user ledger match). */
+  | "shareForReconciliationEnabled";
 
 export type Entitlements = Record<EntitlementKey, number | boolean>;
 
@@ -150,6 +152,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryEnabled: false,
       voucherHistoryLimit: 0,
       maxInterCompanyPartners: 1,
+      shareForReconciliationEnabled: false,
     },
     features: [
       "Unlimited local (offline) companies",
@@ -196,6 +199,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryEnabled: true,
       voucherHistoryLimit: 10,
       maxInterCompanyPartners: 3,
+      shareForReconciliationEnabled: false,
     },
     features: [
       "1 online company + unlimited offline",
@@ -244,6 +248,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryEnabled: true,
       voucherHistoryLimit: 20,
       maxInterCompanyPartners: 10,
+      shareForReconciliationEnabled: true,
     },
     features: [
       "3 online companies + unlimited offline",
@@ -291,6 +296,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryEnabled: true,
       voucherHistoryLimit: 50,
       maxInterCompanyPartners: 0,
+      shareForReconciliationEnabled: true,
     },
     features: [
       "10 online companies + unlimited offline",

@@ -32,6 +32,11 @@ import { sortTransactionsWithFiscalMergeForCompany, DEFAULT_TRANSACTION_SORT_ORD
 import { Checkbox } from "@/components/ui/checkbox";
 import { AlertCircle, Filter, MoreVertical, Pencil, Printer, History } from "lucide-react";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import {
+  LEDGER_HEADER_PILL_CN,
+  LEDGER_HEADER_PILL_ICON_CN,
+  LEDGER_HEADER_PILL_ICON_SIZE_CN,
+} from "@/lib/ledgerHeaderChrome";
 import { txnSelectedMainRowCn, txnSelectedNarrationRowCn, txnTableIconBtnCn } from "@/lib/listSelectionChrome";
 import {
   matchesOverdueImportanceFilter,
@@ -419,7 +424,7 @@ export function OverdueAccountView({
               type="button"
               variant={importanceFilter === "all" ? "default" : "outline"}
               size="sm"
-              className="h-9 flex-shrink-0"
+              className={LEDGER_HEADER_PILL_CN}
               onClick={() => handleImportanceFilterChange("all")}
             >
               All
@@ -428,7 +433,7 @@ export function OverdueAccountView({
               type="button"
               variant={importanceFilter === "important" ? "default" : "outline"}
               size="sm"
-              className="h-9 flex-shrink-0"
+              className={LEDGER_HEADER_PILL_CN}
               onClick={() => handleImportanceFilterChange("important")}
             >
               Important
@@ -437,7 +442,7 @@ export function OverdueAccountView({
               type="button"
               variant={importanceFilter === "normal" ? "default" : "outline"}
               size="sm"
-              className="h-9 flex-shrink-0"
+              className={LEDGER_HEADER_PILL_CN}
               onClick={() => handleImportanceFilterChange("normal")}
             >
               Normal
@@ -445,12 +450,12 @@ export function OverdueAccountView({
             <Button
               variant="outline"
               size="icon"
-              className="h-10 w-10 flex-shrink-0"
+              className={LEDGER_HEADER_PILL_ICON_CN}
               onClick={() => runPrintDirect()}
               title="Print"
               data-theme-detail="print"
             >
-              <Printer className="h-4 w-4" />
+              <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
             </Button>
           </div>
         </div>

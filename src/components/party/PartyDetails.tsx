@@ -9,6 +9,7 @@ import type { Party, Group } from "@/components/party/types";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { Button } from "@/components/ui/button";
+import { LedgerViewModePills } from "@/components/ui/LedgerViewModePills";
 import {
   Card,
   CardHeader,
@@ -136,6 +137,7 @@ import {
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import AnimatedNumber from "@/components/ui/AnimatedNumber";
 import { NotificationBell } from "../vouchers/NotificationBell";
+import { ReconciliationAccountButton } from "@/components/reconciliation/ReconciliationAccountButton";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { getLocalAuthUser } from "@/lib/localApiClient";
@@ -143,6 +145,12 @@ import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetail
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+// Shared header pill height — Party + sab ledger detail/report headers
+import {
+  LEDGER_HEADER_PILL_CN,
+  LEDGER_HEADER_PILL_ICON_CN,
+  LEDGER_HEADER_PILL_ICON_SIZE_CN,
+} from "@/lib/ledgerHeaderChrome";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -1099,14 +1107,16 @@ export function PartyDetails({
           />
         ) : (
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
-          <Button
-            type="button"
-            className={cn("flex-1 h-6 rounded-md text-xs font-medium shrink-0 min-w-0", balanceMode === "bill_wise" ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "bg-violet-600 hover:bg-violet-700 text-white border-0")}
-            onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
-            data-theme-btn={balanceMode === "bill_wise" ? "statement" : "bill-wise"}
-          >
-            {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
-          </Button>
+          <LedgerViewModePills
+            className="flex-1 min-w-0"
+            buttonClassName="h-6 flex-1 min-w-0 px-1 text-xs"
+            value={balanceMode}
+            onChange={setBalanceMode}
+            options={[
+              { value: "statement", label: "Statement" },
+              { value: "bill_wise", label: "Bill wise" },
+            ]}
+          />
           <Button className="flex-1 h-6 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("payment_in"); openModalInUrl(); }}>
             Receive
           </Button>
@@ -1348,12 +1358,19 @@ export function PartyDetails({
                   <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
                     {formatCurrency(closingBalance, { showDrCr: true })}
                   </div>
+                  {/* Linked reconciliation — balance ke baad, related account compare */}
+                  {party.id !== "all" && !(party as any).isSystemAccount ? (
+                    <ReconciliationAccountButton accountId={party.id} />
+                  ) : null}
                 </div>
               </div>
             </div>
             {/* Part 2: date range, Add Note, print — single line, no wrap; on small screens this row is below */}
             <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
-              <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
+              <LedgerUnapprovedFilterButton
+                active={unapprovedOnly}
+                onClick={toggleUnapprovedOnly}
+              />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <BsDatePicker
@@ -1361,7 +1378,7 @@ export function PartyDetails({
                     valueAD={dateRange}
                     onChangeAD={(range) => onDateRangeChangeWithUnapprovedReset(range as DateRange | undefined)}
                     transactionDates={transactionDates}
-                    className="w-auto"
+                    className={cn("w-auto", LEDGER_HEADER_PILL_CN)}
                   />
                 </div>
               )}
@@ -1372,10 +1389,14 @@ export function PartyDetails({
                       <Button
                         id="date"
                         variant={"outline"}
-                        className={cn("justify-start text-left font-normal h-10 px-2 w-auto", !dateRange && "text-muted-foreground")}
+                        className={cn(
+                          "justify-start text-left font-normal px-2 w-auto",
+                          LEDGER_HEADER_PILL_CN,
+                          !dateRange && "text-muted-foreground"
+                        )}
                         data-theme-detail="date-range"
                       >
-                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        <CalendarIcon className="mr-2 h-3.5 w-3.5" />
                         {dateRange?.from ? (
                           dateRange.to ? (
                             <>
@@ -1429,37 +1450,36 @@ export function PartyDetails({
               )}
               {isFilterActive && (
                 // Header par BS/AD alag clear buttons hatakar single clear button rakha gaya.
-                <Button variant="ghost" size="icon" onClick={clearFilters} className="h-10 w-10 flex-shrink-0 text-muted-foreground hover:text-foreground" aria-label="Clear date filter">
-                  <XCircle className="h-4 w-4" />
+                <Button variant="ghost" size="icon" onClick={clearFilters} className={cn(LEDGER_HEADER_PILL_ICON_CN, "text-muted-foreground hover:text-foreground")} aria-label="Clear date filter">
+                  <XCircle className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
                 </Button>
               )}
               <NotificationBell context="Party" entityId={party.id} />
-              <Button
-                variant="outline"
-                size="sm"
-                className={cn("flex-shrink-0 h-10", balanceMode === "bill_wise" ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "")}
-                onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
-                data-theme-btn={balanceMode === "bill_wise" ? "statement" : "bill-wise"}
-              >
-                {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
-              </Button>
+              <LedgerViewModePills
+                value={balanceMode}
+                onChange={setBalanceMode}
+                options={[
+                  { value: "statement", label: "Statement" },
+                  { value: "bill_wise", label: "Bill wise" },
+                ]}
+              />
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setIsNoteOpen(true)}
-                className="flex-shrink-0 h-10"
+                className={LEDGER_HEADER_PILL_CN}
                 data-theme-detail="add-note"
               >
-                <FilePlus className="mr-2 h-4 w-4" />
+                <FilePlus className="mr-2 h-3.5 w-3.5" />
                 Add Note
               </Button>
               {onShowAll && (
-                <Button variant="outline" size="sm" onClick={onShowAll} className="flex-shrink-0 h-10">
+                <Button variant="outline" size="sm" onClick={onShowAll} className={LEDGER_HEADER_PILL_CN}>
                   All Vouchers
                 </Button>
               )}
-              <Button variant="outline" size="icon" className="h-10 w-10 flex-shrink-0" onClick={handlePrint} data-theme-detail="print">
-                <Printer className="h-4 w-4" />
+              <Button variant="outline" size="icon" className={LEDGER_HEADER_PILL_ICON_CN} onClick={handlePrint} data-theme-detail="print">
+                <Printer className="h-3.5 w-3.5" />
               </Button>
             </div>
           </div>

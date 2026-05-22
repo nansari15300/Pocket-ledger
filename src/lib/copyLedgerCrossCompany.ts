@@ -8,6 +8,7 @@
 import { collection, getDoc, getDocs, query, Timestamp, where, doc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { saveVoucher } from "@/lib/voucherActionsClient";
+import { getVoucherLedgerDebitCreditForAccount } from "@/lib/journalLedgerAmounts";
 import { voucherTouchesPartyLedger } from "@/lib/voucherTouchesPartyLedger";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
@@ -208,6 +209,13 @@ function toAmount(n: unknown): number {
   return Number.isFinite(x) ? x : 0;
 }
 
+/** Recycle bin / soft-delete — ledger rows me mat dikhao. */
+function isActiveLedgerVoucher(v: Record<string, unknown>): boolean {
+  if (v.isDeleted === true) return false;
+  if (v.deletedAt != null && v.deletedAt !== "") return false;
+  return true;
+}
+
 function toDateLabel(raw: unknown): string {
   if (!raw) return "—";
   try {
@@ -267,6 +275,16 @@ export function collectOppositeReferenceIdsForCompare(v: Record<string, unknown>
   return collectVoucherReferenceIds(v).filter((id) => id !== sel);
 }
 
+/** Ledger/recon row narration — Note voucher ka `title` (party txn table jaisa). */
+export function ledgerNarrationFromVoucher(v: Record<string, unknown>): string {
+  if (String(v.type || "") === "note") {
+    const title = String(v.title || "").trim();
+    if (title) return title;
+  }
+  const narration = String(v.narration || "").trim();
+  return narration || "-";
+}
+
 /**
  * Compare list builder: selected vouchers ke liye missing target references + dr/cr check metadata.
  * `targetKnownIds` me woh ids do jo target company me valid hain (e.g. target parties ids).
@@ -284,6 +302,7 @@ export function buildCopyLedgerComparison(params: {
   const unresolved = new Set<string>();
   const rows: CopyLedgerComparisonRow[] = [];
   for (const v of vouchers) {
+    if (!isActiveLedgerVoucher(v)) continue;
     if (!voucherTouchesPartyLedger(v, sourcePartyId)) continue;
     const id = String(v.id || "");
     if (selectedSet.size > 0 && !selectedSet.has(id)) continue;
@@ -297,16 +316,11 @@ export function buildCopyLedgerComparison(params: {
         unresolved.add(srcId);
       }
     }
-    // Source dr/cr parity marker so user can filter problematic vouchers before copy.
-    let debit = toAmount(v.debit);
-    let credit = toAmount(v.credit);
-    const amount = toAmount(v.total ?? v.amount ?? Math.max(debit, credit));
-    // Fallback: some voucher shapes keep debit/credit empty; show amount in an expected Dr/Cr side.
-    if (debit === 0 && credit === 0 && amount > 0) {
-      const t = String(v.type || "");
-      if (t === "purchase" || t === "payment_out" || t === "direct_expense") credit = amount;
-      else debit = amount;
-    }
+    // Is ledger account ki leg — journal me voucher total nahi (recon flip: remote Dr → owned Cr).
+    const legAmounts = getVoucherLedgerDebitCreditForAccount(v, sourcePartyId);
+    let debit = legAmounts.debit;
+    let credit = legAmounts.credit;
+    const amount = toAmount(Math.max(debit, credit, toAmount(v.total ?? v.amount ?? 0)));
     const crefRaw = v.crossCopySourceRef as { companyId?: string; voucherId?: string } | undefined;
     const crossCopySourceRef =
       crefRaw?.companyId && crefRaw?.voucherId
@@ -318,7 +332,7 @@ export function buildCopyLedgerComparison(params: {
       type: String(v.type || "voucher"),
       rawDate: v.date,
       dateLabel: toDateLabel(v.date),
-      narration: String(v.narration || "").trim() || "-",
+      narration: ledgerNarrationFromVoucher(v),
       amount,
       debit,
       credit,
@@ -423,7 +437,7 @@ export function computeVoucherMatchSignature(v: Record<string, unknown>): string
     type: String(v.type || "voucher"),
     rawDate: v.date,
     dateLabel: "",
-    narration: String(v.narration || "").trim() || "-",
+    narration: ledgerNarrationFromVoucher(v),
     amount,
     debit,
     credit,
@@ -469,7 +483,7 @@ async function loadTargetPartyVoucherMergeIndexes(
     const entry: TargetSigIndexEntry = {
       id: String(data.id ?? ""),
       voucherNumber: String((data as { voucherNumber?: string }).voucherNumber || ""),
-      narration: String((data as { narration?: string }).narration || ""),
+      narration: ledgerNarrationFromVoucher(data as Record<string, unknown>),
     };
     const sig = computeVoucherMatchSignature(data);
     if (!bySig.has(sig)) bySig.set(sig, entry);
@@ -855,7 +869,7 @@ export async function executeCopyLedgerCrossCompany(params: {
           throw new Error("Debit/Credit mismatch while preparing copied voucher.");
         }
         // Sirf tab [Copied] line rakho jab source narration (norm) badal gaya ho; warna purani target narration (ek hi [Copied] line).
-        if (narrationPairNormalizedEqual(String(v.narration || "").trim() || "-", existing.narration)) {
+        if (narrationPairNormalizedEqual(ledgerNarrationFromVoucher(v), existing.narration)) {
           payload.narration = existing.narration;
         }
         await saveVoucher(targetCompanyId, userId, payload, existing.id);

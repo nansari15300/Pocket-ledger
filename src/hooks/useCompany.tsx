@@ -180,6 +180,8 @@ export type Company = {
     enableLinkPaymentToTxns?: boolean;
     /** Header "Copy ledger" + cross-company party ledger tools — role `copy_ledger_cross_company` bhi chahiye. */
     enableCrossCompanyLedgerCopy?: boolean;
+    /** Header Share for Reconciliation + linked account compare — plan + role alag. */
+    enableShareForReconciliation?: boolean;
     /** Country selected when company was created (e.g. Nepal for VAT reports). */
     country?: string;
     /** Inter-company network: 15-digit company A/c No (auto-generated on create / company open). */

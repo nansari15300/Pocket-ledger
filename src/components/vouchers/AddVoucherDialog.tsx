@@ -66,6 +66,7 @@ import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/
 import { VoucherAttachmentFallbackContext } from "@/contexts/VoucherAttachmentFallbackContext";
 import { writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { formatVoucherNumber, normalizePrefix, parseVoucherNumberPart } from "@/lib/voucherNumberFormat";
+import { isRecurringVoucherGenerationEnabled } from "@/lib/recurringVoucherSettings";
 import { BTN_SAVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { stripIdsForCrossCompanyClone } from "@/lib/crossCompanyMasterPrefill";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
@@ -2174,36 +2175,42 @@ export function AddVoucherDialog(props: any) {
       voucherId: effectiveVoucher?.id,
     });
     setIsApproving(true);
+    const voucherId = String(effectiveVoucher.id);
+    const approverName = customUser?.displayName || user?.displayName || user?.email || user.uid;
+    const toastId = toast.loading("Approving...");
+    // Pehle hi persist: SQLite/outbox busy ho to bhi readSelectedCompanyId empty na ho, /company push na ho.
     try {
-      // Pehle hi persist: await ke dauran SQLite/outbox busy ho to bhi readSelectedCompanyId empty na ho, /company push na ho.
-      try {
-        if (typeof window !== "undefined") writeSelectedCompanyId(cid);
-      } catch {
-        /* ignore */
-      }
-      const approverName = customUser?.displayName || user?.displayName || user?.email || user.uid;
-      await approveVoucherWithHistory(cid, effectiveVoucher.id, user.uid, approverName);
-      // Baad me dubara: koi intermediate clear ho to session/local fallback phir set ho jaye.
-      try {
-        if (typeof window !== "undefined") writeSelectedCompanyId(cid);
-      } catch {
-        /* ignore */
-      }
-      // Approve flow me global company ko tabhi touch karo jab context miss/mismatch ho; same-company par needless switch se page-route churn avoid.
-      if (!activeContextCompanyId || activeContextCompanyId !== cid) {
-        setCompanyId(cid);
-      }
-      toast.success("Transaction approved.");
-      // Static APK mobile: parent callbacks kabhi route canonicalization chala dete hain; approve ke baad dialog close enough hai.
-      if (!(isStaticAppBuild() && isMobile)) {
-        props.onVoucherAction?.("saved");
-      }
-      onOpenChange?.(false);
-    } catch (e) {
-      toast.error("Failed to approve transaction.");
-    } finally {
-      setIsApproving(false);
+      if (typeof window !== "undefined") writeSelectedCompanyId(cid);
+    } catch {
+      /* ignore */
     }
+    if (!activeContextCompanyId || activeContextCompanyId !== cid) {
+      setCompanyId(cid);
+    }
+    // Capacitor plain voucher: approve bhi async write — company pin shield (Save jaisa).
+    if (isCapacitorNativeApp() && apkLedgerPinsShellCompanyContext) {
+      beginApkLedgerAsyncWriteShield({ pinCompanyId: cid });
+    }
+    // Dialog turant band — approve API background me.
+    if (!(isStaticAppBuild() && isMobile)) {
+      props.onVoucherAction?.("saved");
+    }
+    onOpenChange?.(false);
+    setIsApproving(false);
+
+    void (async () => {
+      try {
+        await approveVoucherWithHistory(cid, voucherId, user.uid, approverName);
+        try {
+          if (typeof window !== "undefined") writeSelectedCompanyId(cid);
+        } catch {
+          /* ignore */
+        }
+        toast.success("Transaction approved.", { id: toastId, duration: 1000 });
+      } catch (e) {
+        toast.error("Failed to approve transaction.", { id: toastId });
+      }
+    })();
   }, [
     editCompanyId,
     ctxCompanyId,
@@ -2770,32 +2777,11 @@ export function AddVoucherDialog(props: any) {
       }
     }
 
-    // १. सेभ भएको बेला मात्र सर्भरबाट फाइल डिलिट गर्ने
-    if (status === 'saved' && pathsToDelete.length > 0) {
-      console.log("Cleaning up files from storage...");
-      for (const path of pathsToDelete) {
-        try {
-          const fileRef = ref(storage, path);
-          await deleteObject(fileRef);
-          console.log("Deleted:", path);
-        } catch (error) {
-          console.error("Failed to delete file:", path, error);
-        }
-      }
-    }
-
-    // २. Unassigned file को cleanup (पहिलेकै लजिक)
-    if (status === 'saved' && defaultVoucherData?.unassignedFile?.id && companyId) {
-      try {
-        const laneForFirestoreCleanup = company;
-        if (!apkEntityWriteUsesLocalSqliteMirror(laneForFirestoreCleanup)) {
-          const fileDocRef = doc(firestore, `companies/${companyId}/unassigned_documents`, defaultVoucherData.unassignedFile.id);
-          await deleteDoc(fileDocRef);
-        }
-      } catch (error) {
-        console.error("Failed to delete unassigned document:", error);
-      }
-    }
+    // १–२. Storage / unassigned cleanup — dialog band hone ke baad background (Save pe turant close).
+    const pathsToDeleteCopy = [...pathsToDelete];
+    const unassignedFileId =
+      status === "saved" ? String(defaultVoucherData?.unassignedFile?.id || "").trim() : "";
+    const cleanupCompanyId = companyId;
 
     // ३. Propagate action — pehle parent ko saved batao + dialog band (static/offline par niche recurring `getDoc` await se form mat chipke)
     let keepDialogAsNew = Boolean(isSaveAndNew);
@@ -2838,6 +2824,38 @@ export function AddVoucherDialog(props: any) {
   
     if (!keepDialogAsNew && !skipDialogCloseForSaveCopy && !suppressMainDialogCloseForRecurringPicker) {
       onOpenChange?.(false);
+    }
+
+    if (status === "saved" && (pathsToDeleteCopy.length > 0 || (unassignedFileId && cleanupCompanyId))) {
+      void (async () => {
+        if (pathsToDeleteCopy.length > 0) {
+          console.log("Cleaning up files from storage...");
+          for (const path of pathsToDeleteCopy) {
+            try {
+              const fileRef = ref(storage, path);
+              await deleteObject(fileRef);
+              console.log("Deleted:", path);
+            } catch (error) {
+              console.error("Failed to delete file:", path, error);
+            }
+          }
+        }
+        if (unassignedFileId && cleanupCompanyId) {
+          try {
+            const laneForFirestoreCleanup = company;
+            if (!apkEntityWriteUsesLocalSqliteMirror(laneForFirestoreCleanup)) {
+              const fileDocRef = doc(
+                firestore,
+                `companies/${cleanupCompanyId}/unassigned_documents`,
+                unassignedFileId
+              );
+              await deleteDoc(fileDocRef);
+            }
+          } catch (error) {
+            console.error("Failed to delete unassigned document:", error);
+          }
+        }
+      })();
     }
 
     /** Auto Monthly / recurring — har action apni permission; view-only se Firestore mat likho. */
@@ -2886,11 +2904,9 @@ export function AddVoucherDialog(props: any) {
               void refreshRecurringTemplateMeta(companyId, savedVoucherIdForRecurring);
               setCommittedAutoMonthlyEnabled(true);
 
-              const rsRec = (company as Record<string, unknown> | null | undefined)?.recurringVoucherSettings as
-                | Record<string, unknown>
-                | undefined;
+              // Company recurring ON (default) + permission → save ke baad auto-generate try
               if (
-                rsRec?.enabled === true &&
+                isRecurringVoucherGenerationEnabled(company) &&
                 canGenerateRecurringOnVoucher &&
                 !apkOfflineViewOnly &&
                 user?.uid &&
@@ -3144,10 +3160,7 @@ export function AddVoucherDialog(props: any) {
       toast.error("Save the voucher first.");
       return;
     }
-    const rs = (company as Record<string, unknown> | null | undefined)?.recurringVoucherSettings as
-      | Record<string, unknown>
-      | undefined;
-    if (rs?.enabled !== true) {
+    if (!isRecurringVoucherGenerationEnabled(company)) {
       toast.error("Company auto recurring is off.");
       return;
     }

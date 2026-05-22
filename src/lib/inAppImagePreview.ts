@@ -12,6 +12,7 @@ import {
   setAttachmentPreviewHardwareBackHandler,
 } from "@/lib/inAppAttachmentPreviewOpen";
 import { mountGalleryImageZoom, type GalleryImageZoomApi } from "@/lib/inAppGalleryImageZoom";
+import { shareAttachmentFromPreviewSrc } from "@/lib/shareAttachmentBlob";
 
 export function showInAppImagePreview(
   imageSrc: string,
@@ -211,6 +212,38 @@ export function showInAppImagePreview(
     e.stopPropagation();
   });
 
+  /** APK / browser — file ko WhatsApp, Gmail, Drive wagaira me share */
+  const shareBtn = mkBtn("Share");
+  const runShare = () => {
+    shareBtn.disabled = true;
+    void shareAttachmentFromPreviewSrc(imageSrc, title, { dialogTitle: "Share file" })
+      .catch((e) => {
+        const name = (e as Error)?.name;
+        if (name === "AbortError") return;
+        console.warn("[inAppImagePreview] share failed", e);
+        if (typeof window !== "undefined") {
+          window.alert("Could not share this file. Try Browser to open it in another app.");
+        }
+      })
+      .finally(() => {
+        shareBtn.disabled = false;
+      });
+  };
+  shareBtn.addEventListener(
+    "pointerup",
+    (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      runShare();
+    },
+    { passive: false }
+  );
+  shareBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
   /** Single-click = pan (gallery); double-click = browser / tab */
   img.addEventListener("dblclick", (e) => {
     e.preventDefault();
@@ -218,7 +251,7 @@ export function showInAppImagePreview(
     openInSystemBrowser();
   });
 
-  bar.append(titleEl, openBtn, zoomOutBtn, zoomInBtn, fitWidthBtn, fitHeightBtn, closeBtn);
+  bar.append(titleEl, openBtn, shareBtn, zoomOutBtn, zoomInBtn, fitWidthBtn, fitHeightBtn, closeBtn);
   root.append(scrollHost, bar);
 
   root.addEventListener(

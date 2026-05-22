@@ -4,6 +4,7 @@
 import * as React from "react";
 import { openPrintDirect } from "@/lib/printDirect";
 import type { Staff, StaffGroup } from "@/components/staff/types";
+import { ReconciliationAccountButton } from "@/components/reconciliation/ReconciliationAccountButton";
 import { Button } from "@/components/ui/button";
 import { LedgerViewModePills } from "@/components/ui/LedgerViewModePills";
 import {
@@ -74,6 +75,11 @@ import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import BsDatePicker from "@/components/ui/BsDatePicker";
+import {
+  LEDGER_HEADER_PILL_CN,
+  LEDGER_HEADER_PILL_ICON_CN,
+  LEDGER_HEADER_PILL_ICON_SIZE_CN,
+} from "@/lib/ledgerHeaderChrome";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
@@ -1312,6 +1318,7 @@ export function StaffDetails({
                 <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance < 0 ? "text-red-600" : "text-green-600")}>
                   {formatCurrency(closingBalance, { showDrCr: true })}
                 </div>
+                <ReconciliationAccountButton accountId={staff.id} />
               </div>
             </div>
           </div>
@@ -1323,7 +1330,7 @@ export function StaffDetails({
                 valueAD={dateRange}
                 onChangeAD={handleBsDateRangeChange}
                 transactionDates={transactionDates}
-                className="w-auto"
+                className={cn("w-auto", LEDGER_HEADER_PILL_CN)}
               />
             )}
             {(dateSystem === 'AD' || dateSystem === 'Both') && (
@@ -1332,10 +1339,10 @@ export function StaffDetails({
                   <Button
                     id="date"
                     variant="chromePill"
-                    className={cn("justify-start text-left font-normal h-10 px-2 w-auto flex-shrink-0", !dateRange && "text-muted-foreground")}
+                    className={cn("justify-start text-left font-normal px-2 w-auto", LEDGER_HEADER_PILL_CN, !dateRange && "text-muted-foreground")}
                     data-theme-detail="date-range"
                   >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    <CalendarIcon className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} />
                     {dateRange?.from ? (
                       dateRange.to ? (
                         <>
@@ -1387,8 +1394,8 @@ export function StaffDetails({
               </Popover>
             )}
             {isFilterActive && (
-              <Button variant="ghost" size="icon" onClick={clearFilters} className="h-10 w-10 flex-shrink-0 text-muted-foreground hover:text-foreground" aria-label="Clear date filter">
-                <XCircle className="h-4 w-4" />
+              <Button variant="ghost" size="icon" onClick={clearFilters} className={cn(LEDGER_HEADER_PILL_ICON_CN, "text-muted-foreground hover:text-foreground")} aria-label="Clear date filter">
+                <XCircle className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
               </Button>
             )}
             <LedgerViewModePills
@@ -1403,14 +1410,14 @@ export function StaffDetails({
               variant="chromePill"
               size="sm"
               onClick={() => setIsNoteOpen(true)}
-              className="flex-shrink-0 h-10"
+              className={LEDGER_HEADER_PILL_CN}
               data-theme-detail="add-note"
             >
-              <FilePlus className="mr-2 h-4 w-4" />
+              <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} />
               Add Note
             </Button>
             {onShowAll && (
-              <Button variant="chromePill" size="sm" onClick={onShowAll} className="flex-shrink-0 h-10">
+              <Button variant="chromePill" size="sm" onClick={onShowAll} className={LEDGER_HEADER_PILL_CN}>
                 All Vouchers
               </Button>
             )}
@@ -1418,10 +1425,10 @@ export function StaffDetails({
               variant="chromePill"
               size="icon"
               onClick={balanceMode === "bill_wise" ? handlePrintBillWise : handlePrintStatement}
-              className="flex-shrink-0 h-10 w-10"
+              className={LEDGER_HEADER_PILL_ICON_CN}
               data-theme-detail="print"
             >
-              <Printer className="h-4 w-4" />
+              <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
             </Button>
           </div>
         </div>

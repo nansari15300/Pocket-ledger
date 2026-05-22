@@ -58,6 +58,7 @@ import {
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
 import { toast as sonnerToast } from "sonner";
+import { replaceVoucherSaveLoadingWithShortSuccess } from "@/lib/voucherSaveUi";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
@@ -100,6 +101,25 @@ function getInitialFormValues(initialContext?: string, initialEntityId?: string)
         context: initialContext || "",
         entityId: initialEntityId || "",
     };
+}
+
+/** Voucher / sync draft se poora Note form — recon sync ke liye title, context, entityId. */
+function getInitialFormValuesFromVoucher(voucher: Record<string, unknown>): NoteFormValues {
+  const rawDate = (voucher.date as { toDate?: () => Date })?.toDate
+    ? (voucher.date as { toDate: () => Date }).toDate()
+    : new Date(voucher.date as string | number | Date);
+  const safeDate = Number.isFinite(rawDate.getTime()) ? rawDate : startOfDay(new Date());
+  return {
+    voucherNumber: String(voucher.voucherNumber ?? "").trim(),
+    date: safeDate,
+    title: String(voucher.title ?? "").trim(),
+    content:
+      typeof voucher.content === "string"
+        ? voucher.content
+        : String(voucher.narration || ""),
+    context: String(voucher.context ?? ""),
+    entityId: String(voucher.entityId ?? ""),
+  };
 }
 
 
@@ -247,29 +267,35 @@ export function CreateNoteForm({
       return;
     }
     const vid = voucher.id as string | undefined;
-    if (vid && lastResetVoucherIdRef.current === vid) {
-      return;
+    if (vid) {
+      if (lastResetVoucherIdRef.current === vid) return;
+      lastResetVoucherIdRef.current = vid;
+      const d =
+        voucher.date instanceof Date
+          ? voucher.date
+          : voucher.date?.toDate
+            ? voucher.date.toDate()
+            : new Date();
+      form.reset(getInitialFormValuesFromVoucher(voucher));
+      queueMicrotask(() => {
+        form.clearErrors();
+        void form.trigger();
+      });
+    } else {
+      // Recon sync draft — poora note form load (title/context/entityId khali na rahe)
+      const cref = voucher.crossCopySourceRef as { companyId?: string; voucherId?: string } | undefined;
+      const syncDraftKey =
+        cref?.companyId && cref?.voucherId
+          ? `sync:${cref.companyId}|${cref.voucherId}`
+          : `new:note|${String(voucher.entityId || "")}|${String(voucher.title || "").slice(0, 40)}`;
+      if (lastResetVoucherIdRef.current === syncDraftKey) return;
+      lastResetVoucherIdRef.current = syncDraftKey;
+      form.reset(getInitialFormValuesFromVoucher(voucher));
+      queueMicrotask(() => {
+        form.clearErrors();
+        void form.trigger();
+      });
     }
-    if (vid) lastResetVoucherIdRef.current = vid;
-
-    const d =
-      voucher.date instanceof Date
-        ? voucher.date
-        : voucher.date?.toDate
-          ? voucher.date.toDate()
-          : new Date();
-    // Explicit schema fields only — spread `voucher` can leave voucherNumber undefined briefly vs zod.
-    form.reset({
-      voucherNumber: String(voucher.voucherNumber ?? "").trim(),
-      date: d,
-      title: String(voucher.title ?? "").trim(),
-      content: typeof voucher.content === "string" ? voucher.content : "",
-      context: String(voucher.context ?? ""),
-      entityId: String(voucher.entityId ?? ""),
-    });
-    queueMicrotask(() => {
-      form.clearErrors();
-    });
     if (voucher.fileUrls) {
       setFiles(voucher.fileUrls);
       initialFilesRef.current = Array.isArray(voucher.fileUrls) ? [...voucher.fileUrls] : [];
@@ -617,61 +643,89 @@ export function CreateNoteForm({
           preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
         );
 
-        if (approveAfterSave && result?.id) {
-          if (!isEdit) {
-            await approveVoucherWithHistory(companyId, result.id, user.uid, approverName);
-          }
-          sonnerToast.success(isEdit ? "Note updated and approved." : "Note saved and approved.", { id: toastId });
+        const docId = result?.id;
+        const approveBanner = !!(approveAfterSave && docId);
+        // Save & Close: dialog turant band — approve/print background (`postSaveTail`).
+        if (approveBanner) {
+          replaceVoucherSaveLoadingWithShortSuccess(
+            toastId,
+            isEdit ? "Note updated and approved." : "Note saved and approved."
+          );
         } else {
-          sonnerToast.success(isEdit ? "Note updated!" : "Note Saved!", { id: toastId });
+          replaceVoucherSaveLoadingWithShortSuccess(
+            toastId,
+            isEdit ? "Note updated!" : "Note Saved!"
+          );
         }
-        if (saveAndNew) {
+        setIsLoading(false);
+
+        const postSaveTail = async () => {
+          if (approveBanner && !isEdit) {
+            await approveVoucherWithHistory(companyId, docId!, user.uid, approverName);
+          }
+          if (saveAndNew) {
             form.reset(getInitialFormValues(initialContext, initialEntityId));
             setFiles([]);
             setSavePdfAsImage(false);
             initialFilesRef.current = [];
             lastResetVoucherIdRef.current = undefined;
             fetchVoucherNumber();
-        } else {
-          initialFilesRef.current = [...fileUrls];
-          setFiles(fileUrls);
-        }
+          } else {
+            initialFilesRef.current = [...fileUrls];
+            setFiles(fileUrls);
+          }
 
-        onSuccess?.();
+          onSuccess?.();
 
-        // Save & Print: open print preview with this note as custom content
-        if (saveAndPrint && result?.id && company) {
-          const noteDate = values.date instanceof Date ? values.date : new Date(values.date);
-          const dateStr = dateSystem === "Both" ? `${formatDateBS(noteDate)} / ${formatDate(noteDate)}` : (dateSystem === "BS" ? formatDateBS(noteDate) : formatDate(noteDate));
-          openPrintDirect({
-            company: { name: company.name, pan: company.pan, phone: company.phone, address: company.address, logoUrl: company.logoUrl },
-            title: `Note: ${values.voucherNumber}`,
-            context: "daybook",
-            dateSystem: dateSystem as "AD" | "BS" | "Both",
-            dateRangeText: dateStr,
-            vouchersCount: 1,
-            openingBalance: 0,
-            transactions: [],
-            customContent: [
-              { text: "Note", fontSize: 14, bold: true, margin: [0, 0, 0, 8] },
-              {
-                table: {
-                  body: [
-                    ["Note No.", values.voucherNumber],
-                    ["Date", dateStr],
-                    ["Title", values.title || "—"],
-                    ["Link to", values.context || "—"],
-                    ["Entity", entityName || "—"],
-                    ["Details", (values.content || "—") as string],
-                  ],
-                  widths: [100, "*"],
+          if (saveAndPrint && docId && company) {
+            const noteDate = values.date instanceof Date ? values.date : new Date(values.date);
+            const dateStr = dateSystem === "Both" ? `${formatDateBS(noteDate)} / ${formatDate(noteDate)}` : (dateSystem === "BS" ? formatDateBS(noteDate) : formatDate(noteDate));
+            openPrintDirect({
+              company: { name: company.name, pan: company.pan, phone: company.phone, address: company.address, logoUrl: company.logoUrl },
+              title: `Note: ${values.voucherNumber}`,
+              context: "daybook",
+              dateSystem: dateSystem as "AD" | "BS" | "Both",
+              dateRangeText: dateStr,
+              vouchersCount: 1,
+              openingBalance: 0,
+              transactions: [],
+              customContent: [
+                { text: "Note", fontSize: 14, bold: true, margin: [0, 0, 0, 8] },
+                {
+                  table: {
+                    body: [
+                      ["Note No.", values.voucherNumber],
+                      ["Date", dateStr],
+                      ["Title", values.title || "—"],
+                      ["Link to", values.context || "—"],
+                      ["Entity", entityName || "—"],
+                      ["Details", (values.content || "—") as string],
+                    ],
+                    widths: [100, "*"],
+                  },
                 },
-              },
-            ],
-          }, true);
+              ],
+            }, true);
+          }
+
+          if (saveAndNew) {
+            onVoucherAction?.("saved", true, docId ?? undefined);
+          }
+        };
+
+        if (!saveAndNew) {
+          onVoucherAction?.("saved", false, docId ?? undefined);
+          void postSaveTail().catch((err) => {
+            console.error("[CreateNoteForm] post-save tail", err);
+            sonnerToast.error("Note saved — finishing steps pending", {
+              description: err instanceof Error ? err.message : "Print may still run.",
+              duration: 4500,
+            });
+          });
+          return;
         }
 
-        onVoucherAction?.("saved", saveAndNew, result?.id ?? undefined);
+        await postSaveTail();
     } catch (err) {
         if (err instanceof PermissionDeniedError) {
           sonnerToast.error("Permission Denied", { id: toastId, description: err.message });

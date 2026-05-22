@@ -15,6 +15,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { proDashboardRibbonClass } from "@/lib/proTheme";
 import { useDate } from "@/hooks/useDate";
 import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -23,6 +24,7 @@ import { buildCompanyFlowDrCrContext } from "@/lib/dashboardRecurringAccrual";
 import usePermissions from "@/hooks/usePermissions";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { toast } from "sonner";
+import { isRecurringVoucherGenerationEnabled } from "@/lib/recurringVoucherSettings";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { RecurringDashboardLine } from "@/lib/dashboardRecurringAccrual";
@@ -257,9 +259,7 @@ export function RecurringAutoSummaryCard({
   const { company, companyId, triggerSync, reloadLocalCompanyRegistry } = useCompany();
   const { can } = usePermissions();
   const cid = String(companyId || "").trim();
-  const recurringCompanyEnabled =
-    (company as { recurringVoucherSettings?: { enabled?: boolean } } | null)?.recurringVoucherSettings?.enabled ===
-    true;
+  const recurringCompanyEnabled = isRecurringVoucherGenerationEnabled(company);
   const {
     vouchers,
     journalAccountNames,
@@ -387,8 +387,11 @@ export function RecurringAutoSummaryCard({
     [cid, company, canToggleRecurring, reloadLocalCompanyRegistry, triggerSync],
   );
 
-  // Net accrued: inflow (Dr) − outflow (Cr); >0 = zyada andar aane wala hissa
-  const balanceAccruedNetInDr = agg.totalAccruedDr - agg.totalAccruedCr;
+  // Card Dr/Cr = View details popup jaisa (detailDebitLines / detailCreditLines totals)
+  // totalAccruedDr/Cr alag flow-weight se kabhi ulta dikha sakte hain — card par popup source use karo
+  const cardDrTotal = agg.detailDebitLines.reduce((s, r) => s + r.debit, 0);
+  const cardCrTotal = agg.detailCreditLines.reduce((s, r) => s + r.credit, 0);
+  const cardBalanceDrMinusCr = agg.detailNetCompanyDrMinusCr;
   const hasResolvedRows = agg.templateRows.length > 0;
   const waitingForVouchers = !agg.loading && agg.firestoreEnabledCount > 0 && !hasResolvedRows;
   const emptySchedules = !agg.loading && agg.firestoreEnabledCount === 0 && recurringCompanyEnabled;
@@ -404,11 +407,13 @@ export function RecurringAutoSummaryCard({
 
   // `min-w-min` + parent grid `minmax(min-content,1fr)` — lamba amount cut/wrap na ho, column width badhe
   const gridOuterClass = cn(
-    "col-span-1 min-w-min w-full transition-colors app-chrome-top-ribbon border-2 border-foreground/30 border-rose-300/70 pl-dashboard-ribbon-rose",
+    "col-span-1 min-w-min w-full transition-colors app-chrome-top-ribbon",
+    proDashboardRibbonClass(4),
     className,
   );
   const defaultOuterClass = cn(
-    "min-w-min w-full app-chrome-top-ribbon border-2 border-foreground/30 border-rose-300/70 pl-dashboard-ribbon-rose",
+    "min-w-min w-full app-chrome-top-ribbon",
+    proDashboardRibbonClass(4),
     className,
   );
 
@@ -450,37 +455,37 @@ export function RecurringAutoSummaryCard({
             <div className="flex min-w-0 items-baseline justify-between gap-2 sm:gap-3">
               <span className="min-w-0 shrink truncate text-xs text-muted-foreground">Inflow to company</span>
               <span className="shrink-0 whitespace-nowrap text-base font-bold tabular-nums text-green-600">
-                {fmt(agg.totalAccruedDr)} <span className="text-xs">Dr</span>
+                {fmt(cardDrTotal)} <span className="text-xs">Dr</span>
               </span>
             </div>
             <div className="flex min-w-0 items-baseline justify-between gap-2 sm:gap-3">
               <span className="min-w-0 shrink truncate text-xs text-muted-foreground">Outflow from company</span>
               <span className="shrink-0 whitespace-nowrap text-base font-bold tabular-nums text-red-600">
-                {fmt(agg.totalAccruedCr)} <span className="text-xs">Cr</span>
+                {fmt(cardCrTotal)} <span className="text-xs">Cr</span>
               </span>
             </div>
             <div className="mt-2 flex min-w-0 items-baseline justify-between gap-2 border-t pt-2 sm:gap-3">
               <span className="min-w-0 shrink truncate text-sm font-bold">
-                {balanceAccruedNetInDr > 0
+                {cardBalanceDrMinusCr > 0
                   ? "Balance (Dr)"
-                  : balanceAccruedNetInDr < 0
+                  : cardBalanceDrMinusCr < 0
                     ? "Balance (Cr)"
                     : "Balance"}
               </span>
               <span
                 className={cn(
                   "shrink-0 whitespace-nowrap text-lg font-bold tabular-nums",
-                  balanceAccruedNetInDr > 0
+                  cardBalanceDrMinusCr > 0
                     ? "text-green-600"
-                    : balanceAccruedNetInDr < 0
+                    : cardBalanceDrMinusCr < 0
                       ? "text-red-600"
                       : "text-muted-foreground",
                 )}
               >
-                {balanceAccruedNetInDr !== 0 ? (
+                {cardBalanceDrMinusCr !== 0 ? (
                   <>
-                    {fmt(Math.abs(balanceAccruedNetInDr))}{" "}
-                    <span className="text-xs">{balanceAccruedNetInDr > 0 ? "Dr" : "Cr"}</span>
+                    {fmt(Math.abs(cardBalanceDrMinusCr))}{" "}
+                    <span className="text-xs">{cardBalanceDrMinusCr > 0 ? "Dr" : "Cr"}</span>
                   </>
                 ) : (
                   fmt(0)

@@ -52,6 +52,7 @@ const entitlementLabels: Partial<Record<EntitlementKey, string>> = {
     canAddAvatar: "Can add avatar (Profile & Company logo)",
     canAddFileImagePdf: "Can add file (image/PDF) on vouchers",
     maxInterCompanyPartners: "Max joined inter-company partners",
+    shareForReconciliationEnabled: "Share for Reconciling (cross-user ledger match)",
 };
 
 export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
@@ -246,7 +247,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
       // Multi-device switch off = dono 1; on = online/local alag caps (billing chart rows).
       { online: "maxDevices", local: "maxDevicesLocal", label: "Max devices" },
     ];
-    const entitlementBooleanFields: EntitlementKey[] = ["hasPrioritySupport", "hasAuditLogs", "hasRoleBasedAccess", "allowCompanyAdminRecycleBin", "canAddAvatar"];
+    const entitlementBooleanFields: EntitlementKey[] = ["hasPrioritySupport", "hasAuditLogs", "hasRoleBasedAccess", "allowCompanyAdminRecycleBin", "canAddAvatar", "shareForReconciliationEnabled"];
 
     const offerDate = editablePlan.limitedTimeOfferDate ? 
         (editablePlan.limitedTimeOfferDate.toDate ? editablePlan.limitedTimeOfferDate.toDate() : new Date(editablePlan.limitedTimeOfferDate))

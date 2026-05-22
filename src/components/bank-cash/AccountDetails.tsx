@@ -5,6 +5,7 @@ import * as React from "react";
 import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
 import type { Account } from "@/components/bank-cash/types";
+import { ReconciliationAccountButton } from "@/components/reconciliation/ReconciliationAccountButton";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -67,11 +68,17 @@ import {
 import { useDate } from "@/hooks/useDate";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
+import { LedgerViewModePills } from "@/components/ui/LedgerViewModePills";
 
 import { perfDebugLog, perfNow } from "@/lib/perfDebug";
 import { ScrollArea } from "../ui/scroll-area";
 import { EditAccountDialog } from "../bank-cash/EditAccountDialog";
 import BsDatePicker from "@/components/ui/BsDatePicker";
+import {
+  LEDGER_HEADER_PILL_CN,
+  LEDGER_HEADER_PILL_ICON_CN,
+  LEDGER_HEADER_PILL_ICON_SIZE_CN,
+} from "@/lib/ledgerHeaderChrome";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
@@ -1368,18 +1375,17 @@ export function AccountDetails({
       />
       
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
-             <Button
-               type="button"
-               variant={spendWiseView ? "default" : "outline"}
-               size="sm"
-               className={cn(
-                 "flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0",
-                 !spendWiseView && "bg-violet-600 hover:bg-violet-700 text-white border-0"
-               )}
-               onClick={() => setSpendWiseView(!spendWiseView)}
-             >
-               {spendWiseView ? "Statement" : "Spend wise"}
-             </Button>
+          {/* Mobile: Group details jaisa Statement | Spend wise do pill */}
+          <LedgerViewModePills
+            className="flex-1 min-w-0"
+            buttonClassName="h-6 flex-1 min-w-0 px-1 text-xs"
+            value={spendWiseView ? "spend_wise" : "statement"}
+            onChange={(v) => setSpendWiseView(v === "spend_wise")}
+            options={[
+              { value: "statement", label: "Statement" },
+              { value: "spend_wise", label: "Spend wise" },
+            ]}
+          />
              <Button
                className="flex-1 h-6 min-w-0 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium"
                onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("payment_in"); openModalInUrl(); }}
@@ -1528,6 +1534,7 @@ export function AccountDetails({
                       </>
                     )}
                   </div>
+                  <ReconciliationAccountButton accountId={account.id} />
                 </div>
               </div>
             </div>
@@ -1539,7 +1546,7 @@ export function AccountDetails({
                   valueAD={dateRange}
                   onChangeAD={onDateRangeChangeWithUnapprovedReset}
                   transactionDates={transactionDates}
-                  className="w-auto"
+                  className={cn("w-auto", LEDGER_HEADER_PILL_CN)}
                 />
               )}
               {(dateSystem === "AD" || dateSystem === "Both") && (
@@ -1548,10 +1555,10 @@ export function AccountDetails({
                     <Button
                       id="date"
                       variant={"outline"}
-                      className={cn("justify-start text-left font-normal h-10 px-2 w-auto flex-shrink-0", !dateRange && "text-muted-foreground")}
+                      className={cn("justify-start text-left font-normal px-2 w-auto", LEDGER_HEADER_PILL_CN, !dateRange && "text-muted-foreground")}
                       data-theme-detail="date-range"
                     >
-                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      <CalendarIcon className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} />
                       {dateRange?.from ? (
                         dateRange.to ? (
                           <>
@@ -1603,23 +1610,23 @@ export function AccountDetails({
                 </Popover>
               )}
               {isFilterActive && (
-                <Button variant="ghost" size="icon" onClick={clearFilters} className="h-10 w-10 flex-shrink-0 text-muted-foreground hover:text-foreground" aria-label="Clear date filter">
-                  <XCircle className="h-4 w-4" />
+                <Button variant="ghost" size="icon" onClick={clearFilters} className={cn(LEDGER_HEADER_PILL_ICON_CN, "text-muted-foreground hover:text-foreground")} aria-label="Clear date filter">
+                  <XCircle className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
                 </Button>
               )}
-              <Button
-                variant={spendWiseView ? "default" : "outline"}
-                size="sm"
-                onClick={() => setSpendWiseView(!spendWiseView)}
-                className="flex-shrink-0 h-10"
-              >
-                {spendWiseView ? "Statement" : "Spend wise"}
+              <LedgerViewModePills
+                value={spendWiseView ? "spend_wise" : "statement"}
+                onChange={(v) => setSpendWiseView(v === "spend_wise")}
+                options={[
+                  { value: "statement", label: "Statement" },
+                  { value: "spend_wise", label: "Spend wise" },
+                ]}
+              />
+              <Button variant="outline" size="sm" onClick={() => setIsNoteOpen(true)} className={LEDGER_HEADER_PILL_CN} data-theme-detail="add-note">
+                <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
               </Button>
-              <Button variant="outline" size="sm" onClick={() => setIsNoteOpen(true)} className="flex-shrink-0 h-10" data-theme-detail="add-note">
-                <FilePlus className="mr-2 h-4 w-4" /> Add Note
-              </Button>
-              <Button variant="outline" size="icon" onClick={handlePrintStatement} className="flex-shrink-0 h-10 w-10" data-theme-detail="print">
-                <Printer className="h-4 w-4" />
+              <Button variant="outline" size="icon" onClick={handlePrintStatement} className={LEDGER_HEADER_PILL_ICON_CN} data-theme-detail="print">
+                <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
               </Button>
             </div>
           </div>

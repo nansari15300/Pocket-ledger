@@ -673,6 +673,32 @@ service cloud.firestore {
         && resource.data.userId == request.auth.uid;
       allow update: if false;
     }
+
+    /**
+     * Cross-user Share for Reconciliation — sender / target / receiver read.
+     * List queries MUST filter by senderUserId | targetUserId | receiverUserId (rules match).
+     * @path /reconciliation_shares/{shareId}
+     */
+    match /reconciliation_shares/{shareId} {
+      function isReconciliationShareParticipant() {
+        return isSignedIn()
+          && (
+            resource.data.senderUserId == request.auth.uid
+            || resource.data.targetUserId == request.auth.uid
+            || resource.data.get('receiverUserId', '') == request.auth.uid
+          );
+      }
+      allow get: if isReconciliationShareParticipant();
+      allow list: if isReconciliationShareParticipant();
+      allow create: if isSignedIn()
+        && request.resource.data.senderUserId == request.auth.uid
+        && request.resource.data.targetUserId is string
+        && request.resource.data.senderCompanyId is string
+        && request.resource.data.senderAccountId is string;
+      allow update: if isReconciliationShareParticipant();
+      allow delete: if isSignedIn()
+        && resource.data.senderUserId == request.auth.uid;
+    }
     
     /**
      * @description Activity logs for admin auditing.

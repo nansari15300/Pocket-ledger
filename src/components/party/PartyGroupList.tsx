@@ -55,7 +55,10 @@ export function PartyGroupList({
   const { formatCurrency } = useDate();
   const { settings: animationSettings } = useAnimationSettings();
   const isRowAnimationEnabled = animationSettings.rows.enabled === true;
-  const rowAnimationDuration = isRowAnimationEnabled ? animationSettings.rows.duration : 0;
+  // Party page tab (`collapsible={false}`): layout/out animation band — tab switch flicker na ho
+  const rowAnimationDuration =
+    collapsible === false ? 0 : isRowAnimationEnabled ? animationSettings.rows.duration : 0;
+  const useListMotion = collapsible === true;
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['party group']));
   const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
 
@@ -122,23 +125,24 @@ export function PartyGroupList({
           {categories.length === 0 ? (
             <div className="p-8 text-center text-sm text-muted-foreground">No groups found.</div>
           ) : null}
-          <AnimatePresence mode="popLayout">
+          <AnimatePresence mode={useListMotion ? "popLayout" : "sync"}>
             {categories.map((category) => {
               const categoryKey = category.name.toLowerCase();
               const isExpanded = collapsible ? expandedCategories.has(categoryKey) : true;
               const hasGroups = category.groups.length > 0;
+              const CategoryTag = useListMotion ? motion.div : "div";
+              const RowTag = useListMotion ? motion.li : "li";
+              const motionProps = useListMotion
+                ? {
+                    layout: true as const,
+                    initial: false as const,
+                    exit: { transition: { duration: 0 } },
+                    transition: { duration: rowAnimationDuration, ease: "easeInOut" as const },
+                  }
+                : {};
               
               return (
-                <motion.div
-                  key={categoryKey}
-                  layout
-                  initial={false}
-                  exit={{ transition: { duration: 0 } }}
-                  transition={{ 
-                    duration: rowAnimationDuration,
-                    ease: "easeInOut"
-                  }}
-                >
+                <CategoryTag key={categoryKey} {...motionProps}>
                   {/* Category Header - same padding/height as party list section (Party (x)) */}
                   <div
                     className={cn(
@@ -167,17 +171,7 @@ export function PartyGroupList({
                         const isSelected = selectedGroup?.id === group.id;
                         const isSystem = (group as any).isSystemReserved;
                         return (
-                          <motion.li
-                            key={group.id}
-                            className="w-full"
-                            layout
-                            initial={false}
-                            exit={{ transition: { duration: 0 } }}
-                            transition={{ 
-                              duration: rowAnimationDuration,
-                              ease: "easeInOut"
-                            }}
-                          >
+                          <RowTag key={group.id} className="w-full" {...motionProps}>
                             {(() => {
                               const href = getItemHref?.(group);
                               const cardClassName = masterListRowUnselectedCn(isSelected);
@@ -233,7 +227,12 @@ export function PartyGroupList({
                               );
                               return href ? (
                                 // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
-                                <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
+                                <Link
+                                  prefetch={false}
+                                  href={href}
+                                  onClick={() => onSelectGroup(group)}
+                                  className="block min-w-0 max-w-full overflow-hidden"
+                                >
                                   <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
                                 </Link>
                               ) : (
@@ -242,16 +241,16 @@ export function PartyGroupList({
                                 </MasterListRow>
                               );
                             })()}
-                          </motion.li>
+                          </RowTag>
                         );
                       })}
                     </ul>
                   )}
-                </motion.div>
+                </CategoryTag>
               );
             })}
           </AnimatePresence>
-        </div>
+          </div>
       </ScrollArea>
       <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
       </div>

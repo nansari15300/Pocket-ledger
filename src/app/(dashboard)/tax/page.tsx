@@ -126,7 +126,7 @@ function TaxPageContent() {
     setSelected(null);
     router.replace(masterDetailListHref("tax"), { scroll: false });
   }, [setSelected, router]);
-  useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
+  useRegisterMasterDetailHardwareBack("tax", onBackToList);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [showOnlyTaxesWithPendingApproval, setShowOnlyTaxesWithPendingApproval] = useState(false);

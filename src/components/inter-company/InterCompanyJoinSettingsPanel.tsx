@@ -239,7 +239,7 @@ export function InterCompanyJoinSettingsPanel({ companyId, onSettingsChange }: P
           setDraft(next);
           setSaved(next);
         }
-        onSettingsChange?.();
+    onSettingsChange?.();
       })
       .catch((err) => console.warn("[IC join] reset links:", err));
   }, [user?.uid, ownedCompaniesForGroups, companyId, onSettingsChange]);
@@ -782,8 +782,8 @@ export function InterCompanyJoinSettingsPanel({ companyId, onSettingsChange }: P
               onChange={(e) => setSystemSearchQuery(e.target.value)}
               placeholder="Search systems…"
               className="h-9 pl-8"
-            />
-          </div>
+        />
+      </div>
         )}
         {allSystemsInList.length === 0 ? (
           <p className="text-xs text-muted-foreground">No systems yet.</p>

@@ -114,7 +114,7 @@ function ItemsPageContent() {
     setSelected(null);
     router.replace(masterDetailListHref("items"), { scroll: false });
   }, [setSelected, router]);
-  useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
+  useRegisterMasterDetailHardwareBack("items", onBackToList);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [showOnlyItemsWithPendingApproval, setShowOnlyItemsWithPendingApproval] = useState(false);

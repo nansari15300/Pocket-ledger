@@ -18,6 +18,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { LEDGER_HEADER_PILL_CN, LEDGER_HEADER_PILL_ICON_SIZE_CN } from "@/lib/ledgerHeaderChrome";
 import type { Party } from "@/components/party/types";
 
 type PartyFilterDropdownProps = {
@@ -80,12 +81,12 @@ export function PartyFilterDropdown({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          className="h-10 px-2 w-auto justify-between"
+          className={cn(LEDGER_HEADER_PILL_CN, "w-auto justify-between px-2")}
         >
           <span className="truncate">
             {displayValue()}
           </span>
-          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          <ChevronsUpDown className={cn("ml-2 shrink-0 opacity-50", LEDGER_HEADER_PILL_ICON_SIZE_CN)} />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[250px] p-0">

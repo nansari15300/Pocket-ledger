@@ -60,6 +60,7 @@ import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transac
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
+import { consumeMasterDetailSidebarListNav } from "@/lib/masterDetailSidebarNav";
 import { collectPartyIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesPartyLedger";
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
@@ -72,6 +73,19 @@ import {
   writeOverdueImportanceFilter,
   type OverdueImportanceFilter,
 } from "@/lib/overdueImportanceFilter";
+
+/** Tab `replaceState` ke baad `useSearchParams` stale reh sakta hai — address bar (location) pehle. */
+function readPartyPageUrlState(viewFromUrl: string | null, selectedIdFromUrl: string | null) {
+  if (typeof window === "undefined") {
+    return { view: viewFromUrl, selectedId: selectedIdFromUrl };
+  }
+  const loc = new URLSearchParams(window.location.search);
+  // `view` bhi location-only — replaceState `/party` ke baad stale searchParams.view=groups se wapas Groups mat kholo
+  const view = loc.has("view") ? loc.get("view") : null;
+  // URL me `selected` param nahi → stale searchParams.selected ignore (Groups tab switch fix)
+  const selectedId = loc.has("selected") ? loc.get("selected") : null;
+  return { view, selectedId };
+}
 
 function PartyPageContent() {
   const { user } = useAuth();
@@ -132,22 +146,49 @@ function PartyPageContent() {
   const selectedIdFromUrl = searchParams.get("selected");
   const viewFromUrl = searchParams.get("view");
   const isInitialMount = useRef(true);
+  /** List click turant select — URL effect stale ?selected= se peeche wala row na khole */
+  const pendingPartySelectIdRef = useRef<string | null>(null);
+  /** Mobile back → list: partyPageState / URL restore se detail dubara na khule */
+  const suppressPartyListRestoreRef = useRef(false);
   const { setBalanceMode } = useBalanceMode();
 
-  const [activeView, setActiveView] = useState("parties");
+  const [activeView, setActiveView] = useState(() => {
+    // Refresh / ?view=groups deep link — pehla paint sahi tab
+    if (typeof window === "undefined") return "parties";
+    return new URLSearchParams(window.location.search).get("view") === "groups" ? "groups" : "parties";
+  });
   const { isMobile, selected, setSelected } = useResponsiveListLayout<Party | Group>(`party_view_${activeView}`);
-  // APK / static Electron: wide window par bhi ?selected= rakho taaki header Report button ko id mile
+  // APK/static: mobile list-detail + hardware back — sirf `isMobile` par mat band karo (PC mode tablet)
   const useQueryNav = useMasterDetailQueryNav();
+  const mobileMasterDetail = useQueryNav;
 
   // List farkina: replace (push jasto double history hoina) + hardware back ma pani (Capacitor) yahi logic
   const onBackToList = useCallback(() => {
-    setSelected(null);
+    pendingPartySelectIdRef.current = null;
+    suppressPartyListRestoreRef.current = true;
     const base = masterDetailListHref("party");
     // Groups tab se detail se wapas aane par URL me `view=groups` rakho — warna bare `/party` pe memory/effect Parties pe kheench leta hai
     const href = activeView === "groups" ? `${base}?view=groups` : base;
+    // Pehle URL + memory clear — phir selected null (sync effect purani ?selected= se detail na khole)
+    if (typeof window !== "undefined") {
+      try {
+        window.history.replaceState(window.history.state, "", href);
+        const raw = localStorage.getItem("partyPageState");
+        if (raw) {
+          const parsed = JSON.parse(raw) as { selections?: Record<string, string> };
+          if (parsed.selections?.[activeView]) {
+            delete parsed.selections[activeView];
+            localStorage.setItem("partyPageState", JSON.stringify(parsed));
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    setSelected(null);
     router.replace(href, { scroll: false });
   }, [setSelected, router, activeView]);
-  useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
+  useRegisterMasterDetailHardwareBack("party", onBackToList);
 
   const [searchTerm, setSearchTerm] = useState("");
   /** Party list: sirf un jinke paas pending approval (count box click toggle) */
@@ -382,6 +423,23 @@ function PartyPageContent() {
     return processedGroups.filter((g) => (pendingApprovalByGroupId[g.id] ?? 0) > 0);
   }, [processedGroups, showOnlyPartyGroupsWithPendingApproval, showApproveOnList, pendingApprovalByGroupId]);
 
+  const partyUrlState = useMemo(
+    () => readPartyPageUrlState(viewFromUrl, selectedIdFromUrl),
+    [viewFromUrl, selectedIdFromUrl, activeView]
+  );
+
+  // URL sync effect ko har voucher snapshot par re-run na karo — refs se latest lists
+  const processedPartiesRef = useRef(processedParties);
+  const processedGroupsRef = useRef(processedGroups);
+  const selectedRef = useRef(selected);
+  const activeViewRef = useRef(activeView);
+  processedPartiesRef.current = processedParties;
+  processedGroupsRef.current = processedGroups;
+  selectedRef.current = selected;
+  activeViewRef.current = activeView;
+  const overdueVirtualPartyRef = useRef(overdueVirtualParty);
+  overdueVirtualPartyRef.current = overdueVirtualParty;
+
   // ========== MEMORY LOGIC ==========
   usePageMemory(
     "partyPageState",
@@ -391,56 +449,124 @@ function PartyPageContent() {
     setSelected,
     activeView === "parties" ? partiesForPageMemory : processedGroups,
     pageDataLoading,
-    undefined,
-    selectedIdFromUrl,
+    useQueryNav,
+    partyUrlState.selectedId,
     undefined,
     [OVERDUE_ACCOUNT_ID]
   );
   // ==================================
 
-  // Restore selection when returning from details (e.g. /party?selected=xyz or /party?view=groups&selected=xyz)
+  /** Sidebar Parties click — saved detail / memory skip, sirf list kholo */
   useEffect(() => {
-    if (!selectedIdFromUrl) return;
     if (pageDataLoading) return;
-    if (selectedIdFromUrl === OVERDUE_ACCOUNT_ID && overdueVirtualParty) {
-      setActiveView("parties");
-      setSelected(overdueVirtualParty);
-      // URL pehle se match ho to replace mat — snapshot deps se effect bar-baar chalne par double navigation
+    if (!consumeMasterDetailSidebarListNav("party")) return;
+    suppressPartyListRestoreRef.current = true;
+    pendingPartySelectIdRef.current = null;
+    const href =
+      activeView === "groups"
+        ? `${masterDetailListHref("party")}?view=groups`
+        : masterDetailListHref("party");
+    if (typeof window !== "undefined") {
+      try {
+        window.history.replaceState(window.history.state, "", href);
+        const raw = localStorage.getItem("partyPageState");
+        if (raw) {
+          const parsed = JSON.parse(raw) as { selections?: Record<string, string> };
+          if (parsed.selections) {
+            delete parsed.selections.parties;
+            delete parsed.selections.groups;
+            localStorage.setItem("partyPageState", JSON.stringify(parsed));
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    setSelected(null);
+  }, [pageDataLoading, selectedIdFromUrl, viewFromUrl, activeView, setSelected]);
+
+  // URL ↔ tab/selection sync (location-first — stale ?selected= se Groups tab wapas Parties mat kheecho)
+  useEffect(() => {
+    if (pageDataLoading) return;
+    const { view, selectedId } = readPartyPageUrlState(viewFromUrl, selectedIdFromUrl);
+    const currentSelectedId = selectedRef.current?.id ?? null;
+    const currentActiveView = activeViewRef.current;
+
+    // User ne abhi click kiya — router.replace / useSearchParams peeche ho to purana id mat lagao
+    const pendingId = pendingPartySelectIdRef.current;
+    if (pendingId) {
+      if (selectedId === pendingId) {
+        pendingPartySelectIdRef.current = null;
+      } else if (currentSelectedId === pendingId) {
+        return;
+      }
+    }
+
+    if (!selectedId) {
+      if (view === "groups") {
+        // Sirf tab switch par selection clear — groups auto-select (usePageMemory) na todho
+        if (currentActiveView !== "groups") {
+          setActiveView("groups");
+          setSelected(null);
+        }
+      } else if (currentActiveView !== "parties") {
+        setActiveView("parties");
+      }
+      return;
+    }
+
+    if (selectedId === OVERDUE_ACCOUNT_ID) {
+      const overdueParty = overdueVirtualPartyRef.current;
+      if (!overdueParty) return;
+      if (currentActiveView !== "parties") setActiveView("parties");
+      if (currentSelectedId !== OVERDUE_ACCOUNT_ID) setSelected(overdueParty);
       const overdueUrl = `/party?selected=${encodeURIComponent(OVERDUE_ACCOUNT_ID)}`;
       if (shouldReplaceWithMasterDetailCanonical(overdueUrl)) {
         router.replace(overdueUrl, { scroll: false });
       }
       return;
     }
-    const groupItem = processedGroups.find((i) => i.id === selectedIdFromUrl);
-    const partyItem = processedParties.find((i) => i.id === selectedIdFromUrl);
+    const groupItem = processedGroupsRef.current.find((i) => i.id === selectedId);
+    const partyItem = processedPartiesRef.current.find((i) => i.id === selectedId);
+    let targetView = currentActiveView;
     if (groupItem && partyItem) {
-      if (viewFromUrl === "groups") setActiveView("groups");
-      else setActiveView("parties");
-    } else if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
-    else if (partyItem) setActiveView("parties");
-    else if (groupItem) setActiveView("groups");
+      targetView = view === "groups" ? "groups" : "parties";
+    } else if (view === "groups" && groupItem) targetView = "groups";
+    else if (partyItem) targetView = "parties";
+    else if (groupItem) targetView = "groups";
+    if (targetView !== currentActiveView) setActiveView(targetView);
     const item =
       groupItem && partyItem
-        ? viewFromUrl === "groups"
+        ? view === "groups"
           ? groupItem
           : partyItem
         : groupItem || partyItem;
-    if (item) setSelected(item);
-    // URL me ?selected= / view=groups rakhna: router.replace("/party") se hataane par header Report + static build break ho jata tha
+    if (item && item.id !== currentSelectedId) setSelected(item);
     const canonical =
-      viewFromUrl === "groups"
-        ? `/party?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
-        : `/party?selected=${encodeURIComponent(selectedIdFromUrl)}`;
+      view === "groups"
+        ? `/party?view=groups&selected=${encodeURIComponent(selectedId)}`
+        : `/party?selected=${encodeURIComponent(selectedId)}`;
     if (shouldReplaceWithMasterDetailCanonical(canonical)) {
       router.replace(canonical, { scroll: false });
     }
-  }, [selectedIdFromUrl, viewFromUrl, pageDataLoading, processedParties, processedGroups, overdueVirtualParty, setSelected, setActiveView, router]);
+  }, [
+    viewFromUrl,
+    selectedIdFromUrl,
+    pageDataLoading,
+    setSelected,
+    setActiveView,
+    router,
+  ]);
 
   /** Refresh / bare `/party`: URL na ho to partyPageState ya selectedItemId se party restore — Overdue default na kholo */
   useEffect(() => {
     if (pageDataLoading) return;
-    if (selectedIdFromUrl) return;
+    // Mobile/APK list-first: back ke baad memory se detail mat kholo (desktop refresh restore chalu)
+    if (mobileMasterDetail) return;
+    if (suppressPartyListRestoreRef.current) return;
+    const { view, selectedId } = readPartyPageUrlState(viewFromUrl, selectedIdFromUrl);
+    if (selectedId) return;
+    if (view === "groups") return;
     if (activeView !== "parties") return;
     if (selected?.id && selected.id !== OVERDUE_ACCOUNT_ID) return;
 
@@ -470,23 +596,15 @@ function PartyPageContent() {
   }, [
     pageDataLoading,
     selectedIdFromUrl,
+    viewFromUrl,
     activeView,
     processedParties,
     selected?.id,
     setSelected,
     router,
+    isMobile,
+    mobileMasterDetail,
   ]);
-
-  // Sidebar / in-app link zyada tar `/party` (bina query) kholta hai; `usePageMemory` purana `activeView: groups` restore karke
-  // Party tab hata deta tha. `?selected=` / `?view=groups` explicit ho to URL hi boss hai.
-  // NOTE: `processedGroups` / `selected` yahan deps mein mat rakho — har voucher refresh par naya array ref se effect
-  // dubara chal kar Groups tab ko Parties pe kheench deta tha (tab click "kaam nahi" jaisa).
-  useEffect(() => {
-    if (pageDataLoading) return;
-    if (selectedIdFromUrl) return;
-    if (viewFromUrl === "groups") return;
-    setActiveView("parties");
-  }, [pageDataLoading, selectedIdFromUrl, viewFromUrl, setActiveView]);
 
   /** Parties tab + selected id kisi group row se match ho (same id edge) to selection clear. */
   useEffect(() => {
@@ -500,17 +618,29 @@ function PartyPageContent() {
 
   const handlePartyGroupsTabChange = useCallback(
     (value: string) => {
-      setActiveView(value);
-      if (!useQueryNav) return;
-      const base = masterDetailListHref("party");
-      if (value === "groups") {
-        router.replace(`${base}?view=groups`, { scroll: false });
-      } else {
-        router.replace(base, { scroll: false });
-      }
+      const tab = value === "groups" ? "groups" : "parties";
+      setActiveView(tab);
       setSelected(null);
+      try {
+        const raw = localStorage.getItem("partyPageState");
+        const parsed = raw ? JSON.parse(raw) : { selections: {} };
+        parsed.activeView = tab;
+        localStorage.setItem("partyPageState", JSON.stringify(parsed));
+      } catch {
+        /* ignore */
+      }
+      const base = masterDetailListHref("party");
+      const href = tab === "groups" ? `${base}?view=groups` : base;
+      // replaceState: URL se view/selected hatao — stale useSearchParams se dubara groups/group restore na ho
+      if (typeof window !== "undefined") {
+        try {
+          window.history.replaceState(window.history.state, "", href);
+        } catch {
+          /* ignore */
+        }
+      }
     },
-    [useQueryNav, router, setSelected]
+    [setSelected]
   );
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
@@ -619,7 +749,10 @@ function PartyPageContent() {
     }
   }, [overdueVirtualParty, setSelected, setActiveView, useQueryNav, router]);
 
-  const handleSelect = (item: Party | Group) => {
+  const handleSelect = useCallback((item: Party | Group) => {
+    suppressPartyListRestoreRef.current = false;
+    pendingPartySelectIdRef.current = item.id;
+    setSelected(item);
     // Har viewport: ?selected= URL sync — refresh / wapas aane par wahi party/group khule
     const path =
       item.id === OVERDUE_ACCOUNT_ID
@@ -627,9 +760,16 @@ function PartyPageContent() {
         : "pan" in item
           ? `/party?selected=${encodeURIComponent(item.id)}`
           : `/party?view=groups&selected=${encodeURIComponent(item.id)}`;
+    // replaceState pehle — URL effect ko turant sahi id mile (1-click-late bug fix)
+    if (typeof window !== "undefined") {
+      try {
+        window.history.replaceState(window.history.state, "", path);
+      } catch {
+        /* ignore */
+      }
+    }
     router.replace(path, { scroll: false });
-    setSelected(item);
-  };
+  }, [router, setSelected]);
 
   const partiesForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
@@ -713,7 +853,15 @@ function PartyPageContent() {
           </CreateGroupDialog>
         )}
       </div>
-       {activeView === 'parties' ? (
+       <div className="relative flex-1 min-h-0 overflow-hidden">
+        {/* Dono lists mounted — tab switch par unmount/out animation flicker na ho */}
+        <div
+          className={cn(
+            "absolute inset-0 flex min-h-0 flex-col overflow-hidden",
+            activeView !== "parties" && "hidden pointer-events-none"
+          )}
+          aria-hidden={activeView !== "parties"}
+        >
             <>
               <div className={cn(mlc.sectionLabelRow, "justify-between")}>
                 <div className="flex items-center gap-2">
@@ -745,7 +893,14 @@ function PartyPageContent() {
               />
               </div>
             </>
-        ) : (
+        </div>
+        <div
+          className={cn(
+            "absolute inset-0 flex min-h-0 flex-col overflow-hidden",
+            activeView !== "groups" && "hidden pointer-events-none"
+          )}
+          aria-hidden={activeView !== "groups"}
+        >
             <PartyGroupList
               groups={groupsForPartyGroupListView}
               onSelectGroup={handleSelect}
@@ -755,7 +910,8 @@ function PartyPageContent() {
               pendingApprovalByGroupId={pendingApprovalByGroupId}
               getItemHref={useQueryNav ? (g) => `/party?view=groups&selected=${g.id}` : undefined}
             />
-        )}
+        </div>
+       </div>
     </div>
   );
 
@@ -1014,7 +1170,7 @@ function PartyPageContent() {
         }
         listView={listView}
         detailView={detailView}
-        isMobile={isMobile}
+        isMobile={mobileMasterDetail}
         mobileListOnly={true}
         hasSelectedItem={!!selected}
         onBackToList={onBackToList}

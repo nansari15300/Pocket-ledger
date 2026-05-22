@@ -54,6 +54,17 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
         setIsOpen(false);
       } else {
         // PC view: restore saved state or default to open
+        const path = typeof window !== "undefined" ? window.location.pathname : "";
+        // Reconciling / Reports — refresh par sidebar expand na ho (localStorage override)
+        if (path.startsWith("/reconciliation") || path.startsWith("/reports")) {
+          setIsOpen(false);
+          try {
+            localStorage.setItem("sidebar-isOpen", JSON.stringify(false));
+          } catch {
+            /* ignore */
+          }
+          return;
+        }
         const storedState = localStorage.getItem("sidebar-isOpen");
         if (storedState !== null) {
           setIsOpen(JSON.parse(storedState));

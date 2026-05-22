@@ -64,6 +64,11 @@ import {
 import type { Item } from "./types";
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
+import {
+  LEDGER_HEADER_PILL_CN,
+  LEDGER_HEADER_PILL_ICON_CN,
+  LEDGER_HEADER_PILL_ICON_SIZE_CN,
+} from "@/lib/ledgerHeaderChrome";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdCalendar from "@/components/ui/ad-calendar";
 import { format, startOfDay } from "date-fns";
@@ -1048,7 +1053,7 @@ export default function ItemDetails({
                 valueAD={dateRange}
                 onChangeAD={handleBsDateRangeChange}
                 transactionDates={transactionDates}
-                className="w-auto"
+                className={cn("w-auto", LEDGER_HEADER_PILL_CN)}
               />
             )}
             {(dateSystem === 'AD' || dateSystem === 'Both') && (
@@ -1056,9 +1061,9 @@ export default function ItemDetails({
                 <PopoverTrigger asChild>
                   <Button
                     variant={"outline"}
-                    className={cn("justify-start text-left font-normal h-10 px-2 w-auto flex-shrink-0", !dateRange && "text-muted-foreground")}
+                    className={cn("justify-start text-left font-normal px-2 w-auto", LEDGER_HEADER_PILL_CN, !dateRange && "text-muted-foreground")}
                   >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    <CalendarIcon className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} />
                     {dateRange?.from ? (
                       dateRange.to ? <>{format(dateRange.from, "LLL dd, y")} - {format(dateRange.to, "LLL dd, y")}</> : format(dateRange.from, "LLL dd, y")
                     ) : (
@@ -1103,24 +1108,24 @@ export default function ItemDetails({
               </Popover>
             )}
             {isFilterActive && (
-              <Button variant="ghost" size="icon" onClick={clearFilters} className="h-10 w-10 flex-shrink-0 text-muted-foreground hover:text-foreground" aria-label="Clear date filter">
-                <XCircle className="h-4 w-4" />
+              <Button variant="ghost" size="icon" onClick={clearFilters} className={cn(LEDGER_HEADER_PILL_ICON_CN, "text-muted-foreground hover:text-foreground")} aria-label="Clear date filter">
+                <XCircle className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
               </Button>
             )}
             <Button
               variant="outline"
               size="sm"
               onClick={() => { openingModalRef.current = true; openModalInUrl(); setIsNoteOpen(true); }}
-              className="flex-shrink-0 h-10"
+              className={LEDGER_HEADER_PILL_CN}
             >
-              <FilePlus className="mr-2 h-4 w-4" /> Add Note
+              <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
             </Button>
             {onShowAll && (
               <Button
                 variant="outline"
                 size="sm"
                 onClick={onShowAll}
-                className="flex-shrink-0 h-10"
+                className={LEDGER_HEADER_PILL_CN}
               >
                 All Vouchers
               </Button>
@@ -1129,9 +1134,9 @@ export default function ItemDetails({
               variant="outline"
               size="icon"
               onClick={handlePrint}
-              className="flex-shrink-0 h-10 w-10"
+              className={LEDGER_HEADER_PILL_ICON_CN}
             >
-              <Printer className="h-4 w-4" />
+              <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
             </Button>
           </div>
         </div>

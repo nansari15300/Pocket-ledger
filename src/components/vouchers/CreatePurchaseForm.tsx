@@ -388,7 +388,7 @@ export function CreatePurchaseForm({
   } = useCopyDraftFirstSave(copySaveTargetCompanyId);
   // Keep "Read me" help controlled from this form so purchase link section can open the shared multilingual guide.
   const [linkSectionInfoOpen, setLinkSectionInfoOpen] = useState(false);
-  const isEditing = !!voucher;
+  const isEditing = !!voucher?.id;
   const isEditingAndConverting = voucher && voucher.type !== "purchase";
   
   const form = useForm<PurchaseFormValues>({
@@ -706,16 +706,27 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         setSavePdfAsImage(shouldSuggestPdfAsImage(urlsToSet));
       }
     } else if (voucher) {
-      lastResetVoucherIdRef.current = null;
+      // Recon sync draft — poora purchase form hydrate
+      const cref = voucher.crossCopySourceRef as { companyId?: string; voucherId?: string } | undefined;
+      const syncDraftKey =
+        cref?.companyId && cref?.voucherId
+          ? `sync:${cref.companyId}|${cref.voucherId}`
+          : `new:${String(voucher.type || "purchase")}|${String(voucher.partyId || "")}|${String(voucher.narration || "").slice(0, 40)}`;
+      const isFirstNewPurchaseHydrate = lastResetVoucherIdRef.current !== syncDraftKey;
+      lastResetVoucherIdRef.current = syncDraftKey;
       setSavedVoucherId(null);
-      if (voucher.partyId != null && String(voucher.partyId).trim() !== "") {
-        form.setValue("partyId", voucher.partyId);
+      if (isFirstNewPurchaseHydrate) {
+        const initialValues = getInitialFormValues(voucher);
+        form.reset(initialValues);
+        const li0 = initialValues.lineItems?.[0];
+        if (li0?.type === "service" || li0?.type === "item") {
+          setItemType(li0.type);
+        }
       }
-      // Sale jaisa: template `voucher` ref dubara aane par `date` overwrite mat karo — user ki chuni date save rahe.
       const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
       if (Array.isArray(urlsToSet)) {
         setFiles(urlsToSet);
-        initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === 'string') as string[];
+        initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === "string") as string[];
         setSavePdfAsImage(shouldSuggestPdfAsImage(urlsToSet));
       }
     } else {
@@ -760,10 +771,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   );
 
   useEffect(() => {
-    if (!isEditing || isEditingAndConverting) {
+    if (!voucher?.id && !savedVoucherId && !isEditingAndConverting) {
       fetchVoucherNumber();
     }
-  }, [isEditing, isEditingAndConverting, fetchVoucherNumber, primaryLineItemType, company]);
+  }, [voucher?.id, savedVoucherId, isEditingAndConverting, fetchVoucherNumber, primaryLineItemType, company]);
 
   /* ---------------------------- TOTALS CALC LOGIC ------------------------- */
 

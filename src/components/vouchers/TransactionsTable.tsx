@@ -17,8 +17,9 @@ import { cn } from "@/lib/utils";
 import type { StockView, Item } from "@/components/items/types";
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Filter, MoreVertical } from "lucide-react";
+import { Filter, MoreVertical, CheckSquare } from "lucide-react";
 import { txnTableIconBtnCn } from "@/lib/listSelectionChrome";
+import { scrollTransactionSelectedRowIntoView } from "@/lib/ledgerScrollToSelection";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,6 +27,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { motion, AnimatePresence } from "framer-motion";
 import { Virtuoso } from "react-virtuoso";
 import { VoucherTypeFilter } from "@/components/vouchers/VoucherTypeFilter";
@@ -392,12 +394,23 @@ export function TransactionsTable({
     return () => cancelAnimationFrame(id);
   }, [isStaffGroup, selectedId]);
 
-  // Check mode: focus row scroll into view (keyboard navigation)
+  // Check mode: focus badle tab hi scroll — table refresh par jump na ho (manual scroll safe rahe)
+  const statementCheckFocusScrollRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!statementCheckModeActive || !statementCheckFocusId) return;
+    if (!statementCheckModeActive || !statementCheckFocusId) {
+      statementCheckFocusScrollRef.current = statementCheckFocusId;
+      return;
+    }
+    if (statementCheckFocusScrollRef.current === statementCheckFocusId) return;
+    statementCheckFocusScrollRef.current = statementCheckFocusId;
     const el = tableContainerRef.current?.querySelector('[data-check-focus="true"]');
     el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [statementCheckModeActive, statementCheckFocusId, tableTransactions]);
+  }, [statementCheckModeActive, statementCheckFocusId]);
+
+  /** Space — sirf selected (orange) row par scroll; auto scroll refresh par band */
+  const scrollSelectedRowIntoView = useCallback(() => {
+    scrollTransactionSelectedRowIntoView(tableContainerRef.current);
+  }, []);
 
   const getStatementCheckRowProps = useCallback(
     (t: any) => {
@@ -446,9 +459,13 @@ export function TransactionsTable({
         e.preventDefault();
         const t = tableTransactions.find((x) => x.id === selectedId);
         if (t && (t as any).type !== FISCAL_YEAR_PARTITION_ROW_TYPE) onRowClick?.(t);
+      } else if ((e.key === " " || e.code === "Space") && selectedId) {
+        // Manual scroll ke baad wapas selected row — sirf Space se
+        e.preventDefault();
+        scrollSelectedRowIntoView();
       }
     },
-    [tableTransactions, selectedId, onRowClick, statementCheckModeActive]
+    [tableTransactions, selectedId, onRowClick, statementCheckModeActive, scrollSelectedRowIntoView]
   );
 
   /** Spend-wise multi-row: clicked row = selected (border); other rows of same voucher = blink only, not selected. */
@@ -570,6 +587,91 @@ export function TransactionsTable({
               </Popover>
             )}
           </div>
+        </div>
+      </TableHead>
+    );
+  };
+
+  /** File column — checkbox dropdown: All / with file / without file */
+  const renderFileHeaderWithFilter = () => {
+    const fileFilterRaw = filters?.file ?? "";
+    const fileFilterMode: "all" | "with" | "without" =
+      fileFilterRaw === "with" || fileFilterRaw === "without" ? fileFilterRaw : "all";
+    const isFileFiltered = fileFilterMode !== "all";
+    const innerPadding = ensureMinGaps ? "px-[10px]" : "px-2";
+    const setFileFilter = (mode: "all" | "with" | "without") => {
+      if (!setFilters) return;
+      setFilters((prev: Record<string, string>) => ({
+        ...prev,
+        file: mode === "all" ? "" : mode,
+      }));
+    };
+
+    return (
+      <TableHead
+        className="font-semibold p-0 text-center"
+        style={ensureMinGaps ? { minWidth: "44px" } : undefined}
+        data-theme-header="file"
+      >
+        <div
+          className={cn(
+            "flex items-center justify-center gap-1 font-bold py-3 whitespace-nowrap",
+            innerPadding,
+            isFileFiltered ? "text-red-600" : "text-black"
+          )}
+        >
+          <span>File</span>
+          {setFilters ? (
+            <Popover
+              modal
+              open={activeFilter === "file"}
+              onOpenChange={(open) => setActiveFilter && setActiveFilter(open ? "file" : null)}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  data-pl-txn-icon-btn=""
+                  className={cn(txnTableIconBtnCn, "h-6 w-6")}
+                  aria-label="Filter by file attachment"
+                >
+                  <CheckSquare className={cn("h-4 w-4", isFileFiltered && "text-red-600")} />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="p-2 w-52" align="center" onCloseAutoFocus={(e: Event) => e.preventDefault()}>
+                <div className="flex items-center gap-2 border-b pb-2 mb-1">
+                  <Checkbox
+                    id="txn-file-filter-all"
+                    checked={fileFilterMode === "all"}
+                    onCheckedChange={() => setFileFilter("all")}
+                  />
+                  <label htmlFor="txn-file-filter-all" className="text-sm font-medium cursor-pointer flex-1">
+                    All
+                  </label>
+                </div>
+                <div className="flex items-center gap-2 py-1">
+                  <Checkbox
+                    id="txn-file-filter-with"
+                    checked={fileFilterMode === "with"}
+                    onCheckedChange={() => setFileFilter("with")}
+                  />
+                  <label htmlFor="txn-file-filter-with" className="text-sm font-medium cursor-pointer flex-1">
+                    With file
+                  </label>
+                </div>
+                <div className="flex items-center gap-2 py-1">
+                  <Checkbox
+                    id="txn-file-filter-without"
+                    checked={fileFilterMode === "without"}
+                    onCheckedChange={() => setFileFilter("without")}
+                  />
+                  <label htmlFor="txn-file-filter-without" className="text-sm font-medium cursor-pointer flex-1">
+                    Without file
+                  </label>
+                </div>
+              </PopoverContent>
+            </Popover>
+          ) : null}
         </div>
       </TableHead>
     );
@@ -1547,7 +1649,7 @@ export function TransactionsTable({
           {/* Item + Item-group page: Party header visibility follows Columns dropdown toggle. */}
           {isItemPartyContext && showItemPartyColumn && <TableHead className="font-semibold p-0" style={ensureMinGaps ? { minWidth: "90px" } : undefined}>Party</TableHead>}
           {showCol("user") && context !== 'note' && renderHeaderWithFilter("user", "User", false, ensureMinGaps ? 85 : undefined)}
-          {showFileBySelection && <TableHead className="font-semibold p-0 text-center" style={ensureMinGaps ? { minWidth: "44px" } : undefined} data-theme-header="file">File</TableHead>}
+          {showFileBySelection && renderFileHeaderWithFilter()}
           {showCol("dr") && !hideDebitColumn && renderHeaderWithFilter("debit", stockView === 'amount' ? "Debit" : "In", true, ensureMinGaps ? 100 : undefined)}
           {showCol("cr") && !hideCreditColumn && renderHeaderWithFilter("credit", stockView === 'amount' ? "Credit" : "Out", true, ensureMinGaps ? 100 : undefined)}
           {showCol("status") && !hideStatusColumn && renderHeaderWithFilter("status", "Status", false, ensureMinGaps ? 95 : undefined)}

@@ -30,6 +30,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
+import {
+  LEDGER_HEADER_PILL_CN,
+  LEDGER_HEADER_PILL_ICON_CN,
+  LEDGER_HEADER_PILL_ICON_SIZE_CN,
+} from "@/lib/ledgerHeaderChrome";
 import { ScrollArea } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
 import { EditAccountGroupDialog } from "@/components/bank-cash/EditAccountGroupDialog";
@@ -264,11 +269,11 @@ export function AccountGroupDetails({
                   </div>
                 </div>
                 <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
-                  <Button variant="outline" size="sm" onClick={() => handleOpenNoteDialog()} className="flex-shrink-0 h-10">
-                    <FilePlus className="mr-2 h-4 w-4" /> Add Note
+                  <Button variant="outline" size="sm" onClick={() => handleOpenNoteDialog()} className={LEDGER_HEADER_PILL_CN}>
+                    <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
                   </Button>
-                  <Button variant="outline" size="icon" onClick={handlePrint} className="flex-shrink-0 h-10 w-10">
-                    <Printer className="h-4 w-4" />
+                  <Button variant="outline" size="icon" onClick={handlePrint} className={LEDGER_HEADER_PILL_ICON_CN}>
+                    <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
                   </Button>
                 </div>
               </div>
@@ -285,9 +290,9 @@ export function AccountGroupDetails({
                           <Button
                             id="date"
                             variant={"outline"}
-                            className={cn("w-auto justify-start text-left font-normal flex-shrink-0 h-10", !dateRange && "text-muted-foreground", dateSystem === 'Both' && "w-[260px]")}
+                            className={cn("w-auto justify-start text-left font-normal", LEDGER_HEADER_PILL_CN, !dateRange && "text-muted-foreground", dateSystem === 'Both' && "w-[260px]")}
                           >
-                            <CalendarIcon className="mr-2 h-4 w-4" />
+                            <CalendarIcon className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} />
                             {dateRange?.from ? (
                               dateRange.to ? (
                                 <>

@@ -47,6 +47,7 @@ import {
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
 import { toast as sonnerToast } from "sonner";
+import { replaceVoucherSaveLoadingWithShortSuccess } from "@/lib/voucherSaveUi";
 import type { CopyMasterDraftRequestPayload } from "./AddVoucherDialog";
 import BsDatePicker from "../ui/BsDatePicker";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -1492,108 +1493,116 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           });
         }
 
-        if (approveAfterSave && savedDoc?.id) {
-          if (!isEdit) {
-            await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
-          }
-          sonnerToast.success(isEdit ? "Payment updated and approved." : "Payment saved and approved.", { id: toastId });
+        const docId = savedDoc.id;
+        const approveBanner = !!(approveAfterSave && docId);
+        // Save & Close: dialog turant band — approve/alerts/print background (`postSaveTail`).
+        if (approveBanner) {
+          replaceVoucherSaveLoadingWithShortSuccess(
+            toastId,
+            isEdit ? "Payment updated and approved." : "Payment saved and approved."
+          );
         } else {
-          sonnerToast.success(
+          replaceVoucherSaveLoadingWithShortSuccess(
+            toastId,
             "Payment Recorded!",
-            { id: toastId, description: `Voucher #${data.voucherNumber} has been ${isEdit ? "updated" : "created"}.` }
+            `Voucher #${data.voucherNumber} has been ${isEdit ? "updated" : "created"}.`
           );
         }
+        setIsLoading(false);
 
-        if (companyId && company) {
-          const vid = savedVoucherId || voucher?.id;
-          if (isEdit) {
-            const oldV = voucher as any;
-            const changes = getChangedFieldLabels(
-              { amount: oldV?.total ?? oldV?.amount, narration: oldV?.narration, date: oldV?.date?.toDate?.() ?? oldV?.date, voucherNumber: oldV?.voucherNumber, accountId: oldV?.accountId, partyId: oldV?.partyId, staffId: oldV?.staffId, expenseAccountId: oldV?.expenseAccountId, toAccountId: oldV?.toAccountId },
-              { amount: data.amount, narration: data.narration, date: data.date, voucherNumber: data.voucherNumber, accountId: data.accountId, partyId: data.partyId, staffId: data.staffId, expenseAccountId: data.expenseAccountId, toAccountId: data.toAccountId },
-              [
-                { key: "amount", label: "Amount" },
-                { key: "narration", label: "Narration" },
-                { key: "date", label: "Date" },
-                { key: "voucherNumber", label: "Voucher number" },
-                { key: "accountId", label: "Account" },
-                { key: "partyId", label: "Party" },
-                { key: "staffId", label: "Staff" },
-                { key: "expenseAccountId", label: "Expense account" },
-                { key: "toAccountId", label: "To account" },
-              ]
-            );
-            await sendTransactionAlert(companyId, company, {
-              kind: "edited",
-              voucherId: vid,
-              voucherNumber: data.voucherNumber,
-              voucherType: voucherType,
-              performedByUserId: user?.uid,
-              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-              performedByEmail: user?.email ?? undefined,
-              changes: changes.length > 0 ? changes : undefined,
-            });
-          } else if (isAmountOverOneLakh(cleanAmount)) {
-            await sendTransactionAlert(companyId, company, {
-              kind: "large_amount",
-              voucherId: vid,
-              voucherNumber: data.voucherNumber,
-              voucherType: voucherType,
-              amount: cleanAmount,
-              performedByUserId: user?.uid,
-              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-              performedByEmail: user?.email ?? undefined,
-            });
+        const postSaveTail = async () => {
+          if (approveBanner && !isEdit) {
+            await approveVoucherWithHistory(companyId, docId, user.uid, approverName);
           }
-        }
-
-        if (print && savedDoc?.id && company) {
-          // Same in-app PDF preview as Payment In / reports (mobile WebView fix)
-          const payeeLabel =
-            data.payeeType === "party"
-              ? processedParties.find((p) => p.id === data.partyId)?.name ?? "—"
-              : data.payeeType === "staff"
-                ? processedStaff.find((s) => s.id === data.staffId)?.name ?? "—"
-                : data.payeeType === "tax"
-                  ? processedTaxes.find((t) => t.id === data.taxAccountId)?.name ?? "—"
-                  : data.payeeType === "expense"
-                    ? expenseAccounts.find((e) => e.id === data.expenseAccountId)?.name ?? "—"
-                    : processedAccounts.find((a) => a.id === data.toAccountId)?.accountName ?? "—";
-          const accountLabel = processedAccounts.find((a) => a.id === data.accountId)?.accountName ?? "—";
-          try {
-            await printPaymentVoucherReceipt({
-              company: {
-                name: company.name,
-                pan: company.pan,
-                phone: company.phone,
-                address: company.address,
-                decimalPlaces: company.decimalPlaces,
-                showDrCr: company.showDrCr,
-                showCurrencySymbol: company.showCurrencySymbol,
-                logoUrl: company.logoUrl,
-              },
-              dateSystem,
-              formatDate,
-              formatDateBS,
-              formatCurrencyForPrint,
-              voucherId: savedDoc.id,
-              voucherType,
-              date: data.date instanceof Date ? data.date : new Date(data.date),
-              voucherNumber: data.voucherNumber,
-              amount: cleanAmount,
-              narration: data.narration,
-              payeeLabel,
-              accountLabel,
-            });
-          } catch (printErr) {
-            console.error(printErr);
-            sonnerToast.error("Print preview failed", {
-              description: printErr instanceof Error ? printErr.message : "Please try again.",
-            });
+          if (companyId && company) {
+            const vid = docId || voucher?.id;
+            if (isEdit) {
+              const oldV = voucher as any;
+              const changes = getChangedFieldLabels(
+                { amount: oldV?.total ?? oldV?.amount, narration: oldV?.narration, date: oldV?.date?.toDate?.() ?? oldV?.date, voucherNumber: oldV?.voucherNumber, accountId: oldV?.accountId, partyId: oldV?.partyId, staffId: oldV?.staffId, expenseAccountId: oldV?.expenseAccountId, toAccountId: oldV?.toAccountId },
+                { amount: data.amount, narration: data.narration, date: data.date, voucherNumber: data.voucherNumber, accountId: data.accountId, partyId: data.partyId, staffId: data.staffId, expenseAccountId: data.expenseAccountId, toAccountId: data.toAccountId },
+                [
+                  { key: "amount", label: "Amount" },
+                  { key: "narration", label: "Narration" },
+                  { key: "date", label: "Date" },
+                  { key: "voucherNumber", label: "Voucher number" },
+                  { key: "accountId", label: "Account" },
+                  { key: "partyId", label: "Party" },
+                  { key: "staffId", label: "Staff" },
+                  { key: "expenseAccountId", label: "Expense account" },
+                  { key: "toAccountId", label: "To account" },
+                ]
+              );
+              await sendTransactionAlert(companyId, company, {
+                kind: "edited",
+                voucherId: vid,
+                voucherNumber: data.voucherNumber,
+                voucherType: voucherType,
+                performedByUserId: user?.uid,
+                performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+                performedByEmail: user?.email ?? undefined,
+                changes: changes.length > 0 ? changes : undefined,
+              });
+            } else if (isAmountOverOneLakh(cleanAmount)) {
+              await sendTransactionAlert(companyId, company, {
+                kind: "large_amount",
+                voucherId: vid,
+                voucherNumber: data.voucherNumber,
+                voucherType: voucherType,
+                amount: cleanAmount,
+                performedByUserId: user?.uid,
+                performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+                performedByEmail: user?.email ?? undefined,
+              });
+            }
           }
-        }
 
-        if (saveAndNew) {
+          if (print && docId && company) {
+            const payeeLabel =
+              data.payeeType === "party"
+                ? processedParties.find((p) => p.id === data.partyId)?.name ?? "—"
+                : data.payeeType === "staff"
+                  ? processedStaff.find((s) => s.id === data.staffId)?.name ?? "—"
+                  : data.payeeType === "tax"
+                    ? processedTaxes.find((t) => t.id === data.taxAccountId)?.name ?? "—"
+                    : data.payeeType === "expense"
+                      ? expenseAccounts.find((e) => e.id === data.expenseAccountId)?.name ?? "—"
+                      : processedAccounts.find((a) => a.id === data.toAccountId)?.accountName ?? "—";
+            const accountLabel = processedAccounts.find((a) => a.id === data.accountId)?.accountName ?? "—";
+            try {
+              await printPaymentVoucherReceipt({
+                company: {
+                  name: company.name,
+                  pan: company.pan,
+                  phone: company.phone,
+                  address: company.address,
+                  decimalPlaces: company.decimalPlaces,
+                  showDrCr: company.showDrCr,
+                  showCurrencySymbol: company.showCurrencySymbol,
+                  logoUrl: company.logoUrl,
+                },
+                dateSystem,
+                formatDate,
+                formatDateBS,
+                formatCurrencyForPrint,
+                voucherId: docId,
+                voucherType,
+                date: data.date instanceof Date ? data.date : new Date(data.date),
+                voucherNumber: data.voucherNumber,
+                amount: cleanAmount,
+                narration: data.narration,
+                payeeLabel,
+                accountLabel,
+              });
+            } catch (printErr) {
+              console.error(printErr);
+              sonnerToast.error("Print preview failed", {
+                description: printErr instanceof Error ? printErr.message : "Please try again.",
+              });
+            }
+          }
+
+          if (saveAndNew) {
             form.reset(getInitialFormValues());
             setFiles([]);
             setSavePdfAsImage(false);
@@ -1602,11 +1611,28 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             setLinkedPaymentInIds([]);
             initialLinkedPaymentInIdsRef.current = [];
             await fetchVoucherNumber();
+          }
+
+          onSuccess?.();
+
+          if (saveAndNew) {
+            onVoucherAction?.("saved", true, docId);
+          }
+        };
+
+        if (!saveAndNew) {
+          onVoucherAction?.("saved", false, docId);
+          void postSaveTail().catch((err) => {
+            console.error("[CreatePaymentOutForm] post-save tail", err);
+            sonnerToast.error("Payment saved — finishing steps pending", {
+              description: err instanceof Error ? err.message : "Alerts or print may still run.",
+              duration: 4500,
+            });
+          });
+          return;
         }
 
-        onSuccess?.();
-        // Save + print/save&new branches ke baad hi parent notify — dialog tab band ho jab persistence safe ho chuki ho.
-        onVoucherAction?.("saved", saveAndNew, savedDoc.id);
+        await postSaveTail();
   
     } catch (error) {
       if (error instanceof PermissionDeniedError) {

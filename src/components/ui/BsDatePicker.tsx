@@ -22,6 +22,8 @@ type BsDatePickerBaseProps = {
   hideTriggerIcon?: boolean;
   /** Range mode me empty/`from`-only fallback text (default: "Pick a date range") */
   rangeEmptyLabel?: string;
+  /** true = `data-theme-detail="date-range"` mat lagao — global black border override avoid (recon ribbon blue pill). */
+  skipDateRangeThemeDetail?: boolean;
 };
 
 type BsDatePickerConditionalProps =
@@ -62,6 +64,7 @@ export default function BsDatePicker({
   className,
   hideTriggerIcon = false,
   rangeEmptyLabel,
+  skipDateRangeThemeDetail = false,
 }: BsDatePickerProps) {
   const [open, setOpen] = React.useState(false);
   const { formatDateBS } = useDate();
@@ -140,16 +143,16 @@ export default function BsDatePicker({
         <Button 
           variant="outline" 
           className={cn(
-            "w-auto justify-start text-left font-normal h-10 px-2 gap-1 min-w-0",
+            "w-auto justify-start text-left font-normal h-7 min-h-7 px-2 gap-1 min-w-0",
             hideTriggerIcon && "gap-0",
             !valueAD && "text-muted-foreground",
             className
           )}
           disabled={disabled}
           onClick={() => setOpen(true)}
-          data-theme-detail="date-range"
+          {...(skipDateRangeThemeDetail ? {} : { "data-theme-detail": "date-range" })}
         >
-            {!hideTriggerIcon && <Icon className="h-4 w-4 shrink-0" />}
+            {!hideTriggerIcon && <Icon className="h-3.5 w-3.5 shrink-0" />}
             <span className="truncate min-w-0">{displayValue()}</span>
         </Button>
       </PopoverTrigger>

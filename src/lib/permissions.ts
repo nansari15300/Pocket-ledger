@@ -1,3 +1,4 @@
+import { RECON_PERMISSIONS_GROUP_TITLE } from "@/lib/reconciliation/labels";
 
 export type Permission =
   | "view_own_records"
@@ -53,7 +54,13 @@ export type Permission =
   /** Inter Company Join tab — view join settings, groups, invite inbox */
   | "inter_company_read"
   /** Inter Company Join tab — save joins, groups, accept invites (shared user inherits admin joins) */
-  | "inter_company_write";
+  | "inter_company_write"
+  /** Header Share for Reconciliation — naya share bhejna */
+  | "share_for_reconciliation"
+  /** Shared list se apna account link karna (receiver) */
+  | "link_reconciliation_accounts"
+  /** Linked accounts par Reconciliation page kholna */
+  | "view_reconciliation";
 
 export type PermissionInfo = {
   key: Permission;
@@ -152,6 +159,14 @@ export const PermissionGroups: PermissionGroup[] = [
         permissions: [
             { key: "inter_company_read", label: "View Inter Company join settings & groups" },
             { key: "inter_company_write", label: "Manage Inter Company joins & groups" },
+        ],
+    },
+    {
+        title: RECON_PERMISSIONS_GROUP_TITLE,
+        permissions: [
+            { key: "share_for_reconciliation", label: "Share account for reconciling (header)" },
+            { key: "link_reconciliation_accounts", label: "Link shared account to local ledger" },
+            { key: "view_reconciliation", label: "View reconciling compare page" },
         ],
     },
 ];

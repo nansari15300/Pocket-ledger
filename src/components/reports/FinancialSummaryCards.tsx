@@ -9,6 +9,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { proDashboardRibbonClass } from "@/lib/proTheme";
 import { DASHBOARD_VIEW_DETAILS_TABLE_CN } from "@/lib/dashboardViewDetailsTableClass";
 import { useDate } from "@/hooks/useDate";
 import usePermissions from "@/hooks/usePermissions";
@@ -2334,21 +2335,10 @@ export function FinancialSummaryCards({
         : "grid-cols-1 sm:grid-cols-[repeat(2,minmax(min-content,1fr))] lg:grid-cols-[repeat(3,minmax(min-content,1fr))] xl:grid-cols-[repeat(5,minmax(min-content,1fr))]";
     // Dashboard request: keep exact 5px card-to-card spacing across summary grids.
     const cardSpacing = compact ? "gap-[5px] px-0.5" : "gap-[5px] px-0.5";
-    // Dashboard request: use bold card border thickness globally on summary cards.
-    const cardBorder = compact ? "border-2 border-foreground/30" : "border-2 border-foreground/30";
     // APK WebView compatibility: apply shared top ribbon strip class directly on every dashboard summary card.
     const dashboardCardRibbonClass = "app-chrome-top-ribbon";
-    // Dashboard card palette: Tailwind gradient + `pl-dashboard-ribbon-*` — WebView par CSS rgba fallback paint hota hai
-    const ribbonTones = [
-        "border-emerald-300/70 pl-dashboard-ribbon-emerald",
-        "border-sky-300/70 pl-dashboard-ribbon-sky",
-        "border-violet-300/70 pl-dashboard-ribbon-violet",
-        "border-amber-300/70 pl-dashboard-ribbon-amber",
-        "border-rose-300/70 pl-dashboard-ribbon-rose",
-        "border-teal-300/70 pl-dashboard-ribbon-teal",
-        "border-indigo-300/70 pl-dashboard-ribbon-indigo",
-    ];
-    const ribbonTone = (index: number) => ribbonTones[index % ribbonTones.length];
+    // Dashboard card palette — border card ke hue se match (`proTheme` + globals.css).
+    const ribbonTone = (index: number) => proDashboardRibbonClass(index);
     
     // Responsive classes only for compact mode (report page)
     // Use min-width to prevent content overflow, cards will auto-adjust columns
@@ -2531,9 +2521,9 @@ export function FinancialSummaryCards({
         formatDateBS,
     ]);
 
-    /** Stock card: compact report = pehle; full dashboard = Sales stat card ke baad DOM order (2-col me right). */
+    /** Stock card: compact report = pehle; full dashboard = Sales ke left (same row, Sales right). */
     const renderStockSummaryDashboardCard = () => (
-            <Card className={`${compact ? 'financial-summary-stock-card' : 'col-span-1 lg:col-span-2'} transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${cardWrapperClass} ${ribbonTone(0)}`}>
+            <Card className={`${compact ? 'financial-summary-stock-card' : 'col-span-1 lg:col-span-2'} transition-colors ${dashboardCardRibbonClass} ${cardWrapperClass} ${ribbonTone(0)}`}>
                 <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                     <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Stock Summary</CardTitle>
                     {compact ? (
@@ -2783,7 +2773,7 @@ export function FinancialSummaryCards({
             {!compact && recurringSummarySlot}
 
             {can("view_receivable_payable_summary") && (
-                <Card className={`col-span-1 transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${cardWrapperClass} ${ribbonTone(1)}`}>
+                <Card className={`col-span-1 transition-colors ${dashboardCardRibbonClass} ${cardWrapperClass} ${ribbonTone(1)}`}>
                     <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                         <CardTitle className={`text-base whitespace-nowrap text-card-foreground ${titleClass} min-w-0`}>
                             Outstanding
@@ -3063,7 +3053,7 @@ export function FinancialSummaryCards({
             )}
             
             {can("view_payment_in_out_summary") && (
-                <Card className={`col-span-1 transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${cardWrapperClass} ${ribbonTone(2)}`}>
+                <Card className={`col-span-1 transition-colors ${dashboardCardRibbonClass} ${cardWrapperClass} ${ribbonTone(2)}`}>
                     <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                         <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Cash Flow</CardTitle>
                         {compact ? (
@@ -3288,7 +3278,7 @@ export function FinancialSummaryCards({
                 </Card>
             )}
 
-            <Card className={`col-span-1 transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${cardWrapperClass} ${ribbonTone(3)}`}>
+            <Card className={`col-span-1 transition-colors ${dashboardCardRibbonClass} ${cardWrapperClass} ${ribbonTone(3)}`}>
                 <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                     <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Tax Summary</CardTitle>
                     {compact ? (
@@ -3909,7 +3899,7 @@ export function FinancialSummaryCards({
                 </CardContent>
             </Card>
 
-            <Card className={`col-span-1 transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${cardWrapperClass} ${ribbonTone(4)}`}>
+            <Card className={`col-span-1 transition-colors ${dashboardCardRibbonClass} ${cardWrapperClass} ${ribbonTone(4)}`}>
                 <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                     <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Bank & Cash Summary</CardTitle>
                     {compact ? (
@@ -4086,7 +4076,9 @@ export function FinancialSummaryCards({
                     !!deepHref && (deepHref.startsWith("/reports") ? can("export_data") : true);
                 return (
                 <React.Fragment key={stat.type}>
-                    <Card className={`hover:bg-muted/50 transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${ribbonTone(idx + 5)}`}>
+                    {/* Stock left, Sales right — same grid row (Stock pehle DOM me). */}
+                    {stat.type === 'sale' && renderStockSummaryDashboardCard()}
+                    <Card className={`hover:bg-muted/50 transition-colors ${dashboardCardRibbonClass} ${ribbonTone(idx + 5)}`}>
                         <CardHeader className="p-3 flex-row items-center justify-between">
                             <CardTitle className="text-sm whitespace-nowrap">{stat.title}</CardTitle>
                             <stat.icon className="h-5 w-5 text-muted-foreground" />
@@ -4134,8 +4126,6 @@ export function FinancialSummaryCards({
                             )}
                         </CardContent>
                     </Card>
-                    {/* Mobile 2-col: Sales ke turant baad Stock — same row me right tile. */}
-                    {stat.type === 'sale' && renderStockSummaryDashboardCard()}
                 </React.Fragment>
             );})}
             {/* Voucher summary cards band ho to bhi Stock pehle jaisa dashboard par dikhe. */}
@@ -4193,7 +4183,7 @@ export function FinancialSummaryCards({
                                 : undefined,
                         },
                     ].map((item, idx) => (
-                        <Card key={item.title} className={`${dashboardCardRibbonClass} ${cardBorder} ${ribbonTone(idx + 2)}`}>
+                        <Card key={item.title} className={`${dashboardCardRibbonClass} ${ribbonTone(idx + 2)}`}>
                             <CardHeader className="p-3">
                                 <CardTitle className="text-sm whitespace-nowrap">{item.title}</CardTitle>
                             </CardHeader>

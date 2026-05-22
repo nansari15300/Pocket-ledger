@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import { LEDGER_HEADER_PILL_CN } from "@/lib/ledgerHeaderChrome";
 import { cn } from "@/lib/utils";
 
 /** PC ledger header: date picker ke left — click = all-time unapproved-only filter. */
@@ -19,7 +20,8 @@ export function LedgerUnapprovedFilterButton({
       variant={active ? "default" : "outline"}
       size="sm"
       className={cn(
-        "h-10 flex-shrink-0 whitespace-nowrap",
+        LEDGER_HEADER_PILL_CN,
+        "whitespace-nowrap",
         active && "bg-pink-600 text-white hover:bg-pink-700 hover:text-white",
         className
       )}

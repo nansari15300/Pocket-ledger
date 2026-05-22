@@ -3,6 +3,8 @@
  * saare themes par line 1px black (`globals.css`); Default = white containers, Pro = ribbon colors.
  */
 
+import { cn } from "@/lib/utils";
+
 export const PRO_THEME_CLASS = "theme-pro" as const;
 export const PRO_PRIMARY_CLASS = "primary-pro" as const;
 
@@ -16,6 +18,9 @@ export const PRO_PAGE_SURFACE_BG = "hsl(220 14% 96%)";
 /** Purana "Default Light" — sirf white + 1px black lines */
 export const LIGHT_THEME_DISPLAY_NAME = "Light";
 
+/** Dashboard summary cards — theme CSS me colored border (black outline se alag). */
+export const PL_DASHBOARD_TONE_CARD = "pl-dashboard-tone-card" as const;
+
 /** Dashboard `FinancialSummaryCards` / Device sync — same rotate order */
 export const PRO_DASHBOARD_RIBBON_CYCLE = [
   "pl-dashboard-ribbon-emerald",
@@ -27,18 +32,37 @@ export const PRO_DASHBOARD_RIBBON_CYCLE = [
   "pl-dashboard-ribbon-indigo",
 ] as const;
 
-export const PRO_DASHBOARD_RIBBON_BORDER_CYCLE = [
-  "border-emerald-300/70",
-  "border-sky-300/70",
-  "border-violet-300/70",
-  "border-amber-300/70",
-  "border-rose-300/70",
-  "border-teal-300/70",
-  "border-indigo-300/70",
+const PRO_DASHBOARD_TONE_KEYS = [
+  "emerald",
+  "sky",
+  "violet",
+  "amber",
+  "rose",
+  "teal",
+  "indigo",
 ] as const;
 
-/** Card / section index se dashboard ribbon class (Manage Devices pattern) */
+/** Tailwind border hint — asli rang `globals.css` `.pl-dashboard-tone-*` se. */
+export const PRO_DASHBOARD_RIBBON_BORDER_CYCLE = [
+  "border-emerald-500/85",
+  "border-sky-500/85",
+  "border-violet-500/85",
+  "border-amber-500/85",
+  "border-rose-500/85",
+  "border-teal-500/85",
+  "border-indigo-500/85",
+] as const;
+
+/** Card / section index se dashboard ribbon + card-color border (recon share jaisa bold hue). */
 export function proDashboardRibbonClass(index: number): string {
-  const i = ((index % PRO_DASHBOARD_RIBBON_CYCLE.length) + PRO_DASHBOARD_RIBBON_CYCLE.length) % PRO_DASHBOARD_RIBBON_CYCLE.length;
-  return `${PRO_DASHBOARD_RIBBON_BORDER_CYCLE[i]} ${PRO_DASHBOARD_RIBBON_CYCLE[i]}`;
+  const i =
+    ((index % PRO_DASHBOARD_RIBBON_CYCLE.length) + PRO_DASHBOARD_RIBBON_CYCLE.length) %
+    PRO_DASHBOARD_RIBBON_CYCLE.length;
+  return cn(
+    PL_DASHBOARD_TONE_CARD,
+    "border-2",
+    PRO_DASHBOARD_RIBBON_BORDER_CYCLE[i],
+    PRO_DASHBOARD_RIBBON_CYCLE[i],
+    `pl-dashboard-tone-${PRO_DASHBOARD_TONE_KEYS[i]}`,
+  );
 }

@@ -145,6 +145,9 @@ export function AlertsTab({
     if (kind === "auto_created") return "Auto created voucher";
     if (kind === "ic_reverse_pending") return "Inter Company revert request";
     if (kind === "ic_system_join_pending") return "Inter Company system join";
+    if (kind === "reconciliation_share_pending") return "Share for Reconciling";
+    if (kind === "reconciliation_share_accepted") return "Reconcilink accepted";
+    if (kind === "reconciliation_share_unlinked") return "Reconcilink disconnected";
     return "Alert";
   };
   const getByLabel = (n: Notification) => {

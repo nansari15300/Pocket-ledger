@@ -265,6 +265,30 @@
         { "fieldPath": "isDeleted", "order": "ASCENDING" },
         { "fieldPath": "name", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "reconciliation_shares",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "senderUserId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "reconciliation_shares",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "targetUserId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "reconciliation_shares",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "receiverUserId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

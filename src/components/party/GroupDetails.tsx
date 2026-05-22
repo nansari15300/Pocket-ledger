@@ -68,6 +68,11 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { useDate } from "@/hooks/useDate";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import BsDatePicker from "@/components/ui/BsDatePicker";
+import {
+  LEDGER_HEADER_PILL_CN,
+  LEDGER_HEADER_PILL_ICON_CN,
+  LEDGER_HEADER_PILL_ICON_SIZE_CN,
+} from "@/lib/ledgerHeaderChrome";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
@@ -1419,7 +1424,7 @@ export function GroupDetails({
                     onDateRangeChange(range as DateRange | undefined)
                   }
                   transactionDates={transactionDates}
-                  className="w-auto"
+                  className={cn("w-auto", LEDGER_HEADER_PILL_CN)}
                 />
               </div>
             )}
@@ -1434,12 +1439,13 @@ export function GroupDetails({
                       id="date"
                       variant={"outline"}
                       className={cn(
-                        "justify-start text-left font-normal h-10 px-2 w-auto",
+                        "justify-start text-left font-normal px-2 w-auto",
+                        LEDGER_HEADER_PILL_CN,
                         !dateRange && "text-muted-foreground"
                       )}
                       data-theme-detail="date-range"
                     >
-                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      <CalendarIcon className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} />
                       {dateRange?.from ? (
                         dateRange.to ? (
                           <>
@@ -1497,10 +1503,10 @@ export function GroupDetails({
                 variant="ghost"
                 size="icon"
                 onClick={clearFilters}
-                className="h-10 w-10 flex-shrink-0 text-muted-foreground hover:text-foreground"
+                className={cn(LEDGER_HEADER_PILL_ICON_CN, "text-muted-foreground hover:text-foreground")}
                 aria-label="Clear date filter"
               >
-                <XCircle className="h-4 w-4" />
+                <XCircle className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
               </Button>
             )}
             <DropdownMenu>
@@ -1508,7 +1514,7 @@ export function GroupDetails({
                 <Button
                   variant="outline"
                   // Trigger compact rakho; sirf dropdown panel wide hoga.
-                  className="w-[200px] justify-between flex-shrink-0 h-10"
+                  className={cn("w-[200px] justify-between", LEDGER_HEADER_PILL_CN)}
                   data-theme-detail="members"
                 >
                   <span className="truncate">Members ({partiesInGroup.length})</span>
@@ -1545,13 +1551,13 @@ export function GroupDetails({
               variant="chromePill"
               size="sm"
               onClick={() => handleOpenNoteDialog()}
-              className="flex-shrink-0 h-10"
+              className={LEDGER_HEADER_PILL_CN}
               data-theme-detail="add-note"
             >
-              <FilePlus className="mr-2 h-4 w-4" /> Add Note
+              <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} /> Add Note
             </Button>
-            <Button variant="chromePill" size="icon" onClick={handlePrint} className="flex-shrink-0 h-10 w-10" data-theme-detail="print">
-              <Printer className="h-4 w-4" />
+            <Button variant="chromePill" size="icon" onClick={handlePrint} className={LEDGER_HEADER_PILL_ICON_CN} data-theme-detail="print">
+              <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
             </Button>
           </div>
         </div>

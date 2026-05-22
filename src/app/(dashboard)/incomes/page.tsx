@@ -141,7 +141,7 @@ function IncomeExpensePageContent() {
     setSelected(null);
     router.replace(masterDetailListHref("incomes"), { scroll: false });
   }, [setSelected, router]);
-  useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
+  useRegisterMasterDetailHardwareBack("incomes", onBackToList);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [showOnlyExpenseAccountsWithPendingApproval, setShowOnlyExpenseAccountsWithPendingApproval] =

@@ -66,6 +66,11 @@ import type { Permission } from "@/lib/permissions";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 import { appNavHref } from "@/lib/appNavHref";
+import {
+  markMasterDetailSidebarListNav,
+  masterDetailRouteKeyFromPath,
+} from "@/lib/masterDetailSidebarNav";
+import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import { CompanyActions } from "@/components/company/CompanySelector";
 import type { Company as CompanyData } from "@/hooks/useCompany";
 import { Badge } from "../ui/badge";
@@ -175,7 +180,15 @@ export function AppSidebar() {
     (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
       if (isStaticApp) {
         e.preventDefault();
-        router.push(appNavHref(href));
+        const pathnameOnly = href.split("?")[0]?.split("#")[0] ?? href;
+        const routeKey = masterDetailRouteKeyFromPath(pathnameOnly);
+        if (routeKey) {
+          // Entity sidebar: list-only + replace — push stack (bank→party) hardware back galat page khole
+          markMasterDetailSidebarListNav(routeKey);
+          router.replace(appNavHref(masterDetailListHref(routeKey)), { scroll: false });
+        } else {
+          router.push(appNavHref(href));
+        }
       }
       if (isMobile) setIsOpen(false);
     },

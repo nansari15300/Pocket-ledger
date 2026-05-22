@@ -48,12 +48,12 @@ export const initialPermissionConfig: PermissionConfig = {
   }, {} as Record<string, string[]>),
   // Role arrays: order matches flattenedPermissions (trailing block = Recurring Auto Voucher group).
   roles: {
-    viewer:       [true, false, false, false, false, false, false, false, false, false, false, false, true, false, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false],
+    viewer:       [true, false, false, false, false, false, false, false, false, false, false, false, true, false, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false],
     // data-entry: manage_users_roles + configure_company_settings = false; recurring voucher strip allowed.
-    "data-entry": [true, false, true, true, false, true, false, false, false, false, false, false, false, false, true, true, true, false, false, false, false, false, false, false, false, false, false, false, true, true, false, false, false, false, true, true, true, true, false, false, false, false],
-    accountant:   [true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, false, true, true, true, false, false, false, false, false, false, true, false, true, true, false, false, false, false, true, true, true, true, true, true, false],
-    editor:       [true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, false, true, true, true, false, false, false, false, false, false, true, false, true, true, false, false, false, false, true, true, true, true, true, true, false],
-    manager:      [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true],
+    "data-entry": [true, false, true, true, false, true, false, false, false, false, false, false, false, false, true, true, true, false, false, false, false, false, false, false, false, false, false, false, true, true, false, false, false, false, true, true, true, true, false, false, false, false, false, false, false],
+    accountant:   [true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, false, true, true, true, false, false, false, false, false, false, true, false, true, true, false, false, false, false, true, true, true, true, true, true, false, true, true, true],
+    editor:       [true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, false, true, true, true, false, false, false, false, false, false, true, false, true, true, false, false, false, false, true, true, true, true, true, true, false, true, true, true],
+    manager:      [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true],
     owner: Array(flattenedPermissions.length).fill(true)
   },
   dateLimits: {
