@@ -63,6 +63,7 @@ import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import {
   appendLocalOnlyVoucherFilesToUrls,
   shouldDeferStorageIncrementUntilPendingUpload,
@@ -742,19 +743,30 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const fetchVoucherNumber = useCallback(
     async (prefix?: string) => {
       const type = primaryLineItemType === "service" ? "sale_service" : "sale";
-      if (!companyId || !company || !(company.autoVoucherNumbering?.[type] ?? true)) return;
+      if (!companyId || !company || !isAutoVoucherEnabled) return;
 
       const prefixes =
         company?.voucherPrefixes?.[type] || [getVoucherPrefix(primaryLineItemType)];
       const VOUCHER_PREFIX = prefix || prefixes[0];
 
       try {
-        const q = query(collection(firestore, `companies/${companyId}/vouchers`), where("type", "==", "sale"));
-        const querySnapshot = await getDocs(q);
-        const voucherNumbers = querySnapshot.docs
-          .map((doc) => doc.data())
-          .filter((data) => (data.lineItems?.[0]?.type || "item") === primaryLineItemType)
-          .map((data) => data.voucherNumber as string);
+        let voucherNumbers: string[] = [];
+        // APK/static offline: Firestore `getDocs` hang/empty — SQLite mirror se max number (Payment In jaisa).
+        if (preferLocalLedgerReads()) {
+          const rows = await listCompanyDocsFromBrowserDb(companyId, "vouchers");
+          voucherNumbers = rows
+            .filter((r: { type?: string }) => String(r?.type ?? "") === "sale")
+            .filter((r: { lineItems?: { type?: string }[] }) => (r.lineItems?.[0]?.type || "item") === primaryLineItemType)
+            .map((r: { voucherNumber?: string }) => String(r?.voucherNumber ?? ""))
+            .filter(Boolean);
+        } else {
+          const q = query(collection(firestore, `companies/${companyId}/vouchers`), where("type", "==", "sale"));
+          const querySnapshot = await getDocs(q);
+          voucherNumbers = querySnapshot.docs
+            .map((doc) => doc.data())
+            .filter((data) => (data.lineItems?.[0]?.type || "item") === primaryLineItemType)
+            .map((data) => data.voucherNumber as string);
+        }
 
         let maxNum = 0;
         voucherNumbers.forEach((numStr) => {
@@ -770,14 +782,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         console.error("fetchVoucherNumber error:", err);
       }
     },
-    [companyId, company, form, primaryLineItemType]
+    [companyId, company, form, primaryLineItemType, isAutoVoucherEnabled]
   );
 
   useEffect(() => {
-    if (!voucher?.id && !savedVoucherId && !isEditingAndConverting) {
+    if ((!savedVoucherId || isEditingAndConverting) && isAutoVoucherEnabled && !voucher?.id) {
       fetchVoucherNumber();
     }
-  }, [voucher?.id, savedVoucherId, isEditingAndConverting, fetchVoucherNumber, primaryLineItemType, company]);
+  }, [voucher?.id, savedVoucherId, isEditingAndConverting, fetchVoucherNumber, primaryLineItemType, company, isAutoVoucherEnabled]);
 
   /* ---------------------------- TOTALS CALC LOGIC ------------------------- */
 

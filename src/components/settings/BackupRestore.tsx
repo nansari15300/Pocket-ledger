@@ -1,10 +1,10 @@
 
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Download, Upload, Loader2, FileWarning, ShieldCheck, ShieldOff, Eye, EyeOff, Folder } from "lucide-react";
+import { Download, Upload, Loader2, FileWarning, ShieldCheck, ShieldOff, Eye, EyeOff, Folder, Info } from "lucide-react";
 import { useCompany } from "@/hooks/useCompany";
 import {
   collection,
@@ -37,7 +37,8 @@ import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { Label } from "../ui/label";
 import { PermissionButton } from "@/components/permission";
 import { assertCan, PermissionDeniedError } from "@/lib/permissions/enforcePermission";
-import { decryptData, encryptData } from "@/lib/encryption";
+import { decryptBytes, encryptData } from "@/lib/encryption";
+import { isPlbpZipPayload, unpackPlbpZipBackup } from "@/lib/plbpBackupZip";
 import Link from "next/link";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { flushBrowserDbToIndexedDB } from "@/lib/localSqlite";
@@ -47,6 +48,44 @@ import {
   listCompanyDocsFromBrowserDb,
 } from "@/lib/localCompanyDocMirror";
 import { pushAllLocalCompanyDocsToFirestore } from "@/lib/migrateLocalCompanySubcollectionsToFirestore";
+import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
+import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
+import {
+  checkAttachmentBackupAllowed,
+  checkAttachmentRestoreAllowed,
+  formatAttachmentUsageRemaining,
+  incrementAttachmentRestoreUsage,
+  planAttachmentBackupRestoreEnabled,
+} from "@/lib/attachmentBackupUsage";
+import {
+  applyAttachmentRefMapToBackupData,
+  backupDataHasAttachmentBundle,
+  backupDataHasOrphanAttachmentRefs,
+  restoreAttachmentsFromBackupData,
+} from "@/lib/attachmentBackupBundle";
+import {
+  dismissCompanyBackupRunLater,
+  isCompanyBackupRunning,
+  cancelCompanyBackupRun,
+  startCompanyBackupRun,
+} from "@/lib/companyBackupRunner";
+import { COLLECTIONS_TO_BACKUP } from "@/lib/companyBackupCore";
+import { useCompanyBackupRun } from "@/hooks/useCompanyBackupRun";
+import { readBackupLocationDisplayLabel, formatNativeFolderDisplayPath } from "@/lib/backupLocationDisplay";
+import {
+  readAutoBackupPrefs,
+  saveAutoBackupPrefs,
+  type AutoBackupFrequency,
+  type AutoBackupPrefs,
+} from "@/lib/autoBackupPrefs";
+import { Switch } from "@/components/ui/switch";
+import { BackupProgressStrip } from "@/components/settings/BackupProgressStrip";
+import type { CompanyBackupProgress } from "@/lib/companyBackupCore";
+import {
+  countRestoreWorkUnits,
+  createRestoreProgressReporter,
+} from "@/lib/companyRestoreProgress";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Capacitor } from "@capacitor/core";
 import {
   readBackupSaveLocationPrefs,
@@ -76,6 +115,51 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { pathnameForModalRouterReplace } from "@/lib/modalUrlSync";
 import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { generateCompanyId } from "@/lib/generateCompanyId";
+import { cn } from "@/lib/utils";
+import { chromeProPillCn } from "@/lib/chromePillButton";
+import { canPickElectronBackupDirectory } from "@/lib/electronBackupFolder";
+
+/** Backup cards — header jaisa blue pill tone + sab ki height enable auto backup (h-9) jitni. */
+const backupCardPillCn = cn(
+  chromeProPillCn,
+  "h-9 inline-flex items-center rounded-full px-3 text-sm font-medium"
+);
+
+type BackupLocationFieldProps = {
+  locationLabel: string;
+  onChooseLocation: () => void;
+  /** Backup Data card me button footer me hai — yahan sirf path dikhao. */
+  showButton?: boolean;
+  /** Web par visible lekin disabled — sirf static/APK me chalega (getDirectoryHandle). */
+  disabled?: boolean;
+  disabledHint?: string;
+};
+
+/** Backup Data + auto backup — ek hi prefs label; kisi card se choose → dono refresh. */
+function BackupLocationField({
+  locationLabel,
+  onChooseLocation,
+  showButton = true,
+  disabled = false,
+  disabledHint,
+}: BackupLocationFieldProps) {
+  return (
+    <div className={cn("space-y-2 text-sm text-muted-foreground", disabled && "opacity-60")}>
+      <p>
+        Backup location:{" "}
+        <span className="font-medium text-foreground break-all">{locationLabel}</span>
+      </p>
+      {disabled && disabledHint ? (
+        <p className="text-xs text-muted-foreground">{disabledHint}</p>
+      ) : null}
+      {showButton ? (
+        <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={onChooseLocation}>
+          Backup location
+        </Button>
+      ) : null}
+    </div>
+  );
+}
 
 /** Local/static restore: SQLite `companies` + `company_docs` — create-company-local jaisa; Firebase password zaroori nahi */
 function fiscalFieldToLocalIso(val: unknown): string | null {
@@ -97,11 +181,7 @@ function fiscalFieldToLocalIso(val: unknown): string | null {
   return null;
 }
 
-const collectionsToBackup = [
-  "parties", "groups", "bank_accounts", "account_groups",
-  "staff", "staff_groups", "items", "item_groups",
-  "taxes", "tax_groups", "expense_accounts", "expense_groups", "vouchers",
-];
+const collectionsToBackup = [...COLLECTIONS_TO_BACKUP];
 
 /** Firestore ek query me ~1000 doc cap — pages se poora subcollection (warna backup adhura) */
 const BACKUP_PAGE_SIZE = 500;
@@ -191,7 +271,7 @@ async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string): Promi
   let webPreferredFolderFailed = false;
   if (typeof window !== "undefined") {
     try {
-      // Device settings: when user enabled fixed web folder, save directly there and skip Save As dialog.
+      // Device settings: fixed web folder — direct save jab user ne folder choose kiya ho.
       if (!isNativeRuntime() && savePrefs.webUseSelectedFolder) {
         const dirHandle = await readWebBackupDirectoryHandle();
         if (!dirHandle) {
@@ -201,19 +281,35 @@ async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string): Promi
           if (typeof dirHandle.queryPermission === "function") {
             const p = await dirHandle.queryPermission({ mode: "readwrite" });
             if (p !== "granted" && typeof dirHandle.requestPermission === "function") {
-              const req = await dirHandle.requestPermission({ mode: "readwrite" });
-              if (req !== "granted") {
-                webPreferredFolderFailed = true;
+              try {
+                const req = await dirHandle.requestPermission({ mode: "readwrite" });
+                if (req !== "granted") {
+                  webPreferredFolderFailed = true;
+                }
+              } catch (e) {
+                if (e instanceof DOMException && e.name === "NotAllowedError") {
+                  webPreferredFolderFailed = true;
+                } else {
+                  throw e;
+                }
               }
             }
           }
           if (!webPreferredFolderFailed) {
-            const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
-            const writable = await fileHandle.createWritable();
-            await writable.write(blob);
-            await writable.close();
-            const label = savePrefs.webFolderLabel || "Selected folder";
-            return { where: `${label}/${fileName}` };
+            try {
+              const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+              const writable = await fileHandle.createWritable();
+              await writable.write(blob);
+              await writable.close();
+              const label = savePrefs.webFolderLabel || "Selected folder";
+              return { where: `${label}/${fileName}` };
+            } catch (e) {
+              if (e instanceof DOMException && e.name === "NotAllowedError") {
+                webPreferredFolderFailed = true;
+              } else {
+                throw e;
+              }
+            }
           }
         }
       }
@@ -262,26 +358,6 @@ function fileFromBase64Payload(base64Data: string, fileName: string, mimeType?: 
   return new File([bytes], fileName || "backup.plbp", {
     type: mimeType || "application/octet-stream",
   });
-}
-
-/** SAF/content URI ko user-friendly storage path label me badlo (UI display only). */
-function formatNativeFolderDisplayPath(folderPath: string | null): string {
-  const raw = String(folderPath || "").trim();
-  if (!raw) return "Not set";
-  if (!raw.startsWith("content://")) return raw;
-  try {
-    // Android tree URI pattern: .../tree/primary%3ADocuments -> storage/Documents
-    const treeEncoded = raw.includes("/tree/") ? raw.split("/tree/")[1] ?? "" : "";
-    const treeDecoded = decodeURIComponent(treeEncoded);
-    const [volumeRaw, ...segments] = treeDecoded.split(":");
-    const volume = String(volumeRaw || "").trim().toLowerCase();
-    const root = volume === "primary" ? "storage" : `storage/${volume || "selected"}`;
-    const suffix = segments.join(":").replace(/^\/+/, "");
-    return suffix ? `${root}/${suffix}` : root;
-  } catch {
-    // Decode fail hone par raw URI hi fallback rakho.
-    return raw;
-  }
 }
 
 /** Firestore subcollections `companies/{id}/…` — cloud doc id kabhi `authoritativeCompanyId` hota hai, registry `companyId` se alag */
@@ -455,15 +531,33 @@ export function BackupRestore() {
     return true;
   };
 
-  const { company, companyId, setCompanyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
+  const { company, companyId, allCompanies, setCompanyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
   const { user, customUser } = useAuth();
   const { toast } = useToast();
   const { can } = usePermissions();
-  const [isBackingUp, setIsBackingUp] = useState(false);
+  const livePlans = useLivePlans();
+  const accountPlanId = useMemo(
+    () => resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId),
+    [allCompanies, user?.uid, company?.planId]
+  );
+  const accountPlanLive = useMemo(
+    () => getPlanFromPlans(livePlans, accountPlanId),
+    [livePlans, accountPlanId]
+  );
+  const attachmentFeatureOn = planAttachmentBackupRestoreEnabled(accountPlanId, accountPlanLive);
+  const backupRun = useCompanyBackupRun();
+  const isBackingUp = backupRun.status === "running";
+  const backupProgress = backupRun.progress;
+  const [autoBackupPrefs, setAutoBackupPrefs] = useState<AutoBackupPrefs>(() => readAutoBackupPrefs());
+  const [backupLocationLabel, setBackupLocationLabel] = useState("Not set");
   const [isRestoring, setIsRestoring] = useState(false);
+  const [restoreProgress, setRestoreProgress] = useState<CompanyBackupProgress | null>(null);
+  const restoreAbortRef = useRef<AbortController | null>(null);
+  /** v3 zip backup: decrypt ke baad attachment bytes yahan — restore tak memory me. */
+  const restoreZipFilesRef = useRef<Map<string, Uint8Array> | null>(null);
   const [fileToRestore, setFileToRestore] = useState<File | null>(null);
   const [isOverwriteConfirmOpen, setIsOverwriteConfirmOpen] = useState(false);
   const [confirmationText, setConfirmationText] = useState("");
@@ -476,6 +570,7 @@ export function BackupRestore() {
   const [backupLocationDialogOpen, setBackupLocationDialogOpen] = useState(false);
   const [webUseSelectedFolder, setWebUseSelectedFolder] = useState(false);
   const [webFolderLabel, setWebFolderLabel] = useState<string | null>(null);
+  const [webFolderDisplayPath, setWebFolderDisplayPath] = useState<string | null>(null);
   const [nativeFolderPath, setNativeFolderPath] = useState<string | null>(null);
   const [savingBackupLocation, setSavingBackupLocation] = useState(false);
   const [liveDataLocationDialogOpen, setLiveDataLocationDialogOpen] = useState(false);
@@ -491,28 +586,94 @@ export function BackupRestore() {
   const [restoreCompanyNameChoice, setRestoreCompanyNameChoice] = useState<"target" | "backup">("target");
   /** Create Backup bina company password — popup (mobile layout safe); user Close kare tab tak. */
   const [backupPasswordHintOpen, setBackupPasswordHintOpen] = useState(false);
+  /** Backup confirm: data-only vs attachment embed (Option A). */
+  const [backupIncludeAttachments, setBackupIncludeAttachments] = useState(false);
+  const [backupAttachmentGateHint, setBackupAttachmentGateHint] = useState<string | null>(null);
+  /** Restore: bundle ho to attachments restore karna hai ya sirf URLs. */
+  const [restoreIncludeAttachments, setRestoreIncludeAttachments] = useState(false);
+  const [restoreAttachmentGateHint, setRestoreAttachmentGateHint] = useState<string | null>(null);
+
+  /** Device backup folder prefs → UI state; dono cards same label share karte hain. */
+  const refreshBackupLocationUi = useCallback(() => {
+    const prefs = readBackupSaveLocationPrefs();
+    setWebUseSelectedFolder(prefs.webUseSelectedFolder);
+    setWebFolderLabel(prefs.webFolderLabel);
+    setWebFolderDisplayPath(prefs.webFolderDisplayPath);
+    setNativeFolderPath(prefs.nativeFolderPath ?? null);
+    setBackupLocationLabel(readBackupLocationDisplayLabel());
+  }, []);
+
+  const openBackupLocationDialog = () => setBackupLocationDialogOpen(true);
+
+  /** Restore cancel — backup runner jaisa AbortController. */
+  const cancelRestoreRun = () => {
+    if (!isRestoring || !restoreAbortRef.current) return false;
+    restoreAbortRef.current.abort();
+    return true;
+  };
+
+  const beginRestoreProgress = (backupData: Record<string, unknown>, restoreAttachments: boolean) => {
+    restoreAbortRef.current?.abort();
+    restoreAbortRef.current = new AbortController();
+    const signal = restoreAbortRef.current.signal;
+    const total = countRestoreWorkUnits(backupData, restoreAttachments, collectionsToBackup);
+    const report = createRestoreProgressReporter(total, setRestoreProgress, signal);
+    report.tick("Starting restore", "Preparing…", 0, 0);
+    return { signal, report };
+  };
 
   useEffect(() => {
     if (isOverwriteConfirmOpen) {
       setRestoreToLocalSqlite(true);
       setRestoreCompanyNameChoice("target");
+      const hasBundle = backupDataHasAttachmentBundle(backupDataToRestore);
+      setRestoreIncludeAttachments(hasBundle && attachmentFeatureOn);
     }
-  }, [isOverwriteConfirmOpen]);
+  }, [isOverwriteConfirmOpen, backupDataToRestore, attachmentFeatureOn]);
+
+  useEffect(() => {
+    // Attachment backup dialog: plan limit hint.
+    if (!isEncryptedBackupConfirmOpen || !user?.uid) {
+      setBackupAttachmentGateHint(null);
+      return;
+    }
+    void (async () => {
+      const gate = await checkAttachmentBackupAllowed(user.uid, accountPlanId);
+      if (!attachmentFeatureOn) {
+        setBackupAttachmentGateHint("Not included on your plan — use Data only or upgrade.");
+        return;
+      }
+      setBackupAttachmentGateHint(formatAttachmentUsageRemaining(gate.cap, gate.used));
+    })();
+  }, [isEncryptedBackupConfirmOpen, user?.uid, accountPlanId, attachmentFeatureOn]);
+
+  useEffect(() => {
+    if (!isOverwriteConfirmOpen || !user?.uid || !backupDataHasAttachmentBundle(backupDataToRestore)) {
+      setRestoreAttachmentGateHint(null);
+      return;
+    }
+    void (async () => {
+      const gate = await checkAttachmentRestoreAllowed(user.uid, accountPlanId);
+      if (!attachmentFeatureOn) {
+        setRestoreAttachmentGateHint("Not included on your plan — restore Data only.");
+        return;
+      }
+      setRestoreAttachmentGateHint(formatAttachmentUsageRemaining(gate.cap, gate.used));
+    })();
+  }, [isOverwriteConfirmOpen, backupDataToRestore, user?.uid, accountPlanId, attachmentFeatureOn]);
 
   useEffect(() => {
     // Hydrate backup location prefs for this device.
-    const prefs = readBackupSaveLocationPrefs();
-    setWebUseSelectedFolder(prefs.webUseSelectedFolder);
-    setWebFolderLabel(prefs.webFolderLabel);
-    setNativeFolderPath(prefs.nativeFolderPath ?? null);
+    refreshBackupLocationUi();
     const live = readLiveDataFolderPrefs();
     setLiveWebEnabled(live.webEnabled);
     setLiveWebLabel(live.webFolderLabel);
     setLiveNativeFolderPath(live.nativeFolderPath);
-  }, []);
+    setAutoBackupPrefs(readAutoBackupPrefs());
+  }, [refreshBackupLocationUi]);
 
   useEffect(() => {
-    // Deep link `?dialog=backup-location` opens the same popup as Backup location button.
+    // Deep link — backup location dialog.
     if (searchParams.get("dialog") === "backup-location") {
       setBackupLocationDialogOpen(true);
     }
@@ -527,6 +688,7 @@ export function BackupRestore() {
 
   const closeBackupLocationDialog = () => {
     setBackupLocationDialogOpen(false);
+    refreshBackupLocationUi();
     if (searchParams.get("dialog") !== "backup-location") return;
     const next = new URLSearchParams(searchParams.toString());
     next.delete("dialog");
@@ -536,8 +698,31 @@ export function BackupRestore() {
   };
 
   const handlePickWebFolder = async () => {
-    if (!supportsWebFolderPicker) return;
     try {
+      // Desktop EXE: native dialog se poora path (D:\Backup PL\…) store karo.
+      if (canPickElectronBackupDirectory()) {
+        const { pickElectronBackupDirectory } = await import("@/lib/electronBackupFolder");
+        const { path: pickedPath, cancelled } = await pickElectronBackupDirectory();
+        if (cancelled || !pickedPath) return;
+        await clearWebBackupDirectoryHandle();
+        const leafName =
+          pickedPath.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || "Selected folder";
+        const prev = readBackupSaveLocationPrefs();
+        saveBackupSaveLocationPrefs({
+          ...prev,
+          webUseSelectedFolder: true,
+          webFolderLabel: leafName,
+          webFolderDisplayPath: pickedPath,
+        });
+        setWebUseSelectedFolder(true);
+        setWebFolderLabel(leafName);
+        setWebFolderDisplayPath(pickedPath);
+        toast({ title: "Backup location saved", description: `Folder set to ${pickedPath}.` });
+        refreshBackupLocationUi();
+        return;
+      }
+
+      if (!supportsWebFolderPicker) return;
       const picker = (window as any).showDirectoryPicker;
       const handle = await picker({ mode: "readwrite" });
       const ok = await storeWebBackupDirectoryHandle(handle);
@@ -551,10 +736,13 @@ export function BackupRestore() {
         ...prev,
         webUseSelectedFolder: true,
         webFolderLabel: nextLabel,
+        webFolderDisplayPath: null,
       });
       setWebUseSelectedFolder(true);
       setWebFolderLabel(nextLabel);
+      setWebFolderDisplayPath(null);
       toast({ title: "Backup location saved", description: `Folder set to ${nextLabel}.` });
+      refreshBackupLocationUi();
     } catch (e: any) {
       if (e?.name === "AbortError") return;
       toast({ variant: "destructive", title: "Failed", description: "Could not select backup folder." });
@@ -568,10 +756,13 @@ export function BackupRestore() {
       ...prev,
       webUseSelectedFolder: false,
       webFolderLabel: null,
+      webFolderDisplayPath: null,
     });
     setWebUseSelectedFolder(false);
     setWebFolderLabel(null);
+    setWebFolderDisplayPath(null);
     toast({ title: "Backup location cleared", description: "Backup will ask location again." });
+    refreshBackupLocationUi();
   };
 
   const handleSaveWebLocation = async () => {
@@ -589,6 +780,7 @@ export function BackupRestore() {
       });
       setWebUseSelectedFolder(true);
       toast({ title: "Backup location saved", description: `Backups will save to ${webFolderLabel}.` });
+      refreshBackupLocationUi();
     } finally {
       setSavingBackupLocation(false);
     }
@@ -634,6 +826,7 @@ export function BackupRestore() {
         title: "Backup location saved",
         description: `Folder set to ${formatNativeFolderDisplayPath(nativeFolderPath)}.`,
       });
+      refreshBackupLocationUi();
     } finally {
       setSavingBackupLocation(false);
     }
@@ -698,7 +891,7 @@ export function BackupRestore() {
         const root = (await readWebLiveDataDirectoryHandle()) as FileSystemDirectoryHandle | null;
         if (root) await getOrCreatePocketLedgerDir(root);
       }
-      await syncAllLocalCompanyMirrorsToFolder();
+      await syncAllLocalCompanyMirrorsToFolder({ userInitiated: true });
       toast({
         title: "Data location saved",
         description: `Encrypted copies are written under ${POCKET_LEDGER_MIRROR_DIR}/${COMPANIES_DIR_SEGMENT}/… (auto key on this device).`,
@@ -745,7 +938,7 @@ export function BackupRestore() {
 
   const handleSyncLiveDataNow = async () => {
     try {
-      await syncAllLocalCompanyMirrorsToFolder();
+      await syncAllLocalCompanyMirrorsToFolder({ userInitiated: true });
       toast({ title: "Synced", description: "Encrypted mirrors under pocket-ledger/ refreshed (if configured)." });
     } catch (e: unknown) {
       toast({ variant: "destructive", title: "Sync failed", description: e instanceof Error ? e.message : "" });
@@ -755,6 +948,7 @@ export function BackupRestore() {
   const handleBackupClick = () => {
     if (company?.password) {
       setBackupPasswordHintOpen(false);
+      setBackupIncludeAttachments(false);
       setIsEncryptedBackupConfirmOpen(true);
     } else {
       // Mobile par inline alert layout bigadta tha — Dialog/AlertDialog se band kare tab tak dikhe.
@@ -762,114 +956,71 @@ export function BackupRestore() {
     }
   };
 
-  const handleBackup = async () => {
-    if (!companyId || !company || !company.password) return;
-    
+  const handleBackup = async (includeAttachments: boolean) => {
+    if (!companyId || !company || !company.password || !user?.uid) return;
+
+    if (isCompanyBackupRunning()) {
+      toast({
+        variant: "destructive",
+        title: "Backup already running",
+        description: "Wait for the current backup to finish. Do not refresh the page.",
+      });
+      return;
+    }
+
     try {
-      // Permission check: export
       assertCan(can, "export_data");
     } catch (error) {
       if (error instanceof PermissionDeniedError) {
-        toast({
-          variant: "destructive",
-          title: "Permission Denied",
-          description: error.message,
-        });
+        toast({ variant: "destructive", title: "Permission Denied", description: error.message });
       } else {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "Failed to check permissions.",
-        });
+        toast({ variant: "destructive", title: "Error", description: "Failed to check permissions." });
       }
       setIsEncryptedBackupConfirmOpen(false);
       return;
     }
-    
+
     setIsEncryptedBackupConfirmOpen(false);
-    setIsBackingUp(true);
 
-    try {
-      const backupData: Record<string, any[]> = {
-        companyDetails: [{ ...company, id: companyId }],
-      };
+    // Web: sirf data-only backup — attachments + folder picker static build par.
+    const withAttachments = includeAttachments;
 
-      // Cloud data Firestore root id — galat `companyId` se parties pe PERMISSION_DENIED aata tha; local SQLite hamesha registry `companyId` se
-      const fsCompanyId =
-        String((company as { authoritativeCompanyId?: string }).authoritativeCompanyId || companyId || "").trim() ||
-        companyId;
-      const localOnlyBackup = String(company.storageOption || "").toLowerCase() === "local";
+    const result = await startCompanyBackupRun({
+      company,
+      companyId,
+      ownerUid: user.uid,
+      accountPlanId,
+      includeAttachments: withAttachments,
+    });
 
-      for (const colName of collectionsToBackup) {
-        let fsRows: Array<Record<string, unknown> & { id: string }> = [];
-        if (!localOnlyBackup) {
-          try {
-            fsRows = await fetchSubcollectionAllDocsPaginated(fsCompanyId, colName);
-          } catch (colError: unknown) {
-            // Offline / rules / path: poori backup mat todo — SQLite mirror (forBackupMerge) se jodo
-            console.warn("[Backup] Firestore subcollection read skipped, using local mirror if any:", colName, colError);
-            fsRows = [];
-          }
-        }
-        const localRows = await listCompanyDocsFromBrowserDb(companyId, colName, { forBackupMerge: true });
-        backupData[colName] =
-          localRows.length > 0
-            ? mergeFirestoreRowsWithLocalMirrorForBackup(
-                fsRows,
-                localRows as Array<Record<string, unknown> & { id: string }>
-              )
-            : fsRows;
-      }
-
-      let jsonData: string;
-      try {
-        jsonData = JSON.stringify(backupData);
-      } catch (stringifyError: any) {
-        console.error("Backup JSON.stringify failed:", stringifyError);
+    if (result.ok === true) {
+      const embedded = result.attachmentEmbeddedCount ?? 0;
+      const refs = result.attachmentRefCount ?? 0;
+      if (result.includeAttachments) {
+        toast({
+          title: "Success",
+          description: `Backup saved: ${result.where} (${embedded} file${embedded === 1 ? "" : "s"} embedded)`,
+        });
+      } else if (refs > 0) {
+        // Checkbox tha lekin koi blob resolve nahi hua — size data-only jaisa hi rahega.
         toast({
           variant: "destructive",
-          title: "Backup Failed",
-          description: "Data too large or invalid to prepare for backup.",
+          title: "Backup saved without files",
+          description: `${refs} attachment link${refs === 1 ? "" : "s"} found but no files could be read. Check internet and retry “With attachments”.`,
         });
-        return;
-      }
-
-      let finalDataString: string;
-      try {
-        finalDataString = await encryptData(jsonData, company.password!);
-      } catch (encError: any) {
-        console.error("Backup encryption failed:", encError);
-        const msg = encError?.message || String(encError);
-        toast({
-          variant: "destructive",
-          title: "Backup Failed",
-          description: msg.includes("encrypt") ? msg : `Encryption failed: ${msg}`,
-        });
-        return;
-      }
-
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const fileExtension = 'plbp';
-      const fileName = `pocket-ledger_backup_${company.name.replace(/\s+/g, '_')}_${timestamp}.${fileExtension}`;
-      const blob = new Blob([finalDataString], { type: "application/octet-stream" });
-      const saved = await saveBackupBlobWithBestEffort(blob, fileName);
-      toast({
-        title: "Success",
-        description: `Backup saved: ${saved.where}`,
-      });
-    } catch (error) {
-      console.error(error);
-      if ((error as any)?.name === "AbortError") {
-        toast({ title: "Backup cancelled", description: "Save location was not selected." });
-        return;
-      }
-      if (error instanceof PermissionDeniedError) {
-        toast({ variant: "destructive", title: "Permission Denied", description: error.message });
       } else {
-        toast({ variant: "destructive", title: "Backup Failed", description: (error as any)?.message || "Unexpected backup error." });
+        toast({
+          title: "Success",
+          description: `Backup saved: ${result.where}`,
+        });
       }
-    } finally {
-      setIsBackingUp(false);
+      dismissCompanyBackupRunLater(8000);
+    } else if (!result.cancelled) {
+      toast({
+        variant: "destructive",
+        title: "Backup Failed",
+        description: result.error,
+      });
     }
   };
 
@@ -1024,8 +1175,16 @@ export function BackupRestore() {
       
       try {
           const encryptedContent = await fileToRestore.text();
-          const decryptedJson = await decryptData(encryptedContent, decryptionPassword);
-          const backupData = JSON.parse(decryptedJson);
+          const plainBytes = await decryptBytes(encryptedContent, decryptionPassword);
+          let backupData: Record<string, unknown>;
+          if (isPlbpZipPayload(plainBytes)) {
+            const { manifest, filesByPath } = unpackPlbpZipBackup(plainBytes);
+            restoreZipFilesRef.current = filesByPath;
+            backupData = manifest;
+          } else {
+            restoreZipFilesRef.current = null;
+            backupData = JSON.parse(new TextDecoder().decode(plainBytes)) as Record<string, unknown>;
+          }
           
           if (backupData?.companyDetails?.[0]?.handoverStatus === 'accepted') {
               const receiver = backupData.companyDetails[0].handoverTo;
@@ -1064,7 +1223,11 @@ export function BackupRestore() {
   }
 
   /** Static/local-first: backup → SQLite `company_docs` + `companies` row (Firebase account password nahi) */
-  const handleLocalOverwriteRestore = async (backupData: any, resolvedCompanyName: string) => {
+  const handleLocalOverwriteRestore = async (
+    backupData: any,
+    resolvedCompanyName: string,
+    restoreAttachments: boolean
+  ) => {
     if (!companyId || !user?.uid || !backupData) return;
 
     const backupCompanyDetails = backupData?.companyDetails?.[0];
@@ -1149,13 +1312,33 @@ export function BackupRestore() {
 
     setIsRestoring(true);
     setIsOverwriteConfirmOpen(false);
-    toast({ title: "Restore Initiated", description: "Writing to local database…" });
 
     try {
+      const { signal, report } = beginRestoreProgress(backupData, restoreAttachments);
+
       // Har restore par naya doc id — same backup do baar restore par SQLite rows mix nahi honge.
       const newCompanyId = generateCompanyId(
         resolvedCompanyName.trim() || String(backupCompanyDetails.name ?? "company")
       );
+
+      let dataToWrite = backupData;
+      if (restoreAttachments && backupDataHasAttachmentBundle(backupData)) {
+        const gate = await checkAttachmentRestoreAllowed(user.uid, accountPlanId);
+        if (!gate.allowed) {
+          toast({ variant: "destructive", title: "Attachment restore blocked", description: gate.message });
+          setIsRestoring(false);
+          setRestoreProgress(null);
+          return;
+        }
+        const map = await restoreAttachmentsFromBackupData(
+          backupData,
+          restoreZipFilesRef.current,
+          newCompanyId,
+          (_done, _total, bytes) => report.tick("Restoring attachments", "", 1, bytes),
+          signal
+        );
+        dataToWrite = applyAttachmentRefMapToBackupData(backupData, map);
+      }
 
       const safeTimestamp = (val: any): Timestamp | null => {
         // Restore dates can come from Firestore JSON, local SQLite JSON, or old ISO backups; normalize all before writing.
@@ -1166,8 +1349,10 @@ export function BackupRestore() {
       const backupCompanyIdFromFile = String(backupData.companyDetails?.[0]?.id ?? "").trim();
 
       for (const colName of collectionsToBackup) {
-        const docsToRestore = backupData[colName] || [];
+        report.throwIfAborted();
+        const docsToRestore = dataToWrite[colName] || [];
         for (const docData of docsToRestore) {
+          report.throwIfAborted();
           const { id: originalId, ...data } = docData;
           const rewritten = rewriteBackupCompanyIdsDeep(backupCompanyIdFromFile, newCompanyId, data) as Record<string, unknown>;
           const rw = rewritten as { isDeleted?: boolean; date?: unknown; dueDate?: unknown; due_date?: unknown; openingBalanceDate?: unknown; createdAt?: unknown; amount?: unknown; total?: number };
@@ -1186,12 +1371,14 @@ export function BackupRestore() {
             notify: false,
             force: true,
           });
+          report.tick("Writing records", colName.replace(/_/g, " "));
         }
         notifyBrowserDbCollectionUpdated(newCompanyId, colName);
       }
 
       const existing = await getLocalCompanyById(newCompanyId, { includeDeleted: true });
-      const { id: _bid, ownerId: _boid, ownerEmail: _boe, ...restDetails } = backupData.companyDetails[0];
+      const restoredCompanyDetails = (dataToWrite.companyDetails || backupData.companyDetails) as Array<Record<string, unknown>>;
+      const { id: _bid, ownerId: _boid, ownerEmail: _boe, ...restDetails } = restoredCompanyDetails[0];
       const rest = restDetails as Record<string, unknown>;
       const fyStart = fiscalFieldToLocalIso(rest.fiscalYearStart);
       const fyEnd = fiscalFieldToLocalIso(rest.fiscalYearEnd);
@@ -1224,7 +1411,9 @@ export function BackupRestore() {
       };
       delete localCompanyRow.authoritativeCompanyId;
 
+      report.tick("Finalizing", "Saving company row…");
       await upsertLocalCompany(localCompanyRow as Parameters<typeof upsertLocalCompany>[0]);
+      report.tick("Finalizing", "Flushing local database…");
       await flushBrowserDbToIndexedDB();
       reloadLocalCompanyRegistry();
       triggerSync();
@@ -1232,6 +1421,7 @@ export function BackupRestore() {
       // Firestore root kabhi purane `authoritativeCompanyId` (backup wali company A) rakhta hai — shared user
       // `companies/{galatId}/vouchers` padhta hai → 0 data. SQLite sahi `companyId` par hai; cloud align + push.
       try {
+        report.tick("Finalizing", "Aligning cloud copy…");
         const cref = doc(firestore, "companies", newCompanyId);
         const cs = await getDoc(cref);
         if (cs.exists()) {
@@ -1247,6 +1437,11 @@ export function BackupRestore() {
         console.warn("[BackupRestore] post-local-restore Firestore align/push skipped:", e);
       }
 
+      if (restoreAttachments && backupDataHasAttachmentBundle(backupData)) {
+        await incrementAttachmentRestoreUsage(user.uid);
+      }
+
+      report.tick("Complete", "Reloading app…");
       setCompanyId(newCompanyId);
       toast({
         title: "Restore Successful",
@@ -1254,19 +1449,30 @@ export function BackupRestore() {
       });
       window.location.reload();
     } catch (error: any) {
-      console.error("Local restore failed:", error);
-      toast({
-        variant: "destructive",
-        title: "Restore Failed",
-        description: error.message || "An error occurred during local restore.",
-      });
+      if (error instanceof DOMException && error.name === "AbortError") {
+        toast({ title: "Restore cancelled", description: "You can start again when ready." });
+      } else {
+        console.error("Local restore failed:", error);
+        toast({
+          variant: "destructive",
+          title: "Restore Failed",
+          description: error.message || "An error occurred during local restore.",
+        });
+      }
     } finally {
       setIsRestoring(false);
+      restoreAbortRef.current = null;
+      restoreZipFilesRef.current = null;
+      setRestoreProgress(null);
       setFileToRestore(null);
     }
   };
 
-  const handleOverwriteRestore = async (backupData: any, resolvedCompanyName: string) => {
+  const handleOverwriteRestore = async (
+    backupData: any,
+    resolvedCompanyName: string,
+    restoreAttachments: boolean
+  ) => {
     if (!companyId || !user?.uid || !backupData) return;
 
     const backupCompanyDetails = backupData?.companyDetails?.[0];
@@ -1354,13 +1560,32 @@ export function BackupRestore() {
 
     setIsRestoring(true);
     setIsOverwriteConfirmOpen(false);
-    toast({ title: "Restore Initiated", description: "This may take a moment..." });
 
     try {
+        const { signal, report } = beginRestoreProgress(backupData, restoreAttachments);
         const newCompanyId = generateCompanyId(
           resolvedCompanyName.trim() || String(backupCompanyDetails.name ?? "company")
         );
         const backupCompanyIdFromFile = String(backupData.companyDetails?.[0]?.id ?? "").trim();
+
+        let dataToWrite = backupData;
+        if (restoreAttachments && backupDataHasAttachmentBundle(backupData)) {
+          const gate = await checkAttachmentRestoreAllowed(user.uid, accountPlanId);
+          if (!gate.allowed) {
+            toast({ variant: "destructive", title: "Attachment restore blocked", description: gate.message });
+            setIsRestoring(false);
+            setRestoreProgress(null);
+            return;
+          }
+          const map = await restoreAttachmentsFromBackupData(
+            backupData,
+            restoreZipFilesRef.current,
+            newCompanyId,
+            (_done, _total, bytes) => report.tick("Restoring attachments", "", 1, bytes),
+            signal
+          );
+          dataToWrite = applyAttachmentRefMapToBackupData(backupData, map);
+        }
 
         let batch = writeBatch(firestore);
         const safeTimestamp = (val: any): Timestamp | null => {
@@ -1371,8 +1596,10 @@ export function BackupRestore() {
         
         let count = 0;
         for (const colName of collectionsToBackup) {
-            const docsToRestore = backupData[colName] || [];
+            report.throwIfAborted();
+            const docsToRestore = dataToWrite[colName] || [];
             for (const docData of docsToRestore) {
+                report.throwIfAborted();
                 const { id: originalId, ...data } = docData;
                 const rewritten = rewriteBackupCompanyIdsDeep(
                   backupCompanyIdFromFile,
@@ -1408,7 +1635,9 @@ export function BackupRestore() {
                 batch.set(docRef, finalData);
                 
                 count++;
+                report.tick("Writing records", colName.replace(/_/g, " "));
                 if (count >= 450) { 
+                    report.tick("Writing records", "Uploading batch to cloud…", 0, 0);
                     await batch.commit();
                     batch = writeBatch(firestore);
                     count = 0;
@@ -1416,14 +1645,14 @@ export function BackupRestore() {
             }
         }
 
-        if (backupData.companyDetails?.[0]) {
+        if (dataToWrite.companyDetails?.[0]) {
             const {
               id: _bid,
               ownerId: _oid,
               ownerEmail: _oem,
               authoritativeCompanyId: _oldAuth,
               ...details
-            } = backupData.companyDetails[0];
+            } = dataToWrite.companyDetails[0];
             const finalName =
               resolvedCompanyName.trim() || String((details as { name?: string }).name ?? "");
             const detailsRewritten = rewriteBackupCompanyIdsDeep(
@@ -1441,12 +1670,19 @@ export function BackupRestore() {
             });
         }
 
+        report.tick("Finalizing", "Saving to Firestore…");
         await batch.commit();
 
+        if (restoreAttachments && backupDataHasAttachmentBundle(backupData)) {
+          await incrementAttachmentRestoreUsage(user.uid);
+        }
+
+        report.tick("Finalizing", "Refreshing local registry…");
         // Online restore ke baad local company registry / listeners align (static + web dono)
         reloadLocalCompanyRegistry();
         triggerSync();
 
+        report.tick("Complete", "Reloading app…");
         setCompanyId(newCompanyId);
         toast({
           title: "Restore Successful",
@@ -1454,10 +1690,21 @@ export function BackupRestore() {
         });
         window.location.reload();
     } catch (error: any) {
-      console.error("Restore failed:", error);
-      toast({ variant: "destructive", title: "Restore Failed", description: error.message || "An error occurred during the overwrite process." });
+      if (error instanceof DOMException && error.name === "AbortError") {
+        toast({ title: "Restore cancelled", description: "You can start again when ready." });
+      } else {
+        console.error("Restore failed:", error);
+        toast({
+          variant: "destructive",
+          title: "Restore Failed",
+          description: error.message || "An error occurred during the overwrite process.",
+        });
+      }
     } finally {
       setIsRestoring(false);
+      restoreAbortRef.current = null;
+      restoreZipFilesRef.current = null;
+      setRestoreProgress(null);
       setFileToRestore(null);
     }
   };
@@ -1465,35 +1712,203 @@ export function BackupRestore() {
 
   return (
     <>
-      <div className="space-y-8">
-        <Card>
-          <CardHeader>
-            <CardTitle>Backup Data</CardTitle>
-            <CardDescription>
-              Download a complete backup of your company&apos;s data. You can choose to encrypt it for security.
-            </CardDescription>
+      <div className="flex flex-col gap-8">
+        {/* PC: Backup + Auto ek row; mobile: Backup phir Auto (order 1–2), baaki cards neeche */}
+        <div className="grid grid-cols-1 gap-8 md:grid-cols-2 md:gap-6 md:items-stretch">
+        <Card className="h-full flex flex-col">
+          <CardHeader className="pb-3">
+            {/* Title + Create Backup — web par Backup location disabled (getDirectoryHandle fail). */}
+            <div className="flex flex-nowrap items-center gap-2 overflow-x-auto">
+              <div className="flex shrink-0 items-center gap-1.5">
+                <CardTitle className="text-base whitespace-nowrap">Backup Data</CardTitle>
+                <TooltipProvider delayDuration={200}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                        aria-label="Backup data information"
+                      >
+                        <Info className="h-4 w-4" aria-hidden />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-[20rem] text-xs leading-snug">
+                      Download a complete backup of your company&apos;s data. You can choose to encrypt it for security.
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+              <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">
+                <PermissionButton
+                  permission="export_data"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleBackupClick}
+                  disabled={isBackingUp}
+                >
+                  {isBackingUp ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="mr-2 h-4 w-4" />
+                  )}
+                  Create Backup
+                </PermissionButton>
+                <Button type="button" variant="outline" size="sm" onClick={openBackupLocationDialog}>
+                  Backup location
+                </Button>
+              </div>
+            </div>
           </CardHeader>
-          <CardFooter>
-            <div className="flex flex-wrap items-center gap-2">
-              <PermissionButton
-                permission="export_data"
-                onClick={handleBackupClick}
-                disabled={isBackingUp}
+          <CardContent className="space-y-3 text-sm text-muted-foreground">
+            <BackupLocationField
+              locationLabel={backupLocationLabel}
+              onChooseLocation={openBackupLocationDialog}
+              showButton={false}
+            />
+            {isBackingUp ? null : backupRun.status === "interrupted" ? (
+              <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                Previous backup was interrupted by refresh or close. Start again and keep this page open until complete.
+              </p>
+            ) : null}
+          </CardContent>
+          {(isBackingUp || backupProgress) && backupProgress ? (
+          <CardFooter className="flex flex-col items-stretch gap-3 pt-0">
+            <BackupProgressStrip
+              progress={backupProgress}
+              spinning={isBackingUp}
+              inCard
+              showRefreshWarning={isBackingUp}
+              showCancel={isBackingUp}
+              onCancel={() => {
+                if (cancelCompanyBackupRun()) {
+                  toast({ title: "Backup cancelled", description: "You can start a new backup when ready." });
+                }
+              }}
+            />
+          </CardFooter>
+          ) : null}
+        </Card>
+
+        <Card className="h-full flex flex-col">
+          <CardHeader className="pb-3">
+            {/* Auto backup — device prefs se scheduled backup (web + static). */}
+            <div className="flex flex-nowrap items-center gap-2 overflow-x-auto">
+              <div className="flex shrink-0 items-center gap-1.5">
+                <CardTitle className="text-base whitespace-nowrap">auto backup</CardTitle>
+                <TooltipProvider delayDuration={200}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                        aria-label="Auto backup information"
+                      >
+                        <Info className="h-4 w-4" aria-hidden />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-[20rem] text-xs leading-snug">
+                      Runs on this device for the currently selected company (owner, password set). Uses the same backup
+                      location as Backup Data (either card se change — dono sync).
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+              <select
+                id="auto-backup-frequency"
+                className={cn(backupCardPillCn, "ml-auto min-w-[7.5rem] shrink-0 cursor-pointer py-0")}
+                value={autoBackupPrefs.enabled ? autoBackupPrefs.frequency : "off"}
+                disabled={!autoBackupPrefs.enabled}
+                onChange={(e) => {
+                  const frequency = e.target.value as AutoBackupFrequency;
+                  const next: AutoBackupPrefs = {
+                    ...autoBackupPrefs,
+                    enabled: frequency !== "off",
+                    frequency: frequency === "off" ? "daily" : frequency,
+                  };
+                  setAutoBackupPrefs(next);
+                  saveAutoBackupPrefs(next);
+                }}
+                aria-label="Auto backup frequency"
               >
-                {isBackingUp ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Download className="mr-2 h-4 w-4" />
-                )}
-                Create Backup
-              </PermissionButton>
-              {/* Backup page par hi backup location control: synced-device page se hata diya. */}
-              <Button type="button" variant="outline" onClick={() => setBackupLocationDialogOpen(true)}>
+                <option value="off">Off</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+              </select>
+              <div className={cn(backupCardPillCn, "shrink-0 gap-2 py-0")}>
+                <Label
+                  htmlFor="auto-backup-enabled"
+                  className="cursor-pointer text-sm font-medium whitespace-nowrap"
+                >
+                  Enable auto backup
+                </Label>
+                <Switch
+                  id="auto-backup-enabled"
+                  checked={autoBackupPrefs.enabled}
+                  onCheckedChange={(checked) => {
+                    const frequency: AutoBackupFrequency = checked
+                      ? autoBackupPrefs.frequency === "off"
+                        ? "daily"
+                        : autoBackupPrefs.frequency
+                      : "off";
+                    const next: AutoBackupPrefs = {
+                      ...autoBackupPrefs,
+                      enabled: checked,
+                      frequency,
+                    };
+                    setAutoBackupPrefs(next);
+                    saveAutoBackupPrefs(next);
+                  }}
+                />
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm flex-1">
+            <BackupLocationField
+              locationLabel={backupLocationLabel}
+              onChooseLocation={openBackupLocationDialog}
+              showButton={false}
+            />
+            {/* Backup location + Include attachments — ek hi row me pills. */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={openBackupLocationDialog}>
                 Backup location
               </Button>
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className={cn(backupCardPillCn, "gap-2 py-0")}>
+                      <Label
+                        htmlFor="auto-backup-include-attachments"
+                        className="cursor-pointer text-sm font-medium whitespace-nowrap"
+                      >
+                        Include attachments
+                      </Label>
+                      <Switch
+                        id="auto-backup-include-attachments"
+                        checked={autoBackupPrefs.includeAttachments}
+                        disabled={!autoBackupPrefs.enabled || !attachmentFeatureOn}
+                        onCheckedChange={(checked) => {
+                          const next = { ...autoBackupPrefs, includeAttachments: checked };
+                          setAutoBackupPrefs(next);
+                          saveAutoBackupPrefs(next);
+                        }}
+                      />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[16rem] text-xs leading-snug">
+                    Uses plan quota; larger backup files. {!attachmentFeatureOn ? "Not included on your plan." : null}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
-          </CardFooter>
+            {autoBackupPrefs.lastRunAt ? (
+              <p className="text-xs text-muted-foreground">
+                Last auto backup: {new Date(autoBackupPrefs.lastRunAt).toLocaleString()}
+              </p>
+            ) : null}
+          </CardContent>
         </Card>
+        </div>
 
         <Card>
           <CardHeader>
@@ -1507,7 +1922,7 @@ export function BackupRestore() {
             {nativeRuntime ? (
               <>
                 {/* Native APK: dedicated picker se restore file selection stable rahe. */}
-                <Button type="button" variant="outline" onClick={handlePickRestoreFileNative}>
+                <Button type="button" variant="outline" size="sm" onClick={handlePickRestoreFileNative}>
                   Choose backup file
                 </Button>
                 <p className="text-xs text-muted-foreground break-all">
@@ -1518,15 +1933,31 @@ export function BackupRestore() {
               <Input type="file" accept=".json,.plbp,.webtally" onChange={handleFileSelect} />
             )}
           </CardContent>
-          <CardFooter>
+          <CardFooter className="flex flex-col items-stretch gap-3 pt-0">
             <PermissionButton
               permission="import_data"
+              variant="outline"
+              size="sm"
               onClick={startRestore}
               disabled={!fileToRestore || isRestoring}
             >
               {isRestoring ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
               Restore as new company
             </PermissionButton>
+            {/* Restore live progress — backup card jaisa pill bar + cancel. */}
+            {isRestoring && restoreProgress ? (
+              <BackupProgressStrip
+                progress={restoreProgress}
+                spinning
+                inCard
+                showRefreshWarning
+                refreshWarningText="Do not refresh or close this tab until restore completes."
+                showCancel
+                onCancel={() => {
+                  cancelRestoreRun();
+                }}
+              />
+            ) : null}
           </CardFooter>
         </Card>
 
@@ -1553,17 +1984,12 @@ export function BackupRestore() {
             <p className="text-xs">Debounced sync also runs a few seconds after local saves when a location is active.</p>
           </CardContent>
           <CardFooter className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={() => setLiveDataLocationDialogOpen(true)}>
+            <Button type="button" variant="outline" size="sm" onClick={() => setLiveDataLocationDialogOpen(true)}>
               Select folder
             </Button>
-            <Button type="button" variant="secondary" onClick={() => void handleSyncLiveDataNow()}>
+            <Button type="button" variant="outline" size="sm" onClick={() => void handleSyncLiveDataNow()}>
               Sync now
             </Button>
-            {(liveWebEnabled || liveNativeFolderPath) && (
-              <Button type="button" variant="ghost" onClick={() => void handleClearLiveDataLocation()}>
-                Clear location
-              </Button>
-            )}
           </CardFooter>
         </Card>
       </div>
@@ -1599,7 +2025,11 @@ export function BackupRestore() {
                   <Button type="button" variant="outline" onClick={() => void handlePickLiveDataWebFolder()}>
                     Browse folder
                   </Button>
-                  <Button type="button" onClick={() => void handleSaveLiveDataLocation()} disabled={savingLiveDataLocation || !liveWebLabel}>
+                  <Button
+                    type="button"
+                    disabled={savingLiveDataLocation || !liveWebLabel}
+                    onClick={() => void handleSaveLiveDataLocation()}
+                  >
                     {savingLiveDataLocation ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                     <span className={savingLiveDataLocation ? "ml-2" : ""}>Save data location</span>
                   </Button>
@@ -1658,10 +2088,13 @@ export function BackupRestore() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            {!nativeRuntime && supportsWebFolderPicker ? (
+            {!nativeRuntime && (supportsWebFolderPicker || canPickElectronBackupDirectory()) ? (
               <>
                 <div className="text-sm text-muted-foreground">
-                  Current folder: <span className="font-medium text-foreground">{webFolderLabel || "Not set"}</span>
+                  Current folder:{" "}
+                  <span className="font-medium text-foreground break-all">
+                    {webFolderDisplayPath || webFolderLabel || "Not set"}
+                  </span>
                 </div>
                 <div className="text-xs text-muted-foreground">
                   Auto save to selected folder: <span className="font-medium text-foreground">{webUseSelectedFolder ? "On" : "Off"}</span>
@@ -1670,12 +2103,13 @@ export function BackupRestore() {
                   <Button type="button" variant="outline" onClick={handlePickWebFolder}>
                     Browse folder
                   </Button>
-                  <Button type="button" onClick={handleSaveWebLocation} disabled={!webFolderLabel || savingBackupLocation}>
+                  <Button
+                    type="button"
+                    onClick={handleSaveWebLocation}
+                    disabled={!webFolderLabel || savingBackupLocation}
+                  >
                     {savingBackupLocation ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                     <span className={savingBackupLocation ? "ml-2" : ""}>Save location</span>
-                  </Button>
-                  <Button type="button" onClick={handleClearWebFolder} disabled={!webFolderLabel}>
-                    Clear
                   </Button>
                 </div>
               </>
@@ -1694,9 +2128,6 @@ export function BackupRestore() {
                   <Button type="button" onClick={handleSaveNativeLocation} disabled={savingBackupLocation || !nativeFolderPath}>
                     {savingBackupLocation ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                     <span className={savingBackupLocation ? "ml-2" : ""}>Save location</span>
-                  </Button>
-                  <Button type="button" variant="ghost" onClick={handleClearNativeFolder} disabled={!nativeFolderPath}>
-                    Clear selected folder
                   </Button>
                 </div>
               </>
@@ -1734,16 +2165,51 @@ export function BackupRestore() {
       </AlertDialog>
 
        <AlertDialog open={isEncryptedBackupConfirmOpen} onOpenChange={setIsEncryptedBackupConfirmOpen}>
-        <AlertDialogContent>
+        <AlertDialogContent className="max-w-md">
           <AlertDialogHeader>
             <AlertDialogTitle>Confirm Encrypted Backup</AlertDialogTitle>
-            <AlertDialogDescription>
-               This backup will be encrypted with your company password. This password will be required to restore the data.
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <p>
+                  This backup will be encrypted with your company password. That password is required to restore the data.
+                </p>
+                <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+                  <Label className="text-sm font-medium text-foreground">Backup contents</Label>
+                  <RadioGroup
+                    value={backupIncludeAttachments ? "attachments" : "data"}
+                    onValueChange={(v) => setBackupIncludeAttachments(v === "attachments")}
+                    className="grid gap-2"
+                  >
+                    <label className="flex cursor-pointer items-start gap-2 text-left">
+                      <RadioGroupItem value="data" id="backup-mode-data" className="mt-0.5" />
+                      <span>
+                        <span className="font-medium text-foreground">Data only</span> — documents and attachment links (URLs). Smaller file, no plan attachment quota.
+                      </span>
+                    </label>
+                    <label
+                      className={`flex items-start gap-2 text-left ${!attachmentFeatureOn ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
+                    >
+                      <RadioGroupItem
+                        value="attachments"
+                        id="backup-mode-attachments"
+                        className="mt-0.5"
+                        disabled={!attachmentFeatureOn}
+                      />
+                      <span>
+                        <span className="font-medium text-foreground">With attachments</span> — compressed zip inside encrypted .plbp (company password lock, uses monthly plan quota).
+                        {backupAttachmentGateHint ? (
+                          <span className="block text-xs mt-1">{backupAttachmentGateHint}</span>
+                        ) : null}
+                      </span>
+                    </label>
+                  </RadioGroup>
+                </div>
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={handleBackup}>
+                <AlertDialogAction onClick={() => void handleBackup(backupIncludeAttachments)}>
                   Proceed
                 </AlertDialogAction>
           </AlertDialogFooter>
@@ -1871,6 +2337,46 @@ export function BackupRestore() {
               </select>
             </div>
           )}
+          {backupDataHasOrphanAttachmentRefs(backupDataToRestore) && (
+            <p className="text-xs text-destructive rounded-md border border-destructive/40 bg-destructive/5 p-3">
+              This backup has attachment links (tick marks) but no embedded files. Restore will not bring files back —
+              take a new backup with “With attachments” after the app update, then restore again.
+            </p>
+          )}
+          {backupDataHasAttachmentBundle(backupDataToRestore) && (
+            <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+              <Label className="text-sm font-medium text-foreground">Attachment restore</Label>
+              <p className="text-xs text-muted-foreground">
+                This backup includes a compressed attachments zip (locked with your company password). Restore files to this device or keep URL links only.
+              </p>
+              <RadioGroup
+                value={restoreIncludeAttachments ? "attachments" : "data"}
+                onValueChange={(v) => setRestoreIncludeAttachments(v === "attachments")}
+                className="grid gap-2"
+              >
+                <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
+                  <RadioGroupItem value="data" id="restore-mode-data" className="mt-0.5" />
+                  <span>Data only — keep URLs from backup (files may be missing offline).</span>
+                </label>
+                <label
+                  className={`flex items-start gap-2 text-left text-sm ${!attachmentFeatureOn ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
+                >
+                  <RadioGroupItem
+                    value="attachments"
+                    id="restore-mode-attachments"
+                    className="mt-0.5"
+                    disabled={!attachmentFeatureOn}
+                  />
+                  <span>
+                    With attachments — write files to this device and update links.
+                    {restoreAttachmentGateHint ? (
+                      <span className="block text-xs mt-1 text-muted-foreground">{restoreAttachmentGateHint}</span>
+                    ) : null}
+                  </span>
+                </label>
+              </RadioGroup>
+            </div>
+          )}
           <Input 
             value={confirmationText}
             onChange={(e) => setConfirmationText(e.target.value)}
@@ -1902,10 +2408,13 @@ export function BackupRestore() {
                     );
                     setIsOverwriteConfirmOpen(false);
                     // Sirf radio — pehle `shouldRestoreToLocalOnly` se local company par cloud option hide + kabhi-kabhi galat branch (SQLite restore skip)
+                    const withAttachments =
+                      restoreIncludeAttachments &&
+                      backupDataHasAttachmentBundle(data);
                     if (restoreToLocalSqlite) {
-                      await handleLocalOverwriteRestore(data, resolvedName);
+                      await handleLocalOverwriteRestore(data, resolvedName, withAttachments);
                     } else {
-                      await handleOverwriteRestore(data, resolvedName);
+                      await handleOverwriteRestore(data, resolvedName, withAttachments);
                     }
                   })();
                 }}

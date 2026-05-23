@@ -13,8 +13,7 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useAuth } from "@/hooks/useAuth";
-import { auth, firestore, signOutWithFirestoreTeardown } from "@/lib/firebase";
-import { pruneRememberedLoginEmailIfDisabled } from "@/lib/loginRememberEmail";
+import { useEmbeddedLogout } from "@/contexts/EmbeddedLogoutContext";
 import { useToast } from "@/hooks/use-toast";
 import { MobileFloatingButton, ReportsMobileReportListFab } from "@/components/layout/MobileFloatingButton";
 import { CompanyDemotedBanner } from "@/components/company/CompanyDemotedBanner";
@@ -50,7 +49,10 @@ import { PlNavDebugOnDeviceOverlay } from "@/components/debug/PlNavDebugOnDevice
 import { DashboardDocumentTitleSync } from "@/components/layout/DashboardDocumentTitleSync";
 import { ElectronTabStripSyncBridge } from "@/components/layout/ElectronTabStripSyncBridge";
 import { RecurringVoucherAutoRunner } from "@/components/vouchers/RecurringVoucherAutoRunner";
+import { BackupRunGlobalBanner } from "@/components/settings/BackupRunGlobalBanner";
+import { AutoBackupScheduler } from "@/components/settings/AutoBackupScheduler";
 import { collection, doc, getDocs, getDoc, onSnapshot, deleteDoc, setDoc, serverTimestamp, query, where } from "firebase/firestore";
+import { firestore } from "@/lib/firebase"; // device-limit overlay: companies/{id}/devices + users lookup
 import { Settings, Monitor, Trash2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -64,10 +66,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-function signOutWithLoginCleanup() {
-  pruneRememberedLoginEmailIfDisabled();
-  return signOutWithFirestoreTeardown(auth);
-}
 
 /** APK + cloud company offline: amber strip sirf ~2s — lambi “view only” strip na chipke (`useEffect` timed dismiss). */
 function ApkCloudOfflineViewBanner() {
@@ -153,6 +151,7 @@ type DeviceItem = { id: string; userId: string; lastActive: string; ts: number; 
 function DeviceLimitOverlay() {
   const pathname = usePathname();
   const { user } = useAuth();
+  const { requestEmbeddedLogout } = useEmbeddedLogout();
   const { company, companyId, allCompanies } = useCompany();
   const livePlansForDeviceUi = useLivePlans();
   /** Header profile jaisa effective plan — overlay par limit explain karne ke liye */
@@ -352,7 +351,7 @@ function DeviceLimitOverlay() {
           <Link href="/company" className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent">
             Switch company
           </Link>
-          <Button variant="outline" onClick={() => void signOutWithLoginCleanup()} className="rounded-md px-4 py-2 text-sm">
+          <Button variant="outline" onClick={() => requestEmbeddedLogout()} className="rounded-md px-4 py-2 text-sm">
             Logout
           </Button>
         </div>
@@ -627,7 +626,7 @@ function DeviceLimitOverlay() {
             </Link>
             <Button
               variant="outline"
-              onClick={() => void signOutWithLoginCleanup()}
+              onClick={() => requestEmbeddedLogout()}
               className="rounded-md px-4 py-2 text-sm"
             >
               Logout
@@ -679,7 +678,7 @@ function DeviceLimitOverlay() {
             </Link>
             <Button
               variant="outline"
-              onClick={() => void signOutWithLoginCleanup()}
+              onClick={() => requestEmbeddedLogout()}
               className="rounded-md px-4 py-2 text-sm"
             >
               Logout
@@ -709,7 +708,7 @@ function DeviceLimitOverlay() {
             {rejoining ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             <span className={rejoining ? "ml-2" : ""}>{rejoining ? "Rejoining…" : "Rejoin"}</span>
           </Button>
-          <Button variant="outline" onClick={() => void signOutWithLoginCleanup()} className="rounded-md px-4 py-2 text-sm">
+          <Button variant="outline" onClick={() => requestEmbeddedLogout()} className="rounded-md px-4 py-2 text-sm">
             Logout
           </Button>
         </div>
@@ -858,6 +857,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
             <AlarmPopup />
             {/* Month-end recurring vouchers: app-open trigger runner (company settings + user scope aware). */}
             <RecurringVoucherAutoRunner />
+            <AutoBackupScheduler />
             <ReportListProvider>
               <SettingsListProvider>
               <ReportPartyViewProvider>
@@ -886,6 +886,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       )}
                     >
                       <AppHeader />
+                      <BackupRunGlobalBanner />
                       <CompanyDemotedBanner />
                       <PlanAuthoritativeSyncBanner />
                       <ApkCloudOfflineViewBanner />

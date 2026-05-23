@@ -62,6 +62,7 @@ import usePermissions from "@/hooks/usePermissions";
 import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
 import { firestore, auth, signOutWithFirestoreTeardown } from "@/lib/firebase";
+import { useEmbeddedLogout } from "@/contexts/EmbeddedLogoutContext";
 import type { Permission } from "@/lib/permissions";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
@@ -162,6 +163,7 @@ export function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { user, customUser } = useAuth();
+  const { requestEmbeddedLogout } = useEmbeddedLogout();
   const { can } = usePermissions();
   const { company, companyId, effectiveNotificationSettings } = useCompany();
   const {
@@ -467,19 +469,8 @@ export function AppSidebar() {
   
   const displayName = user?.displayName || user?.email?.split('@')[0] || "User";
 
-  const handleLogout = async () => {
-    const { clearNavigationMemory } = await import("@/lib/navigation-memory");
-    clearNavigationMemory();
-    pruneRememberedLoginEmailIfDisabled();
-    // Local guest logout: local session band karke user ko online login page par le jao.
-    if (isLocalGuestEnabled()) {
-      disableLocalGuest();
-      router.replace("/");
-      return;
-    }
-    await signOutWithFirestoreTeardown(auth);
-    // Firebase user logout ke baad explicit login redirect to avoid stale dashboard screen.
-    router.replace("/");
+  const handleLogout = () => {
+    requestEmbeddedLogout();
   };
 
   const getInitials = (name: string | null | undefined) => {

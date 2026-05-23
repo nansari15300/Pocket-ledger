@@ -1262,6 +1262,15 @@ export function PartyDetails({
           }}
           voucher={selectedVoucher}
           onVoucherAction={() => setSelectedVoucher(null)}
+          ledgerEntityId={party?.id}
+          ledgerOpeningBalanceOutstanding={
+            typeof openingBalanceOutstanding === "number"
+              ? openingBalanceOutstanding
+              : Math.abs(masterPartyOpening) > 0
+                ? Math.abs(masterPartyOpening)
+                : undefined
+          }
+          ledgerBooksOpeningBalanceSigned={ledgerOpeningForRunning}
         />
         <HistoryDialog
           voucher={historyVoucher}
@@ -1657,6 +1666,15 @@ export function PartyDetails({
         }}
         voucher={selectedVoucher}
         onVoucherAction={() => setSelectedVoucher(null)}
+        ledgerEntityId={party?.id}
+        ledgerOpeningBalanceOutstanding={
+          typeof openingBalanceOutstanding === "number"
+            ? openingBalanceOutstanding
+            : Math.abs(masterPartyOpening) > 0
+              ? Math.abs(masterPartyOpening)
+              : undefined
+        }
+        ledgerBooksOpeningBalanceSigned={ledgerOpeningForRunning}
       />
       <HistoryDialog voucher={historyVoucher} isOpen={!!historyVoucher} onOpenChange={(open) => !open && setHistoryVoucher(null)} onHistoryReset={() => setHistoryVoucher((prev: any) => prev ? { ...prev, history: [] } : null)} />
       {linkAdvancesVoucher && (

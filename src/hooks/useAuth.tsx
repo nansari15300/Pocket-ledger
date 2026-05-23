@@ -114,6 +114,33 @@ function tryApplyRememberedLocalCompanyAuth(
   return true;
 }
 
+/** Static/APK/EXE: persisted Firebase session se turant UI — online par bhi network user-doc ka wait mat karo. */
+function isEmbeddedFastAuthShell(): boolean {
+  if (typeof window === "undefined") return false;
+  return isStaticAppBuild() || isCapacitorNativeApp() || isElectronEnvironment();
+}
+
+function applyEmbeddedFastAuthSession(
+  firebaseUser: User,
+  setUser: React.Dispatch<React.SetStateAction<User | null>>,
+  setCustomUser: React.Dispatch<React.SetStateAction<AppUser | null>>,
+  setLoading: React.Dispatch<React.SetStateAction<boolean>>,
+): void {
+  setUser(firebaseUser);
+  const displayNameEarly = firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "User";
+  setCustomUser({
+    id: firebaseUser.uid,
+    uid: firebaseUser.uid,
+    userDocId: firebaseUser.uid,
+    displayName: displayNameEarly,
+    email: firebaseUser.email || "",
+    role: (firebaseUser.email === "nansari15300@gmail.com" ? "SuperAdmin" : "User") as Role,
+    companyId: null,
+    isActive: true,
+  });
+  setLoading(false);
+}
+
 type AuthContextType = {
   user: User | null;
   customUser: AppUser | null;
@@ -146,7 +173,11 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
 
   // `useEffect` se pehle paint: login/dashboard pe spinner flash kam — remembered local company turant hydrate.
   useLayoutEffect(() => {
-    tryApplyRememberedLocalCompanyAuth(setUser, setCustomUser, setLoading, fastLocalAuthRef);
+    if (tryApplyRememberedLocalCompanyAuth(setUser, setCustomUser, setLoading, fastLocalAuthRef)) return;
+    // Online cold open: IndexedDB me Firebase session ho to observer se pehle turant paint (offline jaisa).
+    if (isEmbeddedFastAuthShell() && auth.currentUser) {
+      applyEmbeddedFastAuthSession(auth.currentUser, setUser, setCustomUser, setLoading);
+    }
   }, []);
 
   useEffect(() => {
@@ -232,22 +263,8 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
         return;
       }
       // Static/APK/Electron: `users` onSnapshot / getDoc slow network par root spinner mat chipkao — SQLite UI pehle, profile baad mein merge.
-      if (
-        typeof window !== "undefined" &&
-        (isStaticAppBuild() || isCapacitorNativeApp() || isElectronEnvironment())
-      ) {
-        const displayNameEarly = firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "User";
-        setCustomUser({
-          id: firebaseUser.uid,
-          uid: firebaseUser.uid,
-          userDocId: firebaseUser.uid,
-          displayName: displayNameEarly,
-          email: firebaseUser.email || "",
-          role: (firebaseUser.email === "nansari15300@gmail.com" ? "SuperAdmin" : "User") as Role,
-          companyId: null,
-          isActive: true,
-        });
-        setLoading(false);
+      if (typeof window !== "undefined" && isEmbeddedFastAuthShell()) {
+        applyEmbeddedFastAuthSession(firebaseUser, setUser, setCustomUser, setLoading);
       }
       const email = (firebaseUser.email || "").trim();
       (async () => {

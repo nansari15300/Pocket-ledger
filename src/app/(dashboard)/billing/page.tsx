@@ -180,6 +180,9 @@ const BILLING_FEATURES: { key: EntitlementKey; label: string }[] = [
   { key: "maxAttachmentsGBLocal", label: "Attachments GB (local)" },
   { key: "maxStorageGB", label: "Storage GB (online)" },
   { key: "maxStorageGBLocal", label: "Storage GB (local)" },
+  { key: "maxAttachmentBackupPerMonth", label: "Attachment backups / month" },
+  { key: "maxAttachmentRestorePerMonth", label: "Attachment restores / month" },
+  { key: "maxLocalToOnlineAttachmentMB", label: "Local→cloud attachments (MB)" },
   { key: "hasRoleBasedAccess", label: "Role-based access" },
   { key: "hasAuditLogs", label: "Audit logs" },
   { key: "hasPrioritySupport", label: "Priority support" },
@@ -191,6 +194,7 @@ const BILLING_BOOLEAN_ICON_KEYS: EntitlementKey[] = [
   "hasRoleBasedAccess",
   "hasAuditLogs",
   "hasPrioritySupport",
+  "attachmentBackupRestoreEnabled",
 ];
 
 /** Bahar wale boxes: user ne “bold” maanga — `border-2` + thoda dark outline (patle 1.5px se zyada dikhe). */
@@ -1258,7 +1262,10 @@ export default function BillingPage() {
       key === "dailyVoucherLimit" ||
       key === "monthlyVoucherLimit" ||
       key === "dailyVoucherLimitLocal" ||
-      key === "monthlyVoucherLimitLocal"
+      key === "monthlyVoucherLimitLocal" ||
+      key === "maxAttachmentBackupPerMonth" ||
+      key === "maxAttachmentRestorePerMonth" ||
+      key === "maxLocalToOnlineAttachmentMB"
     ) {
       const enabled = value !== 0;
       const text = value === 0 ? "Unlimited" : String(value);

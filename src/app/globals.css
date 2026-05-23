@@ -549,9 +549,9 @@ body.theme-colorfull [data-theme-table="transactions"] table tfoot td {
 [data-theme-table="transactions"] tbody tr[data-row="opening-balance"] > td,
 [data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"] > td,
 [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:not(:has(+ tr[data-row="opening-balance-narration"])) > td {
-  border-bottom-width: 1px !important;
-  border-bottom-style: solid !important;
-  border-bottom-color: #000 !important;
+  border-bottom-width: 0 !important;
+  /* Zoom in/out par 1px border flicker avoid — inset shadow stable rehta hai */
+  box-shadow: inset 0 -1px 0 0 #000;
 }
 /* Dated + narration dono hon to line sirf narration ke niche */
 [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:has(+ tr[data-row="opening-balance-narration"]) > td {
@@ -560,9 +560,21 @@ body.theme-colorfull [data-theme-table="transactions"] table tfoot td {
 /* Spend-wise: OB ke baad gap row ho to bhi dated/narration ke niche line */
 [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:has(+ tr[data-row="opening-balance-gap"]) > td,
 [data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"]:has(+ tr[data-row="opening-balance-gap"]) > td {
-  border-bottom-width: 1px !important;
-  border-bottom-style: solid !important;
-  border-bottom-color: #000 !important;
+  border-bottom-width: 0 !important;
+  box-shadow: inset 0 -1px 0 0 #000;
+}
+
+/* Transaction row horizontal separators — box-shadow (zoom par 1px border kabhi gayab na ho) */
+[data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td,
+[data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td {
+  border-bottom-width: 0 !important;
+  border-bottom-color: transparent !important;
+  box-shadow: inset 0 -1px 0 0 #000;
+}
+[data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]),
+[data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) {
+  border-bottom-width: 0 !important;
+  border-bottom-color: transparent !important;
 }
 
 /* Colorfull: action btn — bg + border same hue se thoda dark (pic-4 jaisa match) */
@@ -1666,6 +1678,12 @@ button.day_selected.is-today.has-transactions {
     border-bottom-width: 0 !important;
     border-left-width: 0 !important;
     border-right-width: 0 !important;
+  }
+  /* 4K: zoom-stable txn row separators (td inset shadow, not 3px border-bottom) */
+  [data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td,
+  [data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td {
+    border-bottom-width: 0 !important;
+    box-shadow: inset 0 -1px 0 0 #000;
   }
   [data-theme-table="transactions"] tbody tr.narration-row > td:first-child,
   [data-theme-table="transactions"] tbody tr.narration-row > td:last-child {
@@ -3554,14 +3572,20 @@ body.theme-colorfull main [data-pl-master-list-chrome] [data-pl-master-list-tabs
     border-color: #f9a8d4 !important;
     background-color: #fffbfc !important;
   }
-  /* Pro mobile list: Dr balance pink (details page green) */
-  body.theme-pro main [data-pl-master-list-chrome] .text-green-600,
-  body.theme-pro main [data-pl-master-list-chrome] .text-green-700 {
-    color: #db2777 !important;
+  /* Master list amounts: Dr/Cr — mobile APK par bhi hamesha green/red (pehle Pro par Dr pink ho jata tha) */
+  [data-pl-master-list-chrome] [data-pl-list-balance="dr"] {
+    color: rgb(22 163 74) !important;
   }
-  body.theme-pro.dark main [data-pl-master-list-chrome] .text-green-600,
-  body.theme-pro.dark main [data-pl-master-list-chrome] .text-green-700 {
-    color: #f472b6 !important;
+  [data-pl-master-list-chrome] [data-pl-list-balance="cr"] {
+    color: rgb(220 38 38) !important;
+  }
+  body.theme-pro.dark main [data-pl-master-list-chrome] [data-pl-list-balance="dr"],
+  body[class*="theme-"].dark [data-pl-master-list-chrome] [data-pl-list-balance="dr"] {
+    color: rgb(74 222 128) !important;
+  }
+  body.theme-pro.dark main [data-pl-master-list-chrome] [data-pl-list-balance="cr"],
+  body[class*="theme-"].dark [data-pl-master-list-chrome] [data-pl-list-balance="cr"] {
+    color: rgb(248 113 113) !important;
   }
   body.theme-colorfull main [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"],
   body.theme-pure-white main [data-pl-master-list-chrome] [data-pl-master-list-tabs] [role="tab"][data-state="active"],
@@ -3691,8 +3715,7 @@ body[class*="theme-"] [data-theme-table="transactions"] .transaction-main-row + 
   border-top-width: 0 !important;
   border-left-width: 0 !important;
   border-right-width: 0 !important;
-  border-bottom-width: 1px !important;
-  border-bottom-color: #000 !important;
+  border-bottom-width: 0 !important;
 }
 /* Spend-wise group card: main + narration beech koi line nahi */
 body[class*="theme-"] [data-pl-spend-group-card] .transaction-main-row:has(+ .narration-row[data-pl-spend-in-group-card]) > td {
@@ -3713,9 +3736,8 @@ html.pl-admin-route [data-pl-spend-group-card] tbody tr.transaction-main-row + t
 html.pl-admin-route [data-theme-table="transactions"] tr[data-pl-spend-wise-group].transaction-main-row:has(+ .narration-row) {
   border-bottom-width: 0 !important;
 }
-body[class*="theme-"] [data-theme-table="transactions"] .transaction-main-row:not(:has(+ .narration-row)) {
-  border-bottom-width: 1px !important;
-  border-bottom-color: #000 !important;
+body[class*="theme-"] [data-theme-table="transactions"] .transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) {
+  border-bottom-width: 0 !important;
 }
 
 body[class*="theme-"] main hr {

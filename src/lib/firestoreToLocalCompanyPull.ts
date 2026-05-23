@@ -146,6 +146,8 @@ export const COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS = [
   "staff_groups",
   "tax_groups",
   "expense_groups",
+  /** Auto Monthly templates — backup/restore + local mirror (Firestore recurring runner). */
+  "recurring_voucher_templates",
 ] as const;
 
 export type CompanyLocalMirrorSubcollection = (typeof COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS)[number];

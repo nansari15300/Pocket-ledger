@@ -89,8 +89,18 @@ export type EntitlementKey =
   | "voucherHistoryLimit"
   /** Max joined inter-company partner companies (Join tab). 0 = unlimited. */
   | "maxInterCompanyPartners"
+  /** Plan-wise: APK/EXE saved account quick switch on login + logout save. */
+  | "savedAccountSwitchEnabled"
   /** Plan-wise: Share for Reconciliation (header + cross-user ledger match). */
-  | "shareForReconciliationEnabled";
+  | "shareForReconciliationEnabled"
+  /** Backup/restore `.plbp` me attachment bytes embed + restore (Option A). Off = data-only URLs. */
+  | "attachmentBackupRestoreEnabled"
+  /** Per owner per calendar month — attachment wala backup count; 0 = unlimited. */
+  | "maxAttachmentBackupPerMonth"
+  /** Per owner per calendar month — attachment wala restore count; 0 = unlimited. */
+  | "maxAttachmentRestorePerMonth"
+  /** Local company → cloud upload: max attachment payload (MB); 0 = unlimited. */
+  | "maxLocalToOnlineAttachmentMB";
 
 export type Entitlements = Record<EntitlementKey, number | boolean>;
 
@@ -153,6 +163,11 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryLimit: 0,
       maxInterCompanyPartners: 1,
       shareForReconciliationEnabled: false,
+      attachmentBackupRestoreEnabled: false,
+      maxAttachmentBackupPerMonth: 0,
+      maxAttachmentRestorePerMonth: 0,
+      maxLocalToOnlineAttachmentMB: 0,
+      savedAccountSwitchEnabled: false,
     },
     features: [
       "Unlimited local (offline) companies",
@@ -200,6 +215,11 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryLimit: 10,
       maxInterCompanyPartners: 3,
       shareForReconciliationEnabled: false,
+      attachmentBackupRestoreEnabled: true,
+      maxAttachmentBackupPerMonth: 2,
+      maxAttachmentRestorePerMonth: 2,
+      maxLocalToOnlineAttachmentMB: 500,
+      savedAccountSwitchEnabled: true,
     },
     features: [
       "1 online company + unlimited offline",
@@ -249,6 +269,11 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryLimit: 20,
       maxInterCompanyPartners: 10,
       shareForReconciliationEnabled: true,
+      attachmentBackupRestoreEnabled: true,
+      maxAttachmentBackupPerMonth: 5,
+      maxAttachmentRestorePerMonth: 5,
+      maxLocalToOnlineAttachmentMB: 2000,
+      savedAccountSwitchEnabled: true,
     },
     features: [
       "3 online companies + unlimited offline",
@@ -297,6 +322,11 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryLimit: 50,
       maxInterCompanyPartners: 0,
       shareForReconciliationEnabled: true,
+      attachmentBackupRestoreEnabled: true,
+      maxAttachmentBackupPerMonth: 10,
+      maxAttachmentRestorePerMonth: 10,
+      maxLocalToOnlineAttachmentMB: 5000,
+      savedAccountSwitchEnabled: true,
     },
     features: [
       "10 online companies + unlimited offline",
@@ -363,6 +393,9 @@ export function limitFor(
     | "maxDevicesLocal"
     | "voucherHistoryLimit"
     | "maxInterCompanyPartners"
+    | "maxAttachmentBackupPerMonth"
+    | "maxAttachmentRestorePerMonth"
+    | "maxLocalToOnlineAttachmentMB"
   >
 ): number {
   const p = getPlan(planId);

@@ -24,7 +24,10 @@ export type BackupNativeDirectory = "DOCUMENTS" | "EXTERNAL";
 
 export type BackupSaveLocationPrefs = {
   webUseSelectedFolder: boolean;
+  /** Leaf folder name from File System Access handle (browser) — poora path nahi hota. */
   webFolderLabel: string | null;
+  /** Desktop EXE / known absolute path — UI me D:\Backup PL\… jaisa dikhane ke liye. */
+  webFolderDisplayPath: string | null;
   nativeDirectory: BackupNativeDirectory;
   nativeSubfolder: string;
   /** Native APK: user-picked absolute folder path from Device location dialog (if available). */
@@ -34,6 +37,7 @@ export type BackupSaveLocationPrefs = {
 const DEFAULT_PREFS: BackupSaveLocationPrefs = {
   webUseSelectedFolder: false,
   webFolderLabel: null,
+  webFolderDisplayPath: null,
   nativeDirectory: "DOCUMENTS",
   nativeSubfolder: "PocketLedgerBackups",
   nativeFolderPath: null,
@@ -49,6 +53,10 @@ export function readBackupSaveLocationPrefs(): BackupSaveLocationPrefs {
     return {
       webUseSelectedFolder: parsed.webUseSelectedFolder === true,
       webFolderLabel: typeof parsed.webFolderLabel === "string" && parsed.webFolderLabel.trim() ? parsed.webFolderLabel : null,
+      webFolderDisplayPath:
+        typeof parsed.webFolderDisplayPath === "string" && parsed.webFolderDisplayPath.trim()
+          ? parsed.webFolderDisplayPath.trim()
+          : null,
       nativeDirectory: parsed.nativeDirectory === "EXTERNAL" ? "EXTERNAL" : "DOCUMENTS",
       nativeSubfolder:
         typeof parsed.nativeSubfolder === "string" && parsed.nativeSubfolder.trim()

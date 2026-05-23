@@ -2,7 +2,11 @@
  * Billing & Plans: `/api/payments/*`, `/api/company/sync-plan`, `/api/company/downgrade-plan` server par JSON dete hain.
  *
  * `npm run build:static` (`STATIC_BUILD=1`): `out/` me koi Next API route nahi — relative `/api/...` static host par 404.
- * Isliye static bundle me env khali ho to default **`https://pocket-ledger.com`** (live billing + sync-plan).
+ * Isliye static bundle me env khali ho to default **`https://pocket-ledger.com`** (live billing + sync-plan + subscribe).
+ *
+ * ⚠️ MAT HATANA — static/APK par yahi origin plan subscribe + live sync-plan ke liye zaroori hai;
+ * refactors me is default ko mat hatao / mat relative `/api` par wapas karo.
+ *
  * Override: build par `NEXT_PUBLIC_BILLING_API_ORIGIN=https://...` set karo.
  */
 /** Static export par env miss ho to plan/checkout POST yahi production origin par jaayein. */

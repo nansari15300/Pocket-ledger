@@ -1,20 +1,28 @@
 "use client";
 
 import { LoginForm } from '@/components/auth/LoginForm';
+import { SavedAccountsLoginPanel, hasSavedAccountsForLoginPanel } from '@/components/auth/SavedAccountsLoginPanel';
 import { useAuth } from '@/hooks/useAuth';
+import { useLivePlans } from '@/hooks/useLivePlans';
 import { useRouter } from 'next/navigation';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
 import { resolvePostAuthCompanyRoute } from '@/lib/postAuthCompanyRoute';
 import { isStaticAppBuild } from '@/lib/isStaticAppBuild';
 import { isCapacitorNativeApp } from '@/lib/isCapacitorNative';
 import { isElectronEnvironment } from '@/hooks/use-mobile';
+import { isEmbeddedLoginAccountSwitchShell } from '@/lib/embeddedLoginAccountSwitchShell';
+import { Button } from '@/components/ui/button';
 
 export default function LoginPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
+  const livePlans = useLivePlans();
+  const [showSavedAccounts, setShowSavedAccounts] = useState(false);
   /** `loading`/`user` dobara fire hone par sirf ek replace — kai baar SPA "refresh" jaisa dikhta tha */
   const postAuthNavigateOnceRef = useRef(false);
+  const savedAccountsAvailable =
+    isEmbeddedLoginAccountSwitchShell() && hasSavedAccountsForLoginPanel(livePlans);
 
   useEffect(() => {
     if (loading || !user) {
@@ -63,7 +71,18 @@ export default function LoginPage() {
             Sign in to access your account.
           </p>
         </div>
-        <LoginForm />
+        {showSavedAccounts && savedAccountsAvailable ? (
+          <SavedAccountsLoginPanel onBack={() => setShowSavedAccounts(false)} />
+        ) : (
+          <>
+            <LoginForm />
+            {savedAccountsAvailable ? (
+              <Button type="button" variant="outline" className="w-full" onClick={() => setShowSavedAccounts(true)}>
+                Change account
+              </Button>
+            ) : null}
+          </>
+        )}
         <div className="text-center text-sm text-muted-foreground">
           <p>© {new Date().getFullYear()} Pocket Ledger. All rights reserved.</p>
         </div>

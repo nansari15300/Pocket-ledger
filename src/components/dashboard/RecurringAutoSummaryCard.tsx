@@ -465,13 +465,8 @@ export function RecurringAutoSummaryCard({
               </span>
             </div>
             <div className="mt-2 flex min-w-0 items-baseline justify-between gap-2 border-t pt-2 sm:gap-3">
-              <span className="min-w-0 shrink truncate text-sm font-bold">
-                {cardBalanceDrMinusCr > 0
-                  ? "Balance (Dr)"
-                  : cardBalanceDrMinusCr < 0
-                    ? "Balance (Cr)"
-                    : "Balance"}
-              </span>
+              {/* Label sirf "Balance" — Dr/Cr amount ke saath right side par hi dikhe */}
+              <span className="min-w-0 shrink truncate text-sm font-bold">Balance</span>
               <span
                 className={cn(
                   "shrink-0 whitespace-nowrap text-lg font-bold tabular-nums",

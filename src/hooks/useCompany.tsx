@@ -54,6 +54,10 @@ import { readCompanyInterCompanyAcNo } from "@/lib/interCompany/interCompanyAcco
 import { plNavDbg, plNavDbgCritical, plNavDbgIdHint } from "@/lib/plNavRedirectDebug";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import {
+  embeddedClientRequiresServerPlanSyncWhenOnline,
+  shouldSkipPeriodicPlanSyncForLocalOnlyMode,
+} from "@/lib/planSyncClientPolicy";
 import { shouldSkipEmbeddedStartupAuthChurn } from "@/lib/embeddedWarmBootstrapFlags";
 
 export type DisplaySettings = {
@@ -946,7 +950,10 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     [user, companyId, authLoading, normalizeLocalCompany]
   );
 
-  /** Login + selected company: online-only live plan sync; offline par timer band. */
+  /**
+   * Login + selected company: online-only live plan sync; offline par timer band.
+   * ⚠️ MAT HATANA — static/APK local companies: online = live sync-plan + subscribe entitlements (see planSyncClientPolicy.ts).
+   */
   const planPeriodicSyncInFlightRef = useRef(false);
   const planSyncChainTimerRef = useRef<number | undefined>(undefined);
   useEffect(() => {
@@ -961,13 +968,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       void refreshAuthoritativePlan({ recordDailySuccess: true });
     };
 
-    const embeddedClient =
-      isStaticAppBuild() || (typeof window !== "undefined" && isCapacitorNativeApp());
+    const embeddedClient = embeddedClientRequiresServerPlanSyncWhenOnline();
     const skipIdlePlanSyncBoot =
       isLocalOnlyMode() &&
       embeddedClient &&
       shouldSkipEmbeddedStartupAuthChurn(user?.uid, auth.currentUser?.uid);
-    const skipOnlinePlanSyncForLocalOnly = isLocalOnlyMode();
+    // Sirf pure web local-only skip; static/native par local SQLite ho tab bhi online plan sync chalao.
+    const skipOnlinePlanSyncForLocalOnly = shouldSkipPeriodicPlanSyncForLocalOnlyMode(isLocalOnlyMode());
 
     const canSyncNow = () => {
       if (cancelled) return false;
@@ -1082,9 +1089,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     };
   }, [user, companyId, authLoading, refreshAuthoritativePlan]);
 
-  /** Shared company select: turant server plan → SQLite/cache (owner upgrade ke baad file limit / entitlements). */
+  /**
+   * Shared company select: turant server plan → SQLite/cache (owner upgrade ke baad file limit / entitlements).
+   * Static/native local-only: shared user ko bhi online plan sync — MAT HATANA (planSyncClientPolicy.ts).
+   */
   useEffect(() => {
-    if (!user?.uid || !companyId?.trim() || authLoading || isLocalOnlyMode()) return;
+    if (!user?.uid || !companyId?.trim() || authLoading) return;
+    if (shouldSkipPeriodicPlanSyncForLocalOnlyMode(isLocalOnlyMode())) return;
     const row = allCompanies.find((c) => c.id === companyId);
     if (!row || isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user.email ?? null })) return;
     void refreshAuthoritativePlan();

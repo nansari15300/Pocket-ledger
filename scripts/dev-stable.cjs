@@ -37,11 +37,11 @@ try {
   console.warn("[dev-stable] Cache cleanup skipped:", error?.message || error);
 }
 
-// Default 5000 — Electron/EXE static server 3000 par rehta hai; dono saath chalne par browser galat origin na khole.
-const devPort = String(process.env.PORT || "5000");
+// Default 3000 — browser dev yahi; packaged EXE static server busy ho to apne fallback ports use karta hai.
+const devPort = String(process.env.PORT || "3000");
 const lanIps = listLanIPv4Addresses();
 // eslint-disable-next-line no-console
-console.log(`[dev-stable] Local dev → http://localhost:${devPort} (EXE usually http://localhost:3000)`);
+console.log(`[dev-stable] Local dev → http://localhost:${devPort}`);
 if (lanIps.length) {
   // eslint-disable-next-line no-console
   console.log("[dev-stable] LAN — same Wi‑Fi / cable devices par yeh URL use karo (Next ka 0.0.0.0 yahan replace):");

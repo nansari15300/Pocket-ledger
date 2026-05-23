@@ -70,6 +70,10 @@ export interface LinkPaymentToTxnsDialogProps {
   paymentOutDate?: unknown;
   /** Party opening balance, signed: Dr > 0 (show in Payment In), Cr < 0 (show in Payment Out). */
   partyOpeningBalance?: number;
+  /** Bill-wise ledger: opening row par jo remaining linkable hai — Journal link dialog me OB row ke liye. */
+  partyOpeningBalanceOutstanding?: number;
+  /** Ledger books opening signed (Dr + / Cr −) — Journal link me master lookup miss par fallback. */
+  ledgerBooksOpeningBalanceSigned?: number;
   /** When set (e.g. from Journal form), use this as dialog title instead of "Link Payment In/Out to Txns". */
   dialogTitle?: string;
   /** When true (Journal link dialog): Other Linked = sum from opposite-side vouchers only. Dr rows ← Cr sources; Cr rows ← Dr sources. */
@@ -94,11 +98,13 @@ export function LinkPaymentToTxnsDialog({
   paymentOutVoucherNumber,
   paymentOutDate,
   partyOpeningBalance = 0,
+  partyOpeningBalanceOutstanding,
+  ledgerBooksOpeningBalanceSigned,
   dialogTitle: dialogTitleOverride,
   isJournalLinkDialog = false,
   onDone,
 }: LinkPaymentToTxnsDialogProps) {
-  const { vouchers, vouchersAll } = useVouchers();
+  const { vouchers, vouchersAll, processedPartiesForSelection, processedParties, processedStaff } = useVouchers();
   const vouchersForAllocations = (vouchersAll && vouchersAll.length > 0) ? vouchersAll : (vouchers || []);
   const { formatDate, formatDateBS, formatCurrency, dateSystem } = useDate();
   const isMobile = useIsMobile();
@@ -110,6 +116,40 @@ export function LinkPaymentToTxnsDialog({
   // Prevent self-link: when Journal opens this dialog, same voucher must never appear in From list.
   const currentVoucherIdStr = String(paymentInId ?? paymentOutId ?? "");
 
+  // Journal link: partyId = jis account ki line link ho rahi — usi ka books opening (Dr + / Cr −) master se dhoondo.
+  const accountBooksOpeningSigned = useMemo(() => {
+    if (!partyId) return 0;
+    const id = String(partyId);
+    const asNum = (v: unknown) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const ledger = asNum(ledgerBooksOpeningBalanceSigned);
+    if (Math.abs(ledger) > 1e-6) return ledger;
+    const prop = asNum(partyOpeningBalance);
+    if (Math.abs(prop) > 1e-6) return prop;
+    const party =
+      (processedPartiesForSelection || []).find((p) => String(p.id) === id) ||
+      (processedParties || []).find((p) => String(p.id) === id);
+    if (party) return asNum(party.openingBalance);
+    const staffRow = (processedStaff || []).find((s) => String(s.id) === id);
+    if (staffRow) return asNum(staffRow.openingBalance);
+    return 0;
+  }, [
+    partyId,
+    ledgerBooksOpeningBalanceSigned,
+    partyOpeningBalance,
+    processedPartiesForSelection,
+    processedParties,
+    processedStaff,
+  ]);
+
+  const partyOB = isJournalLinkDialog
+    ? accountBooksOpeningSigned
+    : Number.isFinite(Number(partyOpeningBalance))
+      ? Number(partyOpeningBalance)
+      : 0;
+
   // Total consumed from Opening Balance: (1) Payment In/Out + (2) Sale/Purchase openingBalanceAllocated + (3) Journal allocations to OB (same party). Use vouchersForAllocations so OB Dr/Cr both track correctly.
   const totalConsumedFromOB = useMemo(() => {
     if (!partyId || !vouchersForAllocations?.length) return 0;
@@ -118,7 +158,18 @@ export function LinkPaymentToTxnsDialog({
       String((v as any)?.partyId ?? "") === partyIdStr ||
       (Array.isArray((v as any)?.entries) && (v as any).entries.some((e: any) => String(e?.accountId ?? "") === partyIdStr));
     let fromPayments = 0;
-    const payType = isOut ? ["payment_out", "direct_expense"] : ["payment_in", "direct_income"];
+    // Journal link: Dr OB ← payment_in; Cr OB ← payment_out (variant se independent, Dr→Cr jaisa mirror).
+    const payType = isJournalLinkDialog
+      ? partyOB > 0
+        ? ["payment_in", "direct_income"]
+        : partyOB < 0
+          ? ["payment_out", "direct_expense"]
+          : isOut
+            ? ["payment_out", "direct_expense"]
+            : ["payment_in", "direct_income"]
+      : isOut
+        ? ["payment_out", "direct_expense"]
+        : ["payment_in", "direct_income"];
     (vouchersForAllocations as any[]).forEach((v) => {
       if (!payType.includes(v.type) || String((v as any).partyId ?? "") !== partyIdStr) return;
       const allocs = (v.allocations as Allocation[] | undefined) || [];
@@ -139,9 +190,8 @@ export function LinkPaymentToTxnsDialog({
         .reduce((s, a) => s + getAllocationTotal(a), 0);
     }, 0);
     return fromPayments + fromBillwise + fromJournals;
-  }, [partyId, isOut, vouchersForAllocations]);
+  }, [partyId, isOut, vouchersForAllocations, isJournalLinkDialog, partyOB]);
 
-  const partyOB = Number(partyOpeningBalance) || 0;
   const showOBInPaymentIn = partyOB > 0;
   const showOBInPaymentOut = partyOB < 0;
   const obAmount = partyOB > 0 ? partyOB : Math.abs(partyOB);
@@ -158,6 +208,48 @@ export function LinkPaymentToTxnsDialog({
       .reduce((s, a) => s + getAllocationTotal(a), 0);
   }, [currentVoucherIdStr, vouchers]);
   const obAllocatedToOthers = Math.max(0, totalConsumedFromOB - currentVoucherAllocToOB);
+  // Remaining linkable: bill-wise prop > 0 ho to wahi, warna isi account ke consumed se calc.
+  const effectiveObRemaining =
+    typeof partyOpeningBalanceOutstanding === "number" && partyOpeningBalanceOutstanding > 0
+      ? partyOpeningBalanceOutstanding
+      : obOutstandingIn;
+  const billWiseObRemaining =
+    effectiveObRemaining > 0 ? effectiveObRemaining : null;
+  const hasLinkableObAmount =
+    effectiveObRemaining > 0 ||
+    existingAllocations.some((a) => a.voucherId === OPENING_BALANCE_VOUCHER_ID && getAllocationTotal(a) > 0);
+  /**
+   * Journal link: link account ka books opening — Dr (+) ho to Dr-list (Cr card),
+   * Cr (−) ho to Cr-list (Dr card). Remaining 0 ho tab bhi row dikhe (linkable column me 0).
+   */
+  const shouldIncludeOpeningBalanceRow = (
+    side: "payment_in" | "payment_out",
+    hasExisting: (id: string) => boolean
+  ) => {
+    if (hasExisting(OPENING_BALANCE_VOUCHER_ID)) return true;
+    if (isJournalLinkDialog) {
+      if (side === "payment_out") {
+        return partyOB < 0 || (effectiveObRemaining > 0 && partyOB <= 0);
+      }
+      return partyOB > 0 || (effectiveObRemaining > 0 && partyOB >= 0);
+    }
+    const showSide = side === "payment_out" ? showOBInPaymentOut : showOBInPaymentIn;
+    const hasLinkable = hasLinkableObAmount || hasExisting(OPENING_BALANCE_VOUCHER_ID);
+    return showSide && hasLinkable;
+  };
+  const openingBalanceRowOutstanding = (_side: "payment_in" | "payment_out") => {
+    if (effectiveObRemaining > 0) {
+      return Math.max(0, effectiveObRemaining + currentVoucherAllocToOB);
+    }
+    return Math.max(0, obAmount - obAllocatedToOthers);
+  };
+  // Amount column: books opening gross; linkable alag column.
+  const openingBalanceGrossTotal = (_side: "payment_in" | "payment_out") => {
+    if (obAmount > 0) return obAmount;
+    const outstanding = openingBalanceRowOutstanding(_side);
+    return Math.max(obAmount, outstanding + obAllocatedToOthers, outstanding);
+  };
+  const openingBalanceRowLabel = isJournalLinkDialog ? ("Book Opening" as const) : ("Opening Balance" as const);
 
   // Payment In links to Sales (same party) and Payment Outs (contra). Show Opening Balance when OB is Dr (> 0).
   const combinedInList = useMemo(() => {
@@ -258,7 +350,13 @@ export function LinkPaymentToTxnsDialog({
     const paymentOutsFiltered = paymentOuts.filter((p) => p.outstanding > 0 || hasExistingAlloc(p.id));
     // Payment In should link against Dr-side journals for the same party.
     const journalDrRows = (vouchers as any[])
-      .filter((v) => !isCurrentVoucher(v) && v.type === "journal" && voucherTouchesParty(v))
+      .filter((v) => {
+        if (isCurrentVoucher(v) || v.type !== "journal") return false;
+        if (!isJournalLinkDialog) return voucherTouchesParty(v);
+        // Journal bill-wise: sirf jahan is party ki Dr entry ho — Cr-only ya counterparty lines exclude.
+        const partyAmount = getJournalPartyAmount(v, String(partyId));
+        return !!partyAmount && partyAmount.debit > 0;
+      })
       .map((v) => {
         const partyAmount = getJournalPartyAmount(v, String(partyId));
         if (!partyAmount || partyAmount.debit <= 0) return null;
@@ -283,13 +381,13 @@ export function LinkPaymentToTxnsDialog({
     };
     salesFiltered.sort(byDate);
     paymentOutsFiltered.sort(byDate);
-    const ob = showOBInPaymentIn && (obOutstandingIn > 0 || hasExistingAlloc(OPENING_BALANCE_VOUCHER_ID)) ? [{
+    const ob = shouldIncludeOpeningBalanceRow("payment_in", hasExistingAlloc) ? [{
       id: OPENING_BALANCE_VOUCHER_ID,
       date: null,
-      type: "Opening Balance" as const,
+      type: openingBalanceRowLabel,
       refNo: "—",
-      total: obAmount,
-      outstanding: Math.max(0, obAmount - obAllocatedToOthers),
+      total: openingBalanceGrossTotal("payment_in"),
+      outstanding: openingBalanceRowOutstanding("payment_in"),
       allocatedToOthers: obAllocatedToOthers,
     }] : [];
     const combined = [...ob, ...salesFiltered, ...paymentOutsFiltered, ...journalsDrFiltered];
@@ -299,7 +397,7 @@ export function LinkPaymentToTxnsDialog({
       return dA - dB;
     });
     return combined;
-  }, [variant, effectiveAccountId, accountIdStr, partyId, vouchers, vouchersForAllocations, partyOB, showOBInPaymentIn, obOutstandingIn, totalConsumedFromOB, obAllocatedToOthers, obAmount, existingAllocations, currentVoucherIdStr, isJournalLinkDialog]);
+  }, [variant, effectiveAccountId, accountIdStr, partyId, vouchers, vouchersForAllocations, partyOB, showOBInPaymentIn, obOutstandingIn, totalConsumedFromOB, obAllocatedToOthers, obAmount, existingAllocations, currentVoucherIdStr, isJournalLinkDialog, partyOpeningBalanceOutstanding, currentVoucherAllocToOB, billWiseObRemaining]);
 
   // Payment Out links to Purchases (same party) and Payment Ins (contra). Show Opening Balance when OB is Cr (< 0).
   const combinedOutList = useMemo(() => {
@@ -406,7 +504,13 @@ export function LinkPaymentToTxnsDialog({
     const paymentInsFiltered = paymentIns.filter((p) => p.outstanding > 0 || hasExistingAllocOut(p.id));
     // Payment Out should link against Cr-side journals for the same party.
     const journalCrRows = (vouchers as any[])
-      .filter((v) => !isCurrentVoucher(v) && v.type === "journal" && voucherTouchesParty(v))
+      .filter((v) => {
+        if (isCurrentVoucher(v) || v.type !== "journal") return false;
+        if (!isJournalLinkDialog) return voucherTouchesParty(v);
+        // Journal bill-wise: sirf jahan is party ki Cr entry ho — Dr-only ya counterparty lines exclude.
+        const partyAmount = getJournalPartyAmount(v, String(partyId));
+        return !!partyAmount && partyAmount.credit > 0;
+      })
       .map((v) => {
         const partyAmount = getJournalPartyAmount(v, String(partyId));
         if (!partyAmount || partyAmount.credit <= 0) return null;
@@ -431,13 +535,13 @@ export function LinkPaymentToTxnsDialog({
     };
     purchasesFiltered.sort(byDate);
     paymentInsFiltered.sort(byDate);
-    const ob = showOBInPaymentOut && (obOutstandingIn > 0 || hasExistingAllocOut(OPENING_BALANCE_VOUCHER_ID)) ? [{
+    const ob = shouldIncludeOpeningBalanceRow("payment_out", hasExistingAllocOut) ? [{
       id: OPENING_BALANCE_VOUCHER_ID,
       date: null,
-      type: "Opening Balance" as const,
+      type: openingBalanceRowLabel,
       refNo: "—",
-      total: obAmount,
-      outstanding: Math.max(0, obAmount - obAllocatedToOthers),
+      total: openingBalanceGrossTotal("payment_out"),
+      outstanding: openingBalanceRowOutstanding("payment_out"),
       allocatedToOthers: obAllocatedToOthers,
     }] : [];
     const combined = [...ob, ...purchasesFiltered, ...paymentInsFiltered, ...journalsCrFiltered];
@@ -447,7 +551,7 @@ export function LinkPaymentToTxnsDialog({
       return dA - dB;
     });
     return combined;
-  }, [variant, partyId, vouchers, vouchersForAllocations, partyOB, showOBInPaymentOut, obOutstandingIn, totalConsumedFromOB, obAllocatedToOthers, obAmount, existingAllocations, currentVoucherIdStr, isJournalLinkDialog]);
+  }, [variant, partyId, vouchers, vouchersForAllocations, partyOB, showOBInPaymentOut, obOutstandingIn, totalConsumedFromOB, obAllocatedToOthers, obAmount, existingAllocations, currentVoucherIdStr, isJournalLinkDialog, partyOpeningBalanceOutstanding, currentVoucherAllocToOB, billWiseObRemaining]);
 
   const targetList = isOut ? combinedOutList : combinedInList;
 
@@ -634,7 +738,10 @@ export function LinkPaymentToTxnsDialog({
                       const rowMax = row.outstanding ?? 0;
                       const maxAllowed = Math.min(rowMax, remaining + linked);
                       const cannotAddMore = remaining <= 0 && linked === 0;
-                      const rowType = row.type === "Opening Balance" ? "Opening Balance" : (row.type ?? (isOut ? "Purchase" : "Sale")).toLowerCase();
+                      const rowType =
+                        row.type === "Book Opening" || row.type === "Opening Balance"
+                          ? row.type
+                          : (row.type ?? (isOut ? "Purchase" : "Sale")).toLowerCase();
                       const amountSuffix = isOut ? " Cr" : " Dr";
                       return (
                         <tr key={row.id} className="border-b last:border-b-0 hover:bg-muted/30">

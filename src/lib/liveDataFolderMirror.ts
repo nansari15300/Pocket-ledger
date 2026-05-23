@@ -78,6 +78,18 @@ const DEFAULT_LIVE_PREFS: LiveDataFolderPrefs = {
 /** Web: user deleted `pocket-ledger/` — writes pause until Recreate or company removed. */
 let mirrorFolderWriteBlocked = false;
 let mirrorMissingDispatchedForBlock = false;
+/** Background SQLite flush: requestPermission mat karo (NotAllowedError); sirf user Sync/Save par true. */
+let mirrorSyncAllowPermissionRequest = false;
+
+async function withMirrorSyncContext<T>(userInitiated: boolean, fn: () => Promise<T>): Promise<T> {
+  const prev = mirrorSyncAllowPermissionRequest;
+  mirrorSyncAllowPermissionRequest = userInitiated;
+  try {
+    return await fn();
+  } finally {
+    mirrorSyncAllowPermissionRequest = prev;
+  }
+}
 
 export function resetMirrorMissingDispatchedGate(): void {
   mirrorMissingDispatchedForBlock = false;
@@ -90,6 +102,14 @@ export function clearMirrorFolderWriteBlock(): void {
 
 function isNotFoundError(e: unknown): boolean {
   return e instanceof DOMException && e.name === "NotFoundError";
+}
+
+/** Browser: bina user click ke File System Access — `getDirectoryHandle` / `requestPermission` fail. */
+function isFileSystemAccessDeniedError(e: unknown): boolean {
+  return (
+    e instanceof DOMException &&
+    (e.name === "NotAllowedError" || e.name === "SecurityError")
+  );
 }
 
 async function dispatchMirrorFolderMissingIfWeb(companyId: string): Promise<void> {
@@ -232,30 +252,51 @@ async function ensureDirWritePermission(dirHandle: FileSystemDirectoryHandle): P
   if (typeof h.queryPermission !== "function") return true;
   let p = await h.queryPermission({ mode: "readwrite" });
   if (p === "granted") return true;
+  // Background debounced sync: sirf query — requestPermission user gesture ke bina NotAllowedError deta hai.
+  if (!mirrorSyncAllowPermissionRequest) return false;
   if (typeof h.requestPermission === "function") {
-    p = await h.requestPermission({ mode: "readwrite" });
+    try {
+      p = await h.requestPermission({ mode: "readwrite" });
+    } catch (e) {
+      if (isFileSystemAccessDeniedError(e)) return false;
+      throw e;
+    }
   }
   return p === "granted";
 }
 
 export async function getOrCreatePocketLedgerDir(parent: FileSystemDirectoryHandle): Promise<FileSystemDirectoryHandle> {
-  return parent.getDirectoryHandle(POCKET_LEDGER_MIRROR_DIR, { create: true });
+  try {
+    return await parent.getDirectoryHandle(POCKET_LEDGER_MIRROR_DIR, { create: true });
+  } catch (e) {
+    if (isFileSystemAccessDeniedError(e)) {
+      throw new Error("Folder access denied — use Sync now or re-select the data folder.");
+    }
+    throw e;
+  }
 }
 
-/** Open `pocket-ledger` without creating — `null` if user removed the folder. */
+/** Open `pocket-ledger` without creating — `null` if user removed the folder or browser blocked access. */
 export async function tryOpenPocketLedgerDirOnly(
   parent: FileSystemDirectoryHandle
 ): Promise<FileSystemDirectoryHandle | null> {
   try {
     return await parent.getDirectoryHandle(POCKET_LEDGER_MIRROR_DIR, { create: false });
   } catch (e) {
-    if (isNotFoundError(e)) return null;
+    if (isNotFoundError(e) || isFileSystemAccessDeniedError(e)) return null;
     throw e;
   }
 }
 
 async function getOrCreateCompaniesDir(plDir: FileSystemDirectoryHandle): Promise<FileSystemDirectoryHandle> {
-  return plDir.getDirectoryHandle(COMPANIES_DIR_SEGMENT, { create: true });
+  try {
+    return await plDir.getDirectoryHandle(COMPANIES_DIR_SEGMENT, { create: true });
+  } catch (e) {
+    if (isFileSystemAccessDeniedError(e)) {
+      throw new Error("Folder access denied — use Sync now or re-select the data folder.");
+    }
+    throw e;
+  }
 }
 
 /**
@@ -274,6 +315,7 @@ async function companyMirrorJsonMissingButCompanyDirExisted(
       companyDir = await companiesDir.getDirectoryHandle(seg, { create: false });
     } catch (e) {
       if (isNotFoundError(e)) return false;
+      if (isFileSystemAccessDeniedError(e)) return false;
       throw e;
     }
     const name = mirrorFileName(row.id);
@@ -282,27 +324,33 @@ async function companyMirrorJsonMissingButCompanyDirExisted(
       return false;
     } catch (e) {
       if (isNotFoundError(e)) return true;
+      if (isFileSystemAccessDeniedError(e)) return false;
       throw e;
     }
   } catch (e) {
     if (isNotFoundError(e)) return false;
+    if (isFileSystemAccessDeniedError(e)) return false;
     throw e;
   }
 }
 
 async function writeMirrorWeb(plDir: FileSystemDirectoryHandle, row: LocalCompanyDoc, fileText: string): Promise<void> {
   const ok = await ensureDirWritePermission(plDir);
-  if (!ok) throw new Error("Folder permission denied");
-  const companiesDir = await getOrCreateCompaniesDir(plDir);
-  const seg = companyMirrorFolderSegment(row);
-  const companyDir = await companiesDir.getDirectoryHandle(seg, { create: true });
-  const name = mirrorFileName(row.id);
-  const fileHandle = await companyDir.getFileHandle(name, { create: true });
-  const writable = await fileHandle.createWritable();
-  await writable.write(fileText);
-  await writable.close();
-  // Company rename: purane `OtherName__sameId` folder hata do taaki duplicate tree na rahe.
-  await removeDuplicateCompanyMirrorDirs(companiesDir, row.id, seg);
+  if (!ok) return;
+  try {
+    const companiesDir = await getOrCreateCompaniesDir(plDir);
+    const seg = companyMirrorFolderSegment(row);
+    const companyDir = await companiesDir.getDirectoryHandle(seg, { create: true });
+    const name = mirrorFileName(row.id);
+    const fileHandle = await companyDir.getFileHandle(name, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(fileText);
+    await writable.close();
+    await removeDuplicateCompanyMirrorDirs(companiesDir, row.id, seg);
+  } catch (e) {
+    if (isFileSystemAccessDeniedError(e)) return;
+    throw e;
+  }
 }
 
 async function removeDuplicateCompanyMirrorDirs(
@@ -521,7 +569,19 @@ async function sealPayloadForMirror(plainJson: string): Promise<string> {
   return sealLiveMirrorJson(plainJson, phrase, salt);
 }
 
-export async function syncLocalCompanyMirrorToFolder(companyId: string): Promise<void> {
+export type LiveDataMirrorSyncOptions = {
+  /** User click (Sync now / Save location) — folder permission request allowed. */
+  userInitiated?: boolean;
+};
+
+export async function syncLocalCompanyMirrorToFolder(
+  companyId: string,
+  options?: LiveDataMirrorSyncOptions
+): Promise<void> {
+  return withMirrorSyncContext(options?.userInitiated === true, () => syncLocalCompanyMirrorToFolderInner(companyId));
+}
+
+async function syncLocalCompanyMirrorToFolderInner(companyId: string): Promise<void> {
   const prefs = readLiveDataFolderPrefs();
   if (!prefs.webEnabled && !prefs.nativeFolderPath) return;
   if (!isNativeRuntime() && prefs.webEnabled && mirrorFolderWriteBlocked) return;
@@ -535,6 +595,7 @@ export async function syncLocalCompanyMirrorToFolder(companyId: string): Promise
   if (!isNativeRuntime()) {
     const root = (await readWebLiveDataDirectoryHandle()) as FileSystemDirectoryHandle | null;
     if (!root) return;
+    if (!(await ensureDirWritePermission(root))) return;
     const inner = await tryOpenPocketLedgerDirOnly(root);
     if (!inner) {
       await dispatchMirrorFolderMissingIfWeb(companyId);
@@ -555,7 +616,11 @@ export async function syncLocalCompanyMirrorToFolder(companyId: string): Promise
   await writeMirrorNative(tree, row, fileText);
 }
 
-export async function syncAllLocalCompanyMirrorsToFolder(): Promise<void> {
+export async function syncAllLocalCompanyMirrorsToFolder(options?: LiveDataMirrorSyncOptions): Promise<void> {
+  return withMirrorSyncContext(options?.userInitiated === true, () => syncAllLocalCompanyMirrorsToFolderInner());
+}
+
+async function syncAllLocalCompanyMirrorsToFolderInner(): Promise<void> {
   const prefs = readLiveDataFolderPrefs();
   if (!prefs.webEnabled && !prefs.nativeFolderPath) return;
   if (!isNativeRuntime() && prefs.webEnabled && mirrorFolderWriteBlocked) return;
@@ -566,6 +631,7 @@ export async function syncAllLocalCompanyMirrorsToFolder(): Promise<void> {
   if (!isNativeRuntime()) {
     const root = (await readWebLiveDataDirectoryHandle()) as FileSystemDirectoryHandle | null;
     if (!root) return;
+    if (!(await ensureDirWritePermission(root))) return;
     const inner = await tryOpenPocketLedgerDirOnly(root);
     if (!inner) {
       const first = localRows[0];
@@ -647,6 +713,7 @@ export function scheduleLiveDataFolderMirrorAfterFlush(): void {
   if (mirrorDebounceTimer) clearTimeout(mirrorDebounceTimer);
   mirrorDebounceTimer = setTimeout(() => {
     mirrorDebounceTimer = null;
-    void syncAllLocalCompanyMirrorsToFolder();
+    // Background: permission request nahi — NotAllowedError uncaught mat aaye.
+    void syncAllLocalCompanyMirrorsToFolder().catch(() => undefined);
   }, 4000);
 }

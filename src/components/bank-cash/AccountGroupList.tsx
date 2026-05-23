@@ -1,7 +1,7 @@
 
 "use client";
 
-import { cn } from "@/lib/utils";
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { Users, Crown } from "lucide-react";
 import type { AccountGroup } from "@/components/bank-cash/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -103,23 +103,22 @@ export function AccountGroupList({
                           </TooltipContent>
                         </Tooltip>
                       </div>
-                      <Tooltip>
-                        <TooltipTrigger
-                          type="button"
-                          onPointerDown={(e) => e.stopPropagation()}
-                          className={cn(
-                            "pl-master-list-row-amount-xs ml-1 rounded border-0 bg-transparent px-1 text-left shadow-none",
-                            !isBalanceMasked && (group.balance >= 0 ? "text-green-600" : "text-red-600")
-                          )}
-                        >
-                          {isBalanceMasked ? "*****" : formatCurrency(group.balance, { showDrCr: true })}
-                        </TooltipTrigger>
-                        <TooltipContent side="left">
-                          <p className="font-medium">
-                            {isBalanceMasked ? "*****" : formatCurrency(group.balance, { showDrCr: true })}
-                          </p>
-                        </TooltipContent>
-                      </Tooltip>
+                      {/* `<p>` — amount par TooltipTrigger button theme/button CSS se red tint avoid (PartyGroupList jaisa) */}
+                      <p
+                        data-pl-list-balance={
+                          isBalanceMasked
+                            ? undefined
+                            : typeof group.balance === "number" && group.balance >= 0
+                              ? "dr"
+                              : "cr"
+                        }
+                        className={cn(
+                          "pl-master-list-row-amount-xs ml-1",
+                          !isBalanceMasked && masterDetailBalanceToneClass(group.balance)
+                        )}
+                      >
+                        {isBalanceMasked ? "*****" : formatCurrency(group.balance, { showDrCr: true })}
+                      </p>
                     </div>
               );
               return (

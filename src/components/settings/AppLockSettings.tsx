@@ -16,7 +16,6 @@ import { useToast } from "@/hooks/use-toast";
 import {
   embeddedPinLength,
   getEmbeddedLockShellKind,
-  generateInternalDeviceLockPin,
   hasEmbeddedLockConfigured,
   hasEmbeddedPinConfigured,
   hasUserChosenEmbeddedPin,
@@ -117,6 +116,42 @@ export function AppLockSettings() {
     );
   }
 
+  const n = embeddedPinLength();
+
+  const onSetBackupPin = async () => {
+    if (!isSixDigitNumericPin(newPin) || !isSixDigitNumericPin(newPin2)) {
+      toast({ variant: "destructive", title: "PIN", description: `Enter a ${n}-digit PIN and confirmation.` });
+      return;
+    }
+    if (newPin !== newPin2) {
+      toast({ variant: "destructive", title: "Mismatch", description: "PIN and confirmation must match." });
+      return;
+    }
+    setPinBusy(true);
+    try {
+      await saveEmbeddedPinHash(uid, newPin);
+      setUserChosenEmbeddedPin(uid, true);
+      if (readBiometricUnlockEnabled(uid)) {
+        try {
+          await saveNativeBiometricLockPin(uid, newPin);
+        } catch {
+          setBiometricUnlockEnabled(uid, false);
+          toast({
+            title: "Biometric updated",
+            description: "Backup PIN set. Biometric was turned off — enable it again below if you want.",
+          });
+        }
+      }
+      markEmbeddedSessionUnlocked();
+      setNewPin("");
+      setNewPin2("");
+      refreshLocalState();
+      toast({ title: "Backup PIN set", description: "You can change this PIN anytime below." });
+    } finally {
+      setPinBusy(false);
+    }
+  };
+
   const onChangePin = async () => {
     if (!isSixDigitNumericPin(currentPin)) {
       toast({ variant: "destructive", title: "Current PIN", description: `Enter your current ${embeddedPinLength()}-digit PIN.` });
@@ -167,29 +202,30 @@ export function AppLockSettings() {
         toast({ title: "Not available", description: "This device does not report fingerprint or face unlock." });
         return;
       }
+      if (!hasEmbeddedPinConfigured(uid) || !hasUserChosenEmbeddedPin(uid)) {
+        toast({
+          variant: "destructive",
+          title: "PIN required",
+          description: `Set a ${embeddedPinLength()}-digit backup PIN above before enabling biometric unlock.`,
+        });
+        return;
+      }
+      if (!isSixDigitNumericPin(bioPinForEnable)) {
+        toast({
+          variant: "destructive",
+          title: "PIN required",
+          description: `Enter your ${embeddedPinLength()}-digit backup PIN to enable biometric unlock.`,
+        });
+        return;
+      }
       setBioBusy(true);
       try {
-        let pinForBio = bioPinForEnable;
-        if (isSixDigitNumericPin(bioPinForEnable)) {
-          const ok = await verifyEmbeddedPin(uid, bioPinForEnable);
-          if (!ok) {
-            toast({ variant: "destructive", title: "Wrong PIN", description: "Cannot enable biometric unlock." });
-            return;
-          }
-        } else if (!hasEmbeddedPinConfigured(uid)) {
-          // APK: pehli baar sirf biometric — andar hidden PIN, user ko PIN optional
-          pinForBio = generateInternalDeviceLockPin();
-          await saveEmbeddedPinHash(uid, pinForBio);
-          setUserChosenEmbeddedPin(uid, false);
-        } else {
-          toast({
-            variant: "destructive",
-            title: "PIN required",
-            description: `Enter your ${embeddedPinLength()}-digit backup PIN to enable biometric, or set up lock from the unlock screen.`,
-          });
+        const ok = await verifyEmbeddedPin(uid, bioPinForEnable);
+        if (!ok) {
+          toast({ variant: "destructive", title: "Wrong PIN", description: "Cannot enable biometric unlock." });
           return;
         }
-        await saveNativeBiometricLockPin(uid, pinForBio);
+        await saveNativeBiometricLockPin(uid, bioPinForEnable);
         setBiometricUnlockEnabled(uid, true);
         setBioOn(true);
         setBioPinForEnable("");
@@ -228,8 +264,6 @@ export function AppLockSettings() {
     }
   };
 
-  const n = embeddedPinLength();
-
   return (
     <div className="space-y-6 p-1">
       <Card>
@@ -238,7 +272,7 @@ export function AppLockSettings() {
           <CardDescription>
             {shellKind === "exe"
               ? "Windows app: a 6-digit PIN protects this installation. Until you log out, you are not asked again for the same session."
-              : "Android app: fingerprint or face unlock is primary; a backup PIN is optional. Data can show from local storage while the account is verified in the background."}
+              : "Android app: set a backup PIN first, then optionally enable fingerprint or face unlock in Settings."}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 text-sm text-muted-foreground">
@@ -272,7 +306,49 @@ export function AppLockSettings() {
         </CardContent>
       </Card>
 
-      {pinConfigured && userPinChosen ? (
+      {shellKind === "apk" && lockConfigured && !userPinChosen ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Set backup PIN</CardTitle>
+            <CardDescription>
+              Choose a {n}-digit backup PIN. Required before fingerprint or face unlock can be turned on.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 max-w-md">
+            <div className="space-y-2">
+              <Label htmlFor="pl-al-setpin">Backup PIN</Label>
+              <Input
+                id="pl-al-setpin"
+                type="password"
+                inputMode="numeric"
+                autoComplete="new-password"
+                maxLength={n}
+                value={newPin}
+                onChange={(e) => setNewPin(e.target.value.replace(/\D/g, "").slice(0, n))}
+                disabled={pinBusy}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="pl-al-setpin2">Confirm backup PIN</Label>
+              <Input
+                id="pl-al-setpin2"
+                type="password"
+                inputMode="numeric"
+                autoComplete="new-password"
+                maxLength={n}
+                value={newPin2}
+                onChange={(e) => setNewPin2(e.target.value.replace(/\D/g, "").slice(0, n))}
+                disabled={pinBusy}
+              />
+            </div>
+            <Button type="button" disabled={pinBusy} onClick={() => void onSetBackupPin()}>
+              {pinBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save backup PIN"}
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {(shellKind === "exe" && pinConfigured) || (shellKind === "apk" && pinConfigured && userPinChosen) ? (
         <Card>
           <CardHeader>
             <CardTitle>Change PIN</CardTitle>
@@ -329,7 +405,9 @@ export function AppLockSettings() {
         <Card>
           <CardHeader>
             <CardTitle>Biometric unlock</CardTitle>
-            <CardDescription>Primary unlock on Android. Backup PIN is optional in Settings or on first setup.</CardDescription>
+            <CardDescription>
+              Turn fingerprint or face unlock on or off. Your backup PIN must be set and verified before enabling.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4 max-w-md">
             <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
@@ -343,11 +421,9 @@ export function AppLockSettings() {
                 onCheckedChange={(v) => void onBiometricSwitch(v === true)}
               />
             </div>
-            {!bioOn && bioHardware ? (
+            {!bioOn && bioHardware && userPinChosen ? (
               <div className="space-y-2">
-                <Label htmlFor="pl-al-biopin">
-                  {userPinChosen ? `Your backup PIN (${n} digits)` : "Backup PIN (optional — leave blank for biometric only)"}
-                </Label>
+                <Label htmlFor="pl-al-biopin">Your backup PIN ({n} digits)</Label>
                 <Input
                   id="pl-al-biopin"
                   type="password"
@@ -358,6 +434,9 @@ export function AppLockSettings() {
                   disabled={bioBusy}
                 />
               </div>
+            ) : null}
+            {!bioOn && bioHardware && !userPinChosen ? (
+              <p className="text-xs text-muted-foreground">Set a backup PIN above before enabling biometric unlock.</p>
             ) : null}
           </CardContent>
         </Card>

@@ -30,6 +30,8 @@ import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { removeLocalCompanyMirrorFromFolder } from "@/lib/liveDataFolderMirror";
 import { assertCompanyAllowsLedgerMutations } from "@/lib/security/offlinePlanWriteGate";
 import { companyProfilePinkZone } from "@/lib/companyProfileChrome";
+import { estimateCompanyAttachmentBytes } from "@/lib/estimateCompanyAttachmentBytes";
+import { checkLocalToOnlineAttachmentMbAllowed } from "@/lib/attachmentBackupUsage";
 import { readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConfig";
 
 /** Local → online confirm: company name + ` ok` (case-insensitive). */
@@ -121,6 +123,21 @@ export function UploadCompanyToCloudCard() {
     }
     setLoading(true);
     try {
+      // Plan MB cap: local attachments ka total size cloud upload se pehle check (0 = unlimited).
+      const { totalBytes, refCount } = await estimateCompanyAttachmentBytes(companyId);
+      const mbGate = checkLocalToOnlineAttachmentMbAllowed(totalBytes, accountPlanId, accountPlanLive);
+      if (!mbGate.allowed) {
+        toast({
+          variant: "destructive",
+          title: "Attachment size limit",
+          description:
+            mbGate.message ||
+            `Total ${mbGate.totalMb.toFixed(1)} MB exceeds plan limit of ${mbGate.capMb} MB (${refCount} file ref(s)).`,
+        });
+        setLoading(false);
+        return;
+      }
+
       await assertCompanyAllowsLedgerMutations(companyId);
       await setDoc(
         doc(firestore, "companies", companyId),

@@ -527,8 +527,8 @@ function previousTab(win) {
 }
 
 async function getAppEntryUrl() {
-  // Dev Next (`npm run dev`) port 5000 — packaged EXE static server 3000 par alag rehta hai.
-  if (isDevMode()) return "http://localhost:5000";
+  // Dev Next (`npm run dev`) port 3000 — packaged EXE static server alag fallback ports par.
+  if (isDevMode()) return "http://localhost:3000";
   const port = await startStaticServer();
   // Packaged app route loading must be HTTP to avoid file:// local-resource blocking.
   return `http://localhost:${port}/`;
@@ -914,6 +914,66 @@ if (gotSingleInstanceLock) {
       return `${hostname} (${part})`.replace(/\s+/g, " ").trim();
     } catch (_) {
       return "";
+    }
+  });
+
+  /** Backup folder picker — full OS path for UI (File System Access sirf folder name deta hai). */
+  ipcMain.handle("pl-pick-backup-directory", async () => {
+    try {
+      const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+      const result = await dialog.showOpenDialog(win, {
+        properties: ["openDirectory", "createDirectory"],
+      });
+      if (result.canceled || !result.filePaths?.[0]) {
+        return { ok: false, cancelled: true };
+      }
+      return { ok: true, path: result.filePaths[0] };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  });
+
+  /** Backup .plbp write — renderer se base64; path join main process me safe. */
+  ipcMain.handle("pl-write-backup-file", async (_event, payload) => {
+    try {
+      const dirPath = String(payload?.dirPath || "").trim();
+      const fileName = path.basename(String(payload?.fileName || "backup.plbp"));
+      const base64 = String(payload?.base64 || "");
+      if (!dirPath || !fileName || !base64) return { ok: false, error: "missing-args" };
+      fs.mkdirSync(dirPath, { recursive: true });
+      const buf = Buffer.from(base64, "base64");
+      fs.writeFileSync(path.join(dirPath, fileName), buf);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  });
+
+  /** Incremental backup: folder me `.plbp` names list — pichla backup reuse ke liye. */
+  ipcMain.handle("pl-list-backup-files", async (_event, dirPathRaw) => {
+    try {
+      const dirPath = String(dirPathRaw || "").trim();
+      if (!dirPath) return { ok: false, error: "missing-dir" };
+      const names = fs
+        .readdirSync(dirPath)
+        .filter((n) => String(n).toLowerCase().endsWith(".plbp"));
+      return { ok: true, files: names };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  });
+
+  /** Incremental backup: encrypted `.plbp` text read — company password renderer me decrypt karega. */
+  ipcMain.handle("pl-read-backup-file", async (_event, payload) => {
+    try {
+      const dirPath = String(payload?.dirPath || "").trim();
+      const fileName = path.basename(String(payload?.fileName || ""));
+      if (!dirPath || !fileName) return { ok: false, error: "missing-args" };
+      const full = path.join(dirPath, fileName);
+      const text = fs.readFileSync(full, "utf8");
+      return { ok: true, text };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
     }
   });
 

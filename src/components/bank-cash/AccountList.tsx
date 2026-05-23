@@ -6,7 +6,7 @@ import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { cn } from "@/lib/utils"
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils"
 import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 import { useDate } from "@/hooks/useDate";
@@ -141,14 +141,14 @@ export function AccountList({
                       </TooltipContent>
                     </Tooltip>
                   </div>
+                  {/* data-pl-list-balance: mobile list chrome me Dr/Cr color force (globals.css) */}
                   <p
+                    data-pl-list-balance={account.balance >= 0 ? "dr" : "cr"}
                     className={cn(
                       "pl-master-list-row-amount ml-2",
-                      account.balance >= 0 ? "text-green-600" : "text-red-600",
+                      masterDetailBalanceToneClass(account.balance),
                       isSelected &&
-                        (account.balance >= 0
-                          ? "text-green-800"
-                          : "text-red-800")
+                        (account.balance >= 0 ? "text-green-700" : "text-red-700")
                     )}
                   >
                     {(isSpecial && !canViewSpecialBalance) ? '*****' : formatCurrency(account.balance, { showDrCr: true })}

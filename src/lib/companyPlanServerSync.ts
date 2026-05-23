@@ -3,6 +3,9 @@
 /**
  * Server → local only: Firebase Admin plan + offline license window (20d chunk, sub cap).
  * `authoritativeCompanyId` alag ho to bhi SQLite row sahi patch hoti hai.
+ *
+ * Static/APK: `getBillingApiUrl('/api/company/sync-plan')` → pocket-ledger.com (billingApiOrigin.ts).
+ * Local-only SQLite par bhi online live sync — policy `planSyncClientPolicy.ts` me; MAT HATANA refactors me.
  */
 import { getBillingApiUrl } from "@/lib/billingApiOrigin";
 import { bumpLocalCompanyRegistry } from "@/lib/applyStripePlanToLocalCompany";

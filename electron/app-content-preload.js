@@ -16,3 +16,11 @@ contextBridge.exposeInMainWorld("plElectronTabBridge", {
 contextBridge.exposeInMainWorld("plElectronDevice", {
   getDisplayLabel: () => ipcRenderer.invoke("pl-device-display-info"),
 });
+
+/** Backup location: poora local path (D:\…) + direct file write — web DirectoryHandle path expose nahi karta. */
+contextBridge.exposeInMainWorld("plElectronBackup", {
+  pickDirectory: () => ipcRenderer.invoke("pl-pick-backup-directory"),
+  writeBackupFile: (args) => ipcRenderer.invoke("pl-write-backup-file", args),
+  listBackupFiles: (dirPath) => ipcRenderer.invoke("pl-list-backup-files", dirPath),
+  readBackupFile: (args) => ipcRenderer.invoke("pl-read-backup-file", args),
+});

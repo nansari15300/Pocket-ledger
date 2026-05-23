@@ -23,6 +23,7 @@ import { CompanyAttachmentOfflineBackfillManager } from "@/components/CompanyAtt
 import { LiveMirrorFolderMissingDialog } from "@/components/LiveMirrorFolderMissingDialog";
 import { FirstDeviceCompanyHydrationOverlay } from "@/components/FirstDeviceCompanyHydrationOverlay";
 import { EmbeddedDeviceLockGate } from "@/components/EmbeddedDeviceLockGate";
+import { EmbeddedLogoutProvider } from "@/contexts/EmbeddedLogoutContext";
 import { EmbeddedOfflineFirestoreTransport } from "@/components/EmbeddedOfflineFirestoreTransport";
 import { FirstLoginWarmGateProvider } from "@/contexts/FirstLoginWarmGateContext";
 import { MobileDetailSummaryCollapseProvider } from "@/contexts/MobileDetailSummaryCollapseContext";
@@ -71,6 +72,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
             <FirebaseErrorListener />
             <EmbeddedOfflineFirestoreTransport />
             <CompanyProvider>
+                <EmbeddedLogoutProvider>
                 <EmbeddedAttachmentPrefetchProvider>
                 {/* APK/static pehli login: full warm chalte waqt background warm band — gate overlay set karti hai */}
                 <FirstLoginWarmGateProvider>
@@ -104,6 +106,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 <FirstDeviceCompanyHydrationOverlay />
                 </FirstLoginWarmGateProvider>
                 </EmbeddedAttachmentPrefetchProvider>
+                </EmbeddedLogoutProvider>
             </CompanyProvider>
             {/* EXE/APK: Firebase restore ke baad PIN/biometric overlay — Company tree ke upar full-screen */}
             <EmbeddedDeviceLockGate />

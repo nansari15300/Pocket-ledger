@@ -746,7 +746,7 @@ export function TransactionsTable({
   const displayTotalDr = (displayPeriodDr || 0) + displayOpeningBalanceDr;
   const displayTotalCr = (displayPeriodCr || 0) + displayOpeningBalanceCr;
 
-  // Ledger contexts: Type-column pill ab hamesha "Opening Balance" (neeche Book/Dated date logic same).
+  // Ledger contexts: Type pill — master books OB = "Book Opening"; pagination/date-filter carry = "Dated Opening".
   const ledgerOpeningPillsEnabled =
     typeof ledgerDateFilterActive === "boolean" &&
     ["party", "account", "staff", "tax", "item", "expense", "group"].includes(context);
@@ -886,8 +886,16 @@ export function TransactionsTable({
     booksObScaled != null &&
     Math.abs(booksObScaled) >= BOOK_OB_EPS &&
     masterOpeningDateWithinLedgerRange;
-  /** Reports/daybook: `openingBalanceLabel`; party-account-staff… ledger: ek hi label "Opening Balance". */
-  const primaryOpeningRowPillText = ledgerOpeningPillsEnabled ? "Opening Balance" : openingBalanceLabel;
+  /** Stacked / single dated row: master book pill vs period/pagination carry pill. */
+  const bookOpeningRowPillText = ledgerOpeningPillsEnabled ? "Book Opening" : openingBalanceLabel;
+  /** Dated row pill — stacked mode me hamesha; single row me sirf jab book-only na ho (page>1 / filter carry). */
+  const primaryOpeningRowPillText = ledgerOpeningPillsEnabled
+    ? showBookOpeningAboveDatedRow
+      ? "Dated Opening"
+      : ledgerShowBookOpeningRow && !ledgerDateFilterActive
+        ? "Book Opening"
+        : "Dated Opening"
+    : openingBalanceLabel;
 
   /** Narration sub-row: date se credit tak — `transactionTableShared` colsThroughCredit jaisa */
   const openingBalanceNarrationColSpan =
@@ -1399,7 +1407,7 @@ export function TransactionsTable({
                         voucherTypePillClassName(masterBookSignedScaled >= 0 ? "dr" : "cr")
                       )}
                     >
-                      Opening Balance
+                      {bookOpeningRowPillText}
                     </Badge>
                     {showCol("date") && openingBalanceRowDate ? (
                       <p className="text-sm font-medium text-foreground">
@@ -1441,7 +1449,7 @@ export function TransactionsTable({
                   <div className="flex items-center gap-2 min-w-0">
                     {openingBalanceLeftContent}
                     {openingBalanceSearch}
-                    {/* Table ke Type column pill: ledger = "Opening Balance"; reports = `openingBalanceLabel` */}
+                    {/* Table ke Type column pill: ledger = Book/Dated Opening; reports = `openingBalanceLabel` */}
                     <Badge
                       variant="outline"
                       className={voucherTypePillClassName(displayOpeningForDrCr >= 0 ? "dr" : "cr")}
@@ -1682,7 +1690,7 @@ export function TransactionsTable({
                     >
                       {renderOpeningBalanceDateCells(openingBalanceRowDate)}
                       {renderOpeningBalanceMiddleCells(
-                        "Opening Balance",
+                        bookOpeningRowPillText,
                         false,
                         masterBookSignedScaled >= 0 ? "dr" : "cr"
                       )}
@@ -1836,7 +1844,7 @@ export function TransactionsTable({
                     >
                       {renderOpeningBalanceDateCells(openingBalanceRowDate)}
                       {renderOpeningBalanceMiddleCells(
-                        "Opening Balance",
+                        bookOpeningRowPillText,
                         false,
                         masterBookSignedScaled >= 0 ? "dr" : "cr"
                       )}

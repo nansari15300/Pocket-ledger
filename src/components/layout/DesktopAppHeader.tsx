@@ -35,6 +35,7 @@ import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { firestore, auth, signOutWithFirestoreTeardown } from "@/lib/firebase";
+import { useEmbeddedLogout } from "@/contexts/EmbeddedLogoutContext";
 import { format } from "date-fns";
 import { CompanyActions } from "@/components/company/CompanySelector";
 import { useRouter, usePathname, useParams } from "next/navigation";
@@ -640,6 +641,7 @@ function ProfilePlanStatPill({ tone, children }: { tone: ProfileStatTone; childr
 function UserProfileButton() {
   const router = useRouter();
   const { user } = useAuth();
+  const { requestEmbeddedLogout } = useEmbeddedLogout();
   const { company, allCompanies, refreshAuthoritativePlan } = useCompany();
   const { displaySymbol } = useDisplayCurrency();
   const { toast } = useToast();
@@ -687,19 +689,8 @@ function UserProfileButton() {
     return name.split(" ").map((n) => n[0]).slice(0, 2).join("");
   };
 
-  const handleLogout = async () => {
-    const { clearNavigationMemory } = await import("@/lib/navigation-memory");
-    clearNavigationMemory();
-    pruneRememberedLoginEmailIfDisabled();
-    // Local guest logout: local no-login flag off karo so app true online login screen par aaye.
-    if (isLocalGuestEnabled()) {
-      disableLocalGuest();
-      router.replace("/");
-      return;
-    }
-    await signOutWithFirestoreTeardown(auth);
-    // Firebase logout ke baad bhi explicit redirect rakho for predictable online-login UX.
-    router.replace("/");
+  const handleLogout = () => {
+    requestEmbeddedLogout();
   };
 
   /** Avatar menu: POST `/api/company/sync-plan` — SQLite + plan cache ko Firestore authoritative row se align (checkout/profile mismatch fix). */

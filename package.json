@@ -8,7 +8,7 @@
   "scripts": {
     "postinstall": "patch-package && node scripts/copy-pdf-worker.cjs",
     "dev": "node scripts/dev-stable.cjs",
-    "dev:turbo": "next dev --hostname 0.0.0.0 --port 5000",
+    "dev:turbo": "next dev --hostname 0.0.0.0 --port 3000",
     "allow-dev-port": "powershell -ExecutionPolicy Bypass -File ./scripts/allow-next-dev-port-windows.ps1",
     "build": "node --max-old-space-size=4096 ./node_modules/next/dist/bin/next build",
     "build:webpack": "node --max-old-space-size=4096 ./node_modules/next/dist/bin/next build --webpack",
@@ -81,6 +81,7 @@
     "datex-bs": "^1.1.8",
     "deep-object-diff": "^1.1.9",
     "embla-carousel-react": "^8.6.0",
+    "fflate": "^0.8.3",
     "firebase": "^12.8.0",
     "firebase-admin": "^13.6.0",
     "framer-motion": "^12.29.0",

@@ -19,6 +19,7 @@ import { errorEmitter } from "@/firebase/error-emitter";
 import { FirestorePermissionError } from "@/firebase/errors";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticApkLedgerTransportMode } from "@/lib/staticApkLedgerArchitecture";
 import {
   BROWSER_DB_COLLECTION_BUMP,
@@ -725,6 +726,12 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
 
     const companyRootDocRef = doc(firestore, "companies", fsCompanyId);
 
+    /** Static/APK/local-first: offline jaisa SQLite pehle; online par bhi getDocFromServer gate mat lagao. */
+    const embeddedLocalFirstBoot =
+      isStaticAppBuild() ||
+      (typeof window !== "undefined" && isCapacitorNativeApp()) ||
+      isLocalOnlyMode();
+
     /** `firestoreRemotePullAttempt`: root server verify ke baad hi Firestore→SQLite ek baar pull; offline native par false */
     const bindHybridFirestoreToCompany = (opts: { firestoreRemotePullAttempt: boolean }) => {
       if (cancelled) return;
@@ -760,7 +767,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
           }
         })();
       }
-      if (!shouldUseLocalCompanyData && vouchers.length === 0) setLoading(true);
+      if (!shouldUseLocalCompanyData && !embeddedLocalFirstBoot && vouchers.length === 0) setLoading(true);
 
       const attachListeners = () => {
         if (cancelled) return;
@@ -939,9 +946,17 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
           });
         })
       );
-      Promise.all(initialFetches).then(() => { if (!cancelled) setLoading(false); });
+      if (embeddedLocalFirstBoot) {
+        // SQLite / stale-first pehle paint — saari collection snapshots ka wait mat karo.
+        if (!cancelled) setLoading(false);
+      } else {
+        Promise.all(initialFetches).then(() => {
+          if (!cancelled) setLoading(false);
+        });
+      }
       };
-      const firestoreListenDelayMs = shouldUseLocalCompanyData ? 0 : 600;
+      const firestoreListenDelayMs =
+        shouldUseLocalCompanyData || embeddedLocalFirstBoot ? 0 : 600;
       setTimeout(attachListeners, firestoreListenDelayMs);
     };
 
@@ -950,7 +965,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     const hydrateFromMirrorWhenOffline =
       typeof navigator !== "undefined" && navigator.onLine === false;
 
-    if (hydrateFromMirrorWhenOffline) {
+    if (hydrateFromMirrorWhenOffline || embeddedLocalFirstBoot) {
       bindHybridFirestoreToCompany({
         firestoreRemotePullAttempt:
           shouldUseLocalCompanyData || isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape),

@@ -256,6 +256,12 @@ export function CreateJournalForm({
   isApproving = false,
   /** When opening journal in edit mode, auto-select this side’s bill-wise card and blink the matching row (e.g. Dr row). Pass from ledger when user clicks Dr/Cr. */
   initialFocusSide,
+  /** Party/staff/bank ledger entity id — bill-wise sirf is account ki Dr/Cr line (Firestore live doc me `_openedFromAccountId` nahi). */
+  ledgerEntityId,
+  /** Bill-wise ledger: opening row par remaining linkable — Journal link dialog/card me OB include karne ke liye. */
+  ledgerOpeningBalanceOutstanding,
+  /** Ledger books opening signed (Dr + / Cr −) — Journal link dialog me party master miss par fallback. */
+  ledgerBooksOpeningBalanceSigned,
   /** Compare Side A/B: voucher jis company ka hai — header company se alag ho to account dropdown `useVouchers` se nahi banta. */
   ledgerScopeCompanyId,
   copySaveTargetCompanyId,
@@ -278,6 +284,9 @@ export function CreateJournalForm({
   onApprove?: () => void;
   isApproving?: boolean;
   initialFocusSide?: "debit" | "credit" | null;
+  ledgerEntityId?: string;
+  ledgerOpeningBalanceOutstanding?: number;
+  ledgerBooksOpeningBalanceSigned?: number;
   ledgerScopeCompanyId?: string;
   copySaveTargetCompanyId?: string;
   copyMismatchCategories?: string[];
@@ -599,6 +608,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
 }, [voucher, form, isEditingAndConverting, isFormDirty, allAccountsWithEntity]);
 
+  // Outbox flush / Firestore snapshot: `local:` → HTTPS parent `voucher.fileUrls` update; same id par upar reset skip — dev browser preview fix (Payment In jaisa).
+  useEffect(() => {
+    if (!voucher?.id || savedVoucherId !== voucher.id) return;
+    const hasUnsavedFilePick = files.some((f) => f instanceof File);
+    if (hasUnsavedFilePick) return;
+    if (_isFileDirty) return;
+    const incoming = voucher.unassignedFile?.url
+      ? [voucher.unassignedFile.url]
+      : (voucher.fileUrls || []).filter((u: unknown): u is string => typeof u === "string");
+    const cur = files.filter((f): f is string => typeof f === "string");
+    if (JSON.stringify(incoming) === JSON.stringify(cur)) return;
+    setFiles(incoming);
+    initialFilesRef.current = [...incoming];
+    setSavePdfAsImage(shouldSuggestPdfAsImage(incoming));
+  }, [voucher?.id, voucher?.fileUrls, voucher?.unassignedFile?.url, savedVoucherId, files, _isFileDirty]);
+
   /** Recon sync / compare: scoped accounts load hone ke baad pre-filled accountId ka label + entityType sync */
   useEffect(() => {
     if (voucher?.id || !voucher) return;
@@ -636,8 +661,25 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     (pTaxes || []).forEach((t: any) => map.set(String(t.id), `${t.name || "Tax"} (Tax)`));
     return map;
   }, [pParties, pStaff, pAccounts, pExpense, pTaxes]);
-  // Source account id from account-ledger click; used to reduce two-account confusion in journal edit.
-  const openedFromAccountId = String((voucher as any)?._openedFromAccountId ?? "");
+  // Ledger entity id: prop + row metadata — live Firestore sync `_openedFromAccountId` hata deta tha.
+  const openedFromAccountId = String(
+    ledgerEntityId || (voucher as any)?._openedFromAccountId || ""
+  ).trim();
+  // Ledger se OB remaining na aaye to master books opening se fallback — Book Opening link row ke liye.
+  const effectiveLedgerObOutstanding = useMemo(() => {
+    if (typeof ledgerOpeningBalanceOutstanding === "number") {
+      return Math.max(0, ledgerOpeningBalanceOutstanding);
+    }
+    if (!openedFromAccountId) return undefined;
+    const party = (pParties || []).find((p: any) => String(p.id) === openedFromAccountId);
+    const staff = (pStaff || []).find((s: any) => String(s.id) === openedFromAccountId);
+    const signed =
+      typeof ledgerBooksOpeningBalanceSigned === "number"
+        ? ledgerBooksOpeningBalanceSigned
+        : Number((party as any)?.openingBalance ?? (staff as any)?.openingBalance ?? 0);
+    if (Math.abs(signed) < 1e-6) return undefined;
+    return Math.abs(signed);
+  }, [ledgerOpeningBalanceOutstanding, openedFromAccountId, pParties, pStaff, ledgerBooksOpeningBalanceSigned]);
 
   // Watch current lines once so bill-wise summary card can react instantly to journal edits.
   const watchedLines = useWatch({ control: form.control, name: "lines" });
@@ -682,24 +724,27 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const journalBillLinesBySide = useMemo(() => {
     const lines = Array.isArray(watchedLines) ? watchedLines : [];
     const findForSide = (side: "debit" | "credit") => {
-      // Prefer clicked account row only when it matches side + party + positive amount.
-      const preferred = openedFromAccountId
-        ? lines.find(
-            (l: any) =>
-              String(l?.accountId ?? "") === openedFromAccountId &&
-              String(l?.type ?? "") === side &&
-              journalLinkableAccountIdSet.has(String(l?.accountId ?? "")) &&
-              (Number(l?.amount) || 0) > 0
-          )
-        : null;
-      const line =
-        preferred ||
-        lines.find(
+      // Ledger context: sirf opened party/staff ki usi side (Dr/Cr) — doosre account par fallback mat karo.
+      if (openedFromAccountId) {
+        const openedLine = lines.find(
           (l: any) =>
+            String(l?.accountId ?? "") === openedFromAccountId &&
             String(l?.type ?? "") === side &&
             journalLinkableAccountIdSet.has(String(l?.accountId ?? "")) &&
             (Number(l?.amount) || 0) > 0
         );
+        if (!openedLine) return null;
+        return {
+          partyId: String(openedLine.accountId),
+          amount: Number(openedLine.amount) || 0,
+        };
+      }
+      const line = lines.find(
+        (l: any) =>
+          String(l?.type ?? "") === side &&
+          journalLinkableAccountIdSet.has(String(l?.accountId ?? "")) &&
+          (Number(l?.amount) || 0) > 0
+      );
       if (!line) return null;
       return {
         partyId: String(line.accountId),
@@ -723,9 +768,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const lines = Array.isArray(watchedLines) ? watchedLines : [];
     const hasDebitLine = lines.some((l: any) => String(l?.type) === "debit" && journalLinkableAccountIdSet.has(String(l?.accountId ?? "")) && (Number(l?.amount) || 0) > 0);
     const hasCreditLine = lines.some((l: any) => String(l?.type) === "credit" && journalLinkableAccountIdSet.has(String(l?.accountId ?? "")) && (Number(l?.amount) || 0) > 0);
-    const openedFromDebit = openedFromAccountId && lines.some((l: any) => String(l?.accountId) === openedFromAccountId && String(l?.type) === "debit");
+    const openedEntityLine = openedFromAccountId
+      ? lines.find(
+          (l: any) =>
+            String(l?.accountId ?? "") === openedFromAccountId &&
+            journalLinkableAccountIdSet.has(String(l?.accountId ?? "")) &&
+            (Number(l?.amount) || 0) > 0
+        )
+      : null;
     const side: "debit" | "credit" =
-      initialFocusSide ?? (openedFromAccountId && openedFromDebit ? "debit" : openedFromAccountId && !openedFromDebit ? "credit" : "debit");
+      initialFocusSide ??
+      (openedEntityLine
+        ? String(openedEntityLine.type) === "credit"
+          ? "credit"
+          : "debit"
+        : "debit");
     if (side === "debit" && hasDebitLine) {
       setSelectedBillWiseCard("debit");
       initialFocusAppliedRef.current = vid;
@@ -927,16 +984,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         (Array.isArray((v as any)?.entries) && (v as any).entries.some((e: any) => String(e?.accountId ?? "") === accountId));
       const hasExistingAlloc = (id: string) => existingAllocations.some((a) => a.voucherId === id && getAllocationTotal(a) > 0);
 
-      // Opening balance for party/staff; used for OB linkable row.
+      // Opening balance: isi link account (partyId) ka master books opening — dialog jaisa seedha lookup.
       const getOpeningBalance = () => {
         if (!accountId) return 0;
+        if (
+          openedFromAccountId &&
+          String(accountId) === String(openedFromAccountId) &&
+          typeof ledgerBooksOpeningBalanceSigned === "number" &&
+          Math.abs(ledgerBooksOpeningBalanceSigned) > 1e-6
+        ) {
+          return ledgerBooksOpeningBalanceSigned;
+        }
         if (partyIdSet.has(accountId)) {
           const p = (pParties || []).find((p: any) => String(p.id) === accountId);
-          return Number((p as any)?.openingBalance ?? 0) || 0;
+          return Number((p as any)?.openingBalance ?? 0);
         }
         if (staffIdSet.has(accountId)) {
           const s = (pStaff || []).find((s: any) => String(s.id) === accountId);
-          return Number((s as any)?.openingBalance ?? 0) || 0;
+          return Number((s as any)?.openingBalance ?? 0);
         }
         return 0;
       };
@@ -944,6 +1009,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const showOBInPaymentIn = partyOB > 0;
       const showOBInPaymentOut = partyOB < 0;
       const obAmount = partyOB > 0 ? partyOB : Math.abs(partyOB);
+      // Bill-wise / books OB remaining — card preview me Book Opening row (Dr→Cr / Cr→Dr) ke liye.
+      const billWiseObRemaining =
+        typeof effectiveLedgerObOutstanding === "number" ? effectiveLedgerObOutstanding : null;
+      const shouldIncludeObRow = (paymentSide: "payment_in" | "payment_out") => {
+        if (hasExistingAlloc(OPENING_BALANCE_VOUCHER_ID)) return true;
+        if (paymentSide === "payment_out") {
+          return partyOB < 0 || ((billWiseObRemaining ?? 0) > 0 && partyOB <= 0);
+        }
+        return partyOB > 0 || ((billWiseObRemaining ?? 0) > 0 && partyOB >= 0);
+      };
 
       // totalConsumedFromOB: allocations to OB from payments + sale/purchase openingBalanceAllocated.
       const totalConsumedFromOB = (() => {
@@ -966,6 +1041,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         return fromPayments + fromBillwise;
       })();
       const obOutstandingIn = Math.max(0, obAmount - totalConsumedFromOB);
+      // Card preview Amount: gross books OB — sirf remaining (obAmount) 0 ho to bhi bill-wise gross dikhao.
+      const obGrossTotalForDisplay =
+        obAmount > 0
+          ? obAmount
+          : Math.max(
+              billWiseObRemaining != null ? billWiseObRemaining + totalConsumedFromOB : 0,
+              obOutstandingIn + totalConsumedFromOB,
+              billWiseObRemaining ?? 0
+            );
       const showOB = side === "credit" ? showOBInPaymentIn : showOBInPaymentOut;
       const obOutstanding = showOB ? obOutstandingIn : 0;
 
@@ -1123,14 +1207,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               });
             }
           });
-          if (showOBInPaymentIn && (obOutstandingIn > 0 || hasExistingAlloc(OPENING_BALANCE_VOUCHER_ID))) {
+          if (shouldIncludeObRow("payment_in")) {
             const key = OPENING_BALANCE_VOUCHER_ID;
             if (!map.has(key)) {
               map.set(key, {
                 voucherId: key,
-                voucherNumber: "Opening Balance",
+                voucherNumber: "Book Opening",
                 date: null,
-                total: obAmount,
+                total: obGrossTotalForDisplay,
                 linkedOnCurrent: linkedOnCurrentFor(key),
               });
             }
@@ -1200,14 +1284,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               });
             }
           });
-          if (showOBInPaymentOut && (obOutstandingIn > 0 || hasExistingAlloc(OPENING_BALANCE_VOUCHER_ID))) {
+          if (shouldIncludeObRow("payment_out")) {
             const key = OPENING_BALANCE_VOUCHER_ID;
             if (!map.has(key)) {
               map.set(key, {
                 voucherId: key,
-                voucherNumber: "Opening Balance",
+                voucherNumber: "Book Opening",
                 date: null,
-                total: obAmount,
+                total: obGrossTotalForDisplay,
                 linkedOnCurrent: linkedOnCurrentForOut(key),
               });
             }
@@ -1235,7 +1319,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       debit: buildSide("debit"),
       credit: buildSide("credit"),
     };
-  }, [journalBillLinesBySide, journalLinkedFromRows, journalLinkedToRowsBySide, journalAllocationsBySide, journalVoucherId, vouchers, partyIdSet, staffIdSet, pParties, pStaff]);
+  }, [journalBillLinesBySide, journalLinkedFromRows, journalLinkedToRowsBySide, journalAllocationsBySide, journalVoucherId, vouchers, partyIdSet, staffIdSet, pParties, pStaff, effectiveLedgerObOutstanding, openedFromAccountId, ledgerBooksOpeningBalanceSigned]);
   // Resolve side-wise source account metadata so each Journal card opens the correct link dialog (Party/Staff).
   const journalLinkContextBySide = useMemo(() => {
     const resolve = (side: "debit" | "credit") => {
@@ -1247,7 +1331,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           accountId,
           kind: "party" as const,
           label: party?.name || accountLabelById.get(accountId) || "Party",
-          openingBalance: Number((party as any)?.openingBalance ?? 0) || 0,
+          openingBalance: Number((party as any)?.openingBalance ?? 0),
         };
       }
       if (staffIdSet.has(accountId)) {
@@ -1256,7 +1340,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           accountId,
           kind: "staff" as const,
           label: staff?.name || accountLabelById.get(accountId) || "Staff",
-          openingBalance: Number((staff as any)?.openingBalance ?? 0) || 0,
+          openingBalance: Number((staff as any)?.openingBalance ?? 0),
         };
       }
       return { accountId, kind: null as "party" | "staff" | null, label: accountLabelById.get(accountId) || "Account", openingBalance: 0 };
@@ -1313,6 +1397,30 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       amount: sideAmount,
     };
   }, [activeJournalLinkSide, journalLinkContextBySide, journalBillWiseBySide]);
+  // Dialog ko signed books OB — ledger prop pehle (Dr→Cr / Cr→Dr mirror ke liye same source).
+  const activePartySignedOpeningBalance = useMemo(() => {
+    if (!activeJournalLinkContext || activeJournalLinkContext.kind !== "party") return 0;
+    if (typeof ledgerBooksOpeningBalanceSigned === "number" && Math.abs(ledgerBooksOpeningBalanceSigned) > 1e-6) {
+      return ledgerBooksOpeningBalanceSigned;
+    }
+    const accountId = activeJournalLinkContext.accountId;
+    const party =
+      (pParties || []).find((p: any) => String(p.id) === String(accountId)) ||
+      (openedFromAccountId
+        ? (pParties || []).find((p: any) => String(p.id) === openedFromAccountId)
+        : undefined);
+    let signed = Number((party as any)?.openingBalance ?? activeJournalLinkContext.openingBalance ?? 0);
+    const side = activeJournalLinkContext.side;
+    const obRemaining =
+      typeof effectiveLedgerObOutstanding === "number" && effectiveLedgerObOutstanding > 0
+        ? effectiveLedgerObOutstanding
+        : null;
+    if (Math.abs(signed) > 1e-6) return signed;
+    if (obRemaining != null) {
+      return side === "debit" ? -obRemaining : obRemaining;
+    }
+    return signed;
+  }, [activeJournalLinkContext, pParties, effectiveLedgerObOutstanding, openedFromAccountId, ledgerBooksOpeningBalanceSigned]);
 
 
   // Validated `data` से save — nested mobile `date` + `getValues()` से date miss न हो
@@ -2682,6 +2790,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     </div>
                   )}
                   {shouldShowJournalLinkSections && (["debit", "credit"] as const).map((sideKey) => {
+                    // Ledger se edit: counterparty side card mat dikhao — sirf opened account ki Dr/Cr card.
+                    if (openedFromAccountId && !journalBillLinesBySide[sideKey]) return null;
                     const sideData = journalBillWiseBySide[sideKey];
                     const sideLabel = sideKey === "debit" ? "debit" : "credit";
                     const sideAccountLabel = sideData.sideLine?.partyId ? (accountLabelById.get(sideData.sideLine.partyId) || "—") : "";
@@ -2753,7 +2863,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   <tbody>
                                     {sideData.rows.filter((r) => r.linkedOnCurrent > 0).map((row) => (
                                       <tr key={`${sideKey}-${row.voucherId}`} className="border-b border-border/30 last:border-b-0">
-                                        <td className="p-2 text-muted-foreground whitespace-nowrap">{row.voucherNumber === "Opening Balance" ? "—" : (row.date ? formatDate(row.date) : "—")}</td>
+                                        <td className="p-2 text-muted-foreground whitespace-nowrap">{row.voucherNumber === "Opening Balance" || row.voucherNumber === "Book Opening" ? "—" : (row.date ? formatDate(row.date) : "—")}</td>
                                         <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
                                         <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">
                                           {formatCurrencyForPrint(row.total || row.linkedOnCurrent, { noSuffix: true, noAnimation: true })}
@@ -2932,7 +3042,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         existingAllocations={activeJournalLinkContext?.side === "debit" ? (journalAllocationsBySide.debit || []) : (journalAllocationsBySide.credit || [])}
         paymentInId={journalVoucherId || null}
         paymentOutId={journalVoucherId || null}
-        partyOpeningBalance={Number(activeJournalLinkContext?.openingBalance ?? 0) || 0}
+        partyOpeningBalance={activePartySignedOpeningBalance}
+        partyOpeningBalanceOutstanding={effectiveLedgerObOutstanding}
+        ledgerBooksOpeningBalanceSigned={ledgerBooksOpeningBalanceSigned}
         dialogTitle={activeJournalLinkContext?.side === "debit" ? "Link Journal Dr to Linkable Cr Txns" : "Link Journal Cr to Linkable Dr Txns"}
         paymentInVoucherNumber={String(form.getValues("voucherNumber") || voucher?.voucherNumber || "")}
         paymentOutVoucherNumber={String(form.getValues("voucherNumber") || voucher?.voucherNumber || "")}

@@ -1604,6 +1604,9 @@ export function StaffDetails({
         }}
         voucher={selectedVoucher}
         onVoucherCreated={() => setSelectedVoucher(null)}
+        ledgerEntityId={staff?.id}
+        ledgerOpeningBalanceOutstanding={openingBalanceOutstanding}
+        ledgerBooksOpeningBalanceSigned={ledgerOpeningForRunning}
       />
       <HistoryDialog
         voucher={historyVoucher}

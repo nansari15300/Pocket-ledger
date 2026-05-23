@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { isAllowedEmbeddedBillingClientOrigin } from "@/lib/server/billingApiCors";
 
 /** Env-style base (scheme optional) → absolute http(s) origin. */
 export function normalizePaymentOrigin(raw: string): string {
@@ -24,9 +25,14 @@ function isUnusableBrowserRedirectHost(hostname: string): boolean {
 
 /**
  * Stripe / Khalti return URLs: absolute origin.
- * Request origin tabhi use karo jab user browser ke liye valid host ho.
+ * APK/EXE cross-origin checkout: `Origin: https://localhost` → success/cancel wapas app WebView me.
  */
 export function getPublicAppOriginForPaymentRedirects(req: NextRequest): string {
+  const clientOrigin = req.headers.get("origin");
+  if (clientOrigin && isAllowedEmbeddedBillingClientOrigin(clientOrigin)) {
+    return clientOrigin.replace(/\/+$/, "");
+  }
+
   try {
     const host = req.nextUrl.hostname;
     const fromReq = req.nextUrl?.origin;

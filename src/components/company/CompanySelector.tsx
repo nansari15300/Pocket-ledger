@@ -36,11 +36,10 @@ import {
 import { Input } from "../ui/input";
 import { toast } from "@/hooks/use-toast";
 import { doc, getDoc } from "firebase/firestore";
-import { auth, firestore, signOutWithFirestoreTeardown } from "@/lib/firebase";
+import { auth, firestore } from "@/lib/firebase";
+import { useEmbeddedLogout } from "@/contexts/EmbeddedLogoutContext";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { maybeMarkEmbeddedPendingCompanyDataWarm } from "@/lib/embeddedPendingCompanyWarm";
-import { pruneRememberedLoginEmailIfDisabled } from "@/lib/loginRememberEmail";
-import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
 import {
   shouldPromptCompanyUnlock,
   showCompanyUserNameField,
@@ -131,6 +130,7 @@ const GoogleDriveIcon = () => (
 
 
 export function CompanySelector({ companies: initialCompanies }: { companies: CompanyData[] }) {
+  const { requestEmbeddedLogout } = useEmbeddedLogout();
   const router = useRouter();
   const { user } = useAuth();
   // Local mode: list useCompany context se (local DB + mirror) — alag listLocalCompanies se sab ko isOwned true galat tha.
@@ -326,17 +326,8 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     [sharedCompanies]
   );
 
-  const handleLogout = async () => {
-    const { clearNavigationMemory } = await import("@/lib/navigation-memory");
-    clearNavigationMemory();
-    pruneRememberedLoginEmailIfDisabled();
-    if (isLocalGuestEnabled()) {
-      disableLocalGuest();
-      router.replace("/");
-      return;
-    }
-    await signOutWithFirestoreTeardown(auth);
-    router.replace("/");
+  const handleLogout = () => {
+    requestEmbeddedLogout();
   };
 
   const [ownerNames, setOwnerNames] = useState<Record<string, string>>({});

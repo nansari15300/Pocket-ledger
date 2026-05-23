@@ -53,6 +53,8 @@ const entitlementLabels: Partial<Record<EntitlementKey, string>> = {
     canAddFileImagePdf: "Can add file (image/PDF) on vouchers",
     maxInterCompanyPartners: "Max joined inter-company partners",
     shareForReconciliationEnabled: "Share for Reconciling (cross-user ledger match)",
+    savedAccountSwitchEnabled: "Saved account switch (APK/EXE quick login)",
+    attachmentBackupRestoreEnabled: "Attachment backup & restore (embed files in .plbp)",
 };
 
 export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
@@ -247,7 +249,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
       // Multi-device switch off = dono 1; on = online/local alag caps (billing chart rows).
       { online: "maxDevices", local: "maxDevicesLocal", label: "Max devices" },
     ];
-    const entitlementBooleanFields: EntitlementKey[] = ["hasPrioritySupport", "hasAuditLogs", "hasRoleBasedAccess", "allowCompanyAdminRecycleBin", "canAddAvatar", "shareForReconciliationEnabled"];
+    const entitlementBooleanFields: EntitlementKey[] = ["hasPrioritySupport", "hasAuditLogs", "hasRoleBasedAccess", "allowCompanyAdminRecycleBin", "canAddAvatar", "shareForReconciliationEnabled", "savedAccountSwitchEnabled", "attachmentBackupRestoreEnabled"];
 
     const offerDate = editablePlan.limitedTimeOfferDate ? 
         (editablePlan.limitedTimeOfferDate.toDate ? editablePlan.limitedTimeOfferDate.toDate() : new Date(editablePlan.limitedTimeOfferDate))
@@ -552,6 +554,72 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                             }
                             placeholder="0 = unlimited"
                         />
+                    </div>
+
+                    {/* Attachment backup/restore + local→online MB — plan traffic control (0 = unlimited). */}
+                    <div className="md:col-span-2 lg:col-span-3 rounded-lg border bg-card/50 p-3 space-y-3">
+                        <div className="text-sm font-medium">Attachment backup &amp; restore</div>
+                        <p className="text-xs text-muted-foreground">
+                            Monthly counts limit attachment-heavy .plbp export/import. Local→online MB caps one-time upload size when linking a local company to cloud. Use 0 for unlimited.
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div className="space-y-1">
+                                <Label className="text-xs text-muted-foreground" htmlFor={`${plan.id}-maxAttachmentBackupPerMonth`}>
+                                    Max attachment backups / month
+                                </Label>
+                                <Input
+                                    id={`${plan.id}-maxAttachmentBackupPerMonth`}
+                                    type="number"
+                                    min={0}
+                                    value={String(Number(editablePlan.entitlements.maxAttachmentBackupPerMonth ?? 0))}
+                                    onChange={(e) =>
+                                        handleEntitlementChange(
+                                            "maxAttachmentBackupPerMonth",
+                                            Math.max(0, parseInt(e.target.value, 10) || 0)
+                                        )
+                                    }
+                                    placeholder="0 = unlimited"
+                                    disabled={!editablePlan.entitlements.attachmentBackupRestoreEnabled}
+                                />
+                            </div>
+                            <div className="space-y-1">
+                                <Label className="text-xs text-muted-foreground" htmlFor={`${plan.id}-maxAttachmentRestorePerMonth`}>
+                                    Max attachment restores / month
+                                </Label>
+                                <Input
+                                    id={`${plan.id}-maxAttachmentRestorePerMonth`}
+                                    type="number"
+                                    min={0}
+                                    value={String(Number(editablePlan.entitlements.maxAttachmentRestorePerMonth ?? 0))}
+                                    onChange={(e) =>
+                                        handleEntitlementChange(
+                                            "maxAttachmentRestorePerMonth",
+                                            Math.max(0, parseInt(e.target.value, 10) || 0)
+                                        )
+                                    }
+                                    placeholder="0 = unlimited"
+                                    disabled={!editablePlan.entitlements.attachmentBackupRestoreEnabled}
+                                />
+                            </div>
+                            <div className="space-y-1">
+                                <Label className="text-xs text-muted-foreground" htmlFor={`${plan.id}-maxLocalToOnlineAttachmentMB`}>
+                                    Local → cloud max attachments (MB)
+                                </Label>
+                                <Input
+                                    id={`${plan.id}-maxLocalToOnlineAttachmentMB`}
+                                    type="number"
+                                    min={0}
+                                    value={String(Number(editablePlan.entitlements.maxLocalToOnlineAttachmentMB ?? 0))}
+                                    onChange={(e) =>
+                                        handleEntitlementChange(
+                                            "maxLocalToOnlineAttachmentMB",
+                                            Math.max(0, parseInt(e.target.value, 10) || 0)
+                                        )
+                                    }
+                                    placeholder="0 = unlimited"
+                                />
+                            </div>
+                        </div>
                     </div>
 
                     {entitlementBooleanFields.map((key) => {

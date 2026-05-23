@@ -1878,6 +1878,7 @@ export function AccountDetails({
         }}
         voucher={selectedVoucher}
         onVoucherUpdated={() => setSelectedVoucher(null)}
+        ledgerEntityId={account?.id}
       />
     </>
   );

@@ -1453,11 +1453,19 @@ export function useTransactions(
                 const clickedContraLeg = (t.type === 'contra' && context === 'account' && entity && 'id' in entity)
                     ? (entity.id === t.fromAccountId ? 'out' : entity.id === t.toAccountId ? 'in' : (t as any)._contraLeg)
                     : (t as any)._contraLeg;
-                // Preserve source account context so edit dialog can label/highlight the same account side in Journal bill-wise card.
+                // Preserve ledger entity id (bank / party / staff) so Journal bill-wise sirf usi account ki Dr/Cr side use kare.
+                const openedFromEntityId =
+                    entity && 'id' in entity ? String((entity as any).id || "") : "";
                 const openedFromAccountId =
-                    context === 'account' && entity && 'id' in entity
-                        ? String((entity as any).id || "")
-                        : undefined;
+                    context === 'account' && openedFromEntityId
+                        ? openedFromEntityId
+                        : context === 'party' &&
+                            openedFromEntityId &&
+                            !['all', 'sales_account', 'purchase_account'].includes(openedFromEntityId)
+                          ? openedFromEntityId
+                          : context === 'staff' && openedFromEntityId && openedFromEntityId !== 'all'
+                            ? openedFromEntityId
+                            : undefined;
                 // Tax account ledger: show Paid/Partial/Unpaid for payment_in, payment_out, direct_income, direct_expense involving this tax
                 if ((context === 'tax' || context === 'tax_group') && (t.type === 'payment_in' || t.type === 'payment_out' || t.type === 'direct_income' || t.type === 'direct_expense')) {
                     const remaining = t.type === 'payment_in' || t.type === 'direct_income' ? getPaymentInRemaining(t) : getPaymentOutRemaining(t);
@@ -1732,10 +1740,14 @@ export function useTransactions(
                 const toUnique = Array.from(new Set(linkedToVoucherNos));
                 const linkedFromVoucherNosBillWise = (t.type === 'sale' || t.type === 'purchase' || t.type === 'journal') ? fromUnique : [];
                 const linkedToVoucherNosBillWise = (t.type === 'sale' || t.type === 'purchase' || t.type === 'journal') ? toUnique : [];
-                // Journal in party/staff: which side (Dr/Cr) this row is for, so edit dialog can auto-select that card and blink that row.
-                const _journalFocusSide = t.type === 'journal' && (context === 'party' || context === 'staff') && (Number(amounts.debit) > 0 || Number(amounts.credit) > 0)
-                    ? (Number(amounts.debit) > 0 ? 'debit' as const : 'credit' as const)
-                    : undefined;
+                // Journal: clicked ledger row ki Dr/Cr side — edit dialog me sahi bill-wise card auto-select ho.
+                const _journalFocusSide =
+                    t.type === 'journal' &&
+                    openedFromAccountId &&
+                    (context === 'party' || context === 'staff' || context === 'account') &&
+                    (Number(amounts.debit) > 0 || Number(amounts.credit) > 0)
+                        ? (Number(amounts.debit) > 0 ? 'debit' as const : 'credit' as const)
+                        : undefined;
 
                 return {
                     ...t,

@@ -358,6 +358,17 @@ function mergeAttachmentFieldsFromRowForEffectiveVoucher(live: any, row: any): a
   return out;
 }
 
+/** Ledger row metadata Firestore doc me nahi — live snapshot replace par Journal bill-wise party/side preserve karo. */
+function mergeLedgerRowContextFromRow(live: any, row: any, ledgerEntityId?: string): any {
+  if (!live) return live;
+  return {
+    ...live,
+    _contraLeg: row?._contraLeg ?? live?._contraLeg,
+    _openedFromAccountId: row?._openedFromAccountId ?? ledgerEntityId ?? live?._openedFromAccountId,
+    _journalFocusSide: row?._journalFocusSide ?? live?._journalFocusSide,
+  };
+}
+
 // Voucher number fallback map: cross-company copy me target company ka next number nikalne ke लिए default prefix.
 const DEFAULT_PREFIX_LABELS: Record<string, string> = {
   sale: "Sale Inv",
@@ -851,6 +862,12 @@ function VoucherDialogContent({
   onClearEffectiveLinksOnTabChange,
   /** Compare-before-sync: journal account lists isi company se (`CreateJournalForm`). */
   ledgerScopeCompanyId,
+  /** Party/staff/bank ledger se edit: bill-wise sirf is entity ki Dr/Cr side — Firestore row me nahi hota. */
+  ledgerEntityId,
+  /** Bill-wise ledger: opening row remaining — Journal link me Opening Balance include karne ke liye. */
+  ledgerOpeningBalanceOutstanding,
+  /** Ledger books opening signed (Dr + / Cr −) — Journal link me party lookup miss par fallback. */
+  ledgerBooksOpeningBalanceSigned,
   // Mobile strip me voucher dropdown ke right company selector show karne ke liye parent-controlled props.
   targetCompanyId,
   targetCompanyOptions,
@@ -895,6 +912,9 @@ function VoucherDialogContent({
   onEffectiveLinksChange?: (hasLinks: boolean | undefined) => void,
   onClearEffectiveLinksOnTabChange?: () => void,
   ledgerScopeCompanyId?: string,
+  ledgerEntityId?: string,
+  ledgerOpeningBalanceOutstanding?: number,
+  ledgerBooksOpeningBalanceSigned?: number,
   targetCompanyId?: string,
   targetCompanyOptions?: Array<{ id: string; name: string }>,
   onTargetCompanyChange?: (companyId: string) => void,
@@ -960,7 +980,12 @@ function VoucherDialogContent({
   const initialVoucherData = useMemo(() => {
     if (isEditing) {
       const shaped = shapeVoucherForActiveEditTab(voucher as Record<string, unknown> | undefined, activeTab);
-      return shaped as typeof voucher;
+      if (!shaped) return shaped as typeof voucher;
+      // Ledger entity id row/Firestore dono se — CreateJournalForm bill-wise cards ke liye.
+      return {
+        ...shaped,
+        _openedFromAccountId: (shaped as any)?._openedFromAccountId ?? ledgerEntityId,
+      } as typeof voucher;
     }
 
     // nayi txn: defaultVoucherData me `id` ho to spread se “edit” ban jata — savedVoucherId galat + attach band
@@ -980,7 +1005,7 @@ function VoucherDialogContent({
       ...restDefault,
       id: undefined as undefined,
     };
-  }, [voucher, defaultVoucherData, isEditing, activeTab]);
+  }, [voucher, defaultVoucherData, isEditing, activeTab, ledgerEntityId]);
 
   const ActiveForm = useMemo(() => formMap[activeTab], [activeTab]);
   // formInstanceKey copy-draft re-seed par badalti hai (parent), taaki naye target company ka voucher number/account
@@ -1178,6 +1203,9 @@ function VoucherDialogContent({
               onEffectiveLinksChange={activeTab === 'sale' || activeTab === 'purchase' || activeTab === 'payment_in' || activeTab === 'direct_income' || activeTab === 'payment_out' || activeTab === 'direct_expense' || activeTab === 'add_salary' ? onEffectiveLinksChange : undefined}
               initialFocusSide={activeTab === 'journal' ? (initialVoucherData as any)?._journalFocusSide : undefined}
               {...(activeTab === "journal" && ledgerScopeCompanyId ? { ledgerScopeCompanyId } : {})}
+              {...(activeTab === "journal" && ledgerEntityId ? { ledgerEntityId } : {})}
+              {...(activeTab === "journal" && ledgerOpeningBalanceOutstanding != null ? { ledgerOpeningBalanceOutstanding } : {})}
+              {...(activeTab === "journal" && typeof ledgerBooksOpeningBalanceSigned === "number" ? { ledgerBooksOpeningBalanceSigned } : {})}
               {...(copySaveTargetCompanyId ? { copySaveTargetCompanyId } : {})}
               {...(copyMismatchCategories ? { copyMismatchCategories } : {})}
               {...(onCopyMissingCategory ? { onCopyMissingCategory } : {})}
@@ -1223,6 +1251,11 @@ export function AddVoucherDialog(props: any) {
     /** Recycle bin view: ribbon + Restore (parent restore ke baad `forceViewOnly` hatao). */
     recycleBinOnRestore,
     recycleBinRestoring = false,
+    /** Party/staff/bank ledger entity id — Journal bill-wise cards ke liye (Firestore live doc me nahi). */
+    ledgerEntityId,
+    /** Bill-wise opening row remaining — Journal link dialog me OB row ke liye. */
+    ledgerOpeningBalanceOutstanding,
+    ledgerBooksOpeningBalanceSigned,
     ...rest
   } = props;
   // Outer company context full reference: dialog-scope override provider build karne ke liye (forms ko target company dikhana hai
@@ -2030,13 +2063,15 @@ export function AddVoucherDialog(props: any) {
     };
   }, [isOpen, voucher?.id, companyId, postCopyNewFormSeed, voucher?.type, editCompanyId, ctxCompanyId, vouchers, voucherSqlMirrorFirst]);
 
-  // Preserve clicked contra leg + attachments from table row when live doc has not synced fileUrls yet.
+  // Preserve clicked contra leg + ledger row context + attachments when live Firestore doc replaces table row.
   const effectiveVoucher = liveVoucher
     ? mergeAttachmentFieldsFromRowForEffectiveVoucher(
-        { ...liveVoucher, _contraLeg: (voucher as any)?._contraLeg ?? (liveVoucher as any)?._contraLeg },
+        mergeLedgerRowContextFromRow(liveVoucher, voucher, ledgerEntityId),
         voucher
       )
-    : voucher;
+    : voucher
+      ? mergeLedgerRowContextFromRow(voucher, voucher, ledgerEntityId)
+      : voucher;
   // Dialog chrome / link-locks sirf saved edit par: copied-draft session me null rakho (nahi to source voucher id se locks lag jate hain).
   const voucherForDialogChrome = postCopyNewFormSeed ? null : effectiveVoucher;
   // Bill-wise: voucher's own allocations/linked refs, OR (sale/purchase) any payment has allocations to this voucher
@@ -3780,6 +3815,9 @@ export function AddVoucherDialog(props: any) {
           {...rest}
           // Journal / ledger lists: header target company, warna compare-edit `editCompanyId`.
           ledgerScopeCompanyId={targetCompanyId || editCompanyId || undefined}
+          ledgerEntityId={ledgerEntityId}
+          ledgerOpeningBalanceOutstanding={ledgerOpeningBalanceOutstanding}
+          ledgerBooksOpeningBalanceSigned={ledgerBooksOpeningBalanceSigned}
           // Copy flow ke baad new form force: old voucher edit ke badle seeded new voucher open karo.
           voucher={postCopyNewFormSeed ? undefined : effectiveVoucher}
           defaultVoucherData={postCopyNewFormSeed ?? defaultVoucherData}

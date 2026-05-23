@@ -4,13 +4,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  signInWithPopup,
-  signInWithRedirect,
   getRedirectResult,
-  signInWithCredential,
-  GoogleAuthProvider,
 } from "firebase/auth";
-import { Capacitor } from "@capacitor/core";
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useEffect, useLayoutEffect, useCallback } from "react";
@@ -37,6 +32,8 @@ import {
   readRememberedEmail,
 } from "@/lib/loginRememberEmail";
 import { resolvePostAuthCompanyRoute } from "@/lib/postAuthCompanyRoute";
+import { signInWithGoogleForApp } from "@/lib/googleFirebaseSignIn";
+import { stashSessionPasswordForSavedAccount } from "@/lib/savedLoginSessionPassword";
 
 // One-time handling of redirect result (survives Strict Mode double-mount so we don't consume result twice)
 let redirectResultHandledThisLoad = false;
@@ -141,6 +138,11 @@ export function LoginForm() {
         ? createUserWithEmailAndPassword(auth, values.email, values.password)
         : signInWithEmailAndPassword(auth, values.email, values.password));
 
+      // Logout save-account: isi session ka password memory me (plain storage nahi).
+      if (!isSignUp) {
+        stashSessionPasswordForSavedAccount(values.email, values.password);
+      }
+
       // After successful auth only: persist email if opted in — password is never written to storage.
       try {
         if (rememberEmail) {
@@ -176,52 +178,10 @@ export function LoginForm() {
 
   async function handleGoogleSignIn() {
     setIsGoogleLoading(true);
-    const provider = new GoogleAuthProvider();
-    provider.addScope('email');
-    provider.addScope('profile');
     try {
-      // Native APK/WebView: Firebase web popup/redirect often gets stuck; use Capacitor native Google auth instead.
-      if (Capacitor.isNativePlatform()) {
-        const { GoogleAuth } = await import("@codetrix-studio/capacitor-google-auth");
-        // Env preferred (custom Firebase project); default matches android/app/google-services.json Web client so static export/APK me blank NEXT_PUBLIC_* par bhi native sign-in chale.
-        const clientId =
-          process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim() || FIREBASE_WEB_OAUTH_CLIENT_ID;
-        if (!clientId) {
-          // Message substring must match catch below so toast shows env setup hint (not a silent generic error).
-          throw new Error(
-            "NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID: Google Web client ID missing for native GoogleAuth.initialize",
-          );
-        }
-        await GoogleAuth.initialize({ clientId, scopes: ["profile", "email"], grantOfflineAccess: false });
-        const nativeUser = await GoogleAuth.signIn();
-        const idToken = nativeUser.authentication?.idToken;
-        if (!idToken) {
-          throw new Error("Google idToken missing from native sign-in");
-        }
-        const credential = GoogleAuthProvider.credential(idToken);
-        const result = await signInWithCredential(auth, credential);
-        if (result?.user) {
-          // Native Google login: same post-auth company routing as other login methods.
-          navigateAfterAuth(result.user.uid, true);
-          return;
-        }
-      }
-
-      // Prefer popup so user stays on same page; fallback to redirect if popup is blocked
-      try {
-        const result = await signInWithPopup(auth, provider);
-        if (result?.user) {
-          // Popup Google login: same post-auth company routing as other login methods.
-          navigateAfterAuth(result.user.uid, true);
-          return;
-        }
-      } catch (popupError: any) {
-        if (popupError.code === "auth/popup-blocked" || popupError.code === "auth/cancelled-popup-request") {
-          // Popup blocked or user closed it — use redirect instead
-          await signInWithRedirect(auth, provider);
-          return; // Page will navigate away; getRedirectResult handles return
-        }
-        throw popupError;
+      const result = await signInWithGoogleForApp();
+      if (result?.user) {
+        navigateAfterAuth(result.user.uid, true);
       }
     } catch (error: any) {
       setIsGoogleLoading(false);

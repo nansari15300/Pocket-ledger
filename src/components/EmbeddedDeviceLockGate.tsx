@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * EXE = 6-digit PIN required; APK = biometric primary, optional backup PIN.
+ * EXE = 6-digit PIN required; APK = backup PIN pehle, phir optional biometric (Settings / setup gate).
  * Firebase restore ke baad bhi pura UI tab tak block jab tak session unlock na ho — logout par session flag clear.
  */
 
@@ -15,7 +15,6 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import {
   embeddedPinLength,
-  generateInternalDeviceLockPin,
   getEmbeddedLockShellKind,
   hasEmbeddedLockConfigured,
   hasEmbeddedPinConfigured,
@@ -45,8 +44,6 @@ export function EmbeddedDeviceLockGate() {
   const [pin2, setPin2] = useState("");
   const [busy, setBusy] = useState(false);
   const [bioOffer, setBioOffer] = useState(false);
-  /** APK setup: optional backup PIN fields dikhane ke liye. */
-  const [showOptionalPinSetup, setShowOptionalPinSetup] = useState(false);
   /** APK unlock: backup PIN tab dikhane ke liye (default biometric-only). */
   const [showOptionalPinUnlock, setShowOptionalPinUnlock] = useState(false);
   /** `sessionStorage` / localStorage change par React dubara paint kare — unlock ke baad overlay hataane ke liye. */
@@ -192,30 +189,52 @@ export function EmbeddedDeviceLockGate() {
     return () => window.clearTimeout(t);
   }, [needsGate, setupMode, isApk, bioEnabled, busy, uid, onUnlockBiometric]);
 
-  /** APK: biometric + andar hidden PIN hash; optional user PIN overwrite. */
-  const onSetupApkBiometric = async (userPin?: string) => {
+  /** APK: pehle user PIN verify, phir biometric keystore — bina PIN ke fingerprint/face band. */
+  const validateSetupPinFields = (): boolean => {
+    const n = embeddedPinLength();
+    if (!isSixDigitNumericPin(pin) || !isSixDigitNumericPin(pin2)) {
+      toast({
+        variant: "destructive",
+        title: "PIN",
+        description: `Enter exactly ${n} digits (numbers only).`,
+      });
+      return false;
+    }
+    if (pin !== pin2) {
+      toast({ variant: "destructive", title: "PIN mismatch", description: "Both PIN fields must match." });
+      return false;
+    }
+    return true;
+  };
+
+  const onSetupApkBiometric = async (userPin: string) => {
     if (!user) return;
+    if (!isSixDigitNumericPin(userPin)) {
+      toast({
+        variant: "destructive",
+        title: "PIN required",
+        description: `Set a ${embeddedPinLength()}-digit PIN before enabling fingerprint or face unlock.`,
+      });
+      return;
+    }
     if (!bioOffer) {
       toast({
         variant: "destructive",
         title: "Biometric unavailable",
-        description: "Enable fingerprint or face unlock in device settings, or set a backup PIN.",
+        description: "Enable fingerprint or face unlock in device settings, or continue with PIN only.",
       });
       return;
     }
     setBusy(true);
     try {
-      const lockPin = userPin && isSixDigitNumericPin(userPin) ? userPin : generateInternalDeviceLockPin();
-      await saveEmbeddedPinHash(user.uid, lockPin);
-      await saveNativeBiometricLockPin(user.uid, lockPin);
+      await saveEmbeddedPinHash(user.uid, userPin);
+      await saveNativeBiometricLockPin(user.uid, userPin);
       setBiometricUnlockEnabled(user.uid, true);
-      setUserChosenEmbeddedPin(user.uid, Boolean(userPin && isSixDigitNumericPin(userPin)));
+      setUserChosenEmbeddedPin(user.uid, true);
       finishUnlock();
       toast({
         title: "App lock ready",
-        description: userPin
-          ? "Fingerprint or face unlock is on. You can also use your backup PIN."
-          : "This device unlocks with fingerprint or face.",
+        description: "Fingerprint or face unlock is on. You can also use your backup PIN.",
       });
     } catch {
       toast({
@@ -231,24 +250,16 @@ export function EmbeddedDeviceLockGate() {
   const onSetup = async () => {
     if (!user) return;
     if (isApk) {
-      if (showOptionalPinSetup) {
-        const n = embeddedPinLength();
-        if (!isSixDigitNumericPin(pin) || !isSixDigitNumericPin(pin2)) {
-          toast({
-            variant: "destructive",
-            title: "PIN",
-            description: `Enter exactly ${n} digits (numbers only) or skip backup PIN.`,
-          });
-          return;
-        }
-        if (pin !== pin2) {
-          toast({ variant: "destructive", title: "PIN mismatch", description: "Both PIN fields must match." });
-          return;
-        }
-        await onSetupApkBiometric(pin);
-        return;
+      if (!validateSetupPinFields()) return;
+      setBusy(true);
+      try {
+        await saveEmbeddedPinHash(user.uid, pin);
+        setUserChosenEmbeddedPin(user.uid, true);
+        finishUnlock();
+        toast({ title: "App lock ready", description: "Your backup PIN is set. Enable biometric in Settings if you want." });
+      } finally {
+        setBusy(false);
       }
-      await onSetupApkBiometric();
       return;
     }
 
@@ -318,7 +329,7 @@ export function EmbeddedDeviceLockGate() {
           <CardDescription>
             {setupMode
               ? isApk
-                ? "Use fingerprint or face to lock this app. A backup PIN is optional."
+                ? "Choose a 6-digit backup PIN first. After that you can enable fingerprint or face unlock."
                 : "Windows app: choose a 6-digit PIN. Until you log out, you will not be asked for your cloud password again for this session."
               : isApk
                 ? "Unlock with fingerprint or face. Data loads from local storage first; account checks run in the background."
@@ -330,70 +341,55 @@ export function EmbeddedDeviceLockGate() {
             <>
               {isApk ? (
                 <>
+                  <div className="space-y-2">
+                    <Label htmlFor="pl-embed-pin1">Backup PIN ({embeddedPinLength()} digits)</Label>
+                    <Input
+                      id="pl-embed-pin1"
+                      type="password"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      maxLength={embeddedPinLength()}
+                      value={pin}
+                      onChange={(e) =>
+                        setPin(e.target.value.replace(/\D/g, "").slice(0, embeddedPinLength()))
+                      }
+                      disabled={busy}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="pl-embed-pin2">Confirm backup PIN</Label>
+                    <Input
+                      id="pl-embed-pin2"
+                      type="password"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      maxLength={embeddedPinLength()}
+                      value={pin2}
+                      onChange={(e) =>
+                        setPin2(e.target.value.replace(/\D/g, "").slice(0, embeddedPinLength()))
+                      }
+                      disabled={busy}
+                    />
+                  </div>
+                  <Button type="button" className="w-full" disabled={busy} onClick={() => void onSetup()}>
+                    {busy ? "Saving…" : "Save PIN and continue"}
+                  </Button>
                   <Button
                     type="button"
+                    variant="secondary"
                     className="w-full"
                     disabled={busy || !bioOffer}
-                    onClick={() => void onSetupApkBiometric()}
+                    onClick={() => {
+                      if (!validateSetupPinFields()) return;
+                      void onSetupApkBiometric(pin);
+                    }}
                   >
-                    {busy ? "Setting up…" : "Enable fingerprint / face unlock"}
+                    {busy ? "Setting up…" : "Save PIN and enable fingerprint / face unlock"}
                   </Button>
                   {!bioOffer ? (
                     <p className="text-xs text-muted-foreground">
-                      Biometric hardware not detected. Set a backup PIN below or enable biometrics in Android settings.
+                      Biometric hardware not detected. Save PIN above, or enable biometrics in Android settings.
                     </p>
-                  ) : null}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="w-full text-sm"
-                    disabled={busy}
-                    onClick={() => setShowOptionalPinSetup((v) => !v)}
-                  >
-                    {showOptionalPinSetup ? "Hide backup PIN" : "Set backup PIN (optional)"}
-                  </Button>
-                  {showOptionalPinSetup ? (
-                    <>
-                      <div className="space-y-2">
-                        <Label htmlFor="pl-embed-pin1">Backup PIN ({embeddedPinLength()} digits)</Label>
-                        <Input
-                          id="pl-embed-pin1"
-                          type="password"
-                          inputMode="numeric"
-                          autoComplete="one-time-code"
-                          maxLength={embeddedPinLength()}
-                          value={pin}
-                          onChange={(e) =>
-                            setPin(e.target.value.replace(/\D/g, "").slice(0, embeddedPinLength()))
-                          }
-                          disabled={busy}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="pl-embed-pin2">Confirm backup PIN</Label>
-                        <Input
-                          id="pl-embed-pin2"
-                          type="password"
-                          inputMode="numeric"
-                          autoComplete="one-time-code"
-                          maxLength={embeddedPinLength()}
-                          value={pin2}
-                          onChange={(e) =>
-                            setPin2(e.target.value.replace(/\D/g, "").slice(0, embeddedPinLength()))
-                          }
-                          disabled={busy}
-                        />
-                      </div>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        className="w-full"
-                        disabled={busy}
-                        onClick={() => void onSetup()}
-                      >
-                        Save backup PIN and enable biometric
-                      </Button>
-                    </>
                   ) : null}
                 </>
               ) : (
