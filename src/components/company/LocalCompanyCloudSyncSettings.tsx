@@ -12,8 +12,10 @@ import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { getGoogleDriveAuthUrl } from "@/lib/driveAuthClient";
 import { getLocalCloudSyncStatus, runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
+import { Input } from "@/components/ui/input";
 import { readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConfig";
 import type { CloudSyncProviderId } from "@/lib/localCloudSync/types";
+import type { DriveAttachmentDateFolderMode } from "@/lib/localCloudSync/driveAttachmentPath";
 import { formatDistanceToNow } from "date-fns";
 import { Cloud, Loader2, RefreshCw } from "lucide-react";
 import { doc, deleteDoc } from "firebase/firestore";
@@ -40,12 +42,21 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
   const cfg = readCloudSyncConfigFromCompany(company);
   const [enabled, setEnabled] = useState(cfg.cloudSyncEnabled);
   const [provider, setProvider] = useState<CloudSyncProviderId>(cfg.cloudSyncProvider ?? "google_drive");
+  const [sharedEmailsInput, setSharedEmailsInput] = useState(cfg.cloudSyncSharedEmails.join(", "));
+  const [dateFolderMode, setDateFolderMode] = useState<DriveAttachmentDateFolderMode>(
+    cfg.cloudSyncDriveDateFolderMode ?? "ad"
+  );
+  const isNepalCompany = ["NP", "NEPAL"].includes(
+    String((company as { country?: string }).country ?? "").trim().toUpperCase()
+  );
 
   // Parent `company` refresh (registry bump) par checkbox state sync — tick UI + SQLite align
   useEffect(() => {
     const next = readCloudSyncConfigFromCompany(company);
     setEnabled(next.cloudSyncEnabled);
     if (next.cloudSyncProvider) setProvider(next.cloudSyncProvider);
+    setSharedEmailsInput(next.cloudSyncSharedEmails.join(", "));
+    if (next.cloudSyncDriveDateFolderMode) setDateFolderMode(next.cloudSyncDriveDateFolderMode);
   }, [company]);
 
   const refreshStatus = useCallback(async () => {
@@ -82,6 +93,18 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
   const onProviderChange = async (p: CloudSyncProviderId) => {
     setProvider(p);
     await saveConfig({ cloudSyncProvider: p, cloudSyncEnabled: enabled });
+  };
+
+  const saveDriveExtras = async () => {
+    const emails = sharedEmailsInput
+      .split(/[,;\s]+/)
+      .map((e) => e.trim().toLowerCase())
+      .filter((e) => e.includes("@"));
+    await saveConfig({
+      cloudSyncSharedEmails: emails,
+      cloudSyncDriveDateFolderMode: isNepalCompany ? dateFolderMode : "ad",
+    });
+    toast({ title: "Drive settings saved", description: "Share list and attachment folders updated." });
   };
 
   const connectDrive = async () => {
@@ -152,7 +175,8 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
           Cloud sync (local company)
         </CardTitle>
         <CardDescription>
-          Optional multi-device backup via Google Drive or Dropbox. Firestore online companies use Firestore sync only.
+          Google Drive layout:{" "}
+          <span className="font-mono text-[11px]">Pocket Ledger/CompanyName__id/backup|data|attachments/</span>
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -211,6 +235,45 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                 Force sync now
               </Button>
             </div>
+
+            {provider === "google_drive" ? (
+              <div className="space-y-3 rounded-md border p-3">
+                <div className="space-y-1">
+                  <Label htmlFor="cloud-sync-shared-emails">Share Drive folder with (Gmail)</Label>
+                  <Input
+                    id="cloud-sync-shared-emails"
+                    value={sharedEmailsInput}
+                    onChange={(e) => setSharedEmailsInput(e.target.value)}
+                    placeholder="staff@gmail.com, partner@gmail.com"
+                    className="text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Writer access on company folder — staff same Pocket Ledger login + Drive connect karein.
+                  </p>
+                </div>
+                {isNepalCompany ? (
+                  <div className="space-y-1">
+                    <Label>Attachment date folder (Nepal)</Label>
+                    <div className="flex flex-wrap gap-3 text-sm">
+                      {(["ad", "bs", "both"] as const).map((mode) => (
+                        <label key={mode} className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="cloudSyncDriveDateFolderMode"
+                            checked={dateFolderMode === mode}
+                            onChange={() => setDateFolderMode(mode)}
+                          />
+                          {mode === "ad" ? "AD only" : mode === "bs" ? "BS only" : "Both"}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => void saveDriveExtras()}>
+                  Save Drive share / folder options
+                </Button>
+              </div>
+            ) : null}
 
             <div className="text-xs text-muted-foreground space-y-1">
               <p>Status: {status.status}</p>

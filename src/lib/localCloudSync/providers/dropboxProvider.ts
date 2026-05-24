@@ -1,6 +1,6 @@
 "use client";
 
-import type { CloudSyncManifest, LocalCloudSyncOperation } from "@/lib/localCloudSync/types";
+import type { CloudSyncCompanyRef, CloudSyncManifest, LocalCloudSyncOperation } from "@/lib/localCloudSync/types";
 import type { SyncProvider } from "@/lib/localCloudSync/providers/types";
 
 /** Dropbox — same delta layout as Drive; OAuth/API routes baad me extend. */

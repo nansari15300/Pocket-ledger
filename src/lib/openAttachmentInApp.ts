@@ -23,6 +23,7 @@ import {
   getLocalFileRefMeta,
   getLocalFileRefMetaSync,
 } from "@/lib/localPendingFiles";
+import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";
 
@@ -101,6 +102,42 @@ export async function openAttachmentInApp(
       openAttachmentGalleryInApp(normalized, i, { title: opts?.title, kinds: g.kinds });
       return;
     }
+  }
+
+  // Drive cloud sync ref — `drive:Pocket Ledger/...`
+  if (isDriveFileRef(u)) {
+    const blob = await getBlobFromLocalFileRef(u);
+    if (!blob) {
+      if (typeof window !== "undefined") {
+        window.alert("Could not download this attachment from Google Drive. Check internet and Drive connection.");
+      }
+      return;
+    }
+    const bUrl = URL.createObjectURL(blob);
+    try {
+      const ct = blob.type.toLowerCase();
+      const isPdf = opts?.kind === "pdf" || ct.includes("pdf");
+      const isImg = opts?.kind === "image" || ct.startsWith("image/");
+      if (isImg) {
+        showInAppImagePreview(bUrl, () => URL.revokeObjectURL(bUrl), { title: opts?.title ?? "Image" });
+        return;
+      }
+      if (isPdf && shouldUseInAppPdfPreviewOverlay()) {
+        showInAppPdfPreview(bUrl, () => URL.revokeObjectURL(bUrl), { title: opts?.title ?? "PDF" });
+        return;
+      }
+      if (isPdf) {
+        await openPdfBlobInExternalViewer(blob, opts?.title ?? "PDF");
+        URL.revokeObjectURL(bUrl);
+        return;
+      }
+      window.open(bUrl, "_blank", "noopener,noreferrer");
+      setTimeout(() => URL.revokeObjectURL(bUrl), 60_000);
+    } catch (e) {
+      URL.revokeObjectURL(bUrl);
+      throw e;
+    }
+    return;
   }
 
   // Local-first: blob IndexedDB me — SQLite/Firestore me sirf `local:uuid` string

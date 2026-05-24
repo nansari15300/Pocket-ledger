@@ -2,9 +2,9 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { verifyBearerUid } from "@/lib/localCloudSync/server/apiAuth";
-import { driveGetManifest, driveUpdateManifest } from "@/lib/localCloudSync/server/driveTransportServer";
-import type { CloudSyncManifest } from "@/lib/localCloudSync/types";
+import { driveShareCompanyFolder } from "@/lib/localCloudSync/server/driveTransportServer";
 
+/** Company folder (`Pocket Ledger/{Company}/`) ko staff emails par writer share. */
 export async function POST(req: NextRequest) {
   const auth = await verifyBearerUid(req);
   if ("error" in auth) {
@@ -13,19 +13,15 @@ export async function POST(req: NextRequest) {
   const body = (await req.json()) as {
     companyId?: string;
     companyName?: string;
-    action?: "get" | "set";
-    manifest?: CloudSyncManifest;
+    emails?: string[];
   };
   const companyId = String(body.companyId || "").trim();
   const companyName = typeof body.companyName === "string" ? body.companyName.trim() : undefined;
+  const emails = Array.isArray(body.emails) ? body.emails : [];
   if (!companyId) return NextResponse.json({ error: "companyId required" }, { status: 400 });
   try {
-    if (body.action === "set" && body.manifest) {
-      await driveUpdateManifest(auth.uid, companyId, body.manifest, companyName);
-      return NextResponse.json({ ok: true });
-    }
-    const manifest = await driveGetManifest(auth.uid, companyId, companyName);
-    return NextResponse.json(manifest);
+    const res = await driveShareCompanyFolder(auth.uid, companyId, companyName, emails);
+    return NextResponse.json({ ok: true, ...res });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: msg }, { status: 500 });

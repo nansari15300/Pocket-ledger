@@ -8,7 +8,7 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
   return btoa(bin);
 }
-import type { CloudSyncManifest, LocalCloudSyncOperation } from "@/lib/localCloudSync/types";
+import type { CloudSyncCompanyRef, CloudSyncManifest, LocalCloudSyncOperation } from "@/lib/localCloudSync/types";
 import type { SyncProvider } from "@/lib/localCloudSync/providers/types";
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
@@ -32,42 +32,50 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 export class GoogleDriveSyncProvider implements SyncProvider {
   readonly providerId = "google_drive" as const;
 
-  async uploadOperation(companyId: string, op: LocalCloudSyncOperation): Promise<void> {
-    await postJson("/api/local-cloud-sync/drive/upload-op", { companyId, op });
+  async uploadOperation(ref: CloudSyncCompanyRef, op: LocalCloudSyncOperation): Promise<void> {
+    await postJson("/api/local-cloud-sync/drive/upload-op", {
+      companyId: ref.companyId,
+      companyName: ref.companyName,
+      op,
+    });
   }
 
-  async downloadOperations(companyId: string, afterOpSeq: number): Promise<LocalCloudSyncOperation[]> {
+  async downloadOperations(ref: CloudSyncCompanyRef, afterOpSeq: number): Promise<LocalCloudSyncOperation[]> {
     const res = await postJson<{ operations: LocalCloudSyncOperation[] }>(
       "/api/local-cloud-sync/drive/download-ops",
-      { companyId, afterOpSeq }
+      { companyId: ref.companyId, companyName: ref.companyName, afterOpSeq }
     );
     return res.operations ?? [];
   }
 
-  async getManifest(companyId: string): Promise<CloudSyncManifest> {
+  async getManifest(ref: CloudSyncCompanyRef): Promise<CloudSyncManifest> {
     return postJson<CloudSyncManifest>("/api/local-cloud-sync/drive/manifest", {
-      companyId,
+      companyId: ref.companyId,
+      companyName: ref.companyName,
       action: "get",
     });
   }
 
-  async updateManifest(companyId: string, manifest: CloudSyncManifest): Promise<void> {
+  async updateManifest(ref: CloudSyncCompanyRef, manifest: CloudSyncManifest): Promise<void> {
     await postJson("/api/local-cloud-sync/drive/manifest", {
-      companyId,
+      companyId: ref.companyId,
+      companyName: ref.companyName,
       action: "set",
       manifest,
     });
   }
 
   async uploadFile(
-    companyId: string,
+    ref: CloudSyncCompanyRef,
     fileId: string,
     bytes: ArrayBuffer,
-    meta: { contentType?: string; sha256Hex?: string }
+    meta: { contentType?: string; sha256Hex?: string; remotePath?: string }
   ): Promise<{ remotePath: string }> {
     const res = await postJson<{ remotePath: string }>("/api/local-cloud-sync/drive/upload-file", {
-      companyId,
+      companyId: ref.companyId,
+      companyName: ref.companyName,
       fileId,
+      remotePath: meta.remotePath,
       contentType: meta.contentType,
       sha256Hex: meta.sha256Hex,
       base64: arrayBufferToBase64(bytes),
@@ -75,9 +83,10 @@ export class GoogleDriveSyncProvider implements SyncProvider {
     return { remotePath: res.remotePath };
   }
 
-  async downloadFile(companyId: string, remotePath: string): Promise<ArrayBuffer | null> {
+  async downloadFile(ref: CloudSyncCompanyRef, remotePath: string): Promise<ArrayBuffer | null> {
     const res = await postJson<{ base64: string | null }>("/api/local-cloud-sync/drive/download-file", {
-      companyId,
+      companyId: ref.companyId,
+      companyName: ref.companyName,
       remotePath,
     });
     if (!res.base64) return null;

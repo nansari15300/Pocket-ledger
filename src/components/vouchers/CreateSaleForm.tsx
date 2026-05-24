@@ -122,6 +122,11 @@ import {
 import { CreateBankAccountDialog } from "../bank-cash/CreateBankAccountDialog";
 import { AddVoucherDialog } from "./AddVoucherDialog";
 import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDialog";
+import {
+  buildVoucherLineItemComboboxOptions,
+  comboboxValueFromLineItemId,
+  lineItemIdFromComboboxValue,
+} from "@/components/vouchers/voucherLineItemCombobox";
 
 
 const fileSchema = z.object({
@@ -344,6 +349,8 @@ export function CreateSaleForm({
   const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
   /** Naye party save ke turant baad parties sync se pehle stale-master effect `partyId` na wipe kare. */
   const pendingPartyIdUntilInPartiesListRef = useRef<string | null>(null);
+  /** Items listener pehli snapshot se pehle stale-master effect saved `itemId` na clear kare. */
+  const itemsListHydratedRef = useRef(false);
   const [isCreateItemOpen, setIsCreateItemOpen] = useState(false);
   const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
   // Sales Account combobox: allow creating a new income/expense account inline.
@@ -680,11 +687,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   }, []);
 
   useEffect(() => {
-    if (!companyId) return;
+    if (!companyId) {
+      itemsListHydratedRef.current = false;
+      return;
+    }
+    itemsListHydratedRef.current = false;
 
      const unsubItems = onSnapshot(
       query(collection(firestore, `companies/${companyId}/items`)),
       (snapshot) => {
+        itemsListHydratedRef.current = true;
         setItems(snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Item)).filter(i => !i.isDeleted));
       }
     );
@@ -701,7 +713,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       // dirty false + race par bhi `reset` date/line wipe kar deta tha. Same `id` = dubara reset mat karo.
       if (isSameVoucher) return;
       lastResetVoucherIdRef.current = voucher.id;
-      form.reset(getInitialFormValues(voucher));
+      const initialValues = getInitialFormValues(voucher);
+      form.reset(initialValues);
+      const li0 = initialValues.lineItems?.[0];
+      if (li0?.type === "service" || li0?.type === "item") {
+        setItemType(li0.type);
+      }
       setSavedVoucherId(voucher.id);
       const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
       if (Array.isArray(urlsToSet)) {
@@ -1005,6 +1022,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           ...li,
           quantity: Number(li.quantity),
           taxAmount: li.taxAmount || 0,
+          // Bina item = blank; select karke save par id Firestore me persist ho.
+          itemId: String(li.itemId ?? "").trim(),
         }));
 
         const submissionData = {
@@ -1439,19 +1458,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   
   const filteredItems = useMemo(() => items.filter((i) => i.type === itemType && !i.isDeleted), [items, itemType]);
   
-  const itemOptions = useMemo(() => {
-    if (!allProcessedItems || !filteredItems) return [];
-    return filteredItems.map((item) => {
-        const stock = allProcessedItems.find(p => p.id === item.id);
-        const stockQty = stock?.displayStockQty ?? 0;
-        const stockUnit = (stock as any)?.unitConversions?.[(stock as any).unitConversions.length-1]?.toUnit || '';
-        return {
-            value: item.id,
-            label: `${item.name} (Stock: ${stockQty.toFixed(2)} ${stockUnit})`,
-            isSpecial: stockQty <= 0,
-        };
-    });
-  }, [filteredItems, allProcessedItems]);
+  const itemOptions = useMemo(
+    () =>
+      buildVoucherLineItemComboboxOptions({
+        filteredItems,
+        allProcessedItems,
+        items: items ?? [],
+        watchedLineItems,
+      }),
+    [filteredItems, allProcessedItems, watchedLineItems, items]
+  );
   
   const availableAccounts = useMemo(() => processedAccounts.filter(acc => !acc.isSpecial), [processedAccounts]);
   /** Save & Copy To: mismatch categories source-driven rakho; source me item na ho to item Copy chip hide. */
@@ -1613,12 +1629,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const iid = String(line?.itemId || "").trim();
       // Line row ka item dubara sirf existence check — type toggle se filtered list me na chhute.
       const itemRows = items ?? [];
-      if (iid && !itemRows.some((it: Item) => it.id === iid)) {
+      // Items listener hydrate hone se pehle saved itemId mat hatao (parties pehle aa jate hain).
+      if (iid && itemsListHydratedRef.current && !itemRows.some((it: Item) => it.id === iid)) {
         missing.push(`line ${idx + 1} item`);
         form.setValue(`lineItems.${idx}.itemId`, "");
       }
       const tid = String(line?.taxAccountId || "").trim();
-      if (tid && !processedTaxes.some((t: any) => t.id === tid)) {
+      if (tid && processedTaxes.length > 0 && !processedTaxes.some((t: any) => t.id === tid)) {
         missing.push(`line ${idx + 1} tax`);
         form.setValue(`lineItems.${idx}.taxAccountId`, "");
       }
@@ -2115,7 +2132,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 <FormItem className="min-w-0 flex-1 w-full">
                                 <Combobox
                                   options={itemOptions}
-                                  value={field.value}
+                                  value={comboboxValueFromLineItemId(field.value)}
                                   disabled={itemFieldsDisabled}
                                   onChange={(val, newName) => {
                                     if (val === "add-new") {
@@ -2128,8 +2145,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         );
                                       }, 100);
                                     } else {
-                                      field.onChange(val);
-                                      const sel = allProcessedItems.find((i) => i.id === val);
+                                      const itemId = lineItemIdFromComboboxValue(val);
+                                      field.onChange(itemId);
+                                      const sel = itemId
+                                        ? allProcessedItems.find((i) => i.id === itemId)
+                                        : undefined;
                                       if (sel) {
                                         const defaultUnit = sel.salePriceUnit || (sel.unitConversions as any)?.[0]?.fromUnit || "";
                                         const rate = getUnitBasedPrice(sel, defaultUnit, 'sale');
@@ -2418,7 +2438,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 <FormItem className="min-w-0 flex-1 w-full">
                                 <Combobox
                                   options={itemOptions}
-                                  value={field.value}
+                                  value={comboboxValueFromLineItemId(field.value)}
                                   disabled={itemFieldsDisabled}
                                   onChange={(val, newName) => {
                                     if (val === "add-new") {
@@ -2431,8 +2451,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         );
                                       }, 100);
                                     } else {
-                                      field.onChange(val);
-                                      const sel = allProcessedItems.find((i) => i.id === val);
+                                      const itemId = lineItemIdFromComboboxValue(val);
+                                      field.onChange(itemId);
+                                      const sel = itemId
+                                        ? allProcessedItems.find((i) => i.id === itemId)
+                                        : undefined;
                                       if (sel) {
                                         const defaultUnit = sel.salePriceUnit || (sel.unitConversions as any)?.[0]?.fromUnit || "";
                                         const rate = getUnitBasedPrice(sel, defaultUnit, 'sale');
@@ -2790,7 +2813,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   <FormItem className="min-w-0 w-full">
                                     <Combobox
                                       options={itemOptions}
-                                      value={field.value}
+                                      value={comboboxValueFromLineItemId(field.value)}
                                       disabled={itemFieldsDisabled}
                                       onChange={(val, newName) => {
                                         if (val === "add-new") {
@@ -2803,8 +2826,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                             );
                                           }, 100);
                                         } else {
-                                          field.onChange(val);
-                                          const sel = allProcessedItems.find((i) => i.id === val);
+                                          const itemId = lineItemIdFromComboboxValue(val);
+                                          field.onChange(itemId);
+                                          const sel = itemId
+                                            ? allProcessedItems.find((i) => i.id === itemId)
+                                            : undefined;
                                           if (sel) {
                                             const defaultUnit = sel.salePriceUnit || (sel.unitConversions as any)?.[0]?.fromUnit || "";
                                             const rate = getUnitBasedPrice(sel, defaultUnit, 'sale');

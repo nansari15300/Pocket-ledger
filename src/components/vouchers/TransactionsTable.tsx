@@ -697,7 +697,7 @@ export function TransactionsTable({
   // View/period opening can be 0 (e.g. date filter) while books still have a master OB — use master for Dr/Cr.
   // Statement + bill-wise: same fallback so first row is not empty when "View start" is 0 but books opening exists.
   const useBooksObForRowDrCr =
-    (context === "party" || context === "staff") &&
+    (context === "party" || context === "staff" || context === "item") &&
     booksObScaled != null &&
     Math.abs(safeOpeningBalance) < 1e-7 &&
     Math.abs(booksObScaled) > 1e-7;

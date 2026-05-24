@@ -535,11 +535,11 @@ export function RecurringAutoSummaryCard({
                   <X className="h-3 w-3 md:h-3.5 md:w-3.5" strokeWidth={2.25} />
                 </Button>
               </DialogHeader>
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden">
                 {isMobile ? (
                   <Tabs
                     defaultValue="debit"
-                    className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] overflow-hidden"
+                    className="grid min-h-0 w-full flex-1 grid-rows-[minmax(0,1fr)_auto] overflow-hidden"
                   >
                     {/* Mobile: pehle table+total, neeche tab bar — row 1 = `minmax(0,1fr)` height chain */}
                     <TabsContent
@@ -562,12 +562,34 @@ export function RecurringAutoSummaryCard({
                         onLineOpenVoucher={lineOpenHandler}
                       />
                     </TabsContent>
-                    {/* Selected pill border = header jaisa `border-blue-500` / `dark:border-blue-600` (1px) */}
-                    <TabsList className="col-start-1 row-start-2 grid min-h-8 h-auto w-full shrink-0 grid-cols-2 items-stretch gap-1.5 border-t-2 border-black bg-muted/30 px-1.5 py-1.5 dark:border-neutral-300">
+                    {/* Both: chhoti screen = fixed cols + horizontal scroll; md+ / PC modal = 50-50 full width */}
+                    <TabsContent
+                      value="both"
+                      className="col-start-1 row-start-1 m-0 mt-0 flex h-full min-h-0 min-w-0 flex-col overflow-x-auto overflow-y-hidden p-0 focus-visible:ring-0 focus-visible:ring-offset-0 md:overflow-x-hidden"
+                    >
+                      <div className="flex h-full min-h-0 w-max min-w-full flex-row divide-x divide-black dark:divide-neutral-300 md:w-full md:min-w-0">
+                        <div className="flex h-full min-h-0 w-[min(88vw,22rem)] shrink-0 flex-col md:min-w-0 md:w-auto md:flex-1 md:shrink">
+                          <RecurringDetailsDebitPanel
+                            rows={agg.detailDebitLines}
+                            fmt={fmt}
+                            onLineOpenVoucher={lineOpenHandler}
+                          />
+                        </div>
+                        <div className="flex h-full min-h-0 w-[min(88vw,22rem)] shrink-0 flex-col md:min-w-0 md:w-auto md:flex-1 md:shrink">
+                          <RecurringDetailsCreditPanel
+                            rows={agg.detailCreditLines}
+                            fmt={fmt}
+                            onLineOpenVoucher={lineOpenHandler}
+                          />
+                        </div>
+                      </div>
+                    </TabsContent>
+                    {/* Debit | Both | Credit — footer tab bar same row */}
+                    <TabsList className="col-start-1 row-start-2 grid min-h-8 h-auto w-full shrink-0 grid-cols-3 items-stretch gap-1 border-t-2 border-black bg-muted/30 px-1.5 py-1.5 dark:border-neutral-300">
                       <TabsTrigger
                         value="debit"
                         className={cn(
-                          "flex items-center justify-center rounded-full border border-transparent py-0.5 text-xs font-semibold leading-tight shadow-none transition-[border-color,box-shadow]",
+                          "flex items-center justify-center rounded-full border border-transparent px-1 py-0.5 text-[11px] font-semibold leading-tight shadow-none transition-[border-color,box-shadow]",
                           "!bg-green-200 !text-green-950 dark:!bg-green-800/90 dark:!text-green-50",
                           "data-[state=active]:!bg-green-200 data-[state=active]:!text-green-950 data-[state=active]:dark:!bg-green-800/90",
                           "data-[state=active]:!border-blue-500 dark:data-[state=active]:!border-blue-600 data-[state=inactive]:!border-transparent",
@@ -578,9 +600,22 @@ export function RecurringAutoSummaryCard({
                         Debit ({agg.detailDebitLines.length})
                       </TabsTrigger>
                       <TabsTrigger
+                        value="both"
+                        className={cn(
+                          "flex items-center justify-center rounded-full border border-transparent px-1 py-0.5 text-[11px] font-semibold leading-tight shadow-none transition-[border-color,box-shadow]",
+                          "!bg-slate-200 !text-slate-950 dark:!bg-slate-700/90 dark:!text-slate-50",
+                          "data-[state=active]:!bg-slate-200 data-[state=active]:!text-slate-950 data-[state=active]:dark:!bg-slate-700/90",
+                          "data-[state=active]:!border-blue-500 dark:data-[state=active]:!border-blue-600 data-[state=inactive]:!border-transparent",
+                          "data-[state=active]:shadow-none data-[state=inactive]:shadow-none",
+                          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:focus-visible:ring-blue-600",
+                        )}
+                      >
+                        Both
+                      </TabsTrigger>
+                      <TabsTrigger
                         value="credit"
                         className={cn(
-                          "flex items-center justify-center rounded-full border border-transparent py-0.5 text-xs font-semibold leading-tight shadow-none transition-[border-color,box-shadow]",
+                          "flex items-center justify-center rounded-full border border-transparent px-1 py-0.5 text-[11px] font-semibold leading-tight shadow-none transition-[border-color,box-shadow]",
                           "!bg-pink-200 !text-pink-950 dark:!bg-pink-800/85 dark:!text-pink-50",
                           "data-[state=active]:!bg-pink-200 data-[state=active]:!text-pink-950 data-[state=active]:dark:!bg-pink-800/85",
                           "data-[state=active]:!border-blue-500 dark:data-[state=active]:!border-blue-600 data-[state=inactive]:!border-transparent",
@@ -593,7 +628,7 @@ export function RecurringAutoSummaryCard({
                     </TabsList>
                   </Tabs>
                 ) : (
-                  <div className="flex min-h-0 flex-1 flex-row divide-x divide-black dark:divide-neutral-300">
+                  <div className="flex min-h-0 w-full flex-1 flex-row divide-x divide-black dark:divide-neutral-300">
                     <RecurringDetailsDebitPanel
                       rows={agg.detailDebitLines}
                       fmt={fmt}

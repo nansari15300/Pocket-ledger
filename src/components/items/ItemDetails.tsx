@@ -25,7 +25,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Card } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -91,7 +90,6 @@ import { Combobox } from "@/components/ui/combobox";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
 import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
-import { Badge } from "@/components/ui/badge";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { Input } from "@/components/ui/input";
@@ -141,6 +139,35 @@ const getConversionFactor = (item: Item | undefined, displayUnit: string | undef
         attempts++;
     }
     return factor > 0 ? factor : 1;
+};
+
+/** Master book opening — party `openingBalance` jaisa; date filter / pagination se independent. */
+const getItemMasterBooksOpening = (item: Item | undefined, view: StockView): number => {
+  if (!item) return 0;
+  if (view === "amount") {
+    const obQty = Number((item as any).openingBalance) || 0;
+    const obRate = Number((item as any).openingBalanceRate) || 0;
+    return obQty * obRate;
+  }
+  const conversions = (item.unitConversions || []) as any[];
+  const smallestUnit =
+    conversions.length > 0 ? conversions[conversions.length - 1].toUnit : ((item as any).openingBalanceUnit || "");
+  const factorFromUnit = (unit: string) => {
+    if (!unit || conversions.length === 0) return 1;
+    if (unit === smallestUnit) return 1;
+    let factor = 1;
+    let currentUnit = unit;
+    for (let i = 0; i < 10; i++) {
+      const conv = conversions.find((c: any) => c.fromUnit === currentUnit);
+      if (!conv) return 0;
+      factor *= Number(conv.conversionFactor) || 1;
+      currentUnit = conv.toUnit;
+      if (currentUnit === smallestUnit) break;
+    }
+    return factor;
+  };
+  const openingUnit = (item as any).openingBalanceUnit || "";
+  return (Number((item as any).openingBalance) || 0) * factorFromUnit(openingUnit);
 };
 
 // --- Helper for formatting Quantity only (No Rs.) ---
@@ -538,6 +565,46 @@ export default function ItemDetails({
       ),
     [displayTransactions, filterByUnapprovedOnly, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
+
+  const filteredMobileTransactions = useMemo(() => {
+    if (!mobileSearchTerm) return sortedTransactions;
+    const lowerCaseSearch = mobileSearchTerm.toLowerCase();
+
+    return sortedTransactions.filter((t: any) => {
+      const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+      const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
+      const entryClock = formatVoucherEntryTimeLocal(t as Record<string, unknown>).toLowerCase();
+      return (
+        getTransactionQuickSearchHaystack(t, mobileSearchNames, currentItem ? "item" : undefined, currentItem?.id).includes(lowerCaseSearch) ||
+        formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
+        formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
+        entryClock.includes(lowerCaseSearch) ||
+        String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
+        String(t.debit).toLowerCase().includes(lowerCaseSearch) ||
+        String(t.credit).toLowerCase().includes(lowerCaseSearch) ||
+        String(debitCreditAmount).toLowerCase().includes(lowerCaseSearch) ||
+        String(t.balance).toLowerCase().includes(lowerCaseSearch)
+      );
+    });
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, currentItem?.id]);
+
+  /** Party jaisa: master book OB + period carry running balance */
+  const masterItemBooksOpening = useMemo(
+    () => getItemMasterBooksOpening(currentItem, stockView),
+    [currentItem, stockView]
+  );
+  const ledgerOpeningForRunning = useMemo(() => {
+    if (Math.abs(openingBalanceForPeriod) < 1e-6 && Math.abs(masterItemBooksOpening) > 1e-6) {
+      return masterItemBooksOpening;
+    }
+    return openingBalanceForPeriod;
+  }, [openingBalanceForPeriod, masterItemBooksOpening]);
+
+  const ledgerPagingTransactions = useMemo(
+    () => (isMobile ? filteredMobileTransactions : sortedTransactions),
+    [isMobile, filteredMobileTransactions, sortedTransactions]
+  );
+
   // Statement check mode + desktop tail paging (PartyDetails jaisa)
   const {
     statementCheck,
@@ -549,11 +616,44 @@ export default function ItemDetails({
     context: "item",
     contextId: currentItem?.id,
     viewMode: balanceMode === "bill_wise" ? "bill_wise" : "statement",
-    searchFilteredTransactions: sortedTransactions,
+    searchFilteredTransactions: ledgerPagingTransactions,
     rowsPerPage,
     currentPage,
-    ledgerOpeningForRunning: openingBalanceForPeriod,
+    ledgerOpeningForRunning,
   });
+
+  /** Book OB row: slice list ke shuru par; Dated OB = slice se pehle txn ki date (party jaisa). */
+  const ledgerOpeningPeriodStartDate = useMemo(() => {
+    const list = ledgerPagingTransactions as any[];
+    const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
+    const start = desktopPageLedgerStats.sliceStart;
+    if (rowsPerPage <= 0) {
+      if (hasLedgerDateFilter) return dateRange?.from;
+      return undefined;
+    }
+    if (start === 0) {
+      if (hasLedgerDateFilter) return dateRange?.from;
+      return undefined;
+    }
+    const t = list[start - 1] as any;
+    if (!t) return undefined;
+    const raw = t.date?.toDate ? t.date.toDate() : t.date ? new Date(t.date) : undefined;
+    return raw instanceof Date && !isNaN(raw.getTime()) ? raw : undefined;
+  }, [ledgerPagingTransactions, rowsPerPage, desktopPageLedgerStats.sliceStart, dateRange?.from, dateRange?.to]);
+
+  const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
+
+  const mobilePagerEdgeCounts = useMemo(() => {
+    if (rowsPerPage <= 0) return { before: 0, after: 0 };
+    return {
+      before: desktopPageLedgerStats.beforeCount ?? 0,
+      after: desktopPageLedgerStats.afterCount ?? 0,
+    };
+  }, [rowsPerPage, desktopPageLedgerStats.beforeCount, desktopPageLedgerStats.afterCount]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(Math.max(1, prev), totalPages));
+  }, [ledgerPagingTransactions.length, totalPages, dateRangeFromMs, dateRangeToMs, rowsPerPage]);
 
   const handlePrint = () => {
     if (!company || !currentItem) return;
@@ -639,123 +739,11 @@ export default function ItemDetails({
     }
   };
   
-  const filteredMobileTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return sortedTransactions;
-    const lowerCaseSearch = mobileSearchTerm.toLowerCase();
-    
-    return sortedTransactions.filter((t: any) => {
-      const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-      const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
-      const entryClock = formatVoucherEntryTimeLocal(t as Record<string, unknown>).toLowerCase();
-      return (
-        getTransactionQuickSearchHaystack(t, mobileSearchNames, currentItem ? "item" : undefined, currentItem?.id).includes(lowerCaseSearch) ||
-        formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
-        formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
-        entryClock.includes(lowerCaseSearch) ||
-        String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.debit).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.credit).toLowerCase().includes(lowerCaseSearch) ||
-        String(debitCreditAmount).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.balance).toLowerCase().includes(lowerCaseSearch)
-      );
-    });
-  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, currentItem?.id]);
-
-  // Mobile: latest-first paging (page 1 = newest rows)
-  const mobileDisplayTransactions = useMemo(() => {
-    const list = filteredMobileTransactions;
-    if (rowsPerPage <= 0) return list;
-    const total = list.length;
-    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
-    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
-    const end = total - (safePage - 1) * rowsPerPage;
-    const start = Math.max(0, end - rowsPerPage);
-    return list.slice(start, Math.max(start, end));
-  }, [filteredMobileTransactions, currentPage, rowsPerPage]);
-  const mobilePagerEdgeCounts = useMemo(() => {
-    const total = filteredMobileTransactions.length;
-    if (rowsPerPage <= 0) return { before: 0, after: 0 };
-    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
-    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
-    const end = total - (safePage - 1) * rowsPerPage;
-    const start = Math.max(0, end - rowsPerPage);
-    return { before: start, after: Math.max(0, total - end) };
-  }, [filteredMobileTransactions.length, currentPage, rowsPerPage]);
-
-  useEffect(() => {
-    const total = rowsPerPage > 0 ? Math.ceil(filteredMobileTransactions.length / rowsPerPage) : 1;
-    const safeTotal = Math.max(1, total);
-    setCurrentPage((prev) => {
-      const next = Math.min(Math.max(1, prev), safeTotal);
-      return next === prev ? prev : next;
-    });
-  }, [dateRangeFromMs, dateRangeToMs, filteredMobileTransactions.length, rowsPerPage]);
-
-  const getOppositeLabel = (t: any) => {
-    if (t.type === 'sale' || t.type === 'purchase') {
-      return processedParties?.find((p: any) => p.id === t.partyId)?.name || 'N/A';
-    }
-    return '';
-  };
-
-  const TransactionRow = React.memo(({ transaction }: { transaction: any }) => {
-    const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
-    
-    const d = transaction.date?.toDate ? transaction.date.toDate() : (transaction.date ? new Date(transaction.date) : null);
-    
-    if (!d) {
-        return <Card className="p-2.5"><p className="text-red-500">Invalid date found</p></Card>;
-    }
-    
-    const displayDate = () => {
-        switch (dateSystem) {
-            case 'AD': return formatDate(d);
-            case 'BS': return formatDateBS(d);
-            case 'Both': return `${formatDateBS(d)} (${formatDate(d)})`;
-            default: return formatDateBS(d);
-        }
-    };
-    
-    const userName = effectiveUserNames?.[transaction.userId] || 'N/A';
-    const firstName = userName.split(' ')[0];
-    const oppositeLabel = getOppositeLabel(transaction);
-
-    const isUnitView = stockView === 'qty' && currentItem && displayUnit;
-    const factor = isUnitView ? getConversionFactor(currentItem, displayUnit) : 1;
-    const displayDebit = (transaction.debit || 0) / factor;
-    const displayCredit = (transaction.credit || 0) / factor;
-    const displayBalance = (transaction.balance || 0) / factor;
-    const amount = transaction.debit > 0 ? displayDebit : displayCredit;
-
-    const formatAmount = () => {
-      if (isUnitView) return `${formatQtyValue(amount)} ${displayUnit || ''}`;
-      return formatMoney(transaction.debit > 0 ? transaction.debit : transaction.credit);
-    };
-    const formatBalance = () => {
-      if (isUnitView) return `${formatQtyValue(Math.abs(displayBalance))} ${displayUnit || ''}`;
-      return formatMoney(transaction.balance);
-    };
-
-    return (
-      <Card className="p-2.5 min-w-0 w-full overflow-hidden bg-card border border-border/80 shadow-sm cursor-pointer hover:bg-muted/30 transition-colors" onClick={() => handleEditVoucher(transaction)}>
-            <div className="flex justify-between items-start gap-2 min-w-0">
-                <div className="min-w-0 flex-1 overflow-hidden">
-                    <p className="font-bold text-sm truncate">{transaction.voucherNumber}{oppositeLabel ? ` - ${oppositeLabel}` : ''}</p>
-                    <p className="text-xs text-muted-foreground truncate mt-0.5">{transaction.narration || "No narration"}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {displayDate()} â€¢ {formatVoucherEntryTimeLocal(transaction as Record<string, unknown>)}
-                    </p>
-                </div>
-                <div className="text-right shrink-0 flex flex-col items-end gap-0.5 flex-shrink-0">
-                    <p className={cn("font-bold text-sm", transaction.debit > 0 ? "text-red-600" : "text-green-600")}>{formatAmount()}</p>
-                    <Badge variant="secondary" className={cn("text-xs font-semibold px-1.5 py-0 whitespace-nowrap", transaction.balance >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800')}>Bal: {formatBalance()}</Badge>
-                    <p className="text-[10px] text-muted-foreground truncate max-w-[120px]">User: {firstName}</p>
-                </div>
-            </div>
-        </Card>
-    );
-  });
-  TransactionRow.displayName = 'TransactionRow';
+  const headerStockValue = useMemo(() => {
+    if (!currentItem) return 0;
+    const factor = getConversionFactor(currentItem, displayUnit);
+    return (closingBalance || 0) / factor;
+  }, [closingBalance, currentItem, displayUnit]);
 
   if(!currentItem) return null;
   
@@ -765,16 +753,41 @@ export default function ItemDetails({
     }
   };
 
-  const headerStockValue = useMemo(() => {
-      const factor = getConversionFactor(currentItem, displayUnit);
-      return (closingBalance || 0) / factor;
-  }, [closingBalance, currentItem, displayUnit]);
-
-  const mobileDisplayOpeningBalance = useMemo(() => {
-      const factor = getConversionFactor(currentItem, displayUnit);
-      return (openingBalanceForPeriod || 0) / factor;
-  }, [openingBalanceForPeriod, currentItem, displayUnit]);
-
+  const itemTransactionsTableProps = {
+    transactions: paginatedTransactions,
+    context: "item" as const,
+    contextId: currentItem.id,
+    showItemPartyColumn: showPartyColumn,
+    stockView,
+    item: currentItem,
+    displayUnit,
+    setDisplayUnit: setItemDisplayUnit ? handleUnitChange : undefined,
+    openingBalance: desktopPageLedgerStats.openingForPage,
+    booksOpeningBalance: masterItemBooksOpening,
+    openingBalanceNarration: currentItem.openingBalanceNarration,
+    openingBalanceAttachmentUrls: currentItem.fileUrls,
+    openingBalanceDate: (currentItem as any).openingBalanceDate,
+    ledgerDateFilterActive: hasLedgerDateFilter,
+    ledgerShowBookOpeningRow: rowsPerPage <= 0 || desktopPageLedgerStats.sliceStart === 0,
+    openingBalancePeriodStartDate: ledgerOpeningPeriodStartDate,
+    dateRange,
+    periodDr: desktopPageLedgerStats.periodDrForPage,
+    periodCr: desktopPageLedgerStats.periodCrForPage,
+    closingBalance: desktopPageLedgerStats.closingForPage,
+    filters,
+    setFilters,
+    activeFilter,
+    setActiveFilter,
+    showNarration,
+    visibleColumns: { ...visibleColumns, status: false },
+    userNames: effectiveUserNames,
+    journalAccountNames,
+    accountNames: {},
+    onRowClick: handleEditVoucher,
+    isDateChange,
+    highlightPendingApproval: true,
+    ...statementCheck.tableProps,
+  };
 
   const renderMobileView = () => (
     <>
@@ -864,39 +877,14 @@ export default function ItemDetails({
         className="flex-1 min-h-0 overflow-auto scroll-touch"
         style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
       >
-        <div className="w-full min-w-0 px-0.5 space-y-px pb-24">
-          {openingBalanceForPeriod !== 0 && (
-            <Card className="p-2.5 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
-            <div className="flex items-center justify-between gap-2 min-w-0">
-              <div className="flex items-center gap-2 flex-1 min-w-0">
-                {setStockView && (
-                  <Select value={stockView} onValueChange={(v) => setStockView(v as StockView)}>
-                    <SelectTrigger className="h-7 w-[90px] text-xs flex-shrink-0">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="qty">Unit</SelectItem>
-                      <SelectItem value="amount">Amounts</SelectItem>
-                    </SelectContent>
-                  </Select>
-                )}
-                <p className="font-semibold text-muted-foreground text-sm flex-shrink-0">Opening Stock:</p>
-              </div>
-              <Badge variant="secondary" className={cn("font-normal flex-shrink-0 text-xs", mobileDisplayOpeningBalance >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800')}>
-                {stockView === 'qty' ? `${formatQtyValue(mobileDisplayOpeningBalance)} ${displayUnit || ''}` : formatMoney(mobileDisplayOpeningBalance, { showDrCr: true })}
-              </Badge>
-            </div>
-            </Card>
-          )}
-          {mobileDisplayTransactions.map((t: any) => (
-            <TransactionRow key={t.id} transaction={t} />
-          ))}
+        <div className="pb-2">
+          <TransactionsTable {...itemTransactionsTableProps} scrollOnlyTransactions />
         </div>
       </div>
     <MobileTransactionsPager
       className="flex-shrink-0 mb-12"
       currentPage={currentPage}
-      totalItems={filteredMobileTransactions.length}
+      totalItems={ledgerPagingTransactions.length}
       rowsPerPage={rowsPerPage}
       onRowsPerPageChange={(nextRows) => {
         setRowsPerPage(nextRows);
@@ -1145,39 +1133,7 @@ export default function ItemDetails({
       {/* --- TRANSACTIONS TABLE --- */}
         <ScrollArea className="flex-1">
             <div className="py-4">
-                <TransactionsTable
-                    transactions={paginatedTransactions}
-                    context="item"
-                    contextId={currentItem.id}
-                    showItemPartyColumn={showPartyColumn}
-                    stockView={stockView}
-                    item={currentItem}
-                    displayUnit={displayUnit}
-                    setDisplayUnit={setItemDisplayUnit ? handleUnitChange : undefined}
-                    openingBalance={desktopPageLedgerStats.openingForPage}
-                    openingBalanceNarration={currentItem.openingBalanceNarration}
-                    openingBalanceAttachmentUrls={currentItem.fileUrls}
-                    openingBalanceDate={(currentItem as any).openingBalanceDate}
-                    periodDr={desktopPageLedgerStats.periodDrForPage}
-                    periodCr={desktopPageLedgerStats.periodCrForPage}
-                    closingBalance={desktopPageLedgerStats.closingForPage}
-                    
-                    filters={filters}
-                    setFilters={setFilters}
-                    activeFilter={activeFilter}
-                    setActiveFilter={setActiveFilter}
-                    
-                    showNarration={showNarration}
-                    visibleColumns={{ ...visibleColumns, status: false }}
-                    userNames={effectiveUserNames}
-                    journalAccountNames={journalAccountNames}
-                    accountNames={{}}
-                    onRowClick={handleEditVoucher}
-                    
-                    isDateChange={isDateChange}
-                    highlightPendingApproval
-                    {...statementCheck.tableProps}
-                />
+                <TransactionsTable {...itemTransactionsTableProps} />
             </div>
             <ScrollBar orientation="horizontal" />
         </ScrollArea>

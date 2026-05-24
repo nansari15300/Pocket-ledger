@@ -24,6 +24,15 @@ export function readCloudSyncConfigFromCompany(
         : null,
     cloudSyncStatus: (String(c.cloudSyncStatus || "idle") as CloudSyncRunStatus) || "idle",
     cloudSyncLastError: typeof c.cloudSyncLastError === "string" ? c.cloudSyncLastError : null,
+    cloudSyncSharedEmails: Array.isArray(c.cloudSyncSharedEmails)
+      ? c.cloudSyncSharedEmails.map((e) => String(e || "").trim()).filter(Boolean)
+      : [],
+    cloudSyncDriveDateFolderMode:
+      c.cloudSyncDriveDateFolderMode === "bs" ||
+      c.cloudSyncDriveDateFolderMode === "ad" ||
+      c.cloudSyncDriveDateFolderMode === "both"
+        ? c.cloudSyncDriveDateFolderMode
+        : null,
   };
 }
 
@@ -50,6 +59,8 @@ export async function patchLocalCompanyCloudSyncFields(
     cloudSyncLastSyncAt: number | null;
     cloudSyncStatus: CloudSyncRunStatus;
     cloudSyncLastError: string | null;
+    cloudSyncSharedEmails: string[];
+    cloudSyncDriveDateFolderMode: "bs" | "ad" | "both" | null;
   }>
 ): Promise<void> {
   const reg = await getLocalCompanyById(companyId, { includeDeleted: true });

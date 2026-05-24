@@ -46,6 +46,7 @@ import {
   formatIncrementalMergeProgressDetail,
 } from "@/lib/incrementalBackupFromLocation";
 import type { Company } from "@/hooks/useCompany";
+import { maybeUploadCompanyBackupToDrive } from "@/lib/localCloudSync/driveCloudSyncClient";
 
 export const COLLECTIONS_TO_BACKUP = [
   "parties",
@@ -306,6 +307,8 @@ export type ExecuteCompanyBackupResult =
       attachmentRefCount?: number;
       /** Bundle me kitni files embed hui (0 = data-only backup despite checkbox). */
       attachmentEmbeddedCount?: number;
+      /** Google Drive cloud sync ON ho to backup/ branch path. */
+      driveBackupPath?: string;
     }
   | { ok: false; error: string; cancelled?: boolean };
 
@@ -522,14 +525,22 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
         const saved = await saveBackupBlobWithBestEffort(blob, fileName);
 
         await incrementAttachmentBackupUsage(ownerUid);
+        const driveBackupPath = await maybeUploadCompanyBackupToDrive({
+          companyId: company.id,
+          companyName: company.name,
+          fileName,
+          blob,
+        });
+        const driveNote = driveBackupPath ? " + Google Drive backup/" : "";
 
-        onProgress({ phase: "Complete", detail: `Saved: ${saved.where}` });
+        onProgress({ phase: "Complete", detail: `Saved: ${saved.where}${driveNote}` });
         return {
           ok: true,
           where: saved.where,
           includeAttachments: savedWithAttachments,
           attachmentRefCount,
           attachmentEmbeddedCount,
+          driveBackupPath: driveBackupPath ?? undefined,
         };
       }
       backupData.includesAttachments = false;
@@ -560,13 +571,22 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
       await incrementAttachmentBackupUsage(ownerUid);
     }
 
-    onProgress({ phase: "Complete", detail: `Saved: ${saved.where}` });
+    const driveBackupPath = await maybeUploadCompanyBackupToDrive({
+      companyId: company.id,
+      companyName: company.name,
+      fileName,
+      blob,
+    });
+    const driveNote = driveBackupPath ? " + Google Drive backup/" : "";
+
+    onProgress({ phase: "Complete", detail: `Saved: ${saved.where}${driveNote}` });
     return {
       ok: true,
       where: saved.where,
       includeAttachments: savedWithAttachments,
       attachmentRefCount: includeAttachments ? attachmentRefCount : undefined,
       attachmentEmbeddedCount: includeAttachments ? attachmentEmbeddedCount : undefined,
+      driveBackupPath: driveBackupPath ?? undefined,
     };
   } catch (e: unknown) {
     if (e instanceof DOMException && e.name === "AbortError") {

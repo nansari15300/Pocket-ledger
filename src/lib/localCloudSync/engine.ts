@@ -9,6 +9,7 @@ import {
   readCloudSyncConfigFromCompany,
   shouldUseLocalCloudSync,
 } from "@/lib/localCloudSync/companyConfig";
+import { maybeShareDriveCompanyFolder } from "@/lib/localCloudSync/driveCloudSyncClient";
 import { runWithRemoteCloudSyncApply } from "@/lib/localCloudSync/enqueueFromWrite";
 import {
   mergeRemotePayloadIntoLocal,
@@ -24,7 +25,7 @@ import {
   setCloudSyncCursor,
 } from "@/lib/localCloudSync/queue";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
-import type { CloudSyncProviderId } from "@/lib/localCloudSync/types";
+import type { CloudSyncCompanyRef, CloudSyncProviderId } from "@/lib/localCloudSync/types";
 
 const syncLocks = new Set<string>();
 
@@ -66,11 +67,16 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
   try {
     const provider = getSyncProviderForCompany(providerId);
     const cursor = await getCloudSyncCursor(cid);
+    // Drive folder: `Pocket Ledger/{CompanyName__id}/` — registry se readable name bhejo
+    const syncRef: CloudSyncCompanyRef = {
+      companyId: cid,
+      companyName: typeof reg.name === "string" ? reg.name : undefined,
+    };
 
     const pending = await listPendingLocalCloudSyncOps(cid);
     let maxUploadedSeq = cursor.lastSyncedOp;
     for (const op of pending) {
-      await provider.uploadOperation(cid, op);
+      await provider.uploadOperation(syncRef, op);
       uploaded += 1;
       if (op.opSeq > maxUploadedSeq) maxUploadedSeq = op.opSeq;
     }
@@ -78,8 +84,8 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
       await markLocalCloudSyncOpsSynced(cid, maxUploadedSeq);
     }
 
-    const manifest = await provider.getManifest(cid);
-    const remoteOps = await provider.downloadOperations(cid, cursor.lastSyncedOp);
+    const manifest = await provider.getManifest(syncRef);
+    const remoteOps = await provider.downloadOperations(syncRef, cursor.lastSyncedOp);
     let maxRemoteSeq = cursor.lastSyncedOp;
 
     await runWithRemoteCloudSyncApply(async () => {
@@ -97,7 +103,7 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     });
 
     const latestOp = Math.max(manifest.latestOp, maxUploadedSeq, maxRemoteSeq);
-    await provider.updateManifest(cid, { latestOp, updatedAt: Date.now() });
+    await provider.updateManifest(syncRef, { latestOp, updatedAt: Date.now() });
 
     const now = Date.now();
     await setCloudSyncCursor(cid, {
@@ -111,6 +117,15 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
       cloudSyncStatus: "idle",
       cloudSyncLastError: null,
     });
+
+    const sharedEmails = readCloudSyncConfigFromCompany(reg).cloudSyncSharedEmails;
+    if (sharedEmails.length > 0) {
+      await maybeShareDriveCompanyFolder({
+        companyId: cid,
+        companyName: syncRef.companyName,
+        emails: sharedEmails,
+      });
+    }
 
     logLocalCloudSync("cycle ok", { companyId: cid, uploaded, downloaded, latestOp });
     return { ok: true, uploaded, downloaded };

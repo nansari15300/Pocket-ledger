@@ -21,6 +21,13 @@ import {
   listAttachmentFileRefs,
   upsertAttachmentFileRef,
 } from "@/lib/attachmentFileRefStore";
+import {
+  isGoogleDriveCloudSyncCompany,
+  uploadPendingAttachmentPayloadToDrive,
+  downloadDriveAttachmentBlob,
+} from "@/lib/localCloudSync/driveCloudSyncClient";
+import { isDriveFileRef, remotePathFromDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { getLocalCompanyById } from "@/lib/localCompanyStore";
 
 const STORE = "pendingFiles";
 
@@ -326,6 +333,15 @@ export async function getBlobFromLocalFileRef(
   url: string,
   options?: LocalFileReadOptions
 ): Promise<Blob | null> {
+  if (isDriveFileRef(url)) {
+    const remotePath = remotePathFromDriveFileRef(url);
+    if (!remotePath) return null;
+    try {
+      return await downloadDriveAttachmentBlob(remotePath);
+    } catch {
+      return null;
+    }
+  }
   if (!isLocalFileRef(url)) return null;
   const localId = url.slice(LOCAL_FILE_PREFIX.length);
   if (!localId) return null;
@@ -351,6 +367,39 @@ export async function uploadPendingLocalFileRef(
   const item = await getPendingFileById(localId);
   // If the local payload is missing, keep original ref so caller can retry later without data loss.
   if (!item) return localFileRef;
+
+  const docMatch = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(String(item.docPath || "").trim());
+  if (docMatch && (await isGoogleDriveCloudSyncCompany(docMatch[1]!))) {
+    const reg = await getLocalCompanyById(docMatch[1]!, { includeDeleted: true });
+    const driveRef = await uploadPendingAttachmentPayloadToDrive({
+      companyId: docMatch[1]!,
+      companyName: reg?.name,
+      company: reg,
+      collection: docMatch[2]!,
+      docId: docMatch[3]!,
+      blob: item.blob,
+      contentType: item.contentType,
+      fileName: item.fileName,
+    });
+    const docRef = firestoreDocRefFromPath(item.docPath);
+    const snap = await getDoc(docRef);
+    if (!snap.exists()) throw new Error("Document not found");
+    const data = snap.data();
+    const current = data[item.field];
+    if (Array.isArray(current)) {
+      const arr = [...current];
+      const needle = `${LOCAL_FILE_PREFIX}${item.id}`;
+      const idx = arr.findIndex((v) => v === needle);
+      if (idx >= 0) arr[idx] = driveRef;
+      else arr.push(driveRef);
+      await patchCompanyDocViaGateway(docRef, { [item.field]: arr });
+    } else {
+      await patchCompanyDocViaGateway(docRef, { [item.field]: driveRef });
+    }
+    await removePendingFile(item.id);
+    return driveRef;
+  }
+
   // Upload one local file ref and return its final public URL for caller-side payload replacement.
   const storagePath = `${storagePathPrefix}/${Date.now()}_${item.fileName || "file"}`;
   const storageRef = ref(storage, storagePath);

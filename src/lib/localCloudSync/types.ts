@@ -30,4 +30,14 @@ export type CloudSyncCompanyConfig = {
   cloudSyncLastSyncAt: number | null;
   cloudSyncStatus: CloudSyncRunStatus;
   cloudSyncLastError: string | null;
+  /** Staff Gmail list — Drive company folder writer share. */
+  cloudSyncSharedEmails: string[];
+  /** Nepal attachments date folder: bs | ad | both */
+  cloudSyncDriveDateFolderMode: "bs" | "ad" | "both" | null;
+};
+
+/** Drive/Dropbox API calls — folder segment `{name}__{id}` banane ke liye name bhi chahiye. */
+export type CloudSyncCompanyRef = {
+  companyId: string;
+  companyName?: string;
 };
