@@ -30,7 +30,8 @@ import {
   requestReconciliationShareAgain,
   loadReconciliationAccountsForCompany,
   resolveUserByIdOrEmail,
-  subscribeReconciliationSharesForUser,
+  subscribeReconciliationSharesForViewer,
+  backfillReconciliationShareCompanyIndex,
 } from "@/lib/reconciliation/reconciliationStore";
 import type { ReconciliationAccountOption, ReconciliationEntityType, ReconciliationShare } from "@/lib/reconciliation/types";
 import { RECON_ENTITY_OPTIONS_UI } from "@/lib/reconciliation/types";
@@ -164,8 +165,41 @@ export function ShareForReconciliationDialog({
   const router = useRouter();
   const { user } = useAuth();
   const { company, companyId, allCompanies, setCompanyId } = useCompany();
-  const { canShare, canLink, canView } = useReconciliationFeature();
+  const { canShare, canLink, canView, canViewSharedList, canViewUnlinkedList } = useReconciliationFeature();
   const { toast } = useToast();
+
+  /** Shared list tab — explicit permission ya link (pending link ke liye list chahiye) */
+  const showShareTab = canShare;
+  const showListTab = canViewSharedList || canLink;
+  const showUnlinkedTab = canViewUnlinkedList;
+  const visibleTabCount = [showShareTab, showListTab, showUnlinkedTab].filter(Boolean).length;
+
+  const firstAllowedTab = React.useCallback((): "share" | "list" | "unlinked" => {
+    if (showShareTab) return "share";
+    if (showListTab) return "list";
+    if (showUnlinkedTab) return "unlinked";
+    return "share";
+  }, [showShareTab, showListTab, showUnlinkedTab]);
+
+  const isTabAllowed = React.useCallback(
+    (t: "share" | "list" | "unlinked") =>
+      (t === "share" && showShareTab) ||
+      (t === "list" && showListTab) ||
+      (t === "unlinked" && showUnlinkedTab),
+    [showShareTab, showListTab, showUnlinkedTab]
+  );
+
+  /** Owner company-scoped backfill try kar sakta hai — purane shares ka index staff ke liye */
+  const isCompanyOwner = React.useMemo(() => {
+    if (!company || !user?.uid) return false;
+    if (company.isOwned === true) return true;
+    const byId = !!company.ownerId && company.ownerId === user.uid;
+    const byEmail =
+      !!company.ownerEmail &&
+      !!user.email &&
+      company.ownerEmail.toLowerCase().trim() === user.email.toLowerCase().trim();
+    return byId || byEmail;
+  }, [company, user?.uid, user?.email]);
 
   const [tab, setTab] = React.useState<"share" | "list" | "unlinked">("share");
   const [accountId, setAccountId] = React.useState(initialAccountId || "");
@@ -229,14 +263,29 @@ export function ShareForReconciliationDialog({
       setHighlightShareId(null);
       return;
     }
-    if (initialTab) setTab(initialTab);
+    if (initialTab && isTabAllowed(initialTab)) setTab(initialTab);
+    else setTab(firstAllowedTab());
     if (highlightShareIdProp) setHighlightShareId(highlightShareIdProp);
-  }, [open, initialTab, highlightShareIdProp]);
+  }, [open, initialTab, highlightShareIdProp, isTabAllowed, firstAllowedTab]);
+
+  /** Permission badle to active tab allowed ho */
+  React.useEffect(() => {
+    if (!open || isTabAllowed(tab)) return;
+    setTab(firstAllowedTab());
+  }, [open, tab, isTabAllowed, firstAllowedTab]);
 
   React.useEffect(() => {
     if (!user?.uid || !open) return;
-    return subscribeReconciliationSharesForUser(user.uid, setShares);
-  }, [user?.uid, open]);
+    return subscribeReconciliationSharesForViewer(user.uid, companyId ?? undefined, setShares);
+  }, [user?.uid, open, companyId]);
+
+  /** Dialog khulte hi company index backfill — shared staff ko purane shares dikhne ke liye */
+  React.useEffect(() => {
+    if (!open || !companyId || !user?.uid) return;
+    void backfillReconciliationShareCompanyIndex(companyId, user.uid, {
+      tryCompanyScopedQuery: isCompanyOwner,
+    });
+  }, [open, companyId, user?.uid, isCompanyOwner]);
 
   React.useEffect(() => {
     if (!linkShareId || !linkCompanyId) {
@@ -730,25 +779,41 @@ export function ShareForReconciliationDialog({
         </DialogDescription>
 
         <Tabs value={tab} onValueChange={(v) => setTab(v as "share" | "list" | "unlinked")} className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
-          <TabsList className="grid h-auto w-full grid-cols-3 gap-2 bg-transparent p-0">
-            <TabsTrigger value="share" disabled={!canShare} className={reconDialogTabPillCn}>
+          {visibleTabCount > 0 ? (
+          <TabsList
+            className={cn(
+              "grid h-auto w-full gap-2 bg-transparent p-0",
+              visibleTabCount === 1 ? "grid-cols-1" : visibleTabCount === 2 ? "grid-cols-2" : "grid-cols-3"
+            )}
+          >
+            {showShareTab ? (
+            <TabsTrigger value="share" className={reconDialogTabPillCn}>
               Share
             </TabsTrigger>
+            ) : null}
+            {showListTab ? (
             <TabsTrigger value="list" className={reconDialogTabPillCn}>
               Shared list
               {incomingPending.length > 0 ? (
                 <Badge variant="destructive" className="ml-2 h-5 px-1.5">{incomingPending.length}</Badge>
               ) : null}
             </TabsTrigger>
+            ) : null}
+            {showUnlinkedTab ? (
             <TabsTrigger value="unlinked" className={reconDialogTabPillCn}>
               Unlinked
               {unlinkedShares.length > 0 ? (
                 <Badge variant="secondary" className="ml-2 h-5 px-1.5">{unlinkedShares.length}</Badge>
               ) : null}
             </TabsTrigger>
+            ) : null}
           </TabsList>
+          ) : (
+            <p className="text-sm text-muted-foreground">No Share for Reconciling tabs are enabled for your role.</p>
+          )}
 
-          {(tab === "list" || tab === "unlinked") && listSearchSharesSource.length > 0 ? (
+          {((tab === "list" && showListTab) || (tab === "unlinked" && showUnlinkedTab)) &&
+          listSearchSharesSource.length > 0 ? (
             <ReconShareListSearchBar
               shares={listSearchSharesSource}
               userId={user?.uid}
@@ -760,6 +825,7 @@ export function ShareForReconciliationDialog({
             />
           ) : null}
 
+          {showShareTab ? (
           <TabsContent value="share" className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain scrollbar-slim-dim [scrollbar-gutter:stable]">
             {!canShare ? (
               <p className="text-sm text-muted-foreground">You don&apos;t have permission to share accounts.</p>
@@ -814,7 +880,9 @@ export function ShareForReconciliationDialog({
               </>
             )}
           </TabsContent>
+          ) : null}
 
+          {showListTab ? (
           <TabsContent value="list" className="mt-3 flex min-h-0 flex-1 flex-col">
             {/* Baaki pages jaisa slim dim scrollbar — Radix ScrollArea ki jagah native overflow */}
             <div className={reconShareListScrollCn}>
@@ -831,8 +899,8 @@ export function ShareForReconciliationDialog({
                   filteredActiveCompanyShares.map((s, cardIndex) => {
                     const isIncoming = s.targetUserId === user?.uid;
                     const isSender = s.senderUserId === user?.uid;
-                    const roleLabel = getReconShareRoleLabelForViewer(s, user?.uid);
-                    const { owned, other } = getReconShareSidesForViewer(s, user?.uid);
+                    const roleLabel = getReconShareRoleLabelForViewer(s, user?.uid, companyId ?? undefined);
+                    const { owned, other } = getReconShareSidesForViewer(s, user?.uid, companyId ?? undefined);
                     const canChangeOwnedSide =
                       s.status === "linked" && ((isIncoming && canLink) || (isSender && canShare));
                     const isHighlighted = highlightShareId === s.id;
@@ -928,7 +996,9 @@ export function ShareForReconciliationDialog({
               <p className="text-xs text-muted-foreground mt-2">{linkedShares.length} linked share(s) — open Reconcile or use button on account details.</p>
             ) : null}
           </TabsContent>
+          ) : null}
 
+          {showUnlinkedTab ? (
           <TabsContent value="unlinked" className="mt-3 flex min-h-0 flex-1 flex-col">
             <div className={reconShareListScrollCn}>
               <div className="w-full min-w-0 space-y-2">
@@ -940,8 +1010,8 @@ export function ShareForReconciliationDialog({
                   </p>
                 ) : (
                   filteredUnlinkedShares.map((s, cardIndex) => {
-                    const roleLabel = getReconShareRoleLabelForViewer(s, user?.uid);
-                    const { owned, other } = getReconShareSidesForViewer(s, user?.uid);
+                    const roleLabel = getReconShareRoleLabelForViewer(s, user?.uid, companyId ?? undefined);
+                    const { owned, other } = getReconShareSidesForViewer(s, user?.uid, companyId ?? undefined);
                     return (
                       <div
                         key={s.id}
@@ -987,6 +1057,7 @@ export function ShareForReconciliationDialog({
               </div>
             </div>
           </TabsContent>
+          ) : null}
         </Tabs>
       </DialogContent>
       </Dialog>

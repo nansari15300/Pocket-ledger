@@ -67,6 +67,7 @@ import {
   shouldSuggestPdfAsImage,
 } from "@/lib/voucherAttachmentPdfAsImage";
 import { useAccountBalance } from "@/hooks/useAccountBalance";
+import { bankAccountAllowsVoucherMinusBalance } from "@/lib/bankAccountMinusBalancePolicy";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
 import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
@@ -617,11 +618,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   // `account` row = copy-mismatch red label / Copy chip ke liye same source-of-truth jo balance hook use karta hai (id trim + type-safe).
   const { account: fromAccountRow, displayBalance: fromAccountBalance } = useAccountBalance(fromAccountId);
   const { account: toAccountRow, displayBalance: toAccountBalance } = useAccountBalance(toAccountId);
+  const allowFromAccountMinusBalance = bankAccountAllowsVoucherMinusBalance(fromAccountRow);
   const isAmountExceedingSelectedFromAccount = useCallback((enteredAmount: number) => {
-    if (!fromAccountId) return false;
+    if (!fromAccountId || allowFromAccountMinusBalance) return false;
     const selectedBalance = Number(fromAccountBalance) || 0;
     return enteredAmount > selectedBalance;
-  }, [fromAccountId, fromAccountBalance]);
+  }, [fromAccountId, fromAccountBalance, allowFromAccountMinusBalance]);
 
   const isAutoVoucherEnabled = company?.autoVoucherNumbering?.contra ?? true;
   const isVoucherEditingAllowed = company?.allowVoucherNumberEditing?.contra ?? false;
@@ -1347,7 +1349,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         // Keep list balance short as requested: "2,000.00 Dr" (no "Balance:" / no currency prefix).
         label: `${a.accountName} (${a.accountType}) — ${formatCurrencyForPrint(Number(a.balance) || 0, { showDrCr: true, noSuffix: true, noAnimation: true })}`,
         isSpecial: a.isSpecial,
-        disabled: (Number(a.balance) || 0) <= 0,
+        disabled:
+          !bankAccountAllowsVoucherMinusBalance(a) && (Number(a.balance) || 0) <= 0,
       })),
     [availableFromAccounts, formatCurrencyForPrint]
   );

@@ -7,7 +7,7 @@ import { Scale } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { useReconciliationFeature } from "@/hooks/useReconciliationFeature";
-import { subscribeLinkedSharesForAccount } from "@/lib/reconciliation/reconciliationStore";
+import { subscribeLinkedSharesForAccount, backfillReconciliationShareCompanyIndex } from "@/lib/reconciliation/reconciliationStore";
 import type { ReconciliationShare } from "@/lib/reconciliation/types";
 import { LEDGER_HEADER_PILL_CN } from "@/lib/ledgerHeaderChrome";
 import { cn } from "@/lib/utils";
@@ -19,21 +19,41 @@ type ReconciliationAccountButtonProps = {
   className?: string;
 };
 
-/** Account details header — balance ke paas Reconciliation (linked share ho to). */
+/** Account details header — balance ke paas Reconciliation (linked share ho to; shared staff company index se). */
 export function ReconciliationAccountButton({ accountId, className }: ReconciliationAccountButtonProps) {
   const router = useRouter();
   const { user } = useAuth();
-  const { companyId } = useCompany();
+  const { companyId, company } = useCompany();
   const { canView, enabled } = useReconciliationFeature();
   const [links, setLinks] = React.useState<ReconciliationShare[]>([]);
 
+  /** Owner purane shares ka company index ek baar likh sakta hai — staff account button ke liye */
+  const isCompanyOwner = React.useMemo(() => {
+    if (!company || !user?.uid) return false;
+    if (company.isOwned === true) return true;
+    const byId = !!company.ownerId && company.ownerId === user.uid;
+    const byEmail =
+      !!company.ownerEmail &&
+      !!user.email &&
+      company.ownerEmail.toLowerCase().trim() === user.email.toLowerCase().trim();
+    return byId || byEmail;
+  }, [company, user?.uid, user?.email]);
+
   React.useEffect(() => {
-    if (!enabled || !canView || !companyId || !accountId || !user?.uid) {
+    if (!enabled || !canView || !companyId || !accountId) {
       setLinks([]);
       return;
     }
-    return subscribeLinkedSharesForAccount(companyId, accountId, user.uid, setLinks);
+    return subscribeLinkedSharesForAccount(companyId, accountId, user?.uid, setLinks);
   }, [enabled, canView, companyId, accountId, user?.uid]);
+
+  /** Index missing ho to owner/participant backfill try — account header button staff ko dikhe */
+  React.useEffect(() => {
+    if (!enabled || !canView || !companyId || !user?.uid || links.length > 0) return;
+    void backfillReconciliationShareCompanyIndex(companyId, user.uid, {
+      tryCompanyScopedQuery: isCompanyOwner,
+    });
+  }, [enabled, canView, companyId, user?.uid, links.length, isCompanyOwner]);
 
   if (!enabled || !canView || links.length === 0) return null;
 

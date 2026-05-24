@@ -37,22 +37,36 @@ export function MasterFormTwoColGrid({
   return <div className={cn(masterFormTwoColClass, className)}>{children}</div>;
 }
 
-/** Account / party naam (left) + Inter Co. A/c No (right) */
+/** Account / party naam (left) + Inter Co. A/c No (right); optional row naam ↔ A/c No ke beech (mobile stack). */
 export function MasterFormNameAcNoRow({
   entityKind,
   entityId,
   mode = "edit",
   nameField,
+  betweenNameAndAcNoRow,
 }: {
   entityKind: InterCompanyEntityKind;
   entityId?: string | null;
   mode?: "create" | "edit";
   nameField: ReactNode;
+  /** e.g. bank minus-balance checkbox — mobile par naam ke neeche, A/c No ke upar */
+  betweenNameAndAcNoRow?: ReactNode;
 }) {
   return (
-    <div className={cn(masterFormTwoColClass, "col-span-full sm:col-span-full")}>
-      {nameField}
-      <MasterFormInterCompanyAcNoSlot entityKind={entityKind} entityId={entityId} mode={mode} />
+    <div
+      className={cn(
+        masterFormTwoColClass,
+        "col-span-full sm:col-span-full",
+        betweenNameAndAcNoRow && "grid-flow-dense"
+      )}
+    >
+      <div className="min-w-0 order-1">{nameField}</div>
+      {betweenNameAndAcNoRow ? (
+        <div className="col-span-full order-2 min-w-0">{betweenNameAndAcNoRow}</div>
+      ) : null}
+      <div className={cn("min-w-0", betweenNameAndAcNoRow ? "order-3 sm:order-2" : undefined)}>
+        <MasterFormInterCompanyAcNoSlot entityKind={entityKind} entityId={entityId} mode={mode} />
+      </div>
     </div>
   );
 }

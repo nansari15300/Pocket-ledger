@@ -4474,6 +4474,21 @@ body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr[data-pl-re
   color: hsl(var(--muted-foreground)) !important;
 }
 
+/* Comment saved — solid green ℹ️ (pink/green row par bhi clearly dikhe) */
+[data-pl-reconciliation-ledger] button[data-pl-recon-comment-has] {
+  background-color: rgb(22 163 74) !important;
+  color: #fff !important;
+  border: 1px solid rgb(21 128 61) !important;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+}
+[data-pl-reconciliation-ledger] button[data-pl-recon-comment-has]:hover {
+  background-color: rgb(21 128 61) !important;
+}
+[data-pl-reconciliation-ledger] button[data-pl-recon-comment-has] svg {
+  color: #fff !important;
+  stroke: #fff !important;
+}
+
 /* Dashboard tone cards — file end: Pro/global black Card shell se upar; border card hue se match. */
 body[class*="theme-"] main .pl-dashboard-tone-card.rounded-lg.border.bg-card.pl-dashboard-ribbon-emerald,
 body.theme-pro main .pl-dashboard-tone-card.rounded-lg.border.bg-card.pl-dashboard-ribbon-emerald {

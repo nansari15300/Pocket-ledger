@@ -77,6 +77,7 @@ import { cnMasterEntityDialogContent, masterEntityDialogHeaderClassName } from "
 import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
 import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
 import { persistLedgerModalParentFromBrowser } from "@/lib/modalUrlSync";
+import { AllowVoucherMinusBalanceField } from "@/components/bank-cash/AllowVoucherMinusBalanceField";
 
 /** CreateBankAccountDialog jaisa: combobox value `ungrouped_account` jab account Ungrouped bucket mein ho (null / empty legacy). */
 function normalizeBankAccountEditGroupId(groupId: string | null | undefined): string {
@@ -99,6 +100,7 @@ const formSchema = z.object({
   groupId: z.string().optional(),
   openingBalanceNarration: z.string().optional(),
   isSpecial: z.boolean(),
+  allowVoucherMinusBalance: z.boolean(),
   useFor: z.object({
     in: z.array(z.string()),
     out: z.array(z.string()),
@@ -178,6 +180,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         ifscCode: account.ifscCode || "",
         groupId: normalizeBankAccountEditGroupId(account.groupId),
         isSpecial: account.isSpecial || false,
+        allowVoucherMinusBalance: account.allowVoucherMinusBalance === true,
         useFor: account.useFor || { 
             in: company?.ownerEmail ? [company.ownerEmail] : [], 
             out: company?.ownerEmail ? [company.ownerEmail] : [] 
@@ -303,6 +306,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         ifscCode: account.ifscCode || "",
         groupId: normalizeBankAccountEditGroupId(account.groupId),
         isSpecial: account.isSpecial || false,
+        allowVoucherMinusBalance: account.allowVoucherMinusBalance === true,
         useFor: account.useFor || { 
             in: company?.ownerEmail ? [company.ownerEmail] : [], 
             out: company?.ownerEmail ? [company.ownerEmail] : [] 
@@ -413,6 +417,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           openingBalanceNarration: narrationClean,
           groupId: values.groupId || null,
           isSpecial: values.isSpecial,
+          allowVoucherMinusBalance: values.allowVoucherMinusBalance === true,
           useFor: values.useFor ?? { in: [], out: [] },
           fileUrl,
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
@@ -670,6 +675,9 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                   entityKind="bank"
                   entityId={account.id}
                   mode="edit"
+                  betweenNameAndAcNoRow={
+                    <AllowVoucherMinusBalanceField control={form.control} />
+                  }
                   nameField={
                     <FormField
                       control={form.control}

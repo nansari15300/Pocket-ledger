@@ -156,5 +156,5 @@ export async function ensureFreshParticipantSnapshotNotes(
     refreshed = true;
   }
   if (!refreshed) return null;
-  return getReconciliationShare(share.id);
+  return getReconciliationShare(share.id, share.senderCompanyId || share.receiverCompanyId);
 }

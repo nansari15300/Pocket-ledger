@@ -3,6 +3,7 @@
 import {
   addDoc,
   collection,
+  deleteDoc,
   deleteField,
   doc,
   getDoc,
@@ -10,6 +11,7 @@ import {
   onSnapshot,
   query,
   serverTimestamp,
+  setDoc,
   updateDoc,
   where,
   type Unsubscribe,
@@ -31,8 +33,89 @@ import {
   sendReconciliationRequestAgainAlert,
   sendReconciliationUnlinkedAlert,
 } from "@/lib/reconciliation/notifications";
+import { reconciliationViewerSide } from "@/lib/reconciliation/sideMeta";
 
 const SHARES = () => collection(firestore, "reconciliation_shares");
+
+/** Company staff ke liye mirror — top-level list + isCompanyUser(get) query aksar permission-denied deti hai. */
+const COMPANY_SHARES = (companyId: string) =>
+  collection(firestore, `companies/${companyId}/reconciliation_shares`);
+
+const companyShareIndexRef = (companyId: string, shareId: string) =>
+  doc(firestore, `companies/${companyId}/reconciliation_shares`, shareId);
+
+/** Top-level share doc ko sender/receiver company subcollections me sync — shared role staff yahi padhte hain. */
+export async function syncReconciliationShareToCompanyIndexes(
+  share: ReconciliationShare,
+  opts?: { removeFromCompanyIds?: string[] }
+): Promise<void> {
+  const shareId = String(share.id || "").trim();
+  if (!shareId) return;
+  const { id: _id, ...rest } = share;
+  const payload = { ...rest };
+  const writes: Promise<unknown>[] = [];
+  for (const removeCid of opts?.removeFromCompanyIds || []) {
+    const rc = String(removeCid || "").trim();
+    if (rc) {
+      writes.push(deleteDoc(companyShareIndexRef(rc, shareId)).catch(() => {}));
+    }
+  }
+  const senderCid = String(share.senderCompanyId || "").trim();
+  const receiverCid = String(share.receiverCompanyId || "").trim();
+  if (senderCid) {
+    writes.push(setDoc(companyShareIndexRef(senderCid, shareId), payload, { merge: true }));
+  }
+  if (receiverCid && receiverCid !== senderCid) {
+    writes.push(setDoc(companyShareIndexRef(receiverCid, shareId), payload, { merge: true }));
+  }
+  await Promise.all(writes);
+}
+
+/**
+ * Purane shares jinka company index nahi bana — participant/owner dialog kholte waqt index likho.
+ * Staff sirf subcollection se padh sakta hai; pehli baar owner/sender ko dialog khulwana zaroori ho sakta hai.
+ */
+export async function backfillReconciliationShareCompanyIndex(
+  companyId: string,
+  userId: string,
+  opts?: { tryCompanyScopedQuery?: boolean }
+): Promise<number> {
+  const cid = String(companyId || "").trim();
+  const uid = String(userId || "").trim();
+  if (!cid || !uid) return 0;
+  const map = new Map<string, ReconciliationShare>();
+  const ingest = (docs: { id: string; data: () => Record<string, unknown> }[]) => {
+    for (const d of docs) {
+      const s = { id: d.id, ...d.data() } as ReconciliationShare;
+      if (s.senderCompanyId === cid || s.receiverCompanyId === cid) map.set(d.id, s);
+    }
+  };
+  const participantQueries = [
+    query(SHARES(), where("senderUserId", "==", uid)),
+    query(SHARES(), where("targetUserId", "==", uid)),
+    query(SHARES(), where("receiverUserId", "==", uid)),
+  ];
+  for (const q of participantQueries) {
+    try {
+      const snap = await getDocs(q);
+      ingest(snap.docs);
+    } catch (err) {
+      console.warn("[reconciliation_shares] backfill participant query:", err);
+    }
+  }
+  if (opts?.tryCompanyScopedQuery) {
+    for (const field of ["senderCompanyId", "receiverCompanyId"] as const) {
+      try {
+        const snap = await getDocs(query(SHARES(), where(field, "==", cid)));
+        ingest(snap.docs);
+      } catch (err) {
+        console.warn(`[reconciliation_shares] backfill ${field} query:`, err);
+      }
+    }
+  }
+  await Promise.all([...map.values()].map((s) => syncReconciliationShareToCompanyIndexes(s).catch(() => {})));
+  return map.size;
+}
 
 /** Company ke saare ledger accounts — share/link dropdown. */
 export async function loadReconciliationAccountsForCompany(companyId: string): Promise<ReconciliationAccountOption[]> {
@@ -110,6 +193,15 @@ export async function createReconciliationShare(params: {
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+  // Company subcollection mirror — shared staff list yahi se load karte hain
+  await syncReconciliationShareToCompanyIndexes({
+    id: ref.id,
+    ...params,
+    senderCollection,
+    status: "pending",
+    senderLedgerSnapshot: snapshot.rows,
+    senderOpeningBalance: snapshot.openingBalance,
+  } as ReconciliationShare).catch((err) => console.warn("[reconciliation_shares] index sync on create:", err));
   await sendReconciliationShareAlert({
     shareId: ref.id,
     recipientUserId: params.targetUserId,
@@ -160,6 +252,21 @@ export async function linkReconciliationShare(params: {
     linkedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+  // Linked share — receiver company index bhi update
+  await syncReconciliationShareToCompanyIndexes({
+    ...share,
+    id: params.shareId,
+    status: "linked",
+    receiverUserId: params.receiverUserId,
+    receiverCompanyId: params.receiverCompanyId,
+    receiverCompanyName: params.receiverCompanyName,
+    receiverEntityType: params.receiverEntityType,
+    receiverAccountId: params.receiverAccountId,
+    receiverAccountName: params.receiverAccountName,
+    receiverCollection,
+    receiverLedgerSnapshot: snapshot.rows,
+    receiverOpeningBalance: snapshot.openingBalance,
+  } as ReconciliationShare).catch((err) => console.warn("[reconciliation_shares] index sync on link:", err));
   await sendReconciliationAcceptedAlert({
     shareId: params.shareId,
     senderUserId: share.senderUserId,
@@ -220,6 +327,23 @@ export async function changeLinkedReconciliationShare(params: {
     rowComments: deleteField(), // naya ledger — purane row id comments invalid
     updatedAt: serverTimestamp(),
   });
+  const oldReceiverCo = String(share.receiverCompanyId || "").trim();
+  await syncReconciliationShareToCompanyIndexes(
+    {
+      ...share,
+      id: params.shareId,
+      receiverUserId: params.receiverUserId,
+      receiverCompanyId: params.receiverCompanyId,
+      receiverCompanyName: params.receiverCompanyName,
+      receiverEntityType: params.receiverEntityType,
+      receiverAccountId: params.receiverAccountId,
+      receiverAccountName: params.receiverAccountName,
+      receiverCollection,
+      receiverLedgerSnapshot: snapshot.rows,
+      receiverOpeningBalance: snapshot.openingBalance,
+    } as ReconciliationShare,
+    oldReceiverCo && oldReceiverCo !== params.receiverCompanyId ? { removeFromCompanyIds: [oldReceiverCo] } : undefined
+  ).catch((err) => console.warn("[reconciliation_shares] index sync on change receiver:", err));
 }
 
 /** Linked share par sender apni company/account badle — receiver side same rehti hai. */
@@ -268,6 +392,22 @@ export async function changeSenderLinkedReconciliationShare(params: {
     rowComments: deleteField(),
     updatedAt: serverTimestamp(),
   });
+  const oldSenderCo = String(share.senderCompanyId || "").trim();
+  await syncReconciliationShareToCompanyIndexes(
+    {
+      ...share,
+      id: params.shareId,
+      senderCompanyId: params.senderCompanyId,
+      senderCompanyName: params.senderCompanyName,
+      senderEntityType: params.senderEntityType,
+      senderAccountId: params.senderAccountId,
+      senderAccountName: params.senderAccountName,
+      senderCollection,
+      senderLedgerSnapshot: snapshot.rows,
+      senderOpeningBalance: snapshot.openingBalance,
+    } as ReconciliationShare,
+    oldSenderCo && oldSenderCo !== params.senderCompanyId ? { removeFromCompanyIds: [oldSenderCo] } : undefined
+  ).catch((err) => console.warn("[reconciliation_shares] index sync on change sender:", err));
 }
 
 /** Koi bhi participant apni linked side hata de — share revoked, history fields rehti hain. */
@@ -304,6 +444,12 @@ export async function unlinkReconciliationShare(params: {
     rowComments: deleteField(),
     updatedAt: serverTimestamp(),
   });
+  await syncReconciliationShareToCompanyIndexes({
+    ...share,
+    status: "revoked",
+    unlinkedByUserId: params.userId,
+    unlinkedByUserEmail: params.userEmail,
+  } as ReconciliationShare).catch((err) => console.warn("[reconciliation_shares] index sync on unlink:", err));
 
   if (otherUserId && otherUserId !== params.userId) {
     await sendReconciliationUnlinkedAlert({
@@ -374,6 +520,23 @@ export async function requestReconciliationShareAgain(params: {
   }
 
   await updateDoc(shareRef, updatePayload);
+  const oldReceiverCo = String(share.receiverCompanyId || "").trim();
+  await syncReconciliationShareToCompanyIndexes(
+    {
+      ...share,
+      status: "pending",
+      receiverUserId: undefined,
+      receiverCompanyId: undefined,
+      receiverCompanyName: undefined,
+      receiverEntityType: undefined,
+      receiverAccountId: undefined,
+      receiverAccountName: undefined,
+      receiverCollection: undefined,
+      receiverLedgerSnapshot: undefined,
+      receiverOpeningBalance: undefined,
+    } as ReconciliationShare,
+    oldReceiverCo ? { removeFromCompanyIds: [oldReceiverCo] } : undefined
+  ).catch((err) => console.warn("[reconciliation_shares] index sync on request again:", err));
 
   const recipientUserId =
     params.userId === share.senderUserId
@@ -414,6 +577,11 @@ export async function refreshReconciliationSideSnapshot(params: {
       senderSnapshotAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+    await syncReconciliationShareToCompanyIndexes({
+      ...share,
+      senderLedgerSnapshot: snapshot.rows,
+      senderOpeningBalance: snapshot.openingBalance,
+    }).catch((err) => console.warn("[reconciliation_shares] index sync on refresh sender:", err));
   } else {
     if (!share.receiverCompanyId || !share.receiverAccountId) throw new Error("Receiver not linked");
     const snapshot = await buildReconciliationLedgerSnapshot({
@@ -430,32 +598,87 @@ export async function refreshReconciliationSideSnapshot(params: {
       receiverSnapshotAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+    await syncReconciliationShareToCompanyIndexes({
+      ...share,
+      receiverLedgerSnapshot: snapshot.rows,
+      receiverOpeningBalance: snapshot.openingBalance,
+    }).catch((err) => console.warn("[reconciliation_shares] index sync on refresh receiver:", err));
   }
 }
 
-export async function getReconciliationShare(shareId: string): Promise<ReconciliationShare | null> {
-  const snap = await getDoc(doc(firestore, "reconciliation_shares", shareId));
-  if (!snap.exists()) return null;
-  return { id: snap.id, ...snap.data() } as ReconciliationShare;
+export async function getReconciliationShare(
+  shareId: string,
+  companyId?: string
+): Promise<ReconciliationShare | null> {
+  const id = String(shareId || "").trim();
+  if (!id) return null;
+  try {
+    const snap = await getDoc(doc(firestore, "reconciliation_shares", id));
+    if (snap.exists()) return { id: snap.id, ...snap.data() } as ReconciliationShare;
+  } catch {
+    /* participant nahi / rules — company index niche */
+  }
+  const cid = String(companyId || "").trim();
+  if (cid) {
+    try {
+      const idx = await getDoc(companyShareIndexRef(cid, id));
+      if (idx.exists()) return { id, ...idx.data() } as ReconciliationShare;
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
 }
 
 export function subscribeReconciliationSharesForUser(
   userId: string,
   onData: (shares: ReconciliationShare[]) => void
 ): Unsubscribe {
+  return subscribeReconciliationSharesForViewer(userId, undefined, onData);
+}
+
+/**
+ * Reconciliation shares — participant uid + company subcollection mirror (shared staff).
+ * Top-level senderCompanyId/receiverCompanyId queries rules me get() ki wajah se aksar fail — index primary hai.
+ */
+export function subscribeReconciliationSharesForViewer(
+  userId: string,
+  companyId: string | undefined,
+  onData: (shares: ReconciliationShare[]) => void
+): Unsubscribe {
   if (!userId) {
     onData([]);
     return () => {};
   }
+  const cid = String(companyId || "").trim();
   const sentQ = query(SHARES(), where("senderUserId", "==", userId));
   const recvQ = query(SHARES(), where("targetUserId", "==", userId));
   const linkedRecvQ = query(SHARES(), where("receiverUserId", "==", userId));
+  const senderCoQ = cid ? query(SHARES(), where("senderCompanyId", "==", cid)) : null;
+  const receiverCoQ = cid ? query(SHARES(), where("receiverCompanyId", "==", cid)) : null;
+  const companyIdxQ = cid ? query(COMPANY_SHARES(cid)) : null;
   let sent: ReconciliationShare[] = [];
   let recv: ReconciliationShare[] = [];
   let linkedRecv: ReconciliationShare[] = [];
+  let senderCo: ReconciliationShare[] = [];
+  let receiverCo: ReconciliationShare[] = [];
+  let companyIdx: ReconciliationShare[] = [];
+  /** Participant se mile shares ka index lazily likho — purane shares staff ko dikhne ke liye */
+  let indexSyncInFlight = false;
+  const maybeSyncCompanyIndexes = (rows: ReconciliationShare[]) => {
+    if (!cid || indexSyncInFlight) return;
+    const forCompany = rows.filter((s) => s.senderCompanyId === cid || s.receiverCompanyId === cid);
+    if (!forCompany.length) return;
+    indexSyncInFlight = true;
+    void Promise.all(forCompany.map((s) => syncReconciliationShareToCompanyIndexes(s).catch(() => {}))).finally(
+      () => {
+        indexSyncInFlight = false;
+      }
+    );
+  };
   const emit = () => {
     const map = new Map<string, ReconciliationShare>();
-    [...sent, ...recv, ...linkedRecv].forEach((s) => map.set(s.id, s));
+    [...sent, ...recv, ...linkedRecv, ...senderCo, ...receiverCo, ...companyIdx].forEach((s) => map.set(s.id, s));
     onData(Array.from(map.values()).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""))));
   };
   const onListenError = (label: string) => (err: unknown) => {
@@ -463,72 +686,148 @@ export function subscribeReconciliationSharesForUser(
     if (label === "sent") sent = [];
     if (label === "target") recv = [];
     if (label === "receiver") linkedRecv = [];
+    if (label === "senderCompany") senderCo = [];
+    if (label === "receiverCompany") receiverCo = [];
+    if (label === "companyIndex") companyIdx = [];
     emit();
   };
-  const u1 = onSnapshot(
-    sentQ,
-    (snap) => {
-      sent = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ReconciliationShare);
-      emit();
-    },
-    onListenError("sent")
-  );
-  const u2 = onSnapshot(
-    recvQ,
-    (snap) => {
-      recv = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ReconciliationShare);
-      emit();
-    },
-    onListenError("target")
-  );
-  const u3 = onSnapshot(
-    linkedRecvQ,
-    (snap) => {
-      linkedRecv = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ReconciliationShare);
-      emit();
-    },
-    onListenError("receiver")
-  );
-  return () => {
-    u1();
-    u2();
-    u3();
-  };
+  const unsubs: Unsubscribe[] = [
+    onSnapshot(
+      sentQ,
+      (snap) => {
+        sent = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ReconciliationShare);
+        maybeSyncCompanyIndexes(sent);
+        emit();
+      },
+      onListenError("sent")
+    ),
+    onSnapshot(
+      recvQ,
+      (snap) => {
+        recv = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ReconciliationShare);
+        maybeSyncCompanyIndexes(recv);
+        emit();
+      },
+      onListenError("target")
+    ),
+    onSnapshot(
+      linkedRecvQ,
+      (snap) => {
+        linkedRecv = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ReconciliationShare);
+        maybeSyncCompanyIndexes(linkedRecv);
+        emit();
+      },
+      onListenError("receiver")
+    ),
+  ];
+  if (senderCoQ) {
+    unsubs.push(
+      onSnapshot(
+        senderCoQ,
+        (snap) => {
+          senderCo = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ReconciliationShare);
+          emit();
+        },
+        onListenError("senderCompany")
+      )
+    );
+  }
+  if (receiverCoQ) {
+    unsubs.push(
+      onSnapshot(
+        receiverCoQ,
+        (snap) => {
+          receiverCo = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ReconciliationShare);
+          emit();
+        },
+        onListenError("receiverCompany")
+      )
+    );
+  }
+  if (companyIdxQ) {
+    unsubs.push(
+      onSnapshot(
+        companyIdxQ,
+        (snap) => {
+          companyIdx = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ReconciliationShare);
+          emit();
+        },
+        onListenError("companyIndex")
+      )
+    );
+  }
+  return () => unsubs.forEach((u) => u());
 }
 
-/** Linked share jahan current company + account involved ho — user-scoped listen (broad status query rules todti hai). */
+/** Linked share jahan current company + account involved ho — company index primary (shared staff). */
 export function subscribeLinkedSharesForAccount(
   companyId: string,
   accountId: string,
-  userId: string,
+  userId: string | undefined,
   onData: (shares: ReconciliationShare[]) => void
 ): Unsubscribe {
-  if (!companyId || !accountId || !userId) {
+  const cid = String(companyId || "").trim();
+  const aid = String(accountId || "").trim();
+  if (!cid || !aid) {
     onData([]);
     return () => {};
   }
-  return subscribeReconciliationSharesForUser(userId, (all) => {
-    onData(
-      all.filter(
-        (s) =>
-          s.status === "linked" &&
-          ((s.senderCompanyId === companyId && s.senderAccountId === accountId) ||
-            (s.receiverCompanyId === companyId && s.receiverAccountId === accountId))
-      )
+  const filterLinkedForAccount = (rows: ReconciliationShare[]) =>
+    rows.filter(
+      (s) =>
+        s.status === "linked" &&
+        ((s.senderCompanyId === cid && s.senderAccountId === aid) ||
+          (s.receiverCompanyId === cid && s.receiverAccountId === aid))
     );
-  });
+  let fromCompanyIndex: ReconciliationShare[] = [];
+  let fromViewer: ReconciliationShare[] = [];
+  const emit = () => {
+    const map = new Map<string, ReconciliationShare>();
+    [...fromCompanyIndex, ...fromViewer].forEach((s) => map.set(s.id, s));
+    onData(filterLinkedForAccount(Array.from(map.values())));
+  };
+  const unsubs: Unsubscribe[] = [
+    onSnapshot(
+      query(COMPANY_SHARES(cid)),
+      (snap) => {
+        fromCompanyIndex = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ReconciliationShare);
+        emit();
+      },
+      (err) => {
+        console.warn("[reconciliation_shares] account company index listener:", err);
+        fromCompanyIndex = [];
+        emit();
+      }
+    ),
+  ];
+  const uid = String(userId || "").trim();
+  if (uid) {
+    unsubs.push(
+      subscribeReconciliationSharesForViewer(uid, cid, (all) => {
+        fromViewer = all;
+        emit();
+      })
+    );
+  }
+  return () => unsubs.forEach((u) => u());
 }
 
 /** Right table (remote snapshot) ke comments kis map me — viewer ke hisaab se. */
-export function remoteReconciliationCommentSide(share: ReconciliationShare, userId: string): "sender" | "receiver" {
-  if (share.senderUserId === userId) return "receiver";
-  return "sender";
+export function remoteReconciliationCommentSide(
+  share: ReconciliationShare,
+  userId: string,
+  companyId?: string
+): "sender" | "receiver" {
+  return reconciliationViewerSide(share, userId, companyId) === "sender" ? "receiver" : "sender";
 }
 
 /** Left (You) table: dusre user ne meri row par jo comment likha — us map ka side. */
-export function otherPartyCommentsOnMyRowsSide(share: ReconciliationShare, userId: string): "sender" | "receiver" {
-  if (share.senderUserId === userId) return "sender";
-  return "receiver";
+export function otherPartyCommentsOnMyRowsSide(
+  share: ReconciliationShare,
+  userId: string,
+  companyId?: string
+): "sender" | "receiver" {
+  return reconciliationViewerSide(share, userId, companyId) === "sender" ? "sender" : "receiver";
 }
 
 /** Reconciling remote row comment save — Firestore share doc `rowComments`. */
@@ -544,6 +843,18 @@ export async function saveReconciliationRowComment(params: {
     [`rowComments.${params.side}.${params.rowId}`]: trimmed ? trimmed : deleteField(),
     updatedAt: serverTimestamp(),
   });
+  // Company index mirror — shared staff ko comment + green icon turant dikhe
+  try {
+    const snap = await getDoc(shareRef);
+    if (snap.exists()) {
+      await syncReconciliationShareToCompanyIndexes({
+        id: snap.id,
+        ...snap.data(),
+      } as ReconciliationShare);
+    }
+  } catch (err) {
+    console.warn("[reconciliation_shares] index sync after comment save:", err);
+  }
 }
 
 /** You-side double-click edit — Firestore + SQLite mirror (APK/local) dono try karo */

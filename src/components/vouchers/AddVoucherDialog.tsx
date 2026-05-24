@@ -60,7 +60,7 @@ import { Switch, SWITCH_TRACK_HEIGHT_PX } from "@/components/ui/switch";
 import { CheckCircle } from "lucide-react";
 import { hasPaymentLinks, hasSpendWiseLinks, hasAllocationsToVoucherId } from "@/lib/payment-allocation-utils";
 import { useAuth } from "@/hooks/useAuth";
-import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
+import { approveVoucherWithHistory, softDeleteVoucherMoveToRecycleBin } from "@/lib/voucherActionsClient";
 import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { VoucherAttachmentFallbackContext } from "@/contexts/VoucherAttachmentFallbackContext";
@@ -1281,7 +1281,7 @@ export function AddVoucherDialog(props: any) {
   const calLab = useMemo(() => recurringAutoVoucherLabels(dateSystem), [dateSystem]);
   const router = useRouter();
   const pathname = usePathname();
-  const { can, canEditRecord } = usePermissions();
+  const { can, canEditRecord, canDeleteVoucher } = usePermissions();
   const { vouchers } = useVouchers();
   const isMobile = useIsMobile();
   const isDesktop = !isMobile;
@@ -1311,6 +1311,10 @@ export function AddVoucherDialog(props: any) {
   const [postCopyNewFormSeed, setPostCopyNewFormSeed] = useState<any | null>(null);
   const [copyMismatchCategories, setCopyMismatchCategories] = useState<string[]>([]);
   const [copySourceVoucherSnapshot, setCopySourceVoucherSnapshot] = useState<Record<string, any> | null>(null);
+  /** Copy-draft header: tick par pehli save ke baad source voucher recycle-bin (permission check). */
+  const [deleteOriginalAfterCopySave, setDeleteOriginalAfterCopySave] = useState(false);
+  /** Copy-draft: pehli successful save par original delete ek hi baar try ho. */
+  const copyOriginalDeleteHandledRef = useRef(false);
   const [copyMasterDraftRequest, setCopyMasterDraftRequest] = useState<CopyMasterDraftRequest | null>(null);
   // Center guidance popup: vague toast ki jagah formal actionable message dikhane ke लिए.
   const [copyMissingMasterPopup, setCopyMissingMasterPopup] = useState<{
@@ -1493,6 +1497,8 @@ export function AddVoucherDialog(props: any) {
       setPostCopyNewFormSeed(null);
       setCopyMismatchCategories([]);
       setCopySourceVoucherSnapshot(null);
+      setDeleteOriginalAfterCopySave(false);
+      copyOriginalDeleteHandledRef.current = false;
       setCopyMasterDraftRequest(null);
       // Dialog close par recurring toggle + schedule state safe default (agli open par stale na rahe).
       setAutoMonthlyEnabled(false);
@@ -2162,6 +2168,51 @@ export function AddVoucherDialog(props: any) {
   const voucherDialogTitle =
     effectiveForceViewOnly && !!voucher?.id ? "View Trxn" : !!voucher?.id ? "Edit Trxn" : "New Trxn";
 
+  /** Copy-draft header: source doc par delete permission ho to hi checkbox dikhao. */
+  const showDeleteOriginalCopyCheckbox = useMemo(() => {
+    if (!postCopyNewFormSeed || !copySourceVoucherSnapshot?.id || forceViewOnly) return false;
+    return canDeleteVoucher(copySourceVoucherSnapshot);
+  }, [postCopyNewFormSeed, copySourceVoucherSnapshot, canDeleteVoucher, forceViewOnly]);
+
+  /** Copied Draft (New) + optional delete-original checkbox — desktop/mobile header reuse. */
+  const copiedDraftHeaderBadge = postCopyNewFormSeed ? (
+    <div className="flex flex-row flex-wrap items-center gap-x-2 gap-y-0">
+      <p
+        className={cn(
+          "m-0 font-semibold leading-tight text-emerald-700",
+          isMobile ? "text-[10px]" : "text-[10px] md:text-xs"
+        )}
+      >
+        Copied Draft (New)
+        {copyMismatchCategories.length > 0 ? " - Fix red fields" : ""}
+      </p>
+      {showDeleteOriginalCopyCheckbox ? (
+        <label
+          className={cn(
+            "flex cursor-pointer select-none items-center gap-1.5",
+            forceViewOnly && "pointer-events-none opacity-60"
+          )}
+        >
+          <Checkbox
+            checked={deleteOriginalAfterCopySave}
+            disabled={forceViewOnly}
+            onCheckedChange={(v) => setDeleteOriginalAfterCopySave(v === true)}
+            className={cn(isMobile ? "h-3 w-3" : "h-3.5 w-3.5")}
+            aria-label="Delete original voucher after save"
+          />
+          <span
+            className={cn(
+              "whitespace-nowrap font-medium text-emerald-900",
+              isMobile ? "text-[10px]" : "text-[10px] md:text-xs"
+            )}
+          >
+            Delete original voucher
+          </span>
+        </label>
+      ) : null}
+    </div>
+  ) : null;
+
   // Block edit rule: when history full + setting "Block edit", disable Save (user must clear history first)
   // Re-run when company changes so live voucher settings (from Settings) apply immediately
   useEffect(() => {
@@ -2783,6 +2834,37 @@ export function AddVoucherDialog(props: any) {
     /** Kai missing months picker khula ho to voucher dialog turant band na ho (user tick / cancel kare). */
     let suppressMainDialogCloseForRecurringPicker = false;
 
+    // Copy-draft: naya voucher save ho chuka — tick par source recycle-bin (role delete permission).
+    if (
+      status === "saved" &&
+      postCopyNewFormSeed &&
+      deleteOriginalAfterCopySave &&
+      !copyOriginalDeleteHandledRef.current &&
+      copySourceVoucherSnapshot?.id &&
+      user?.uid
+    ) {
+      copyOriginalDeleteHandledRef.current = true;
+      const srcCompanyId = String(companyId || "").trim();
+      const srcVoucherId = String(copySourceVoucherSnapshot.id).trim();
+      if (srcCompanyId && srcVoucherId) {
+        if (canDeleteVoucher(copySourceVoucherSnapshot)) {
+          try {
+            await softDeleteVoucherMoveToRecycleBin(srcCompanyId, srcVoucherId, user.uid);
+            toast.success("Original voucher moved to recycle bin.");
+            setDeleteOriginalAfterCopySave(false);
+          } catch (err: unknown) {
+            console.error("[AddVoucherDialog] copy-delete original failed", err);
+            toast.error(
+              err instanceof Error ? err.message : "New voucher saved but original could not be deleted."
+            );
+          }
+        } else {
+          toast.error("New voucher saved. You do not have permission to delete the original voucher.");
+          setDeleteOriginalAfterCopySave(false);
+        }
+      }
+    }
+
     // Static ledger (mobile + desktop wide): SQLite flush ke baad `/dashboard` push — guard pehle arm (native ~8s window).
     if (status === "saved") {
       plNavDbg("AddVoucherDialog.handleAction.saved.armGuard", {
@@ -2842,6 +2924,8 @@ export function AddVoucherDialog(props: any) {
       setPostCopyNewFormSeed(null);
       setCopyMismatchCategories([]);
       setCopySourceVoucherSnapshot(null);
+      setDeleteOriginalAfterCopySave(false);
+      copyOriginalDeleteHandledRef.current = false;
     }
     if (props.onVoucherAction) {
       props.onVoucherAction(status, keepDialogAsNew, newId);
@@ -3035,6 +3119,10 @@ export function AddVoucherDialog(props: any) {
     committedAutoMonthlyEnabled,
     recurringTemplateSnapshot?.enabled,
     apkOfflineViewOnly,
+    postCopyNewFormSeed,
+    deleteOriginalAfterCopySave,
+    copySourceVoucherSnapshot,
+    canDeleteVoucher,
   ]);
 
   /**
@@ -3387,13 +3475,7 @@ export function AddVoucherDialog(props: any) {
                     <DialogTitle className="m-0 font-bold font-headline text-inherit text-xl leading-tight">
                       {voucherDialogTitle}
                     </DialogTitle>
-                    {postCopyNewFormSeed && (
-                      <p className="m-0 text-[10px] md:text-xs font-semibold leading-tight text-emerald-700">
-                        Copied Draft (New)
-                        {/* Header copy-draft status: category names (party/account/expense) hide karke sirf generic fix hint dikhana. */}
-                        {copyMismatchCategories.length > 0 ? " - Fix red fields" : ""}
-                      </p>
-                    )}
+                    {copiedDraftHeaderBadge}
                   </div>
                   <div
                     className="justify-self-center self-center shrink-0 rounded-full border border-gray-300/80 bg-gray-200 px-2 py-1.5 md:px-3 md:py-2 inline-flex w-fit max-w-[min(52vw,560px)]"
@@ -3437,12 +3519,7 @@ export function AddVoucherDialog(props: any) {
                     <DialogTitle className="m-0 font-bold font-headline text-inherit text-xl leading-tight">
                       {voucherDialogTitle}
                     </DialogTitle>
-                    {postCopyNewFormSeed && (
-                      <p className="m-0 text-[10px] md:text-xs font-semibold leading-tight text-emerald-700">
-                        Copied Draft (New)
-                        {copyMismatchCategories.length > 0 ? " - Fix red fields" : ""}
-                      </p>
-                    )}
+                    {copiedDraftHeaderBadge}
                   </div>
                   <div className="ml-auto flex shrink-0 items-center gap-[10px]">
                     <VoucherDialogDateSystemSwitcher />
@@ -3501,12 +3578,7 @@ export function AddVoucherDialog(props: any) {
                 <DialogTitle className="m-0 font-bold font-headline text-inherit text-base leading-tight">
                   {voucherDialogTitle}
                 </DialogTitle>
-                {postCopyNewFormSeed && (
-                  <p className="m-0 text-[10px] font-semibold leading-tight text-emerald-700">
-                    Copied Draft (New)
-                    {copyMismatchCategories.length > 0 ? " - Fix red fields" : ""}
-                  </p>
-                )}
+                {copiedDraftHeaderBadge}
               </div>
               {isEditLockedByLinks && (
                 <div className="min-w-0 max-w-[min(100%,14rem)] flex-1 rounded-full border border-gray-300/80 bg-gray-200 px-2 py-1.5">
@@ -4057,6 +4129,8 @@ export function AddVoucherDialog(props: any) {
               setPostCopyNewFormSeed(copiedResult.nextNewFormSeed);
               setCopyMismatchCategories(copiedResult.unmatchedCategories || []);
               setCopySourceVoucherSnapshot((copiedResult as any).sourceSnapshot || null);
+              setDeleteOriginalAfterCopySave(false);
+              copyOriginalDeleteHandledRef.current = false;
               setEffectiveHasLinksFromForm(null);
               setLiveVoucher(null);
               // Manual copy ke liye target ko already-applied mark karo, taaki re-seed effect dubara na chale.

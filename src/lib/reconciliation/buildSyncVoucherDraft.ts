@@ -10,6 +10,7 @@ import { fetchInterCompanyEntitiesForCompany } from "@/lib/interCompany/fetchInt
 import type { InterCompanyEntityDetail } from "@/lib/interCompany/interCompanyEntityTypes";
 import { loadJournalLedgerScopeSnapshot, type JournalScopedLedgerSnapshot } from "@/lib/journalLedgerScopeLoad";
 import { fetchVoucherForReconciliationEdit } from "@/lib/reconciliation/reconciliationStore";
+import { reconciliationViewerSide } from "@/lib/reconciliation/sideMeta";
 
 /** Remote voucher type → apni company me opposite type (payment in ↔ out, etc.) */
 const RECON_MIRROR_VOUCHER_TYPE: Record<string, string> = {
@@ -630,16 +631,16 @@ export type ReconciliationSideContext = {
   companyId: string;
 };
 
-/** Share se meri (you) side ka account context */
+/** Share se meri (you) side ka account context — uid participant ya shared staff (selected company). */
 export function getMyReconciliationSideContext(
   share: ReconciliationShare,
   userId: string,
   companyId: string
 ): ReconciliationSideContext | null {
-  const iAmSender = share.senderUserId === userId;
-  const iAmReceiver = share.receiverUserId === userId || share.targetUserId === userId;
+  const cid = String(companyId || "").trim();
+  const viewerSide = reconciliationViewerSide(share, userId, cid);
 
-  if (iAmSender && share.senderCompanyId === companyId) {
+  if (viewerSide === "sender" && share.senderAccountId) {
     return {
       entityType: share.senderEntityType,
       accountId: share.senderAccountId,
@@ -648,25 +649,7 @@ export function getMyReconciliationSideContext(
       companyId: share.senderCompanyId,
     };
   }
-  if (iAmReceiver && share.receiverCompanyId === companyId) {
-    return {
-      entityType: share.receiverEntityType ?? "party",
-      accountId: share.receiverAccountId ?? "",
-      accountName: share.receiverAccountName ?? "",
-      collection: share.receiverCollection || reconciliationEntityCollection(share.receiverEntityType ?? "party"),
-      companyId: share.receiverCompanyId,
-    };
-  }
-  if (iAmSender) {
-    return {
-      entityType: share.senderEntityType,
-      accountId: share.senderAccountId,
-      accountName: share.senderAccountName,
-      collection: share.senderCollection,
-      companyId: share.senderCompanyId,
-    };
-  }
-  if (iAmReceiver && share.receiverCompanyId) {
+  if (viewerSide === "receiver" && share.receiverCompanyId && share.receiverAccountId) {
     return {
       entityType: share.receiverEntityType ?? "party",
       accountId: share.receiverAccountId ?? "",
@@ -681,10 +664,13 @@ export function getMyReconciliationSideContext(
 /** Remote (dusri) side context — crossCopySourceRef ke liye */
 export function getRemoteReconciliationSideContext(
   share: ReconciliationShare,
-  userId: string
+  userId: string,
+  companyId?: string
 ): ReconciliationSideContext | null {
-  const iAmSender = share.senderUserId === userId;
-  if (iAmSender && share.receiverCompanyId) {
+  const mine = getMyReconciliationSideContext(share, userId, companyId ?? "");
+  if (!mine) return null;
+  if (mine.companyId === share.senderCompanyId) {
+    if (!share.receiverCompanyId || !share.receiverAccountId) return null;
     return {
       entityType: share.receiverEntityType ?? "party",
       accountId: share.receiverAccountId ?? "",
@@ -693,16 +679,13 @@ export function getRemoteReconciliationSideContext(
       companyId: share.receiverCompanyId,
     };
   }
-  if (!iAmSender) {
-    return {
-      entityType: share.senderEntityType,
-      accountId: share.senderAccountId,
-      accountName: share.senderAccountName,
-      collection: share.senderCollection,
-      companyId: share.senderCompanyId,
-    };
-  }
-  return null;
+  return {
+    entityType: share.senderEntityType,
+    accountId: share.senderAccountId,
+    accountName: share.senderAccountName,
+    collection: share.senderCollection,
+    companyId: share.senderCompanyId,
+  };
 }
 
 /** Remote Dr/Cr se ya type se opposite voucher type */
@@ -889,7 +872,7 @@ export function buildSyncVoucherDraftFromRemoteRow(params: {
 }): BuildSyncVoucherDraftResult | null {
   const { remoteRow, share, userId, companyId } = params;
   const myCtx = getMyReconciliationSideContext(share, userId, companyId);
-  const remoteCtx = getRemoteReconciliationSideContext(share, userId);
+  const remoteCtx = getRemoteReconciliationSideContext(share, userId, companyId);
   if (!myCtx?.accountId) return null;
 
   const mirroredType = mirrorReconciliationVoucherType(
@@ -972,7 +955,7 @@ export async function buildSyncVoucherDraftFromRemoteRowAsync(params: {
   const built = buildSyncVoucherDraftFromRemoteRow(params);
   if (!built) return null;
 
-  const remoteCtx = getRemoteReconciliationSideContext(params.share, params.userId);
+  const remoteCtx = getRemoteReconciliationSideContext(params.share, params.userId, params.companyId);
   if (!remoteCtx?.companyId || !remoteCtx.accountId || !params.remoteRow.id) return built;
 
   try {

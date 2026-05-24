@@ -341,6 +341,16 @@ service cloud.firestore {
         allow read: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
         allow write: if isCompanyUser(companyId) || isSuperAdmin();
       }
+
+      /**
+       * Share for Reconciliation — company staff mirror of top-level `reconciliation_shares/{shareId}`.
+       * Top-level list + isCompanyUser(get) query shared users ke liye aksar fail hoti hai; yahan path-based read.
+       * @path /companies/{companyId}/reconciliation_shares/{shareId}
+       */
+      match /reconciliation_shares/{shareId} {
+        allow read, list: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
+      }
       
       /**
        * @description Manages parties (customers/suppliers) for a company.
@@ -676,7 +686,8 @@ service cloud.firestore {
 
     /**
      * Cross-user Share for Reconciliation — sender / target / receiver read.
-     * List queries MUST filter by senderUserId | targetUserId | receiverUserId (rules match).
+     * List queries MUST filter by senderUserId | targetUserId | receiverUserId | senderCompanyId | receiverCompanyId.
+     * Company members (sharedWith) may read shares for their company.
      * @path /reconciliation_shares/{shareId}
      */
     match /reconciliation_shares/{shareId} {
@@ -688,14 +699,29 @@ service cloud.firestore {
             || resource.data.get('receiverUserId', '') == request.auth.uid
           );
       }
-      allow get: if isReconciliationShareParticipant();
-      allow list: if isReconciliationShareParticipant();
+      function canReadReconciliationShare() {
+        return isReconciliationShareParticipant()
+          || (resource.data.get('senderCompanyId', '') != ''
+            && isCompanyUser(resource.data.senderCompanyId))
+          || (resource.data.get('receiverCompanyId', '') != ''
+            && isCompanyUser(resource.data.receiverCompanyId));
+      }
+      /** Company staff — sirf rowComments + updatedAt (remote row comment save). */
+      function reconciliationShareCommentOnlyUpdate() {
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rowComments', 'updatedAt']);
+      }
+      function canUpdateReconciliationShare() {
+        return isReconciliationShareParticipant()
+          || (canReadReconciliationShare() && reconciliationShareCommentOnlyUpdate());
+      }
+      allow get: if canReadReconciliationShare();
+      allow list: if canReadReconciliationShare();
       allow create: if isSignedIn()
         && request.resource.data.senderUserId == request.auth.uid
         && request.resource.data.targetUserId is string
         && request.resource.data.senderCompanyId is string
         && request.resource.data.senderAccountId is string;
-      allow update: if isReconciliationShareParticipant();
+      allow update: if canUpdateReconciliationShare();
       allow delete: if isSignedIn()
         && resource.data.senderUserId == request.auth.uid;
     }

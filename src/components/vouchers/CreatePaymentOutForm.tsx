@@ -76,6 +76,7 @@ import {
   shouldSuggestPdfAsImage,
 } from "@/lib/voucherAttachmentPdfAsImage";
 import { useAccountBalance } from "@/hooks/useAccountBalance";
+import { bankAccountAllowsVoucherMinusBalance } from "@/lib/bankAccountMinusBalancePolicy";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
 import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
@@ -511,7 +512,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const staffId = form.watch("staffId");
   const taxAccountId = form.watch("taxAccountId");
   const accountId = form.watch("accountId");
-  const { displayBalance: accountBalance } = useAccountBalance(accountId);
+  const { displayBalance: accountBalance, account: selectedPayFromAccount } = useAccountBalance(accountId);
+  const allowPayFromMinusBalance = bankAccountAllowsVoucherMinusBalance(selectedPayFromAccount);
   const accountOpeningBalance = Number(processedAccounts.find((a: any) => a.id === accountId)?.openingBalance ?? 0) || 0;
   /** Edit par ledger balance is voucher ka outflow pehle se ghata chuka hota hai — same bank par is amount ko wapas jod kar limit nikalo (naya voucher = 0). */
   const bookedPayFromAmountCreditBack = useMemo(() => {
@@ -531,12 +533,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   ]);
   const isAmountExceedingSelectedAccount = useCallback(
     (enteredAmount: number) => {
-      if (!accountId) return false;
+      if (!accountId || allowPayFromMinusBalance) return false;
       const selectedBalance = Number(accountBalance) || 0;
       const effectiveAvailable = selectedBalance + bookedPayFromAmountCreditBack;
       return enteredAmount > effectiveAvailable;
     },
-    [accountId, accountBalance, bookedPayFromAmountCreditBack]
+    [accountId, accountBalance, bookedPayFromAmountCreditBack, allowPayFromMinusBalance]
   );
 
   const expenseAccountId = form.watch("expenseAccountId");
@@ -1802,7 +1804,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         // Keep list balance short as requested: "2,000.00 Dr" (no "Balance:" / no currency prefix).
         label: `${a.accountName} (${a.accountType}) — ${formatCurrencyForPrint(Number(a.balance) || 0, { showDrCr: true, noSuffix: true, noAnimation: true })}`,
         isSpecial: a.isSpecial,
-        disabled: (Number(a.balance) || 0) <= 0,
+        disabled:
+          !bankAccountAllowsVoucherMinusBalance(a) && (Number(a.balance) || 0) <= 0,
       })),
     [availableAccounts, formatCurrencyForPrint]
   );

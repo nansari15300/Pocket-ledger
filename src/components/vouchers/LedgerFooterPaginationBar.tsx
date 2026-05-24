@@ -44,6 +44,8 @@ export type LedgerFooterPaginationBarProps = {
   className?: string;
   /** Reconciling footer: sort alag center pill me — pagination-only mode */
   hideSort?: boolean;
+  /** Reconciling footer: Trxn count alag pill me — parent ke andar mat dikhao */
+  hideTotalCount?: boolean;
 };
 
 /**
@@ -67,6 +69,7 @@ export function LedgerFooterPaginationBar({
   totalCount,
   className,
   hideSort = false,
+  hideTotalCount = false,
 }: LedgerFooterPaginationBarProps) {
   const options = rowsPerPageOptions as readonly number[];
 
@@ -153,7 +156,9 @@ export function LedgerFooterPaginationBar({
           <ChevronsRight className="h-3.5 w-3.5" />
         </Button>
         <LedgerFooterTextPill>({afterCount})</LedgerFooterTextPill>
-        <LedgerFooterTextPill>Total Trxn {totalCount}</LedgerFooterTextPill>
+        {!hideTotalCount ? (
+          <LedgerFooterTextPill>Total Trxn {totalCount}</LedgerFooterTextPill>
+        ) : null}
       </LedgerFooterParentPill>
     </div>
   );

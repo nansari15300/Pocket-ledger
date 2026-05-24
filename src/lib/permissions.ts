@@ -60,11 +60,19 @@ export type Permission =
   /** Shared list se apna account link karna (receiver) */
   | "link_reconciliation_accounts"
   /** Linked accounts par Reconciliation page kholna */
-  | "view_reconciliation";
+  | "view_reconciliation"
+  /** Share dialog — Shared list tab */
+  | "view_reconciliation_shared_list"
+  /** Share dialog — Unlinked tab */
+  | "view_reconciliation_unlinked_list"
+  /** Reconciling page — blank row par remote txn se sync voucher */
+  | "sync_reconciliation_transaction";
 
 export type PermissionInfo = {
   key: Permission;
   label: string;
+  /** Manage Sharing — (i) popover English help (optional) */
+  description?: string;
 };
 
 export type PermissionGroup = {
@@ -164,9 +172,42 @@ export const PermissionGroups: PermissionGroup[] = [
     {
         title: RECON_PERMISSIONS_GROUP_TITLE,
         permissions: [
-            { key: "share_for_reconciliation", label: "Share account for reconciling (header)" },
-            { key: "link_reconciliation_accounts", label: "Link shared account to local ledger" },
-            { key: "view_reconciliation", label: "View reconciling compare page" },
+            {
+                key: "share_for_reconciliation",
+                label: "Share account for reconciling (header)",
+                description:
+                    "Shows the Share for Reconciling button in the app header. The user can choose a company account and send a ledger snapshot to another Pocket Ledger user by email to start reconciling.",
+            },
+            {
+                key: "link_reconciliation_accounts",
+                label: "Link shared account to local ledger",
+                description:
+                    "Allows accepting incoming reconciliation requests and linking them to an account in the user’s company (party, bank, etc.). Required before both sides can compare ledgers.",
+            },
+            {
+                key: "view_reconciliation",
+                label: "View reconciling compare page",
+                description:
+                    "Opens the side-by-side Reconciling page for linked shares. Also shows the Reconciling button on account detail screens when that account has an active linked share.",
+            },
+            {
+                key: "view_reconciliation_shared_list",
+                label: "View Shared list tab",
+                description:
+                    "Shows the Shared list tab in the Share for Reconciling dialog—pending invites, linked shares, and active reconciliation links for the selected company.",
+            },
+            {
+                key: "view_reconciliation_unlinked_list",
+                label: "View Unlinked tab",
+                description:
+                    "Shows the Unlinked tab in the Share for Reconciling dialog, where disconnected or revoked shares are listed and can be requested again.",
+            },
+            {
+                key: "sync_reconciliation_transaction",
+                label: "Can sync trxn",
+                description:
+                    "On the Reconciling compare page, allows copying a transaction from the other side into a new voucher on your ledger when your row is blank (Sync transaction link on selected rows).",
+            },
         ],
     },
 ];

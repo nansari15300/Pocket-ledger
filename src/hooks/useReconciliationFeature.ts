@@ -34,5 +34,11 @@ export function useReconciliationFeature() {
     canShare: planEnabled && companyEnabled && can("share_for_reconciliation"),
     canLink: planEnabled && companyEnabled && can("link_reconciliation_accounts"),
     canView: planEnabled && companyEnabled && can("view_reconciliation"),
+    /** Share dialog — Shared list tab show/hide */
+    canViewSharedList: planEnabled && companyEnabled && can("view_reconciliation_shared_list"),
+    /** Share dialog — Unlinked tab show/hide */
+    canViewUnlinkedList: planEnabled && companyEnabled && can("view_reconciliation_unlinked_list"),
+    /** Reconciling page — Sync transaction from other side */
+    canSyncTrxn: planEnabled && companyEnabled && can("sync_reconciliation_transaction"),
   };
 }

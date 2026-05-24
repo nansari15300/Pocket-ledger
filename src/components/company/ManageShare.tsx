@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { doc, onSnapshot, updateDoc, arrayRemove, getDoc, collection, query, where, getDocs, serverTimestamp } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Crown, Loader2, PlusCircle, Trash2, Save, Undo2, KeyRound, Eye, EyeOff, Edit, Pencil } from "lucide-react";
+import { Crown, Loader2, PlusCircle, Trash2, Save, Undo2, KeyRound, Eye, EyeOff, Edit, Pencil, Info } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "../ui/skeleton";
 import {
@@ -39,6 +39,7 @@ import { Input } from "../ui/input";
 import { ShareCompanyDialog } from "../company/ShareCompanyDialog";
 import { Checkbox } from "../ui/checkbox";
 import { Switch } from "../ui/switch";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Permission, PermissionGroups } from "@/lib/permissions";
 import usePermissions, { type PermissionConfig, type UserRole, initialPermissionConfig } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
@@ -81,6 +82,43 @@ const getInitials = (nameOrEmail: string) => {
   if (!s) return "U";
   const parts = s.includes("@") ? s.split("@")[0].split(/[.\s_-]+/) : s.split(/\s+/);
   return parts.slice(0, 2).map(p => p[0]?.toUpperCase()).join("") || "U";
+};
+
+/** Permission box — (i) click se English introduction popover */
+function PermissionHelpPopover({ label, description }: { label: string; description: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-blue-700 hover:bg-blue-100",
+            open && "bg-blue-100"
+          )}
+          aria-label={`About ${label}`}
+          aria-expanded={open}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setOpen((v) => !v);
+          }}
+        >
+          <Info className="h-3.5 w-3.5" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="end"
+        collisionPadding={12}
+        className="z-[10050] max-w-[min(20rem,calc(100vw-2rem))] p-3 text-xs leading-relaxed text-foreground"
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
+        <p className="font-semibold text-sm mb-1.5">{label}</p>
+        <p className="text-muted-foreground">{description}</p>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 const flattenedPermissions = PermissionGroups.flatMap(g => g.permissions.map(p => p.key));
@@ -150,6 +188,10 @@ export function ManageShare() {
   const [selectedRoleForPermissions, setSelectedRoleForPermissions] = useState<UserRole>('viewer');
   const [isSavingPermissions, setIsSavingPermissions] = useState(false);
 
+  /** Save ke baad snapshot se editable mat udao; onSnapshot bhi unsaved edits preserve kare */
+  const hasUnsavedChangesRef = useRef(false);
+  const permissionsCompanyIdRef = useRef<string | null>(null);
+
   const [allAppUsers, setAllAppUsers] = useState<any[]>([]);
   /** Revoke ke baad context/SQLite stale ho sakta hai — turant list se hatao; `companyData.sharedWith` sync par khud saaf. */
   const [optimisticRevokedEmails, setOptimisticRevokedEmails] = useState<string[]>([]);
@@ -204,6 +246,19 @@ export function ManageShare() {
   }, [firestorePermissionConfig, editablePermissionConfig]);
 
   useEffect(() => {
+    hasUnsavedChangesRef.current = hasUnsavedChanges;
+  }, [hasUnsavedChanges]);
+
+  /** Firestore / local mirror se config — skeleton sirf company badle tab; save par dubara loading mat */
+  const applyPermissionConfigFromServer = useCallback((merged: PermissionConfig) => {
+    setFirestorePermissionConfig(merged);
+    if (!hasUnsavedChangesRef.current) {
+      setEditablePermissionConfig(merged);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
     const savedRole = localStorage.getItem("selectedRoleForPermissions") as UserRole | null;
     if (savedRole && Object.keys(initialPermissionConfig.roles).includes(savedRole)) {
         setSelectedRoleForPermissions(savedRole);
@@ -226,22 +281,24 @@ export function ManageShare() {
 
   useEffect(() => {
     if (!companyId) {
+      permissionsCompanyIdRef.current = null;
       setLoading(false);
       return;
+    }
+
+    const companyChanged = permissionsCompanyIdRef.current !== companyId;
+    if (companyChanged) {
+      permissionsCompanyIdRef.current = companyId;
+      setLoading(true);
     }
 
     // Device-local company: Firestore share/permission doc nahi — SQLite / context se config.
     if (companyData && isOfflineCompanyStorage(companyData)) {
-      setLoading(true);
       const raw = (companyData as { permissionConfig?: PermissionConfig }).permissionConfig;
-      const merged = buildMergedPermissionConfig(raw ?? null);
-      setFirestorePermissionConfig(merged);
-      setEditablePermissionConfig(merged);
-      setLoading(false);
+      applyPermissionConfigFromServer(buildMergedPermissionConfig(raw ?? null));
       return;
     }
 
-    setLoading(true);
     const companyRef = doc(firestore, "companies", companyId);
 
     const unsubscribe = onSnapshot(companyRef, async (docSnap) => {
@@ -264,19 +321,14 @@ export function ManageShare() {
           }
         }
 
-        const mergedConfig = buildMergedPermissionConfig(currentConfig);
-        setFirestorePermissionConfig(mergedConfig);
-        setEditablePermissionConfig(mergedConfig);
+        applyPermissionConfigFromServer(buildMergedPermissionConfig(currentConfig));
       } else {
-        const mergedConfig = buildMergedPermissionConfig(null);
-        setFirestorePermissionConfig(mergedConfig);
-        setEditablePermissionConfig(mergedConfig);
+        applyPermissionConfigFromServer(buildMergedPermissionConfig(null));
       }
-      setLoading(false);
     });
 
     return () => unsubscribe();
-  }, [companyId, companyData?.storageOption, localPermissionSyncKey]);
+  }, [companyId, companyData?.storageOption, localPermissionSyncKey, applyPermissionConfigFromServer]);
   
   const permissionsForSelectedRole = editablePermissionConfig.roles[selectedRoleForPermissions] || Array(flattenedPermissions.length).fill(false);
   const dateLimitsForSelectedRole = editablePermissionConfig.dateLimits?.[selectedRoleForPermissions] || { entryDays: 0, editDays: 0, deleteDays: 0 };
@@ -355,6 +407,11 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
         const otherIdx = flattenedPermissions.indexOf(other);
         if (otherIdx !== -1) newConfig.roles[selectedRoleForPermissions][otherIdx] = checked;
       }
+      // Link tab ke liye Shared list bhi chahiye — auto ON jab link enable ho
+      if (permissionKey === 'link_reconciliation_accounts' && checked) {
+        const sharedListIdx = flattenedPermissions.indexOf('view_reconciliation_shared_list');
+        if (sharedListIdx !== -1) newConfig.roles[selectedRoleForPermissions][sharedListIdx] = true;
+      }
       return newConfig;
     });
   };
@@ -399,13 +456,18 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
     try {
       // Ensure owner role always has all permissions set to true; baaki roles ko full length par pad.
       const configToSave = normalizePermissionConfigForSave(editablePermissionConfig);
+
+      const commitSavedPermissionConfig = (saved: PermissionConfig) => {
+        hasUnsavedChangesRef.current = false;
+        setFirestorePermissionConfig(saved);
+        setEditablePermissionConfig(saved);
+      };
       
       if (companyData && isOfflineCompanyStorage(companyData)) {
         const localOk = await updateCompanyDocRoot(companyId, { permissionConfig: configToSave });
         if (localOk) {
           reloadLocalCompanyRegistry();
-          setFirestorePermissionConfig(configToSave);
-          setEditablePermissionConfig(configToSave);
+          commitSavedPermissionConfig(configToSave);
           toast({ title: "Success", description: "Permissions have been saved." });
           return;
         }
@@ -419,8 +481,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
               updatedAt: Date.now(),
             } as LocalCompanyDoc);
             reloadLocalCompanyRegistry();
-            setFirestorePermissionConfig(configToSave);
-            setEditablePermissionConfig(configToSave);
+            commitSavedPermissionConfig(configToSave);
             toast({ title: "Success", description: "Permissions have been saved (this device)." });
             return;
           }
@@ -437,8 +498,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
 
       const companyRef = doc(firestore, "companies", companyId);
       await updateDoc(companyRef, { permissionConfig: configToSave });
-      setFirestorePermissionConfig(configToSave);
-      setEditablePermissionConfig(configToSave);
+      commitSavedPermissionConfig(configToSave);
       triggerSync();
       toast({ title: "Success", description: "Permissions have been saved." });
     } catch (error) {
@@ -1265,7 +1325,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                                 const hasPermission = selectedRoleForPermissions === "owner" ? true : permissionsForSelectedRole[globalIndex];
 
                                 return (
-                                    <div key={permission.key} className="flex items-center space-x-2 p-2 rounded-md border">
+                                    <div key={permission.key} className="flex items-start gap-2 p-2 rounded-md border">
                                         <Checkbox
                                             id={`${selectedRoleForPermissions}-${permission.key}`}
                                             checked={hasPermission}
@@ -1273,13 +1333,20 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                                                 handlePermissionChange(permission.key, !!checked)
                                             }
                                             disabled={selectedRoleForPermissions === "owner"}
+                                            className="mt-0.5"
                                         />
                                         <label
                                             htmlFor={`${selectedRoleForPermissions}-${permission.key}`}
-                                            className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                                            className="min-w-0 flex-1 text-sm font-medium leading-snug peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
                                         >
                                             {permission.label}
                                         </label>
+                                        {permission.description ? (
+                                            <PermissionHelpPopover
+                                                label={permission.label}
+                                                description={permission.description}
+                                            />
+                                        ) : null}
                                     </div>
                                 );
                             })}

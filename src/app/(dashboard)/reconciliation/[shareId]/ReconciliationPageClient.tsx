@@ -47,7 +47,7 @@ import {
   reconciliationLedgerRowNarrationLabel,
 } from "@/lib/reconciliation/reconciliationRowNarration";
 import type { ReconciliationLedgerRow, ReconciliationShare } from "@/lib/reconciliation/types";
-import { buildReconSideMeta, type ReconSideMeta } from "@/lib/reconciliation/sideMeta";
+import { buildReconSideMeta, reconciliationViewerSide, type ReconSideMeta } from "@/lib/reconciliation/sideMeta";
 import type { TransactionSortBy, TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
@@ -272,7 +272,7 @@ const RECON_BALANCE_COMMENT_CELL_CLASS = cn(
   "px-0 pr-0 text-right"
 );
 
-/** ℹ️ button — balance cell ke andar ya alag td me reuse */
+/** ℹ️ button — balance cell ke andar; comment ho to green, warna blue (add comment) */
 function ReconCommentIcon({
   commentText,
   readOnly = false,
@@ -285,20 +285,28 @@ function ReconCommentIcon({
   onCommentInfoClick?: (row: ReconciliationLedgerRow) => void;
 }) {
   const showIcon = Boolean(row);
+  const hasComment = Boolean(String(commentText || "").trim());
   if (!showIcon) {
     return <span className="inline-block h-4 w-4 shrink-0" aria-hidden="true" />;
   }
   return (
     <button
       type="button"
-      className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-blue-700 hover:bg-blue-100 dark:text-blue-300 dark:hover:bg-blue-950"
-      title={commentText ? (readOnly ? "View comment from other side" : "View / edit comment") : "Add comment"}
+      data-pl-recon-comment-icon=""
+      data-pl-recon-comment-has={hasComment ? "" : undefined}
+      className={cn(
+        "inline-flex shrink-0 items-center justify-center rounded-full transition-colors",
+        hasComment
+          ? "h-5 w-5 bg-green-600 text-white shadow-sm ring-1 ring-green-700 hover:bg-green-700 dark:bg-green-500 dark:text-white dark:ring-green-400 dark:hover:bg-green-600"
+          : "h-4 w-4 text-blue-700 hover:bg-blue-100 dark:text-blue-300 dark:hover:bg-blue-950"
+      )}
+      title={hasComment ? (readOnly ? "View comment from other side" : "View / edit comment") : "Add comment"}
       onClick={(e) => {
         e.stopPropagation();
         if (row) onCommentInfoClick?.(row);
       }}
     >
-      <Info className="h-3.5 w-3.5" />
+      <Info className={cn(hasComment ? "h-3.5 w-3.5 stroke-[2.5]" : "h-3.5 w-3.5")} />
     </button>
   );
 }
@@ -875,7 +883,7 @@ export default function ReconciliationPage() {
   const { companyId, company } = useCompany();
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const calendarMonths = useCalendarMonths();
-  const { canView, enabled } = useReconciliationFeature();
+  const { canView, enabled, canSyncTrxn } = useReconciliationFeature();
   const { setIsOpen } = useSidebar();
   const [share, setShare] = React.useState<ReconciliationShare | null>(null);
   const [myRowsSource, setMyRowsSource] = React.useState<ReconciliationLedgerRow[]>([]);
@@ -936,7 +944,7 @@ export default function ReconciliationPage() {
     const silent = opts?.silent === true;
     if (!silent) setLoading(true);
     try {
-      const s0 = await getReconciliationShare(shareId);
+      const s0 = await getReconciliationShare(shareId, companyId ?? undefined);
       if (!s0 || s0.status !== "linked") {
         setShare(s0);
         setMyRowsSource([]);
@@ -948,7 +956,6 @@ export default function ReconciliationPage() {
       // Apni side snapshot me purane NOTE ho to refresh — other party ko sahi title dikhe
       const s = (await ensureFreshParticipantSnapshotNotes(s0, user.uid)) ?? s0;
       setShare(s);
-      const iAmSender = s.senderUserId === user.uid;
       const senderSide = rowsWithOpeningFromSnapshot(s.senderLedgerSnapshot, s.senderOpeningBalance);
       const receiverSide = rowsWithOpeningFromSnapshot(s.receiverLedgerSnapshot, s.receiverOpeningBalance);
       let mine: ReconciliationLedgerRow[] = [];
@@ -958,13 +965,14 @@ export default function ReconciliationPage() {
 
       // Owned + Other — same live build; other fail ho to share snapshot + NOTE title enrich
       const myCtx = getMyReconciliationSideContext(s, user.uid, companyId ?? "");
-      const remoteCtx = getRemoteReconciliationSideContext(s, user.uid);
+      const remoteCtx = getRemoteReconciliationSideContext(s, user.uid, companyId ?? "");
+      const viewerOnSenderSide = myCtx?.companyId === s.senderCompanyId;
 
       const myBuilt = await buildLiveReconciliationSideRows(myCtx);
       if (myBuilt) {
         mine = myBuilt.rows;
         myOpening = myBuilt.openingBalance;
-      } else if (iAmSender) {
+      } else if (viewerOnSenderSide) {
         mine = senderSide.rows;
         myOpening = senderSide.openingBalance;
       } else {
@@ -972,8 +980,8 @@ export default function ReconciliationPage() {
         myOpening = receiverSide.openingBalance;
       }
 
-      remote = iAmSender ? receiverSide.rows : senderSide.rows;
-      remoteOpening = iAmSender ? receiverSide.openingBalance : senderSide.openingBalance;
+      remote = viewerOnSenderSide ? receiverSide.rows : senderSide.rows;
+      remoteOpening = viewerOnSenderSide ? receiverSide.openingBalance : senderSide.openingBalance;
 
       const remoteResolved = await resolveRemoteReconciliationRows({
         share: s,
@@ -998,7 +1006,7 @@ export default function ReconciliationPage() {
   const refreshMySideSilent = React.useCallback(async () => {
     if (!shareId || !user?.uid) return;
     try {
-      const s = await getReconciliationShare(shareId);
+      const s = await getReconciliationShare(shareId, companyId ?? undefined);
       if (!s || s.status !== "linked") return;
       const side = s.senderUserId === user.uid ? "sender" : "receiver";
       await refreshReconciliationSideSnapshot({ shareId: s.id, side });
@@ -1091,15 +1099,21 @@ export default function ReconciliationPage() {
     if (!share || !user?.uid) {
       return { companyName: "—", entityName: "—", accountName: "—" };
     }
+    const viewerSide = reconciliationViewerSide(share, user.uid, companyId ?? undefined);
+    if (viewerSide === "sender") return buildReconSideMeta(share, "sender");
+    if (viewerSide === "receiver") return buildReconSideMeta(share, "receiver");
     return buildReconSideMeta(share, share.senderUserId === user.uid ? "sender" : "receiver");
-  }, [share, user?.uid]);
+  }, [share, user?.uid, companyId]);
 
   const remoteSideMeta = React.useMemo((): ReconLedgerSideMeta => {
     if (!share || !user?.uid) {
       return { companyName: "—", entityName: "—", accountName: "—" };
     }
+    const viewerSide = reconciliationViewerSide(share, user.uid, companyId ?? undefined);
+    if (viewerSide === "sender") return buildReconSideMeta(share, "receiver");
+    if (viewerSide === "receiver") return buildReconSideMeta(share, "sender");
     return buildReconSideMeta(share, share.senderUserId === user.uid ? "receiver" : "sender");
-  }, [share, user?.uid]);
+  }, [share, user?.uid, companyId]);
 
   const handleRefreshMySide = async () => {
     if (!share || !user?.uid || refreshing) return;
@@ -1112,8 +1126,8 @@ export default function ReconciliationPage() {
   };
 
   const remoteCommentSide = React.useMemo(
-    () => (share && user?.uid ? remoteReconciliationCommentSide(share, user.uid) : "receiver"),
-    [share, user?.uid]
+    () => (share && user?.uid ? remoteReconciliationCommentSide(share, user.uid, companyId ?? undefined) : "receiver"),
+    [share, user?.uid, companyId]
   );
 
   const remoteRowComments = React.useMemo(
@@ -1123,8 +1137,8 @@ export default function ReconciliationPage() {
 
   /** You-side: dusre party ne meri (left) row id par jo comment save kiya — sender/receiver map alag hota hai. */
   const otherPartyCommentsOnMyRowsSideKey = React.useMemo(
-    () => (share && user?.uid ? otherPartyCommentsOnMyRowsSide(share, user.uid) : "sender"),
-    [share, user?.uid]
+    () => (share && user?.uid ? otherPartyCommentsOnMyRowsSide(share, user.uid, companyId ?? undefined) : "sender"),
+    [share, user?.uid, companyId]
   );
 
   const otherPartyCommentsOnMyRows = React.useMemo(
@@ -1354,7 +1368,7 @@ export default function ReconciliationPage() {
         syncKey={pairRowSyncKey}
         selectedRowKey={selectedRowKey}
         onRowSelectPair={handleReconRowSelect}
-        onSyncTransaction={handleSyncTransaction}
+        onSyncTransaction={canSyncTrxn ? handleSyncTransaction : undefined}
         left={{
           rows: leftColumn,
           side: "left",
@@ -1400,6 +1414,10 @@ export default function ReconciliationPage() {
         rightBeforeCount={rightFooterCounts.before}
         rightAfterCount={rightFooterCounts.after}
         rightTotalCount={rightFooterCounts.total}
+        leftOwnedCompanyName={mySideMeta.companyName}
+        leftOwnedAccountName={mySideMeta.accountName}
+        rightOtherCompanyName={remoteSideMeta.companyName}
+        rightOtherAccountName={remoteSideMeta.accountName}
         className="border-emerald-200/60 bg-transparent"
       />
 

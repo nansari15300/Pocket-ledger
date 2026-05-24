@@ -26,6 +26,8 @@ export type Account = {
   phone?: string;
   isDeleted?: boolean;
   isOwnerAccount?: boolean;
+  /** ON: Payment Out / Direct Expense / Contra — balance se zyada amount save allowed (account minus ho sakta hai). */
+  allowVoucherMinusBalance?: boolean;
 };
 
 export type AccountGroup = {

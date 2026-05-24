@@ -7,7 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Scale } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useReconciliationFeature } from "@/hooks/useReconciliationFeature";
-import { subscribeReconciliationSharesForUser } from "@/lib/reconciliation/reconciliationStore";
+import { useCompany } from "@/hooks/useCompany";
+import { subscribeReconciliationSharesForViewer } from "@/lib/reconciliation/reconciliationStore";
 import { ShareForReconciliationDialog } from "@/components/reconciliation/ShareForReconciliationDialog";
 import { RECON_SHARE_HEADER_LABEL } from "@/lib/reconciliation/labels";
 import {
@@ -20,7 +21,8 @@ export function ShareForReconciliationHeaderButton() {
   const [open, setOpen] = React.useState(false);
   const [openDetail, setOpenDetail] = React.useState<OpenReconShareDialogDetail>({});
   const { user } = useAuth();
-  const { canShare, canLink, enabled } = useReconciliationFeature();
+  const { companyId } = useCompany();
+  const { canShare, canLink, canView, canViewSharedList, canViewUnlinkedList, enabled } = useReconciliationFeature();
   const [pendingIncoming, setPendingIncoming] = React.useState(0);
 
   React.useEffect(() => {
@@ -28,10 +30,10 @@ export function ShareForReconciliationHeaderButton() {
       setPendingIncoming(0);
       return;
     }
-    return subscribeReconciliationSharesForUser(user.uid, (rows) => {
+    return subscribeReconciliationSharesForViewer(user.uid, companyId ?? undefined, (rows) => {
       setPendingIncoming(rows.filter((s) => s.targetUserId === user.uid && s.status === "pending").length);
     });
-  }, [user?.uid, enabled]);
+  }, [user?.uid, companyId, enabled]);
 
   /** Chat / alerts se dialog — Shared list + card highlight */
   React.useEffect(() => {
@@ -46,7 +48,13 @@ export function ShareForReconciliationHeaderButton() {
 
   if (!enabled) return null;
 
-  const showButton = canShare || canLink || pendingIncoming > 0;
+  const showButton =
+    canShare ||
+    canLink ||
+    canView ||
+    canViewSharedList ||
+    canViewUnlinkedList ||
+    pendingIncoming > 0;
 
   return (
     <Suspense fallback={null}>

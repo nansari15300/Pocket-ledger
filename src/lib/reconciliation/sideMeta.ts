@@ -38,15 +38,18 @@ export function buildReconSideMeta(
 export function getReconShareSidesForViewer(
   share: ReconciliationShare,
   userId: string | undefined,
+  companyId?: string,
 ): { owned: ReconSideMeta; other: ReconSideMeta } {
-  const iAmSender = !!userId && share.senderUserId === userId;
+  const viewerSide = reconciliationViewerSide(share, userId, companyId);
+  const iAmSender = viewerSide === "sender";
   const ownedSide: "sender" | "receiver" = iAmSender ? "sender" : "receiver";
   const otherSide: "sender" | "receiver" = iAmSender ? "receiver" : "sender";
 
   let owned = buildReconSideMeta(share, ownedSide);
   let other = buildReconSideMeta(share, otherSide);
 
-  if (share.status === "pending" && !iAmSender) {
+  const iAmTargetUser = !!userId && share.targetUserId === userId;
+  if (share.status === "pending" && !iAmSender && iAmTargetUser) {
     owned = { companyName: "Not linked", entityName: "—", accountName: "—" };
   }
   if (share.status === "pending" && iAmSender) {
@@ -57,19 +60,36 @@ export function getReconShareSidesForViewer(
     };
   }
   // Revoked — dono side ka last linked meta dikhao (receiver fields doc me rehte hain)
-  if (share.status === "revoked" && !share.receiverCompanyId && !iAmSender) {
+  if (share.status === "revoked" && !share.receiverCompanyId && !iAmSender && iAmTargetUser) {
     owned = { companyName: "Was linked", entityName: "—", accountName: "—" };
   }
 
   return { owned, other };
 }
 
+/**
+ * Viewer ki "owned" side — pehle selected company, phir uid (shared staff sender company dekh sakta hai).
+ */
+export function reconciliationViewerSide(
+  share: ReconciliationShare,
+  userId: string | undefined,
+  companyId: string | undefined,
+): "sender" | "receiver" | null {
+  const cid = String(companyId || "").trim();
+  if (cid && share.senderCompanyId === cid) return "sender";
+  if (cid && share.receiverCompanyId === cid) return "receiver";
+  if (userId && share.senderUserId === userId) return "sender";
+  if (userId && (share.receiverUserId === userId || share.targetUserId === userId)) return "receiver";
+  return null;
+}
+
 /** Shared list Owned column — viewer sender hai ya receiver. */
 export function getReconShareRoleLabelForViewer(
   share: ReconciliationShare,
   userId: string | undefined,
+  companyId?: string,
 ): "Sender" | "Receiver" {
-  return !!userId && share.senderUserId === userId ? "Sender" : "Receiver";
+  return reconciliationViewerSide(share, userId, companyId) === "sender" ? "Sender" : "Receiver";
 }
 
 /** Shared list — sirf selected company se judi shares (sender/receiver id match). */
