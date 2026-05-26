@@ -31,6 +31,9 @@ export default {
     'animate-file-hover-switch-to-click',
     'animate-file-hover-switch-to-hover-from-end',
     'animate-file-hover-switch-to-off-from-mid',
+    // Admin master-detail grids — content scan se admin exclude (build-static race); classes yahan safelist.
+    'md:grid-cols-[360px_1fr]',
+    'md:grid-cols-[320px_1fr]',
   ],
   content: [
     './src/pages/**/*.{js,ts,jsx,tsx,mdx}',
@@ -39,9 +42,9 @@ export default {
     './src/app/**/*.{js,ts,jsx,tsx,mdx}',
     // No Tailwind in route handlers; scanning avoids Windows EBUSY if api/ is locked (dev + build-static)
     '!./src/app/api/**',
-    // Admin + components/admin yahan include zaroori: warna `md:grid-cols-[360px_1fr]` JIT me generate hi nahi hota
-    // aur panel hamesha single-column dikhta hai. `build-static` admin folder hata kar build karta hai — `./src/app/**`
-    // sirf maujooda files scan karta hai; missing subtree par ENOENT nahi.
+    // build-static temporarily moves (admin) out — dev + static build overlap par Tailwind ENOENT na kare.
+    '!./src/app/(admin)/**',
+    '!./src/components/admin/**',
   ],
   theme: {
     extend: {

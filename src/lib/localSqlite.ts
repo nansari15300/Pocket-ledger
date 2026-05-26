@@ -295,6 +295,25 @@ export interface BrowserDbWrapper {
 }
 
 let cachedDb: { wrapper: BrowserDbWrapper; db: SqlJsDatabase } | null = null;
+/** Parallel `getBrowserDb()` refresh par do alag DB instances na banen — IndexedDB overwrite / company gayab. */
+let openBrowserDbPromise: Promise<BrowserDbWrapper | null> | null = null;
+let pendingSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingSaveFn: (() => Promise<void>) | null = null;
+
+function registerBrowserDbLifecycleFlushOnce(): void {
+  if (typeof window === "undefined") return;
+  const w = window as unknown as { __plBrowserDbFlushRegistered?: boolean };
+  if (w.__plBrowserDbFlushRegistered) return;
+  w.__plBrowserDbFlushRegistered = true;
+  const flush = () => {
+    void flushPendingBrowserDbSave();
+  };
+  window.addEventListener("pagehide", flush);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flush();
+  });
+}
+registerBrowserDbLifecycleFlushOnce();
 
 // SQLite bind ke liye unsupported JS values ko deterministic scalar me normalize karo.
 function normalizeSqlParam(value: unknown): unknown {
@@ -305,12 +324,14 @@ function normalizeSqlParam(value: unknown): unknown {
 }
 
 function wrapDb(db: SqlJsDatabase, onSave: () => Promise<void>): BrowserDbWrapper {
+  pendingSaveFn = onSave;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   const scheduleSave = () => {
     // Burst writes (mirror batches) ke waqt har row export avoid karke one-shot debounced flush rakho.
     if (saveTimer) return;
-    saveTimer = setTimeout(() => {
+    pendingSaveTimer = saveTimer = setTimeout(() => {
       saveTimer = null;
+      pendingSaveTimer = null;
       onSave().catch(() => {});
     }, 250);
   };
@@ -366,33 +387,55 @@ function wrapDb(db: SqlJsDatabase, onSave: () => Promise<void>): BrowserDbWrappe
 export async function getBrowserDb(): Promise<BrowserDbWrapper | null> {
   if (typeof window === "undefined") return null;
   if (cachedDb) return cachedDb.wrapper;
+  if (openBrowserDbPromise) return openBrowserDbPromise;
 
-  const initSqlJs = (await import("sql.js")).default;
-  const SQL = await initSqlJs({
-    locateFile: (file: string) =>
-      // Offline EXE/APK: wasm ko app ke local public asset se load karo (CDN dependency avoid).
-      file.endsWith(".wasm") ? "/sql-wasm.wasm" : file,
-  });
-
-  const data = await loadDbFromIndexedDB();
-  const db = data ? new SQL.Database(new Uint8Array(data)) : new SQL.Database();
-  initSchema(db);
-
-  const save = () =>
-    saveDbToIndexedDB(db.export()).then(() => {
-      void import("@/lib/liveDataFolderMirror")
-        .then((m) => m.scheduleLiveDataFolderMirrorAfterFlush())
-        .catch(() => undefined);
+  openBrowserDbPromise = (async () => {
+    const initSqlJs = (await import("sql.js")).default;
+    const SQL = await initSqlJs({
+      locateFile: (file: string) =>
+        // Offline EXE/APK: wasm ko app ke local public asset se load karo (CDN dependency avoid).
+        file.endsWith(".wasm") ? "/sql-wasm.wasm" : file,
     });
-  const wrapper = wrapDb(db, save);
-  if (!data) await save();
-  cachedDb = { wrapper, db };
-  return wrapper;
+
+    const data = await loadDbFromIndexedDB();
+    const db = data ? new SQL.Database(new Uint8Array(data)) : new SQL.Database();
+    initSchema(db);
+
+    const save = () =>
+      saveDbToIndexedDB(db.export()).then(() => {
+        void import("@/lib/liveDataFolderMirror")
+          .then((m) => m.scheduleLiveDataFolderMirrorAfterFlush())
+          .catch(() => undefined);
+      });
+    const wrapper = wrapDb(db, save);
+    if (!data) await save();
+    cachedDb = { wrapper, db };
+    return wrapper;
+  })();
+
+  try {
+    return await openBrowserDbPromise;
+  } finally {
+    openBrowserDbPromise = null;
+  }
 }
 
 /** Cache clear karo (e.g. logout / switch data source). */
 export function clearBrowserDbCache(): void {
   cachedDb = null;
+}
+
+/** Debounced save pending ho to turant IndexedDB flush — refresh/tab close se company SQLite na ude. */
+export async function flushPendingBrowserDbSave(): Promise<void> {
+  if (pendingSaveTimer) {
+    clearTimeout(pendingSaveTimer);
+    pendingSaveTimer = null;
+  }
+  if (pendingSaveFn) {
+    await pendingSaveFn();
+    return;
+  }
+  await flushBrowserDbToIndexedDB();
 }
 
 /** Restore / bulk write ke baad `reload` se pehle — `scheduleSave` async hai warna IndexedDB pura flush nahi hota */

@@ -37,6 +37,16 @@ const config: CapacitorConfig = {
   appName: "Pocket Ledger",
   webDir: "out",
   server: serverConfig,
+  // APK: `fetch` → native HTTP (CORS bypass) — Drive connect / billing / plan sync ke liye zaroori.
+  plugins: {
+    CapacitorHttp: {
+      enabled: true,
+    },
+    GoogleAuth: {
+      scopes: ["profile", "email"],
+      serverClientId: "469450068553-h848203thcqi3u8mvl8bvnm7gh8v5icl.apps.googleusercontent.com",
+    },
+  },
 };
 
 export default config;

@@ -17,3 +17,8 @@ export function appNavHref(path: string): string {
   const normalizedPath = pathname.endsWith("/") ? pathname : `${pathname}/`;
   return `${normalizedPath}${queryPart}${hashPart}`;
 }
+
+/** Settings tab deep link — static/APK par trailing slash (`/settings/?view=…`) zaroori. */
+export function settingsViewHref(viewId: string): string {
+  return appNavHref(`/settings?view=${encodeURIComponent(viewId)}`);
+}

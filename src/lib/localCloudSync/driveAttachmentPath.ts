@@ -1,29 +1,40 @@
 import { format } from "date-fns";
-import { formatBsFromAD } from "@/lib/bs-date";
+import { formatBsFromAD, adToBs } from "@/lib/bs-date";
 import type { BSFormatKey } from "@/lib/dateFormatOptions";
 import {
   buildPocketLedgerDriveRelativePath,
   sanitizePocketLedgerDriveFileNamePart,
+  POCKET_LEDGER_OPENING_SUB,
   type PocketLedgerDriveCompanyRef,
 } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 
-const BS_FOLDER_FORMAT = "yyyy-MM-dd" as BSFormatKey;
+/** Drive folder BS segment — BSFormatKey (YYYY-MM-DD), date-fns yyyy-MM-dd nahi. */
+const BS_FOLDER_FORMAT: BSFormatKey = "YYYY-MM-DD";
+
+/** Valid BS folder: 2082-05-24 — literal yyyy / weekday tokens reject. */
+const BS_FOLDER_NAME_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export type DriveAttachmentDateFolderMode = "ad" | "bs" | "both";
 
-const VOUCHER_TYPE_FOLDER: Record<string, string> = {
-  sale: "sales",
-  sales: "sales",
-  purchase: "purchase",
-  payment: "payment",
-  payment_out: "payment",
-  payment_in: "receipt",
-  receipt: "receipt",
-  journal: "journal",
-  contra: "journal",
-  expense: "journal",
-  income: "journal",
+/** Drive attachments branch — collection ke hisaab se folder (type-wise sales/journal nahi). */
+const ATTACHMENT_CATEGORY_FOLDER: Record<string, string> = {
+  vouchers: "vouchers",
+  parties: "parties",
+  bank_accounts: "bank",
+  staff: "staff",
+  company: "company",
+  items: "item",
 };
+
+/** SQLite collection → Drive folder segment (`attachments/{segment}/{date}/`). */
+export function resolveAttachmentCategoryFolder(collection: unknown): string {
+  const key = String(collection ?? "")
+    .trim()
+    .toLowerCase();
+  if (ATTACHMENT_CATEGORY_FOLDER[key]) return ATTACHMENT_CATEGORY_FOLDER[key]!;
+  const safe = sanitizePocketLedgerDriveFileNamePart(key);
+  return safe || "general";
+}
 
 function parseVoucherDate(raw: unknown): Date {
   if (raw instanceof Date && !isNaN(raw.getTime())) return raw;
@@ -58,7 +69,14 @@ function formatAdDateFolder(date: Date): string {
 
 function formatBsDateFolder(date: Date): string {
   const bs = formatBsFromAD(date, BS_FOLDER_FORMAT);
-  return bs || formatAdDateFolder(date);
+  if (bs && BS_FOLDER_NAME_RE.test(bs)) return bs;
+  // NepaliDate/format fail par direct BS y-m-d — folder me literal yyyy na aaye.
+  try {
+    const { y, m, d } = adToBs(date);
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  } catch {
+    return formatAdDateFolder(date);
+  }
 }
 
 /** Nepal: BS / AD / Both — attachments date folder name. */
@@ -73,24 +91,18 @@ export function buildDriveAttachmentDateFolderName(
   return ad;
 }
 
-function voucherTypeFolder(voucherType: unknown): string {
-  const key = String(voucherType ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "_");
-  return VOUCHER_TYPE_FOLDER[key] || "general";
-}
-
-/** `{VoucherNo}_{fileName}` — voucher folder nahi, filename prefix. */
+/** `{VoucherNo}_{fileName}` — date folder ke andar file naam. */
 export function buildDriveAttachmentFileName(voucherNumber: unknown, originalFileName: unknown): string {
   const vno = sanitizePocketLedgerDriveFileNamePart(String(voucherNumber ?? "V"));
   const base = sanitizePocketLedgerDriveFileNamePart(String(originalFileName ?? "file"));
   return `${vno}_${base}`;
 }
 
-/** Full remote path: Pocket Ledger/Co/attachments/{type}/{date}/{VNo_file}. */
+/** Full remote path: Pocket Ledger/Co/attachments/{vouchers|parties|…}/{date}/{VNo_file}. */
 export function buildVoucherAttachmentDriveRemotePath(input: {
   ref: PocketLedgerDriveCompanyRef;
+  /** SQLite collection — vouchers, parties, bank_accounts, … */
+  categoryFolder?: unknown;
   voucherType?: unknown;
   voucherNumber?: unknown;
   voucherDate?: unknown;
@@ -98,8 +110,57 @@ export function buildVoucherAttachmentDriveRemotePath(input: {
   company?: Record<string, unknown> | null;
 }): string {
   const mode = resolveDriveAttachmentDateFolderMode(input.company);
-  const typeFolder = voucherTypeFolder(input.voucherType);
+  const typeFolder = resolveAttachmentCategoryFolder(
+    input.categoryFolder ?? (input.voucherType != null ? "vouchers" : "general")
+  );
   const dateFolder = buildDriveAttachmentDateFolderName(input.voucherDate, mode);
   const fileName = buildDriveAttachmentFileName(input.voucherNumber, input.originalFileName);
   return buildPocketLedgerDriveRelativePath(input.ref, "attachments", typeFolder, dateFolder, fileName);
+}
+
+/** Stock / item files — `attachments/item/{date}/{itemCode_file}`. */
+export function buildItemAttachmentDriveRemotePath(input: {
+  ref: PocketLedgerDriveCompanyRef;
+  itemCode?: unknown;
+  itemId?: unknown;
+  itemDate?: unknown;
+  originalFileName?: unknown;
+  company?: Record<string, unknown> | null;
+}): string {
+  const mode = resolveDriveAttachmentDateFolderMode(input.company);
+  const dateFolder = buildDriveAttachmentDateFolderName(input.itemDate, mode);
+  const code = sanitizePocketLedgerDriveFileNamePart(
+    String(input.itemCode ?? input.itemId ?? "item")
+  );
+  const base = sanitizePocketLedgerDriveFileNamePart(String(input.originalFileName ?? "file"));
+  const fileName = `${code}_${base}`;
+  return buildPocketLedgerDriveRelativePath(input.ref, "attachments", "item", dateFolder, fileName);
+}
+
+const ENTITY_AVATAR_COLLECTION_FOLDER: Record<string, string> = {
+  parties: "parties",
+  bank_accounts: "bank",
+  staff: "staff",
+  company: "company",
+};
+
+/** Profile photo / logo — `opening/avatars/{parties|staff|bank|company}/{id}_{file}`. */
+export function buildOpeningAvatarDriveRemotePath(input: {
+  ref: PocketLedgerDriveCompanyRef;
+  collection: string;
+  entityId: unknown;
+  originalFileName?: unknown;
+}): string {
+  const seg =
+    ENTITY_AVATAR_COLLECTION_FOLDER[input.collection] ||
+    sanitizePocketLedgerDriveFileNamePart(input.collection);
+  const entityPart = sanitizePocketLedgerDriveFileNamePart(String(input.entityId ?? "entity"));
+  const base = sanitizePocketLedgerDriveFileNamePart(String(input.originalFileName ?? "avatar"));
+  return buildPocketLedgerDriveRelativePath(
+    input.ref,
+    "opening",
+    POCKET_LEDGER_OPENING_SUB.avatars,
+    seg,
+    `${entityPart}_${base}`
+  );
 }

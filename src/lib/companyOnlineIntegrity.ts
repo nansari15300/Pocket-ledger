@@ -38,7 +38,8 @@ export type ReconcileOnlineMirrorsResult = {
  * | Row category | Firestore read | Exists | Missing doc | Catch `permission-denied` | Catch `unavailable` etc. |
  * |--------------|----------------|--------|------------|---------------------------|--------------------------|
  * | Owner + `storageOption: local` pure | _(skip)_ | — | — | — | — |
- * | Shared (non-owner) | `companies/{id}` | Keep row | **`removeLocalCompanyById`** (ghost) | **Remove** — access revoked | **No-op** (offline; avoid false purge) |
+ * | Drive shared join (`driveSharedJoin`) + local | _(skip)_ | — | — | — | — |
+ * | Shared (non-owner) Firestore online | `companies/{id}` | Keep row | **`removeLocalCompanyById`** (ghost) | **Remove** — access revoked | **No-op** (offline; avoid false purge) |
  * | Owner + online mirror | `getDoc` same | Keep | **Remove** — server company hard-deleted | **`demoteCompanyToLocal`** — rules handover/revoke | **No-op** — network flaky |
  *
  * **`removedIds`**: SQLite hard-delete (shared ghost ya owner phantom).
@@ -64,9 +65,15 @@ export async function reconcileOnlineMirrorsWithServer(user: {
     const id = row.id;
     const isOwner = isCurrentUserOwnerOfCompanyRow(row, user);
     const storageLocal = String(row.storageOption || "local").toLowerCase() === "local";
+    const isDriveSharedJoin = (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;
 
     // Owner ki sirf device-local company — Firestore par doc expect nahi
     if (isOwner && storageLocal) {
+      continue;
+    }
+
+    // Google Drive shared join — sirf Drive folder + SQLite; Firestore `companies/{id}` nahi
+    if (isDriveSharedJoin && storageLocal) {
       continue;
     }
 

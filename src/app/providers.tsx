@@ -16,6 +16,7 @@ import { ThemeProvider } from "@/hooks/useTheme";
 import { CapacitorAndroidBackButton } from "@/components/CapacitorAndroidBackButton";
 import { VoucherOutboxFlushManager } from "@/components/VoucherOutboxFlushManager";
 import { LocalCompanyCloudSyncManager } from "@/components/LocalCompanyCloudSyncManager";
+import { CapacitorDriveOAuthReturnHandler } from "@/components/CapacitorDriveOAuthReturnHandler";
 import { StaticFastResumeSyncManager } from "@/components/StaticFastResumeSyncManager";
 import { OnlineResumeRouteShield } from "@/components/OnlineResumeRouteShield";
 import { OfflineWarmSyncManager } from "@/components/OfflineWarmSyncManager";
@@ -93,6 +94,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                             <VoucherProvider>
                                 <VoucherOutboxFlushManager />
                                 <LocalCompanyCloudSyncManager />
+                                <CapacitorDriveOAuthReturnHandler />
                                 <TooltipProvider>
                                     <MobileDetailSummaryCollapseProvider>
                                       {children}

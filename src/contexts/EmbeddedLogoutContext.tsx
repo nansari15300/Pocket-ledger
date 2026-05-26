@@ -77,9 +77,9 @@ export function EmbeddedLogoutProvider({ children }: { children: ReactNode }) {
   const pendingUserRef = useRef<User | null>(null);
 
   const activeUser = pendingUserRef.current ?? user;
-  const authMethod = activeUser
-    ? detectSavedLoginAuthMethod(activeUser.providerData.map((p) => p.providerId))
-    : ("password" as const);
+  // Local/synthetic user me `providerData` undefined ho sakta hai — `.map` crash na ho.
+  const providerIds = activeUser?.providerData?.map((p) => p.providerId) ?? [];
+  const authMethod = activeUser ? detectSavedLoginAuthMethod(providerIds) : ("password" as const);
   const activeEmail = activeUser?.email ?? "";
   const needsPasswordPrompt =
     saveAccount && authMethod === "password" && !peekSessionPasswordForSavedAccount(activeEmail);

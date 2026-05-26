@@ -1,6 +1,8 @@
 "use client";
 
-import { auth } from "@/lib/firebase";
+import { getBillingApiUrl } from "@/lib/billingApiOrigin";
+import { getFirebaseIdTokenForApi } from "@/lib/firebaseAuthForApi";
+import { hostedApiFetch } from "@/lib/hostedApiFetch";
 
 function arrayBufferToBase64(buf: ArrayBuffer): string {
   const bytes = new Uint8Array(buf);
@@ -10,12 +12,16 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
 }
 import type { CloudSyncCompanyRef, CloudSyncManifest, LocalCloudSyncOperation } from "@/lib/localCloudSync/types";
 import type { SyncProvider } from "@/lib/localCloudSync/providers/types";
+import {
+  decryptCloudSyncOpFromDrive,
+  encryptCloudSyncOpForDrive,
+  type DriveEncryptedOpFile,
+} from "@/lib/localCloudSync/driveEncryption";
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const user = auth.currentUser;
-  if (!user) throw new Error("Sign in required for Drive sync");
-  const token = await user.getIdToken();
-  const res = await fetch(path, {
+  const { token } = await getFirebaseIdTokenForApi();
+  // Static bundle me `/api/local-cloud-sync/*` sirf hosted server par — relative fetch mat karo.
+  const res = await hostedApiFetch(getBillingApiUrl(path), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -33,25 +39,38 @@ export class GoogleDriveSyncProvider implements SyncProvider {
   readonly providerId = "google_drive" as const;
 
   async uploadOperation(ref: CloudSyncCompanyRef, op: LocalCloudSyncOperation): Promise<void> {
+    const bodyOp = await encryptCloudSyncOpForDrive(ref.companyId, op);
     await postJson("/api/local-cloud-sync/drive/upload-op", {
       companyId: ref.companyId,
       companyName: ref.companyName,
-      op,
+      driveSharedFolderId: ref.driveSharedFolderId,
+      op: bodyOp,
     });
   }
 
   async downloadOperations(ref: CloudSyncCompanyRef, afterOpSeq: number): Promise<LocalCloudSyncOperation[]> {
-    const res = await postJson<{ operations: LocalCloudSyncOperation[] }>(
+    const res = await postJson<{ operations: Array<LocalCloudSyncOperation | DriveEncryptedOpFile> }>(
       "/api/local-cloud-sync/drive/download-ops",
-      { companyId: ref.companyId, companyName: ref.companyName, afterOpSeq }
+      {
+        companyId: ref.companyId,
+        companyName: ref.companyName,
+        driveSharedFolderId: ref.driveSharedFolderId,
+        afterOpSeq,
+      }
     );
-    return res.operations ?? [];
+    const raw = res.operations ?? [];
+    const out: LocalCloudSyncOperation[] = [];
+    for (const row of raw) {
+      out.push(await decryptCloudSyncOpFromDrive(ref.companyId, row));
+    }
+    return out;
   }
 
   async getManifest(ref: CloudSyncCompanyRef): Promise<CloudSyncManifest> {
     return postJson<CloudSyncManifest>("/api/local-cloud-sync/drive/manifest", {
       companyId: ref.companyId,
       companyName: ref.companyName,
+      driveSharedFolderId: ref.driveSharedFolderId,
       action: "get",
     });
   }
@@ -60,6 +79,7 @@ export class GoogleDriveSyncProvider implements SyncProvider {
     await postJson("/api/local-cloud-sync/drive/manifest", {
       companyId: ref.companyId,
       companyName: ref.companyName,
+      driveSharedFolderId: ref.driveSharedFolderId,
       action: "set",
       manifest,
     });

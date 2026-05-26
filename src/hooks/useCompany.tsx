@@ -453,6 +453,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   /** Local fiscal split save/tab change — merged `company` dubara banao. */
   const [fiscalLocalEpoch, setFiscalLocalEpoch] = useState(0);
   const [allCompanies, setAllCompanies] = useState<Company[]>([]);
+  /** setCompanyId turant list se row dhundhne ke liye — render ke saath sync ref. */
+  const allCompaniesLiveRef = useRef<Company[]>([]);
+  allCompaniesLiveRef.current = allCompanies;
   const [loading, setLoading] = useState(true);
   /** Online mode: company doc / sharing change par listener re-subscribe (light). */
   const [registryVersion, setRegistryVersion] = useState(0);
@@ -676,9 +679,21 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const setCompanyId = useCallback((newCompanyId: string) => {
     // Debug: APK par save ke baad company switch race — hr set dikhao (flag ON par only).
     plNavDbg("useCompany.setCompanyId", { hint: plNavDbgIdHint(newCompanyId), len: String(newCompanyId || "").length });
-    // Save per-tab selection as well as last-login fallback for new app launches.
     writeSelectedCompanyId(newCompanyId);
-    setCompanyIdState(newCompanyId);
+    const nextId = String(newCompanyId || "").trim();
+    // Purani company row turant hatao — warna useVouchers stale `companyRef` se galat SQLite gate / merge kare.
+    const fromList = allCompaniesLiveRef.current.find((c) => c.id === nextId) ?? null;
+    if (fromList) {
+      setCompany(fromList);
+      setLoading(false);
+    } else {
+      setCompany(null);
+      setLoading(true);
+    }
+    setCompanyIdState(nextId);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("pl-company-switched", { detail: { companyId: nextId } }));
+    }
   }, []);
 
   const normalizeLocalCompany = useCallback((raw: Company): Company => {
@@ -734,14 +749,19 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     const isSharedWithCurrentUser =
       !!currentEmail &&
       sharedEmails.some((e) => String(e || "").toLowerCase().trim() === currentEmail);
+    const isDriveSharedJoin = (raw as { driveSharedJoin?: unknown }).driveSharedJoin === true;
     return {
       ...raw,
       planId,
       ...(typeof rawMs === "number" && Number.isFinite(rawMs) ? { planExpiryMs: rawMs } : {}),
       ...(planExpiryFromMs ? { planExpiry: planExpiryFromMs } : {}),
       ...(stripeSessionFromPlanCache ? { lastStripeCheckoutSessionId: stripeSessionFromPlanCache } : {}),
-      // Keep My/Shared split correct even when company is loaded from local DB mirror.
-      isOwned: isOwnedByCurrentUser ? true : !isSharedWithCurrentUser,
+      // Drive-shared local join → "Shared Companies Local" (online shared jaisa owner email).
+      isOwned: isDriveSharedJoin
+        ? false
+        : isOwnedByCurrentUser
+          ? true
+          : !isSharedWithCurrentUser,
       allowAttachments:
         typeof raw.allowAttachments === "boolean"
           ? raw.allowAttachments
@@ -835,7 +855,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             if (!id || cloudMirrorAllowedIds.has(id)) continue;
             const isOwner = isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user.email });
             const isPureLocalRow = String((row as { storageOption?: string }).storageOption || "").toLowerCase() === "local";
+            const isDriveSharedJoin = (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;
             if (isOwner && isPureLocalRow) continue;
+            // Drive se join ki local company — Firestore id list me nahi hoti, purge mat karo.
+            if (isDriveSharedJoin) continue;
+            // Device-local owner company — Firestore mirror ghost list se kabhi mat hatao (localhost refresh bug).
+            if (isPureLocalRow) continue;
             if (localCompanyRowIsDeleted(row)) continue;
             await removeLocalCompanyById(id, { firebaseUid: user.uid });
           }
@@ -1274,11 +1299,23 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       const existing = companyMap.get(c.id);
       if (!existing) {
         const row = c as unknown as import("@/lib/localCompanyStore").LocalCompanyDoc;
+        const isDriveSharedJoin = (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;
+        const isPureLocalRow =
+          String((row as { storageOption?: string }).storageOption || "local").toLowerCase() === "local";
+        // Auth abhi load ho raha ho to SQLite purge mat karo — refresh par galat ghost delete.
+        const isOwnerRow =
+          !user?.uid ||
+          isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user?.email ?? null });
+        if (isPureLocalRow && isOwnerRow) {
+          companyMap.set(c.id, normalized);
+          continue;
+        }
         if (
           user?.uid &&
-          !isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user?.email ?? null })
+          !isOwnerRow &&
+          !isDriveSharedJoin
         ) {
-          // Owner/shared Firestore lists me ab nahi — access revoke; device se poora company data hatao
+          // Shared online mirror revoke — device-local owner rows upar `isPureLocalRow && isOwnerRow` se safe.
           await removeLocalCompanyById(c.id, { firebaseUid: user.uid });
           continue;
         }

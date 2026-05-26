@@ -45,6 +45,8 @@ import usePermissions, { type PermissionConfig, type UserRole, initialPermission
 import { cn } from "@/lib/utils";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConfig";
+import { LocalDriveShareManagePanel } from "@/components/company/LocalDriveShareManagePanel";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { updateCompanyDocRoot } from "@/lib/companyDocsClient";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
@@ -820,10 +822,15 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
 
   /** SQLite / device-only: email-based Firestore share yahan support nahi — Company login + Local users. */
   const isDeviceLocalCompany = isOfflineCompanyStorage(companyData);
+  const localCloudSyncCfg = companyData ? readCloudSyncConfigFromCompany(companyData as Record<string, unknown>) : null;
+  const localDriveSharingEnabled =
+    isDeviceLocalCompany &&
+    localCloudSyncCfg?.cloudSyncEnabled === true &&
+    localCloudSyncCfg?.cloudSyncProvider === "google_drive";
 
   return (
     <div className="space-y-8">
-        {isDeviceLocalCompany ? (
+        {isDeviceLocalCompany && !localDriveSharingEnabled ? (
           <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
             <CardHeader className={companyProfilePageBg}>
               <CardTitle className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -931,6 +938,18 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                   </p>
                 </TabsContent>
               </Tabs>
+            </CardContent>
+          </Card>
+        ) : isDeviceLocalCompany && localDriveSharingEnabled && companyData && companyId ? (
+          <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
+            <CardContent className="p-4">
+              <LocalDriveShareManagePanel
+                variant="full"
+                companyId={companyId}
+                companyName={companyData.name}
+                company={companyData as Record<string, unknown>}
+                onUsersChanged={reloadLocalCompanyRegistry}
+              />
             </CardContent>
           </Card>
         ) : (

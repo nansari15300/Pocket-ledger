@@ -8,6 +8,12 @@ import { cn } from "@/lib/utils";
 export const PRO_THEME_CLASS = "theme-pro" as const;
 export const PRO_PRIMARY_CLASS = "primary-pro" as const;
 
+/** Naya install / khali localStorage — Light theme default (Pro band). */
+export const LIGHT_THEME_CLASS = "theme-pure-white" as const;
+export const LIGHT_PRIMARY_CLASS = "primary-pure-white" as const;
+export const DEFAULT_THEME_CLASS = LIGHT_THEME_CLASS;
+export const DEFAULT_PRIMARY_CLASS = LIGHT_PRIMARY_CLASS;
+
 /** Settings → Theme picker — pehli row */
 export const PRO_THEME_DISPLAY_NAME = "Pro";
 

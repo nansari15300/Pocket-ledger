@@ -15,8 +15,6 @@ import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import type { Tax, TaxGroup } from "@/components/tax/types";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import type { Item, ItemGroup } from "@/components/items/types";
-import { errorEmitter } from "@/firebase/error-emitter";
-import { FirestorePermissionError } from "@/firebase/errors";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
@@ -440,8 +438,11 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   /** Firestore snapshot → SQLite batch mirror debounce (static); unmount pe clear. */
   const mirrorSnapshotTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const lastCompanyIdRef = useRef<string | null>(null);
+  /** Async SQLite/Firestore callbacks purani company ke liye late na aayein. */
+  const companyDataLoadEpochRef = useRef(0);
   useEffect(() => {
     if (lastCompanyIdRef.current === companyId) return;
+    companyDataLoadEpochRef.current += 1;
     // Company switch par purana company data turant clear karo (offline stale merge avoid).
     setVouchers([]);
     setParties([]);
@@ -459,6 +460,28 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     setJournalAccountNames({});
     setUserNames({});
     setLoading(true);
+    previousData.current = {
+      vouchers: [],
+      vouchersAll: [],
+      processedParties: [],
+      processedPartiesForSelection: [],
+      processedStaff: [],
+      processedAccounts: [],
+      processedTaxes: [],
+      expenseAccounts: [],
+      processedItems: [],
+      processedItemGroups: [],
+      processedGroups: [],
+      processedAccountGroups: [],
+      processedStaffGroups: [],
+      processedTaxGroups: [],
+      processedExpenseAccounts: [],
+      processedExpenseGroups: [],
+      overdueTransactions: [],
+      hasOverdueTransactions: false,
+      journalAccountNames: {},
+      userNames: {},
+    };
     lastCompanyIdRef.current = companyId ?? null;
   }, [companyId]);
 
@@ -501,12 +524,15 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
    * Firestore listeners teardown + 600ms delay → tab wapas aane par 4–5s blank. Sirf sync-relevant fields.
    */
   const voucherListenerCompanyKey = useMemo(() => {
-    if (!company) return "";
+    if (!companyId) return "";
+    // companyId aur company row sync hone se pehle bhi listener dubara bind ho.
+    if (!company || company.id !== companyId) return `pending|${companyId}`;
     const c = company as CloudBackedCompanyShape;
     const shared = JSON.stringify(
       [...(company.sharedWithEmails ?? [])].map((e) => String(e).toLowerCase().trim()).sort()
     );
     return [
+      companyId,
       company.id,
       String(c.storageOption ?? ""),
       String(c.syncPolicy ?? ""),
@@ -518,6 +544,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       shared,
     ].join("|");
   }, [
+    companyId,
     company?.id,
     (company as CloudBackedCompanyShape | undefined)?.storageOption,
     (company as CloudBackedCompanyShape | undefined)?.syncPolicy,
@@ -604,6 +631,16 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
 
     /** Company switch / unmount: SQLite callbacks must not write after teardown. */
     let cancelled = false;
+    const loadEpoch = companyDataLoadEpochRef.current;
+
+    const applySqliteRows = <T,>(
+      setter: StateSetter<T>,
+      cached: T[],
+      orderByField?: string
+    ) => {
+      if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return;
+      setter(sqliteCachedRowsForSetter(cached as any[], orderByField) as T[]);
+    };
 
     if (isExplicitLocalRegistryRow) {
     setLoading(true);
@@ -617,34 +654,29 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
               ? // Fast-first vouchers: projection table se lite rows pehle; full JSON parse background me.
                 listVoucherSummaryProjectionFromBrowserDb(companyId, { forBackupMerge: true })
                   .then((lite) => {
-                    if (cancelled || !lite.length) return;
-                    setter((prev) =>
-                      prev.length
-                        ? prev
-                        : sqliteCachedRowsForSetter(
-                            lite.map((r) => ({
-                              id: r.id,
-                              type: r.type || "sale",
-                              date: r.date || null,
-                              amount: Number(r.amount || 0),
-                            })),
-                            orderByField
-                          )
+                    if (cancelled || loadEpoch !== companyDataLoadEpochRef.current || !lite.length) return;
+                    applySqliteRows(
+                      setter,
+                      lite.map((r) => ({
+                        id: r.id,
+                        type: r.type || "sale",
+                        date: r.date || null,
+                        amount: Number(r.amount || 0),
+                      })),
+                      orderByField
                     );
                   })
                   .catch(() => {})
                   .then(() =>
                     listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
                       .then((cached) => {
-                        if (cancelled) return;
-                        setter(sqliteCachedRowsForSetter(cached, orderByField));
+                        applySqliteRows(setter, cached, orderByField);
                       })
                       .catch(() => {})
                   )
               : listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
                   .then((cached) => {
-                    if (cancelled) return;
-                    setter(sqliteCachedRowsForSetter(cached, orderByField));
+                    applySqliteRows(setter, cached, orderByField);
                   })
                   .catch(() => {}))
           )
@@ -652,7 +684,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       const critical = collectionsToPrefetch.filter((c) => CRITICAL_SQLITE_PATHS.has(c.path));
       const secondary = collectionsToPrefetch.filter((c) => !CRITICAL_SQLITE_PATHS.has(c.path));
       void loadSqliteChunk(critical).finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) setLoading(false);
       });
       void loadSqliteChunk(secondary);
       return () => {
@@ -680,34 +712,29 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
               ? // Local/APK cold load: projection rows se pehle paint; heavy voucher JSON parse baad me merge.
                 listVoucherSummaryProjectionFromBrowserDb(companyId, { forBackupMerge: true })
                   .then((lite) => {
-                    if (cancelled || !lite.length) return;
-                    setter((prev) =>
-                      prev.length
-                        ? prev
-                        : sqliteCachedRowsForSetter(
-                            lite.map((r) => ({
-                              id: r.id,
-                              type: r.type || "sale",
-                              date: r.date || null,
-                              amount: Number(r.amount || 0),
-                            })),
-                            orderByField
-                          )
+                    if (cancelled || loadEpoch !== companyDataLoadEpochRef.current || !lite.length) return;
+                    applySqliteRows(
+                      setter,
+                      lite.map((r) => ({
+                        id: r.id,
+                        type: r.type || "sale",
+                        date: r.date || null,
+                        amount: Number(r.amount || 0),
+                      })),
+                      orderByField
                     );
                   })
                   .catch(() => {})
                   .then(() =>
                     listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
                       .then((cached) => {
-                        if (cancelled) return;
-                        setter(sqliteCachedRowsForSetter(cached, orderByField));
+                        applySqliteRows(setter, cached, orderByField);
                       })
                       .catch(() => {})
                   )
               : listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
                   .then((cached) => {
-                    if (cancelled) return;
-                    setter(sqliteCachedRowsForSetter(cached, orderByField));
+                    applySqliteRows(setter, cached, orderByField);
                   })
                   .catch(() => {}))
           )
@@ -716,7 +743,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       const secondary = collectionsToPrefetch.filter((c) => !CRITICAL_SQLITE_PATHS.has(c.path));
       void loadSqliteChunk(critical).finally(() => {
         // Stale-first: show local SQLite immediately; Firestore listeners refresh in background.
-        if (!cancelled) setLoading(false);
+        if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) setLoading(false);
       });
       void loadSqliteChunk(secondary);
     }
@@ -907,10 +934,6 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
               return;
             }
             console.error(`Error fetching ${path}:`, error?.message || error);
-            errorEmitter.emit('permission-error', new FirestorePermissionError({
-              path: `companies/${companyId}/${path}`,
-              operation: 'list'
-            }));
           } catch (_) {}
         });
       });

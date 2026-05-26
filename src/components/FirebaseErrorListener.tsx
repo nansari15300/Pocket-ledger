@@ -1,72 +1,111 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import { errorEmitter } from '@/firebase/error-emitter';
 import { FirestorePermissionError } from '@/firebase/errors';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
+  FIRESTORE_NO_PERMISSION_DESCRIPTION_CLOUD,
+  FIRESTORE_NO_PERMISSION_DESCRIPTION_LOCAL,
+  FIRESTORE_NO_PERMISSION_TITLE,
+  isFirestorePermissionLikeError,
+  shouldSuppressFirestorePermissionPopup,
+} from '@/lib/firestorePermissionUi';
+import { isLocalOnlyMode } from '@/lib/localMode';
 
 /**
- * An invisible component that listens for globally emitted 'permission-error' events.
- * It throws any received error to be caught by Next.js's global-error.tsx.
+ * Global Firestore permission errors — Next.js runtime overlay nahi, user-friendly popup.
  */
 export function FirebaseErrorListener() {
-  // Use the specific error type for the state for type safety.
-  const [error, setError] = useState<FirestorePermissionError | null>(null);
+  const [open, setOpen] = useState(false);
+  const lastShownAtRef = useRef(0);
   const pathname = usePathname();
 
-  useEffect(() => {
-    // The callback now expects a strongly-typed error, matching the event payload.
-    const handleError = (error: FirestorePermissionError) => {
-      // Set error in state to trigger a re-render.
-      setError(error);
-    };
-
-    // The typed emitter will enforce that the callback for 'permission-error'
-    // matches the expected payload type (FirestorePermissionError).
-    errorEmitter.on('permission-error', handleError);
-
-    // Unsubscribe on unmount to prevent memory leaks.
-    return () => {
-      errorEmitter.off('permission-error', handleError);
-    };
+  const showPermissionPopup = useCallback(() => {
+    // Local-only: Firestore deny normal — SQLite path use hota hai; popup mat dikhao.
+    if (shouldSuppressFirestorePermissionPopup()) return;
+    const now = Date.now();
+    // Ek hi action par multiple listeners se spam na ho.
+    if (now - lastShownAtRef.current < 2000) return;
+    lastShownAtRef.current = now;
+    setOpen(true);
   }, []);
 
   useEffect(() => {
-    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
-      const reason = event.reason as any;
-      const code = String(reason?.code ?? '');
-      const message = String(reason?.message ?? '');
-      const stack = String(reason?.stack ?? '');
-      const isPermissionError =
-        code === 'permission-denied' ||
-        code === 'PERMISSION_DENIED' ||
-        message.toLowerCase().includes('missing or insufficient permissions');
+    const handleError = (_error: FirestorePermissionError) => {
+      showPermissionPopup();
+    };
 
-      if (isPermissionError) {
+    errorEmitter.on('permission-error', handleError);
+
+    return () => {
+      errorEmitter.off('permission-error', handleError);
+    };
+  }, [showPermissionPopup]);
+
+  useEffect(() => {
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const reason = event.reason;
+      const code = String((reason as { code?: string })?.code ?? '');
+      const message = String((reason as { message?: string })?.message ?? '');
+
+      if (isFirestorePermissionLikeError(reason)) {
         event.preventDefault();
+        showPermissionPopup();
         return;
       }
 
-      // Auth: LAN/offline par token refresh fail — fatal overlay nahi; session persistence / listener recover karega.
+      // Auth: LAN/offline par token refresh fail — fatal overlay nahi.
       if (code === 'auth/network-request-failed' || message.includes('auth/network-request-failed')) {
         event.preventDefault();
-        return;
       }
-
-      return;
     };
 
     window.addEventListener('unhandledrejection', onUnhandledRejection);
     return () => {
       window.removeEventListener('unhandledrejection', onUnhandledRejection);
     };
-  }, [pathname]);
+  }, [pathname, showPermissionPopup]);
 
-  // On re-render, if an error exists in state, throw it.
-  if (error) {
-    throw error;
-  }
+  // Sync throw (FirebaseError) — dev overlay ke bajay popup.
+  useEffect(() => {
+    const onWindowError = (event: ErrorEvent) => {
+      const candidate = event.error ?? event.message;
+      if (!isFirestorePermissionLikeError(candidate)) return;
+      event.preventDefault();
+      showPermissionPopup();
+    };
 
-  // This component renders nothing.
-  return null;
+    window.addEventListener('error', onWindowError);
+    return () => {
+      window.removeEventListener('error', onWindowError);
+    };
+  }, [showPermissionPopup]);
+
+  const description = isLocalOnlyMode()
+    ? FIRESTORE_NO_PERMISSION_DESCRIPTION_LOCAL
+    : FIRESTORE_NO_PERMISSION_DESCRIPTION_CLOUD;
+
+  return (
+    <AlertDialog open={open} onOpenChange={setOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{FIRESTORE_NO_PERMISSION_TITLE}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogAction>OK</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
 }

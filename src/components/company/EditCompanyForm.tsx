@@ -83,8 +83,12 @@ import {
 } from "@/components/ui/dialog";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
-import { LocalCompanyCloudSyncSettings } from "@/components/company/LocalCompanyCloudSyncSettings";
 import { generateEncryptServerBackupSaltBase64, setBackupEncryptionSessionFromLogin } from "@/lib/serverBackupEncryption";
+import { ensureCloudSyncDriveEncryptionSalt } from "@/lib/localCloudSync/driveEncryption";
+import { readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConfig";
+import { backfillLocalDocsToCloudSyncOutbox } from "@/lib/localCloudSync/backfillOutbox";
+import { settingsViewHref } from "@/lib/appNavHref";
+import { runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { flushBrowserDbToIndexedDB } from "@/lib/localSqlite";
 import {
@@ -164,8 +168,10 @@ export function EditCompanyForm() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileToUpload, setFileToUpload] = useState<{ file: File; preview: string } | null>(null);
   const [removeLogo, setRemoveLogo] = useState(false);
-  /** Mirrors `encryptServerBackup` on company — server mirror AES (same paths); key from login username+password session. */
+  /** Firebase company: Firestore mirror AES — login username+password session. */
   const [encryptCompanyEnabled, setEncryptCompanyEnabled] = useState(false);
+  /** Local company: Drive/Dropbox delta ops encrypt — company password ya login key. */
+  const [encryptDriveEnabled, setEncryptDriveEnabled] = useState(false);
   const [addCompanyUserEnabled, setAddCompanyUserEnabled] = useState(false);
   const [showCompanyUserPassword, setShowCompanyUserPassword] = useState(false);
   const [queuedCompanyUsers, setQueuedCompanyUsers] = useState<LocalCompanyUserDraft[]>([]);
@@ -295,6 +301,10 @@ export function EditCompanyForm() {
             companyUserPassword: "",
         });
         setEncryptCompanyEnabled(company.encryptServerBackup === true);
+        setEncryptDriveEnabled(
+          readCloudSyncConfigFromCompany(company as Record<string, unknown>).cloudSyncEncryptDriveData ||
+            readCloudSyncConfigFromCompany(company as Record<string, unknown>).cloudSyncEncryptDriveFiles
+        );
         // Saved password ho to toggle ON; nahi to user edit se naya password add kar sake.
         setPasswordEnabled(!!(company.password && String(company.password).trim()));
         currencyPickedManuallyRef.current = false;
@@ -488,15 +498,18 @@ export function EditCompanyForm() {
         updateData.password = String(values.password).trim();
       }
 
-      // Optional Firestore mirror encryption — PBKDF2 uses session from company login (username+password).
-      if (encryptCompanyEnabled) {
-        updateData.encryptServerBackup = true;
-        updateData.encryptServerBackupSalt =
-          String((company as Record<string, unknown>).encryptServerBackupSalt || "").trim() || generateEncryptServerBackupSaltBase64();
-      } else {
-        updateData.encryptServerBackup = false;
-        if (!localOnly) {
-          updateData.encryptServerBackupSalt = deleteField();
+      // Firebase / online company: optional Firestore mirror encryption.
+      if (!deviceLocalCo) {
+        if (encryptCompanyEnabled) {
+          updateData.encryptServerBackup = true;
+          updateData.encryptServerBackupSalt =
+            String((company as Record<string, unknown>).encryptServerBackupSalt || "").trim() ||
+            generateEncryptServerBackupSaltBase64();
+        } else {
+          updateData.encryptServerBackup = false;
+          if (!localOnly) {
+            updateData.encryptServerBackupSalt = deleteField();
+          }
         }
       }
       
@@ -565,12 +578,23 @@ export function EditCompanyForm() {
         if (!encryptCompanyEnabled) {
           delete localUpdatePayload.encryptServerBackupSalt;
         }
+        // Local company: Drive/Dropbox sync encryption (Firebase server-backup alag field hai).
+        const driveEncSalt = encryptDriveEnabled
+          ? ensureCloudSyncDriveEncryptionSalt(
+              String((existingLocal as { cloudSyncDriveEncryptionSalt?: string }).cloudSyncDriveEncryptionSalt ?? "")
+            )
+          : String((existingLocal as { cloudSyncDriveEncryptionSalt?: string }).cloudSyncDriveEncryptionSalt ?? "").trim() ||
+            null;
         // `as any`: merge shape LocalCompanyDoc se match karti hai (name/ownerId existing row se aate hain).
         await upsertLocalCompany({
           ...(existingLocal as any),
           ...localUpdatePayload,
           id: companyId,
           localCompanyUsers: nextUsers,
+          cloudSyncEncryptDrive: encryptDriveEnabled,
+          cloudSyncEncryptDriveData: encryptDriveEnabled,
+          cloudSyncEncryptDriveFiles: encryptDriveEnabled,
+          ...(driveEncSalt ? { cloudSyncDriveEncryptionSalt: driveEncSalt } : {}),
           fiscalYearStart: values.fiscalYearStart ? values.fiscalYearStart.toISOString() : null,
           fiscalYearEnd: values.fiscalYearEnd ? values.fiscalYearEnd.toISOString() : null,
           updatedAt: Date.now(),
@@ -653,7 +677,16 @@ export function EditCompanyForm() {
       setFileToUpload(null);
       setRemoveLogo(false);
       
-      if (localOnly && encryptCompanyEnabled) {
+      if (localOnly && deviceLocalCo && encryptDriveEnabled) {
+        const au = (values.adminUsername || "").trim();
+        const pw = (values.password || "").trim() || (company.password || "");
+        if (au && pw) {
+          void setBackupEncryptionSessionFromLogin(companyId, au, pw);
+        }
+        void backfillLocalDocsToCloudSyncOutbox(companyId).then(() =>
+          runLocalCloudSyncCycle(companyId, { force: true })
+        );
+      } else if (localOnly && !deviceLocalCo && encryptCompanyEnabled) {
         const au = (values.adminUsername || "").trim();
         const pw = (values.password || "").trim() || (company.password || "");
         if (au && pw) {
@@ -788,14 +821,28 @@ export function EditCompanyForm() {
         }
       }
     }
-    if (isLocalOnlyMode() && encryptCompanyEnabled) {
+    if (isLocalOnlyMode() && deviceLocalCoForUi && encryptDriveEnabled) {
+      const adminUsername = (values.adminUsername || "").trim();
+      const adminPw = (values.password || "").trim() || (company.password || "");
+      if (!adminUsername || !adminPw) {
+        toast({
+          variant: "destructive",
+          title: "Credentials required",
+          description:
+            "When Drive/Dropbox encryption is on, set company login username and password (or keep your existing company password).",
+        });
+        return;
+      }
+    }
+    if (isLocalOnlyMode() && !deviceLocalCoForUi && encryptCompanyEnabled) {
       const adminUsername = (values.adminUsername || "").trim();
       const adminPw = (values.password || "").trim() || (company.password || "");
       if (!adminUsername || !adminPw) {
         toast({
           variant: "destructive",
           title: "Admin credentials required",
-          description: "When encryption is on, set Admin username and password (or keep your existing company password).",
+          description:
+            "When encryption is on, set Admin username and password (or keep your existing company password).",
         });
         return;
       }
@@ -1206,15 +1253,43 @@ export function EditCompanyForm() {
 
             {deviceLocalCoForUi && (
             <div className="space-y-4 rounded-md border border-black bg-muted/25 p-3 dark:border-black dark:bg-muted/15">
-                {/* Local-only: encrypt backup — login password upar Protect section me. */}
-                {isLocalOnlyMode() && (
+                {/* Local company: Drive/Dropbox sync encrypt — web / EXE / APK sab builds par dikhe. */}
+                <FormItem>
+                  <div className="flex items-center justify-between rounded-md border border-black p-3">
+                    <div>
+                      <FormLabel>Encrypt Drive / Dropbox sync</FormLabel>
+                      <FormDescription>
+                        When enabled, data synced to Google Drive or Dropbox is encrypted before upload (same folder
+                        paths). Unlock uses the company password above, or the username and password you use to open
+                        this company. Configure provider and sync in{" "}
+                        <Link href={settingsViewHref("local_cloud_sync")} className="underline font-medium hover:no-underline">
+                          Google Drive sync
+                        </Link>
+                        . Log in again after enabling if sync does not run.
+                      </FormDescription>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={encryptDriveEnabled}
+                      onChange={(e) => setEncryptDriveEnabled(e.target.checked)}
+                      className="h-4 w-4 rounded border-input"
+                    />
+                  </div>
+                </FormItem>
+            </div>
+            )}
+
+            {!deviceLocalCoForUi && isLocalOnlyMode() && (
+            <div className="space-y-4 rounded-md border border-black bg-muted/25 p-3 dark:border-black dark:bg-muted/15">
+                {/* Firebase / online company: Firestore mirror backup encrypt. */}
                 <FormItem>
                   <div className="flex items-center justify-between rounded-md border border-black p-3">
                     <div>
                       <FormLabel>Encrypt company (server backup)</FormLabel>
                       <FormDescription>
-                        When enabled, data synced to Firestore is encrypted (same folder paths). Unlock uses the username and password you
-                        use to open this company — no separate passphrase. Log in again after enabling if sync does not run.
+                        When enabled, data synced to Firestore is encrypted (same folder paths). Unlock uses the
+                        username and password you use to open this company — no separate passphrase. Log in again after
+                        enabling if sync does not run.
                       </FormDescription>
                     </div>
                     <input
@@ -1225,7 +1300,6 @@ export function EditCompanyForm() {
                     />
                   </div>
                 </FormItem>
-                )}
             </div>
             )}
 
@@ -1525,10 +1599,6 @@ export function EditCompanyForm() {
                 )}
               />
             </div>
-
-            {company?.id && deviceLocalCoForUi ? (
-              <LocalCompanyCloudSyncSettings companyId={company.id} company={company} />
-            ) : null}
 
             {hasProtectPassword && (
                 <>

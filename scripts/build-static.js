@@ -19,6 +19,30 @@ const adminComponentsBakPath = path.join(root, ".build-static-bak", "admin-compo
 const deleteCompanyPath = path.join(root, "src", "lib", "actions", "deleteCompanyAction.ts");
 const deleteCompanyBakPath = path.join(root, ".build-static-bak", "deleteCompanyAction.ts");
 const nextStaticPath = path.join(root, ".next", "static");
+/** Static APK client bundle — dev `.env.local` localhost billing origin override (billingApiOrigin.ts ke saath). */
+const POCKET_LEDGER_HOSTED_API_ORIGIN = "https://pocket-ledger.com";
+
+/** Pehli crashed/interrupted static build — backup bacha ho to dev se pehle source restore karo. */
+function restoreStaticBuildBackupsIfOrphaned() {
+  if (!fs.existsSync(adminPath) && fs.existsSync(adminBakPath)) {
+    fs.mkdirSync(path.dirname(adminPath), { recursive: true });
+    copyDir(adminBakPath, adminPath);
+    rmDir(adminBakPath);
+    console.log("[build-static] Recovered (admin) from .build-static-bak (previous run interrupted)");
+  }
+  if (!fs.existsSync(adminComponentsPath) && fs.existsSync(adminComponentsBakPath)) {
+    fs.mkdirSync(path.dirname(adminComponentsPath), { recursive: true });
+    copyDir(adminComponentsBakPath, adminComponentsPath);
+    rmDir(adminComponentsBakPath);
+    console.log("[build-static] Recovered components/admin from .build-static-bak");
+  }
+  if (!fs.existsSync(apiPath) && fs.existsSync(apiBakPath)) {
+    fs.mkdirSync(path.dirname(apiPath), { recursive: true });
+    copyDir(apiBakPath, apiPath);
+    rmDir(apiBakPath);
+    console.log("[build-static] Recovered api from .build-static-bak");
+  }
+}
 
 function copyDir(src, dest) {
   if (!fs.existsSync(src)) return;
@@ -64,6 +88,8 @@ function rmPathRobust(targetPath, options = {}) {
 }
 
 try {
+  restoreStaticBuildBackupsIfOrphaned();
+
   // Static/offline runtime ke liye sql.js wasm local public asset me copy karo.
   if (fs.existsSync(sqlWasmSrc)) {
     fs.mkdirSync(path.dirname(sqlWasmDest), { recursive: true });
@@ -139,7 +165,13 @@ try {
     cwd: root,
     stdio: "inherit",
     // NEXT_PUBLIC_* inlined into client bundle so static APK/Electron use query-based master-detail + Report header
-    env: { ...process.env, STATIC_BUILD: "1", NEXT_PUBLIC_STATIC_BUILD: "1" },
+    // Dev `.env.local` localhost billing origin APK me mat jaye — hosted API hamesha production.
+    env: {
+      ...process.env,
+      STATIC_BUILD: "1",
+      NEXT_PUBLIC_STATIC_BUILD: "1",
+      NEXT_PUBLIC_BILLING_API_ORIGIN: POCKET_LEDGER_HOSTED_API_ORIGIN,
+    },
   });
 
   // Capacitor / some static hosts: unknown path → 404.html; SPA bootstrap se app wapas load

@@ -19,6 +19,7 @@ import {
 import { DeleteCompanyDialog } from "./DeleteCompanyDialog";
 import { ShareCompanyDialog } from "./ShareCompanyDialog";
 import { AddLocalCompanyUserDialog } from "./AddLocalCompanyUserDialog";
+import { JoinSharedLocalCompanyDialog } from "./JoinSharedLocalCompanyDialog";
 import { useState, useEffect, useMemo } from "react";
 import { useCompany } from "@/hooks/useCompany";
 import type { Company as CompanyData } from "@/hooks/useCompany";
@@ -139,6 +140,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     type: "share" | "addLocalUser" | "delete" | null;
     company: CompanyData | null;
   }>({ type: null, company: null });
+  const [joinSharedOpen, setJoinSharedOpen] = useState(false);
   const [companies, setCompanies] = useState<CompanyData[]>(() =>
     (initialCompanies ?? []).filter(isCompanyVisibleInSelector)
   );
@@ -166,19 +168,47 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   const [rememberSharedUsername, setRememberSharedUsername] = useState(false);
 
   useEffect(() => {
+    const isOwnedByUser = (c: CompanyData) =>
+      c.ownerId === user?.uid ||
+      (!!c.ownerEmail &&
+        !!user?.email &&
+        c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
+
+    const mergeIntoMap = (map: Map<string, CompanyData>, rows: CompanyData[]) => {
+      rows.forEach((c) => {
+        if (!isCompanyVisibleInSelector(c)) return;
+        map.set(c.id, {
+          ...c,
+          isOwned: c.isOwned ?? isOwnedByUser(c),
+        });
+      });
+    };
+
     if (isLocalOnlyMode()) {
-      const raw = contextCompanies || [];
-      setCompanies(raw.filter(isCompanyVisibleInSelector));
+      const map = new Map<string, CompanyData>();
+      mergeIntoMap(map, contextCompanies || []);
+      setCompanies(Array.from(map.values()));
       return;
     }
-    // Online: parent `/company` page is the single source — Firestore listeners + loading gate live there only.
-    // Duplicate listeners here used to merge with stale `prev` and briefly showed the previous account's companies after login swap.
     if (!user) {
       setCompanies([]);
       return;
     }
-    setCompanies((initialCompanies ?? []).filter(isCompanyVisibleInSelector));
-  }, [user, contextCompanies, contextCompanyLoading, parentCompaniesListSig]);
+    const map = new Map<string, CompanyData>();
+    mergeIntoMap(map, (initialCompanies ?? []).filter(isCompanyVisibleInSelector));
+    // Drive restore/join: device-local rows SQLite se — parent Firestore list me nahi hote.
+    (contextCompanies || []).forEach((c) => {
+      if (!isCompanyVisibleInSelector(c)) return;
+      if (!isOfflineCompanyStorage(c)) return;
+      const driveSharedJoin = (c as CompanyData & { driveSharedJoin?: boolean }).driveSharedJoin === true;
+      map.set(c.id, {
+        ...c,
+        storageOption: "local",
+        isOwned: driveSharedJoin ? false : isOwnedByUser(c),
+      });
+    });
+    setCompanies(Array.from(map.values()));
+  }, [user, contextCompanies, contextCompanyLoading, parentCompaniesListSig, initialCompanies]);
 
 
   const handleSelectCompany = (company: CompanyData) => {
@@ -485,13 +515,28 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
             )}
           </CardContent>
           {hasAnyCompany ? (
-            <CardFooter className="flex justify-center">
+            <CardFooter className="flex flex-col sm:flex-row gap-2 justify-center">
               <Button type="button" variant="outline" onClick={() => router.push("/company/create")}>
                 <PlusCircle className="mr-2 h-4 w-4" />
                 Create New Company
               </Button>
+              <Button type="button" variant="secondary" onClick={() => setJoinSharedOpen(true)}>
+                <Share2 className="mr-2 h-4 w-4" />
+                Join shared local company
+              </Button>
             </CardFooter>
-          ) : null}
+          ) : (
+            <CardFooter className="flex flex-col sm:flex-row gap-2 justify-center">
+              <Button type="button" className="w-full sm:w-auto" onClick={() => router.push("/company/create")}>
+                <PlusCircle className="mr-2 h-4 w-4" />
+                Create New Company
+              </Button>
+              <Button type="button" variant="secondary" className="w-full sm:w-auto" onClick={() => setJoinSharedOpen(true)}>
+                <Share2 className="mr-2 h-4 w-4" />
+                Join shared local company
+              </Button>
+            </CardFooter>
+          )}
         </Card>
       </div>
 
@@ -721,6 +766,14 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <JoinSharedLocalCompanyDialog
+        open={joinSharedOpen}
+        onOpenChange={setJoinSharedOpen}
+        onJoined={() => {
+          reloadLocalCompanyRegistry();
+          triggerSync();
+        }}
+      />
     </>
   );
 }
@@ -742,6 +795,7 @@ export function CompanyActions({
     type: "share" | "addLocalUser" | "delete" | null;
     company: CompanyData | null;
   }>({ type: null, company: null });
+  const [joinSharedOpen, setJoinSharedOpen] = useState(false);
   const [companyToUnlock, setCompanyToUnlock] = useState<CompanyData | null>(null);
   const [usernameInput, setUsernameInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
@@ -1017,6 +1071,10 @@ export function CompanyActions({
                 <PlusCircle className="mr-2 h-4 w-4" />
                 <span>Add Company</span>
              </DropdownMenuItem>
+             <DropdownMenuItem onSelect={() => setJoinSharedOpen(true)}>
+                <Share2 className="mr-2 h-4 w-4" />
+                <span>Join shared local company</span>
+             </DropdownMenuItem>
               {activeCompany && activeCompany.isOwned && (
                 <DropdownMenuItem
                   onSelect={() =>
@@ -1260,6 +1318,15 @@ export function CompanyActions({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <JoinSharedLocalCompanyDialog
+        open={joinSharedOpen}
+        onOpenChange={setJoinSharedOpen}
+        onJoined={() => {
+          reloadLocalCompanyRegistry();
+          triggerSync();
+          onCompanyCreated();
+        }}
+      />
     </>
   );
 }

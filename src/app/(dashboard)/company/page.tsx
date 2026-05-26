@@ -13,6 +13,30 @@ import { useCompany } from "@/hooks/useCompany";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { registerCompanyPickerFirestoreDetach } from "@/lib/companyPickerFirestoreDetach";
+import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+
+/** Device-local SQLite rows — online Firestore picker list me merge (Drive restore / join ke baad). */
+function mergeDeviceLocalCompaniesIntoMap(
+  companyMap: Map<string, Company>,
+  localRows: Company[],
+  user: { uid?: string | null; email?: string | null } | null | undefined
+) {
+  const isOwnedByUser = (c: Company) =>
+    c.ownerId === user?.uid ||
+    (!!c.ownerEmail &&
+      !!user?.email &&
+      c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
+  for (const c of localRows) {
+    if (!isCompanyVisibleInCompanyPage(c)) continue;
+    if (!isOfflineCompanyStorage(c)) continue;
+    const driveSharedJoin = (c as Company & { driveSharedJoin?: boolean }).driveSharedJoin === true;
+    companyMap.set(c.id, {
+      ...c,
+      storageOption: "local",
+      isOwned: driveSharedJoin ? false : isOwnedByUser(c),
+    });
+  }
+}
 
 export type Company = {
   id: string;
@@ -24,7 +48,7 @@ export type Company = {
   isDeleted?: boolean;
   /** Admin recycle-bin hidden tab marker: normal company picker list se hide. */
   movedToAdminRecycleAt?: unknown;
-  storageOption?: 'firebase' | 'drive';
+  storageOption?: 'firebase' | 'drive' | 'local';
 };
 
 /** /company page list guard: deleted + admin-hidden rows ko normal app picker se hatao. */
@@ -37,7 +61,7 @@ function SelectCompanyPageContent() {
   const searchParams = useSearchParams();
   const { user, loading: authLoading } = useAuth();
   // Local mode: list Firestore snapshots se nahi, useCompany() ke local DB hydrate se aati hai (owned/shared wahi logic jo CompanySelector me).
-  const { allCompanies: contextCompanies, loading: companyContextLoading } = useCompany();
+  const { allCompanies: contextCompanies, loading: companyContextLoading, reloadLocalCompanyRegistry, triggerSync } = useCompany();
   const [loading, setLoading] = useState(true);
   const [ownedCompanies, setOwnedCompanies] = useState<Company[]>([]);
   const [sharedCompanies, setSharedCompanies] = useState<Company[]>([]);
@@ -132,6 +156,13 @@ function SelectCompanyPageContent() {
     };
   }, [user, authLoading, router]);
 
+  // Online web: SQLite local / Drive-restored companies context se — sirf Firestore listeners se missing the.
+  useEffect(() => {
+    if (isLocalOnlyMode()) return;
+    reloadLocalCompanyRegistry();
+    triggerSync();
+  }, [reloadLocalCompanyRegistry, triggerSync]);
+
   // When redirected from company create with ?new=companyId, fetch that company so it shows without refresh
   const newCompanyId = searchParams.get("new");
   useEffect(() => {
@@ -198,6 +229,11 @@ function SelectCompanyPageContent() {
     if (newlyCreatedCompany && !companyMap.has(newlyCreatedCompany.id)) {
       companyMap.set(newlyCreatedCompany.id, newlyCreatedCompany);
     }
+    mergeDeviceLocalCompaniesIntoMap(
+      companyMap,
+      (contextCompanies || []) as Company[],
+      user
+    );
     return Array.from(companyMap.values());
 }, [ownedCompanies, sharedCompanies, user, newlyCreatedCompany, contextCompanies]);
 

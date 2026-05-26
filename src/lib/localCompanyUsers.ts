@@ -7,6 +7,7 @@
 
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { setBackupEncryptionSessionFromLogin } from "@/lib/serverBackupEncryption";
+import { normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
 
 /** Company user row — password local blob me (device pe hi), server jaisa trust model. */
 export type LocalCompanyUserRecord = {
@@ -45,6 +46,89 @@ export function parseLocalCompanyUserRows(raw: unknown): LocalCompanyUserRecord[
     out.push({ id, username, displayName, role, password });
   }
   return out;
+}
+
+/** Drive share Gmail list → SQLite `localCompanyUsers` (app role; Drive hamesha writer). */
+export function mergeDriveShareUsersIntoLocalCompanyUsers(
+  rows: LocalCompanyUserRecord[],
+  shareUsers: Array<{ email: string; appRole: string }>
+): LocalCompanyUserRecord[] {
+  if (!Array.isArray(shareUsers) || shareUsers.length === 0) return [...rows];
+  let next = [...rows];
+  for (const u of shareUsers) {
+    const email = String(u?.email || "")
+      .trim()
+      .toLowerCase();
+    if (!email.includes("@")) continue;
+    const role = normalizeLocalCompanyAppRole(u.appRole);
+    const idx = next.findIndex((x) => x.username.toLowerCase() === email);
+    if (idx >= 0) {
+      // Purana password mat hatao — Drive `opening/users.json` se aata hai.
+      next[idx] = { ...next[idx], role, displayName: next[idx].displayName || email };
+    } else {
+      next = upsertUserInList(next, {
+        username: email,
+        displayName: email,
+        role,
+        password: "",
+      });
+    }
+  }
+  return next;
+}
+
+/** Drive `opening/users.json` row — shared devices par login password merge. */
+export type OpeningUserSnapshot = {
+  username?: string;
+  displayName?: string;
+  role?: string;
+  password?: string;
+};
+
+/** Remote users snapshot → local rows; password sirf tab update jab remote me non-empty ho. */
+export function mergeOpeningUsersSnapshotIntoLocalCompanyUsers(
+  rows: LocalCompanyUserRecord[],
+  remoteUsers: OpeningUserSnapshot[]
+): LocalCompanyUserRecord[] {
+  if (!Array.isArray(remoteUsers) || remoteUsers.length === 0) return [...rows];
+  let next = [...rows];
+  for (const ru of remoteUsers) {
+    const username = String(ru.username ?? "").trim();
+    if (!username) continue;
+    const password = String(ru.password ?? "").trim();
+    const idx = next.findIndex((x) => x.username.toLowerCase() === username.toLowerCase());
+    if (idx >= 0) {
+      const row = { ...next[idx] };
+      if (ru.displayName != null && String(ru.displayName).trim()) {
+        row.displayName = String(ru.displayName).trim();
+      }
+      if (ru.role != null && String(ru.role).trim()) {
+        row.role = normalizeLocalCompanyAppRole(ru.role);
+      }
+      if (password) row.password = password;
+      next[idx] = row;
+    } else {
+      next = upsertUserInList(next, {
+        username,
+        displayName: String(ru.displayName ?? username).trim() || username,
+        role: ru.role != null ? normalizeLocalCompanyAppRole(ru.role) : "manager",
+        password,
+      });
+    }
+  }
+  return next;
+}
+
+/** Share list se ek Gmail user hatao — localCompanyUsers se bhi. */
+export function removeDriveShareUserFromLocalCompanyUsers(
+  rows: LocalCompanyUserRecord[],
+  email: string
+): LocalCompanyUserRecord[] {
+  const em = String(email || "")
+    .trim()
+    .toLowerCase();
+  if (!em) return [...rows];
+  return rows.filter((x) => x.username.toLowerCase() !== em);
 }
 
 /** Firestore `companies.sharedWith` entry — SQLite `localCompanyUsers` mirror ke liye. */
@@ -207,7 +291,14 @@ export async function localAuthLoginClientOnly(
   const p = password.trim();
 
   const users = await getLocalCompanyUsersRecords(companyId);
-  const match = users.find((x) => x.username.toLowerCase() === u && x.password === p);
+  let match = users.find((x) => x.username.toLowerCase() === u && x.password === p);
+  // Gmail login + alag login username row — ek hi password row ho to email se bhi chale.
+  if (!match && u.includes("@")) {
+    const withPw = users.filter((x) => x.password === p && x.password.length > 0);
+    if (withPw.length === 1) {
+      match = { ...withPw[0]!, username: u };
+    }
+  }
   if (match) {
     const token = `local_client_${companyId}_${match.id}_${Date.now()}`;
     if (typeof window !== "undefined") {

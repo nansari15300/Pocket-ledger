@@ -8,6 +8,8 @@
  * Local-only SQLite par bhi online live sync — policy `planSyncClientPolicy.ts` me; MAT HATANA refactors me.
  */
 import { getBillingApiUrl } from "@/lib/billingApiOrigin";
+import { hostedApiFetch } from "@/lib/hostedApiFetch";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { bumpLocalCompanyRegistry } from "@/lib/applyStripePlanToLocalCompany";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { clearCompanyPlanLocalCache, readCompanyPlanLocalCache, writeCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
@@ -178,7 +180,7 @@ async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Pro
   const ctrl = new AbortController();
   const tid = typeof setTimeout !== "undefined" ? setTimeout(() => ctrl.abort(), ms) : undefined;
   try {
-    return await fetch(url, { ...init, signal: ctrl.signal });
+    return await hostedApiFetch(url, { ...init, signal: ctrl.signal });
   } finally {
     if (tid !== undefined) clearTimeout(tid);
   }
@@ -245,9 +247,9 @@ export async function syncCompanyPlanFromServer(opts: {
     await new Promise((r) => setTimeout(r, 280 * attempt));
   }
 
-  // NEXT_PUBLIC_BILLING_API_ORIGIN galat host par ho to 404 — dev me API yahin Next par ho to same-origin dobara try karo
+  // Dev full Next: remote 404 par same-origin `/api` retry — APK par localhost:3000 mat kholo.
   const triedRemote = typeof primaryUrl === "string" && /^https?:\/\//i.test(primaryUrl);
-  if (res.status === 404 && triedRemote && typeof window !== "undefined") {
+  if (res.status === 404 && triedRemote && typeof window !== "undefined" && !isCapacitorNativeApp()) {
     try {
       res = await fetchWithTimeout(syncPlanPath, fetchOpts, PLAN_SYNC_FETCH_TIMEOUT_MS);
     } catch (e: unknown) {

@@ -28,6 +28,8 @@ import {
 } from "@/lib/localCloudSync/driveCloudSyncClient";
 import { isDriveFileRef, remotePathFromDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
+import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 
 const STORE = "pendingFiles";
 
@@ -48,6 +50,43 @@ async function patchCompanyDocViaGateway(docRef: DocumentReference, patch: Recor
     data: patch,
   });
   if (r.ok === false) throw new Error(r.error);
+}
+
+/** Pending file target doc — local company SQLite, online company Firestore. */
+async function readCompanyDocForPendingSync(docPath: string): Promise<Record<string, unknown> | null> {
+  const p = String(docPath || "").trim();
+  const m = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(p);
+  if (!m) return null;
+  const [, companyId, collection, docId] = m;
+  const reg = await getLocalCompanyById(companyId!, { includeDeleted: true });
+  if (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) {
+    return (await getCompanyDocFromBrowserDb(companyId!, collection!, docId!)) as Record<string, unknown> | null;
+  }
+  const snap = await getDoc(firestoreDocRefFromPath(p));
+  return snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+}
+
+/** `local:uuid` ko Drive URL / Storage URL se replace karke doc patch karo. */
+async function patchPendingFileTargetField(
+  docPath: string,
+  field: string,
+  localId: string,
+  newValue: string
+): Promise<void> {
+  const data = await readCompanyDocForPendingSync(docPath);
+  if (!data) throw new Error("Document not found");
+  const current = data[field];
+  const needle = `${LOCAL_FILE_PREFIX}${localId}`;
+  const docRef = firestoreDocRefFromPath(docPath);
+  if (Array.isArray(current)) {
+    const arr = [...current];
+    const idx = arr.findIndex((v) => v === needle);
+    if (idx >= 0) arr[idx] = newValue;
+    else arr.push(newValue);
+    await patchCompanyDocViaGateway(docRef, { [field]: arr });
+    return;
+  }
+  await patchCompanyDocViaGateway(docRef, { [field]: newValue });
 }
 
 /** Party/Bank/Staff/Item pending sync ke liye bhi yahi ref (pehle sirf vouchers tha). */
@@ -377,25 +416,12 @@ export async function uploadPendingLocalFileRef(
       company: reg,
       collection: docMatch[2]!,
       docId: docMatch[3]!,
+      field: item.field,
       blob: item.blob,
       contentType: item.contentType,
       fileName: item.fileName,
     });
-    const docRef = firestoreDocRefFromPath(item.docPath);
-    const snap = await getDoc(docRef);
-    if (!snap.exists()) throw new Error("Document not found");
-    const data = snap.data();
-    const current = data[item.field];
-    if (Array.isArray(current)) {
-      const arr = [...current];
-      const needle = `${LOCAL_FILE_PREFIX}${item.id}`;
-      const idx = arr.findIndex((v) => v === needle);
-      if (idx >= 0) arr[idx] = driveRef;
-      else arr.push(driveRef);
-      await patchCompanyDocViaGateway(docRef, { [item.field]: arr });
-    } else {
-      await patchCompanyDocViaGateway(docRef, { [item.field]: driveRef });
-    }
+    await patchPendingFileTargetField(item.docPath, item.field, item.id, driveRef);
     await removePendingFile(item.id);
     return driveRef;
   }
@@ -405,50 +431,7 @@ export async function uploadPendingLocalFileRef(
   const storageRef = ref(storage, storagePath);
   await uploadBytes(storageRef, item.blob, { contentType: item.contentType || "application/octet-stream" });
   const url = await getDownloadURL(storageRef);
-  const docRef = firestoreDocRefFromPath(item.docPath);
-  const snap = await getDoc(docRef);
-  if (!snap.exists()) {
-    throw new Error("Document not found");
-  }
-  const data = snap.data();
-  const current = data[item.field];
-  if (Array.isArray(current)) {
-    const arr = [...current];
-    const needle = `${LOCAL_FILE_PREFIX}${item.id}`;
-    const idx = arr.findIndex((v) => v === needle);
-    const oldArraySnapshot = [...arr];
-    const action: "replace_at_index" | "append_unmatched" =
-      idx >= 0 ? "replace_at_index" : "append_unmatched";
-    if (idx >= 0) arr[idx] = url;
-    else arr.push(url);
-    if (localPendingFilesForensicEnabled()) {
-      console.warn("[FORENSIC_PENDING_UPLOAD]", {
-        phase: "uploadPendingLocalFileRef",
-        localId: item.id,
-        needleMatched: needle,
-        matchedIndex: idx,
-        action,
-        oldArray: oldArraySnapshot,
-        newArray: arr,
-        note: "STEP_FIRESTORE_PATCH_NEXT_then_removePendingFile_after_await",
-        navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
-      });
-    }
-    await patchCompanyDocViaGateway(docRef, { [item.field]: arr });
-  } else {
-    if (localPendingFilesForensicEnabled()) {
-      console.warn("[FORENSIC_PENDING_UPLOAD]", {
-        phase: "uploadPendingLocalFileRef",
-        localId: item.id,
-        field: item.field,
-        action: "scalar_field_replace",
-        oldValue: current,
-        newValue: url,
-        note: "STEP_FIRESTORE_PATCH_NEXT_then_removePendingFile_after_await",
-      });
-    }
-    await patchCompanyDocViaGateway(docRef, { [item.field]: url });
-  }
+  await patchPendingFileTargetField(item.docPath, item.field, item.id, url);
   if (localPendingFilesForensicEnabled()) {
     console.warn("[FORENSIC_PENDING_UPLOAD]", {
       phase: "uploadPendingLocalFileRef",
@@ -627,17 +610,22 @@ export async function syncOnePendingFile(
   item: PendingFilePayload
 ): Promise<{ success: boolean; error?: string }> {
   try {
+    const docMatch = /^companies\/([^/]+)\//.exec(String(item.docPath || "").trim());
+    // Local company + Drive sync — Firebase Storage ki jagah Drive attachments/avatars.
+    if (docMatch && (await isGoogleDriveCloudSyncCompany(docMatch[1]!))) {
+      await uploadPendingLocalFileRef(`${LOCAL_FILE_PREFIX}${item.id}`, item.storagePathPrefix);
+      return { success: true };
+    }
+
     const storagePath = `${item.storagePathPrefix}/${Date.now()}_${item.fileName || "file"}`;
     const storageRef = ref(storage, storagePath);
     await uploadBytes(storageRef, item.blob, { contentType: item.contentType || "application/octet-stream" });
     const url = await getDownloadURL(storageRef);
 
-    const docRef = firestoreDocRefFromPath(item.docPath);
-    const snap = await getDoc(docRef);
-    if (!snap.exists()) {
+    const data = await readCompanyDocForPendingSync(item.docPath);
+    if (!data) {
       return { success: false, error: "Document not found" };
     }
-    const data = snap.data();
     const current = data[item.field];
 
     if (Array.isArray(current)) {
@@ -662,7 +650,7 @@ export async function syncOnePendingFile(
           navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
         });
       }
-      await patchCompanyDocViaGateway(docRef, { [item.field]: arr });
+      await patchPendingFileTargetField(item.docPath, item.field, item.id, url);
     } else {
       if (localPendingFilesForensicEnabled()) {
         console.warn("[FORENSIC_PENDING_SYNC_ONE]", {
@@ -675,7 +663,7 @@ export async function syncOnePendingFile(
           note: "STEP_FIRESTORE_PATCH_NEXT_then_removePendingFile_after_await",
         });
       }
-      await patchCompanyDocViaGateway(docRef, { [item.field]: url });
+      await patchPendingFileTargetField(item.docPath, item.field, item.id, url);
     }
 
     if (localPendingFilesForensicEnabled()) {
@@ -718,6 +706,23 @@ export async function syncPendingFiles(): Promise<{ synced: number; failed: numb
   let synced = 0;
   let failed = 0;
   for (const item of pending) {
+    const result = await syncOnePendingFile(item);
+    if (result.success) synced++;
+    else failed++;
+  }
+  return { synced, failed };
+}
+
+/** Drive sync cycle — sirf is company ke pending attachments/avatars upload karo. */
+export async function syncPendingFilesForCompany(companyId: string): Promise<{ synced: number; failed: number }> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return { synced: 0, failed: 0 };
+  const pending = await getPendingFiles();
+  let synced = 0;
+  let failed = 0;
+  for (const item of pending) {
+    const m = /^companies\/([^/]+)\//.exec(String(item.docPath || "").trim());
+    if (!m || m[1] !== cid) continue;
     const result = await syncOnePendingFile(item);
     if (result.success) synced++;
     else failed++;

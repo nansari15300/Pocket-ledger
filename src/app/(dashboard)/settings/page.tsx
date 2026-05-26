@@ -6,7 +6,7 @@ import { isEmbeddedDeviceLockShell } from "@/lib/embeddedDeviceLock";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Fingerprint, Share2, Loader2, Hash, Eye, Palette, FileDigit, Zap, Building, ShieldAlert, Bell, Smartphone, ChevronLeft, PanelRight, CalendarRange, LockKeyhole } from "lucide-react";
+import { Fingerprint, Share2, Loader2, Hash, Eye, Palette, FileDigit, Zap, Building, ShieldAlert, Bell, Smartphone, ChevronLeft, PanelRight, CalendarRange, LockKeyhole, Cloud } from "lucide-react";
 import { ManageShare } from "@/components/company/ManageShare";
 import usePermissions from "@/hooks/usePermissions";
 import { useCompany } from "@/hooks/useCompany";
@@ -34,6 +34,8 @@ import {
     type EdgeSwipeDocumentOptions,
 } from "@/hooks/useMobileEdgeSwipe";
 import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
+import { LocalCloudSyncSettingsPage } from "@/components/settings/LocalCloudSyncSettingsPage";
+import { settingsViewHref } from "@/lib/appNavHref";
 
 /** Settings list horizontal inset — scroll shell par ek hi layer taake left/right dono 4px barabar (ul par duble na ho) */
 const SETTINGS_NAV_INSET_X = "px-[4px]";
@@ -69,6 +71,8 @@ function settingsNavRowClass(isActive: boolean, isDanger?: boolean) {
 }
 
 const settingsNavItems = [
+    // Sab builds — pehle dikhe; company create ki zaroorat nahi (Connect Drive + join/restore).
+    { id: "local_cloud_sync", title: "Google Drive sync", icon: Cloud, permission: "configure_company_settings" as const, href: null },
     { id: "company", title: "Company Profile", icon: Building, permission: "configure_company_settings" as const, href: null },
     { id: "sharing", title: "Manage Sharing", icon: Share2, permission: "manage_users_roles" as const, href: null },
     // Device sync settings (synced devices management).
@@ -166,9 +170,16 @@ function SettingsPageContent() {
     );
     const availableNavItems = useMemo(() => {
         const allowed = settingsNavItems.filter((item) => {
+            // Google Drive sync — web / EXE / APK; permission ke bina bhi hamesha nav me.
+            if (item.id === "local_cloud_sync") return true;
             if (item.id === "app_lock") return shellLockEligible;
             return can(item.permission);
         });
+        // Safety: permissions hydrate race par bhi Drive sync nav na gayab ho.
+        if (!allowed.some((i) => i.id === "local_cloud_sync")) {
+            const driveItem = settingsNavItems.find((i) => i.id === "local_cloud_sync");
+            if (driveItem) allowed.unshift(driveItem);
+        }
         if (!sharedLocalAppearanceOnly) return allowed;
         const extra = settingsNavItems.filter(
             (item) =>
@@ -176,6 +187,12 @@ function SettingsPageContent() {
         );
         return [...allowed, ...extra];
     }, [can, sharedLocalAppearanceOnly, shellLockEligible]);
+    /** Nav render — kabhi permissions list khali ho to bhi Drive sync dikhe. */
+    const navItemsForUi = useMemo(() => {
+        if (availableNavItems.length > 0) return availableNavItems;
+        const driveOnly = settingsNavItems.filter((i) => i.id === "local_cloud_sync");
+        return driveOnly.length > 0 ? driveOnly : availableNavItems;
+    }, [availableNavItems]);
     const canOpenThemeOrAnimation = canConfigureCompany || sharedLocalAppearanceOnly;
 
     /** URL ya session me non-sharing tab maanga ho lekin nav abhi sirf Sharing (permissions hydrate race) — tab redirect / highlight mat lagao */
@@ -247,7 +264,7 @@ function SettingsPageContent() {
     /** Valid tab ko company-scoped sessionStorage me rakho — company load se pehle galat nav list se overwrite na ho */
     useEffect(() => {
         if (settingsNavStall) return;
-        if (!activeView || !availableNavItems.some((i) => i.id === activeView)) return;
+        if (!activeView || !navItemsForUi.some((i) => i.id === activeView)) return;
         try {
             const k = settingsTabSessionStorageKey(companyId);
             sessionStorage.setItem(k, activeView);
@@ -256,21 +273,26 @@ function SettingsPageContent() {
         } catch {
             /* ignore */
         }
-    }, [activeView, availableNavItems, companyId, settingsNavStall]);
+    }, [activeView, navItemsForUi, companyId, settingsNavStall]);
 
     // Paint se pehle: ?view= (React + window) → valid tab; phir session fallback; invalidate URL mat rakho Manage Sharing tak
     useLayoutEffect(() => {
         if (settingsNavStall) return;
-        if (availableNavItems.length === 0) return;
-        /** company hydrate se pehle `usePermissions` me role galat ho sakta hai → nav sirf sharing; voucher session wipe + refresh par Sharing sticky — isliye stall */
-        if (companyId && !company) return;
+        if (navItemsForUi.length === 0) return;
+        /** company hydrate — Drive sync tab company load ka wait na kare (online company par bhi join dikhe). */
+        if (companyId && !company) {
+            const pendingView =
+                searchParams.get("view") ??
+                (typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("view") : null);
+            if (pendingView !== "local_cloud_sync") return;
+        }
 
         const fromReact = searchParams.get("view");
         const fromWindow =
             typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("view") : null;
         const rawView = fromReact ?? fromWindow;
         const viewOk =
-            rawView != null && rawView !== "" && availableNavItems.some((item) => item.id === rawView)
+            rawView != null && rawView !== "" && navItemsForUi.some((item) => item.id === rawView)
                 ? rawView
                 : null;
 
@@ -296,7 +318,7 @@ function SettingsPageContent() {
 
         if (!mobileSettingsUx) {
             const persisted = readPersistedSettingsTab(companyId);
-            if (persisted && availableNavItems.some((i) => i.id === persisted)) {
+            if (persisted && navItemsForUi.some((i) => i.id === persisted)) {
                 setActiveView(persisted);
                 router.replace(`${pathname}?view=${encodeURIComponent(persisted)}`, { scroll: false });
                 syncSettingsViewQueryToBrowser(persisted);
@@ -305,35 +327,35 @@ function SettingsPageContent() {
 
             /* Ghair-valid ?view= hata kar pehla allowed tab — sharing pe sticky na rah jaye */
             if (rawView && !viewOk) {
-                const firstId = availableNavItems[0]?.id ?? "company";
+                const firstId = navItemsForUi[0]?.id ?? "local_cloud_sync";
                 setActiveView(firstId);
                 router.replace(`${pathname}?view=${encodeURIComponent(firstId)}`, { scroll: false });
                 syncSettingsViewQueryToBrowser(firstId);
                 return;
             }
 
-            const first = availableNavItems[0]?.id ?? "company";
+            const first = navItemsForUi[0]?.id ?? "local_cloud_sync";
             setActiveView((prev) => (prev === "" ? first : prev));
         }
-    }, [searchParams, availableNavItems, mobileSettingsUx, pathname, router, companyId, company, settingsNavStall]);
+    }, [searchParams, navItemsForUi, mobileSettingsUx, pathname, router, companyId, company, settingsNavStall]);
 
     // Shared user: URL / memory me `company` ho sakta hai jab wo ab nav me nahi — pehli allowed tab par le aao.
     useEffect(() => {
         if (settingsNavStall) return;
         if (companyId && !company) return;
-        if (availableNavItems.length === 0) return;
+        if (navItemsForUi.length === 0) return;
         /** Mobile list-first: khali activeView valid — yahan first tab mat thopo */
         if (mobileSettingsUx && activeView === "") return;
         /** Layout init abhi nahi hua / wait */
         if (!activeView) return;
-        if (availableNavItems.some((i) => i.id === activeView)) return;
-        const next = availableNavItems[0].id;
+        if (navItemsForUi.some((i) => i.id === activeView)) return;
+        const next = navItemsForUi[0].id;
         setActiveView(next);
         if (!mobileSettingsUx) {
             router.replace(`${pathname}?view=${encodeURIComponent(next)}`, { scroll: false });
             syncSettingsViewQueryToBrowser(next);
         }
-    }, [company, companyId, availableNavItems, activeView, mobileSettingsUx, pathname, router, settingsNavStall]);
+    }, [company, companyId, navItemsForUi, activeView, mobileSettingsUx, pathname, router, settingsNavStall]);
 
     const setActiveViewWithUrl = useCallback(
         (id: string) => {
@@ -360,15 +382,15 @@ function SettingsPageContent() {
         if (companyId && !company) return;
         if (mobileSettingsUx) return;
         const viewParam = searchParams.get("view");
-        if (!viewParam && activeView && availableNavItems.some((item) => item.id === activeView)) {
+        if (!viewParam && activeView && navItemsForUi.some((item) => item.id === activeView)) {
             router.replace(`${pathname}?view=${encodeURIComponent(activeView)}`, { scroll: false });
             syncSettingsViewQueryToBrowser(activeView);
         }
-    }, [company, companyId, mobileSettingsUx, activeView, pathname, searchParams, router, availableNavItems, settingsNavStall]);
+    }, [company, companyId, mobileSettingsUx, activeView, pathname, searchParams, router, navItemsForUi, settingsNavStall]);
 
     const selectedSetting = useMemo(() => {
-        return availableNavItems.find(item => item.id === activeView) || null;
-    }, [activeView, availableNavItems]);
+        return navItemsForUi.find(item => item.id === activeView) || null;
+    }, [activeView, navItemsForUi]);
 
     const openSettingsListSheet = useCallback(() => setSettingsListOpen(true), [setSettingsListOpen]);
 
@@ -416,7 +438,7 @@ function SettingsPageContent() {
     const renderNavButtons = (onPick?: () => void) => (
         // Native scroll — Radix ScrollArea vertical track (~10px) nav list ko daen se patla dikhaata tha
         <ul className="list-none space-y-1 py-1 w-full min-w-0" data-theme-list="account-list">
-            {availableNavItems.map((item) => {
+            {navItemsForUi.map((item) => {
                 const isActive = activeView === item.id;
                 return (
                     <li key={item.id}>
@@ -449,14 +471,19 @@ function SettingsPageContent() {
         );
 
     if (companyId && !company) {
-        return (
-            <div className="flex min-h-[40vh] items-center justify-center p-4">
-                <p className="flex items-center gap-2 text-muted-foreground text-sm">
-                    <Loader2 className="h-5 w-5 animate-spin shrink-0" />
-                    Loading company…
-                </p>
-            </div>
-        );
+        const pendingView =
+            searchParams.get("view") ??
+            (typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("view") : null);
+        if (pendingView !== "local_cloud_sync") {
+            return (
+                <div className="flex min-h-[40vh] items-center justify-center p-4">
+                    <p className="flex items-center gap-2 text-muted-foreground text-sm">
+                        <Loader2 className="h-5 w-5 animate-spin shrink-0" />
+                        Loading company…
+                    </p>
+                </div>
+            );
+        }
     }
 
     const renderActiveView = () => {
@@ -471,6 +498,9 @@ function SettingsPageContent() {
                 ) : null;
             case "devices":
                 return can('configure_company_settings') ? <ManageDevices /> : null;
+            case "local_cloud_sync":
+                // Local Drive sync — owner/admin/viewer sab dekh sakte; join + connect ke liye permission gate nahi.
+                return <LocalCloudSyncSettingsPage />;
             case "app_lock":
                 return <AppLockSettings />;
             case "voucher":
@@ -500,7 +530,7 @@ function SettingsPageContent() {
         }
     };
 
-    if (availableNavItems.length === 0) {
+    if (navItemsForUi.length === 0) {
       let storedCompanyIdPending = false;
       try {
         // Multi-tab refresh: settings loading guard should respect this tab's company override.
@@ -533,9 +563,14 @@ function SettingsPageContent() {
               ) : (
                 <>
                   <p>Please select a company from the header dropdown to manage settings.</p>
-                  <Button variant="outline" onClick={() => router.push("/company")}>
-                    Go to Company
-                  </Button>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:justify-center">
+                    <Button variant="outline" onClick={() => router.push("/company")}>
+                      Go to Company
+                    </Button>
+                    <Button onClick={() => router.push(settingsViewHref("local_cloud_sync"))}>
+                      Google Drive sync
+                    </Button>
+                  </div>
                 </>
               )}
             </CardContent>

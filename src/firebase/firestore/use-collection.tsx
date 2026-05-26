@@ -11,6 +11,7 @@ import {
 } from 'firebase/firestore';
 import { errorEmitter } from '@/firebase/error-emitter';
 import { FirestorePermissionError } from '@/firebase/errors';
+import { isLocalOnlyMode } from '@/lib/localMode';
 
 /** Utility type to add an 'id' field to a given type T. */
 export type WithId<T> = T & { id: string };
@@ -91,6 +92,29 @@ export function useCollection<T = any>(
           setIsLoading(false);
           return; // Don't emit error, Firebase will use cached data
         }
+
+        const errCode = String(error?.code ?? "");
+        const isPermissionDenied =
+          errCode === "permission-denied" ||
+          errCode === "PERMISSION_DENIED" ||
+          String(error?.message ?? "").toLowerCase().includes("missing or insufficient permissions");
+
+        if (!isPermissionDenied) {
+          setError(error);
+          setIsLoading(false);
+          return;
+        }
+
+        // Local-only: Firestore deny expected — global popup / overlay mat chalao.
+        if (isLocalOnlyMode()) {
+          const pathHint =
+            memoizedTargetRefOrQuery.type === 'collection'
+              ? (memoizedTargetRefOrQuery as CollectionReference).path
+              : (memoizedTargetRefOrQuery as unknown as InternalQuery)._query.path.canonicalString();
+          console.warn('[useCollection] Firestore permission denied in local mode:', pathHint);
+          setIsLoading(false);
+          return;
+        }
         
         // This logic extracts the path from either a ref or a query
         const path: string =
@@ -107,7 +131,7 @@ export function useCollection<T = any>(
         setData(null)
         setIsLoading(false)
 
-        // trigger global error propagation
+        // User-friendly popup — FirebaseErrorListener (runtime overlay nahi).
         errorEmitter.emit('permission-error', contextualError);
       }
     );

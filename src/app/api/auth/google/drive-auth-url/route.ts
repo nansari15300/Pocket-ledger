@@ -1,21 +1,27 @@
 export const runtime = "nodejs";
 
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { verifyBearerUid } from "@/lib/localCloudSync/server/apiAuth";
 import { buildGoogleDriveAuthUrl, type DriveOAuthState } from "@/lib/localCloudSync/server/driveOAuthServer";
+import { driveHostedApiJson, driveHostedApiOptions } from "@/lib/server/driveHostedApiCors";
+
+/** APK/static localhost — CORS preflight (production middleware deploy se pehle bhi chale). */
+export async function OPTIONS(req: NextRequest) {
+  return driveHostedApiOptions(req);
+}
 
 /** Client-safe Drive connect — OAuth URL sirf server par `googleapis` se. */
 export async function POST(req: NextRequest) {
   const auth = await verifyBearerUid(req);
   if ("error" in auth) {
-    return NextResponse.json({ error: auth.error }, { status: auth.status });
+    return driveHostedApiJson(req, { error: auth.error }, auth.status);
   }
 
   const body = (await req.json()) as DriveOAuthState;
   const returnPath = String(body.returnPath || "/company").trim();
   const uid = String(body.uid || auth.uid).trim();
   if (uid !== auth.uid) {
-    return NextResponse.json({ error: "uid mismatch" }, { status: 403 });
+    return driveHostedApiJson(req, { error: "uid mismatch" }, 403);
   }
 
   try {
@@ -25,9 +31,9 @@ export async function POST(req: NextRequest) {
       email: body.email,
       formData: body.formData,
     });
-    return NextResponse.json({ url });
+    return driveHostedApiJson(req, { url });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return driveHostedApiJson(req, { error: msg }, 500);
   }
 }

@@ -21,3 +21,13 @@ export const companyProfileTabsTrigger =
 
 /** Company Profile + Manage Sharing outer card shell */
 export const settingsDetailCardShell = `border border-black ${companyProfilePageBg}`;
+
+/** Cloud sync settings — dashboard tone cards (blue / green / pink / sky) */
+export const cloudSyncProviderCard = "pl-chrome-tone-blue border border-black rounded-md p-3";
+export const cloudSyncEncryptCard = "pl-chrome-tone-emerald border border-black rounded-md p-3 space-y-3";
+export const cloudSyncNepalFolderCard = "pl-chrome-tone-pink border border-black rounded-md p-3 space-y-3";
+export const cloudSyncSharePanelCard = "pl-chrome-tone-sky border border-black rounded-md";
+/** Sync status card — last sync, pending, next sync countdown */
+export const cloudSyncStatusCard = "pl-chrome-tone-blue border border-black rounded-md p-3 space-y-3";
+/** Last sync summary — added / uploaded files & vouchers */
+export const cloudSyncLastSyncSummaryCard = "pl-chrome-tone-amber border border-black rounded-md p-3 space-y-2";

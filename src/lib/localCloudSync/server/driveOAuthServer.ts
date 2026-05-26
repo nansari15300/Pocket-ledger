@@ -21,8 +21,9 @@ export function buildGoogleDriveAuthUrl(state: DriveOAuthState): string {
   const redirectUri = `${appUrl}/api/auth/callback/google`;
   const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
+  // drive.file sirf app-created files — sharedWithMe + shared folder read/write ke liye drive scope chahiye.
   const scopes = [
-    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive",
     "openid",
     "email",
     "profile",
@@ -36,4 +37,16 @@ export function buildGoogleDriveAuthUrl(state: DriveOAuthState): string {
     scope: scopes,
     state: encodedState,
   });
+}
+
+/** OAuth token shard hatao — client Firestore delete rules se block hota hai. */
+export async function deleteGoogleDriveTokensForUser(uid: string): Promise<void> {
+  const { getAdminDb, isFirebaseAdminConfigured } = await import("@/lib/firebaseAdmin");
+  if (!isFirebaseAdminConfigured()) {
+    throw new Error("Firebase Admin not configured for Drive disconnect");
+  }
+  const id = String(uid || "").trim();
+  if (!id) throw new Error("uid required");
+  const db = getAdminDb();
+  await db.collection("user_tokens").doc(id).collection("google").doc("drive").delete();
 }

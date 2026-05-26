@@ -87,6 +87,46 @@ function readPartyPageUrlState(viewFromUrl: string | null, selectedIdFromUrl: st
   return { view, selectedId };
 }
 
+/** partyPageState.selections — tab click par turant row pick (useEffect wait nahi). */
+function readPartyPageSelectionsFromStorage(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem("partyPageState");
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as { selections?: Record<string, string> };
+    return parsed?.selections ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/** Active tab ki list se memory / pehli real row — Overdue default skip. */
+function pickPartyTabSelection(
+  tab: "parties" | "groups",
+  parties: Party[],
+  groups: Group[]
+): Party | Group | null {
+  const items = tab === "parties" ? parties : groups;
+  if (items.length === 0) return null;
+  const remembered = readPartyPageSelectionsFromStorage()[tab];
+  if (remembered) {
+    const found = items.find((i) => i.id === remembered);
+    if (found) return found;
+  }
+  return items.find((i) => i.id !== OVERDUE_ACCOUNT_ID) ?? items[0] ?? null;
+}
+
+function partyTabCanonicalHref(tab: "parties" | "groups", item: { id: string } | null): string {
+  const base = masterDetailListHref("party");
+  if (!item) return tab === "groups" ? `${base}?view=groups` : base;
+  if (tab === "groups") {
+    return `${base}?view=groups&selected=${encodeURIComponent(item.id)}`;
+  }
+  if (item.id === OVERDUE_ACCOUNT_ID) {
+    return `${base}?selected=${encodeURIComponent(OVERDUE_ACCOUNT_ID)}`;
+  }
+  return `${base}?selected=${encodeURIComponent(item.id)}`;
+}
+
 function PartyPageContent() {
   const { user } = useAuth();
   // Pehle company context: warna vouchersLoading false ho kar khali list flash, phir company aate hi dubara paint (Poora page jump).
@@ -504,10 +544,9 @@ function PartyPageContent() {
 
     if (!selectedId) {
       if (view === "groups") {
-        // Sirf tab switch par selection clear — groups auto-select (usePageMemory) na todho
+        // Sirf tab align — selection tab handler / usePageMemory; null se list flash mat karo
         if (currentActiveView !== "groups") {
           setActiveView("groups");
-          setSelected(null);
         }
       } else if (currentActiveView !== "parties") {
         setActiveView("parties");
@@ -616,22 +655,16 @@ function PartyPageContent() {
     setSelected(null);
   }, [pageDataLoading, activeView, selected?.id, processedGroups, setSelected]);
 
+  /** Tab switch — turant list row select (null + useEffect = 1–7s random delay fix). */
   const handlePartyGroupsTabChange = useCallback(
     (value: string) => {
-      const tab = value === "groups" ? "groups" : "parties";
+      const tab: "parties" | "groups" = value === "groups" ? "groups" : "parties";
+      const nextSelected = pickPartyTabSelection(tab, partiesForPageMemory, processedGroups);
+      suppressPartyListRestoreRef.current = false;
+      pendingPartySelectIdRef.current = nextSelected?.id ?? null;
       setActiveView(tab);
-      setSelected(null);
-      try {
-        const raw = localStorage.getItem("partyPageState");
-        const parsed = raw ? JSON.parse(raw) : { selections: {} };
-        parsed.activeView = tab;
-        localStorage.setItem("partyPageState", JSON.stringify(parsed));
-      } catch {
-        /* ignore */
-      }
-      const base = masterDetailListHref("party");
-      const href = tab === "groups" ? `${base}?view=groups` : base;
-      // replaceState: URL se view/selected hatao — stale useSearchParams se dubara groups/group restore na ho
+      setSelected(nextSelected);
+      const href = partyTabCanonicalHref(tab, nextSelected);
       if (typeof window !== "undefined") {
         try {
           window.history.replaceState(window.history.state, "", href);
@@ -639,8 +672,22 @@ function PartyPageContent() {
           /* ignore */
         }
       }
+      if (useQueryNav) {
+        router.replace(href, { scroll: false });
+      }
+      try {
+        const raw = localStorage.getItem("partyPageState");
+        const parsed = raw ? JSON.parse(raw) : { selections: {} };
+        parsed.activeView = tab;
+        if (nextSelected?.id) {
+          parsed.selections = { ...(parsed.selections ?? {}), [tab]: nextSelected.id };
+        }
+        localStorage.setItem("partyPageState", JSON.stringify(parsed));
+      } catch {
+        /* ignore */
+      }
     },
-    [setSelected]
+    [partiesForPageMemory, processedGroups, setActiveView, setSelected, useQueryNav, router]
   );
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
@@ -698,10 +745,13 @@ function PartyPageContent() {
     });
   }, [vouchers, userNames, fetchUserName]);
 
-  // Clear search when company changes (prevent email/other data from carrying over)
+  // Company switch: search + detail selection reset — purani company ki party list/detail na dikhe.
   useEffect(() => {
     setSearchTerm("");
-  }, [companyId]);
+    setSelected(null);
+    pendingPartySelectIdRef.current = null;
+    suppressPartyListRestoreRef.current = true;
+  }, [companyId, setSelected]);
   useEffect(() => {
     setShowOnlyPartiesWithPendingApproval(false);
     setShowOnlyPartyGroupsWithPendingApproval(false);

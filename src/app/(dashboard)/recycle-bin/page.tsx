@@ -46,9 +46,9 @@ import {
     getLocalCompanyById,
     listLocalCompanies,
     localCompanyRowIsDeleted,
-    removeLocalCompanyById,
     upsertLocalCompany,
 } from "@/lib/localCompanyStore";
+import { permanentDeleteLocalCompanyWithDriveCleanup } from "@/lib/localCloudSync/driveCompanyFolderLifecycle";
 import { coerceDeletedAtToDate } from "@/lib/coerceDeletedAt";
 import { finalizeCompanyPermanentDeleteOnServer } from "@/lib/recycleBinCompanyFirestoreFinalize";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
@@ -889,7 +889,9 @@ function RecycleBinContent() {
                     } catch {
                         /* optional cloud row / rules — SQLite hataana zaroori */
                     }
-                    await removeLocalCompanyById(resolvedItem.id, { firebaseUid: user?.uid ?? null });
+                    await permanentDeleteLocalCompanyWithDriveCleanup(resolvedItem.id, {
+                        firebaseUid: user?.uid ?? null,
+                    });
                     removeDeletedItemFromState(resolvedItem);
                     reloadLocalCompanyRegistry();
                     toast({
@@ -904,7 +906,9 @@ function RecycleBinContent() {
                     // Pehle Firestore (cloud row ab bhi `isDeleted` ke saath ho sakta hai) — warna refresh par mirror SQLite me wapas bhar deta hai.
                     const fin = await finalizeCompanyPermanentDeleteOnServer(resolvedItem.id, quickDelete, user?.uid || "");
                     if (fin.ok === false) throw new Error(fin.error);
-                    await removeLocalCompanyById(resolvedItem.id, { firebaseUid: user?.uid ?? null });
+                    await permanentDeleteLocalCompanyWithDriveCleanup(resolvedItem.id, {
+                        firebaseUid: user?.uid ?? null,
+                    });
                     removeDeletedItemFromState(resolvedItem);
                     reloadLocalCompanyRegistry();
                     toast({ title: "Deleted permanently", description: `"${resolvedItem.name}" has been removed from your recycle bin.` });
@@ -1012,7 +1016,7 @@ function RecycleBinContent() {
                         setIsProcessing(false);
                         return;
                     }
-                    await removeLocalCompanyById(cid, { firebaseUid: user?.uid ?? null });
+                    await permanentDeleteLocalCompanyWithDriveCleanup(cid, { firebaseUid: user?.uid ?? null });
                 }
                 if (companyIds.length > 0) {
                     reloadLocalCompanyRegistry();
@@ -1032,7 +1036,7 @@ function RecycleBinContent() {
                 return;
             }
 
-            // Local-only me `removeLocalCompanyById` pehle ho chuka — `companies/*` Firestore delete loop dobara mat chalao.
+            // Local-only me SQLite+Drive cleanup pehle ho chuka — `companies/*` Firestore delete loop dobara mat chalao.
             const firestoreCompanyIds = isLocalOnlyMode() ? [] : companyIds;
 
             if (quickDelete) {
@@ -1048,7 +1052,7 @@ function RecycleBinContent() {
                         } catch {
                             /* ignore */
                         }
-                        await removeLocalCompanyById(cid, { firebaseUid: user?.uid ?? null });
+                        await permanentDeleteLocalCompanyWithDriveCleanup(cid, { firebaseUid: user?.uid ?? null });
                         continue;
                     }
                     const fin = await finalizeOwnerDeletedCompanyOnline(cid, user, true);
@@ -1088,7 +1092,7 @@ function RecycleBinContent() {
                         } catch {
                             /* ignore */
                         }
-                        await removeLocalCompanyById(cid, { firebaseUid: user?.uid ?? null });
+                        await permanentDeleteLocalCompanyWithDriveCleanup(cid, { firebaseUid: user?.uid ?? null });
                         continue;
                     }
                     const fin = await finalizeOwnerDeletedCompanyOnline(cid, user, false);

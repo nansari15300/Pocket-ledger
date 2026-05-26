@@ -4,7 +4,9 @@ import admin from "firebase-admin";
 import { NextRequest } from "next/server";
 import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebaseAdmin";
 
-export async function verifyBearerUid(req: NextRequest): Promise<{ uid: string } | { error: string; status: number }> {
+export async function verifyBearerUid(
+  req: NextRequest
+): Promise<{ uid: string; email: string | null } | { error: string; status: number }> {
   if (!isFirebaseAdminConfigured()) {
     return { error: "Firebase Admin not configured", status: 503 };
   }
@@ -14,7 +16,7 @@ export async function verifyBearerUid(req: NextRequest): Promise<{ uid: string }
   getAdminDb();
   try {
     const decoded = await admin.auth().verifyIdToken(token);
-    return { uid: decoded.uid };
+    return { uid: decoded.uid, email: decoded.email ?? null };
   } catch {
     return { error: "Invalid auth token", status: 401 };
   }
