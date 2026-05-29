@@ -5,7 +5,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useCa
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "./useAuth";
 import { onSnapshot, collection, query, where, Timestamp, getDocs, doc, getDoc } from "firebase/firestore";
-import { auth, firestore } from "@/lib/firebase";
+import { auth, firestore, syncEmbeddedFirestoreTransportFromNavigator } from "@/lib/firebase";
 import type { PermissionConfig } from "./usePermissions";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import {
@@ -1205,9 +1205,51 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     };
   }, [user, normalizeLocalCompany, isSuperAdminUser, performLocalRegistryFirestoreMirror]);
 
+  /**
+   * Static/APK login: pehle Firestore network on, phir SQLite cache + getDocs fallback.
+   * Sirf listener par mat chhodo — fresh install par cache khali + network race = "no company".
+   */
+  useEffect(() => {
+    if (!embeddedClientUsesFirestoreCompanyList()) return;
+    if (!user?.uid || !user?.email || authLoading) return;
+
+    let cancelled = false;
+    void syncEmbeddedFirestoreTransportFromNavigator();
+
+    void (async () => {
+      try {
+        const rawLocals = await listLocalCompanies();
+        if (cancelled) return;
+        const normalizedLocalCompanies = rawLocals
+          .map((c) => normalizeLocalCompany(c as unknown as Company))
+          .filter(isCompanyVisibleInMainApp);
+        if (normalizedLocalCompanies.length > 0) {
+          latestLocalNormalizedCompaniesRef.current = normalizedLocalCompanies;
+          const filteredFast = filterSharedOnlyCompaniesForSuperAdminInMainApp(
+            normalizedLocalCompanies,
+            user,
+            isSuperAdminUser,
+            pathnameRef.current
+          );
+          setAllCompanies(filteredFast);
+          setLoading(false);
+        }
+      } catch {
+        /* SQLite read fail — niche Firestore mirror try karega */
+      }
+
+      if (cancelled) return;
+      await performLocalRegistryFirestoreMirror({ mode: "immediate-empty" }).catch(() => {});
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.uid, user?.email, authLoading, normalizeLocalCompany, isSuperAdminUser, performLocalRegistryFirestoreMirror]);
+
   // `reloadLocalCompanyRegistry` bump: turant Firestore mirror (Stripe/demote) + deferred timer cancel taaki double-sync na ho.
   useEffect(() => {
-    if (!isLocalOnlyMode() || embeddedClientUsesFirestoreCompanyList()) return;
+    if (!isLocalOnlyMode() && !embeddedClientUsesFirestoreCompanyList()) return;
     if (lastLocalRegistryEpochForMirrorRef.current === null) {
       lastLocalRegistryEpochForMirrorRef.current = localRegistryEpoch;
       return;
