@@ -9,7 +9,7 @@ import { readCloudSyncConfigFromCompany, shouldUseLocalCloudSync } from "@/lib/l
 import { purgeAllLocalCompaniesMissingOnDrive } from "@/lib/localCloudSync/driveCompanyFolderLifecycle";
 import { runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
 import { logLocalCloudSync } from "@/lib/localCloudSync/logger";
-import { MIN_CLOUD_SYNC_TICK_MS } from "@/lib/localCloudSync/types";
+import { CLOUD_SYNC_POKE_EVENT, MIN_CLOUD_SYNC_TICK_MS } from "@/lib/localCloudSync/types";
 import { hasRealFirebaseAuthSession, waitForFirebaseAuthReady } from "@/lib/firebaseAuthForApi";
 
 /** Har MIN tick: enabled companies — har company ka apna interval (10–60 sec). */
@@ -24,6 +24,29 @@ export function LocalCompanyCloudSyncManager() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    const runCycleForCompany = async (companyId: string) => {
+      if (!companyId || runningRef.current) return;
+      if (typeof navigator !== "undefined" && !navigator.onLine) return;
+      await waitForFirebaseAuthReady();
+      if (!hasRealFirebaseAuthSession()) return;
+      if (!(await shouldUseLocalCloudSync(companyId))) return;
+      runningRef.current = true;
+      try {
+        lastRunByCompanyRef.current.set(companyId, Date.now());
+        await runLocalCloudSyncCycle(companyId, { force: true });
+      } catch (e) {
+        logLocalCloudSync("poke sync error", e);
+      } finally {
+        runningRef.current = false;
+      }
+    };
+
+    const onPoke = (ev: Event) => {
+      const cid = String((ev as CustomEvent<{ companyId?: string }>).detail?.companyId || "").trim();
+      if (cid) void runCycleForCompany(cid);
+    };
+    window.addEventListener(CLOUD_SYNC_POKE_EVENT, onPoke);
 
     const tick = async () => {
       if (runningRef.current) return;
@@ -71,7 +94,10 @@ export function LocalCompanyCloudSyncManager() {
 
     void tick();
     const id = window.setInterval(() => void tick(), MIN_CLOUD_SYNC_TICK_MS);
-    return () => window.clearInterval(id);
+    return () => {
+      window.removeEventListener(CLOUD_SYNC_POKE_EVENT, onPoke);
+      window.clearInterval(id);
+    };
   }, [company?.id, clearCompanyId, reloadLocalCompanyRegistry, toast, user?.uid]);
 
   return null;

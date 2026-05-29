@@ -30,6 +30,25 @@ function isLoopbackBillingOrigin(origin: string): boolean {
   }
 }
 
+/** Windows: `localhost` kabhi IPv6 `[::1]` par static export pakad leta hai — dev API `127.0.0.1` par chale. */
+function normalizeDevLoopbackBillingOrigin(origin: string): string {
+  const normalized = normalizeBillingOrigin(origin);
+  if (typeof process !== "undefined" && process.env.NODE_ENV !== "development") {
+    return normalized;
+  }
+  try {
+    const withScheme = /^https?:\/\//i.test(normalized) ? normalized : `http://${normalized}`;
+    const u = new URL(withScheme);
+    if (u.hostname.toLowerCase() === "localhost") {
+      u.hostname = "127.0.0.1";
+      return normalizeBillingOrigin(u.origin);
+    }
+  } catch {
+    /* fall through */
+  }
+  return normalized;
+}
+
 /** Billing API ka base URL (trailing slash strip) — khali ho to same-origin relative paths (dev full Next). */
 export function getBillingApiBaseOrigin(): string {
   // Capacitor APK — `.env.local` me `localhost:3000` bake ho to bhi pocket-ledger.com par jao.
@@ -42,8 +61,16 @@ export function getBillingApiBaseOrigin(): string {
   const staticBundle =
     typeof process !== "undefined" && process.env.NEXT_PUBLIC_STATIC_BUILD === "1";
 
-  // Dev (`npm run dev`) + `.env.local` localhost — same-origin API; APK fix yahan mat lagao (Capacitor + build-static.js alag).
-  if (fromEnv) return normalizeBillingOrigin(fromEnv);
+  // Dev (`npm run dev`) + `.env.local` localhost — 127.0.0.1 par API (IPv6/static port clash avoid).
+  // Production `next build` me localhost env ignore — galat bake na ho.
+  if (fromEnv) {
+    if (typeof process !== "undefined" && process.env.NODE_ENV === "development") {
+      return normalizeDevLoopbackBillingOrigin(fromEnv);
+    }
+    if (!isLoopbackBillingOrigin(fromEnv)) {
+      return normalizeBillingOrigin(fromEnv);
+    }
+  }
 
   // Static export / APK bundle (production build) — hosted API; dev mode me niche "" → same-origin fallback.
   if (staticBundle && typeof process !== "undefined" && process.env.NODE_ENV !== "development") {
@@ -71,7 +98,8 @@ export function resolveHostedApiAbsoluteUrl(apiPathOrUrl: string): string {
   let origin = getBillingApiBaseOrigin();
   // Full Next dev / production same-origin — env khali ho to current page origin (localhost ya pocket-ledger.com).
   if (!origin && typeof window !== "undefined" && window.location?.origin) {
-    origin = normalizeBillingOrigin(window.location.origin);
+    // Browser same-origin fallback — dev me localhost hostname ko 127.0.0.1 par map karo.
+    origin = normalizeDevLoopbackBillingOrigin(window.location.origin);
   }
   if (!origin) {
     origin = normalizeBillingOrigin(POCKET_LEDGER_HOSTED_API_ORIGIN);

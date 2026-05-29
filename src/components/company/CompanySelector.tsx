@@ -40,6 +40,7 @@ import { doc, getDoc } from "firebase/firestore";
 import { auth, firestore } from "@/lib/firebase";
 import { useEmbeddedLogout } from "@/contexts/EmbeddedLogoutContext";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { embeddedClientUsesFirestoreCompanyList } from "@/lib/planSyncClientPolicy";
 import { maybeMarkEmbeddedPendingCompanyDataWarm } from "@/lib/embeddedPendingCompanyWarm";
 import {
   shouldPromptCompanyUnlock,
@@ -184,7 +185,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
       });
     };
 
-    if (isLocalOnlyMode()) {
+    if (isLocalOnlyMode() && !embeddedClientUsesFirestoreCompanyList()) {
       const map = new Map<string, CompanyData>();
       mergeIntoMap(map, contextCompanies || []);
       setCompanies(Array.from(map.values()));
@@ -805,12 +806,20 @@ export function CompanyActions({
   const [rememberUnlockDays, setRememberUnlockDays] = useState(0);
   const [rememberSharedUsername, setRememberSharedUsername] = useState(false);
 
-  const activeCompany = companies.find(c => c.id === companyId) || companies[0];
+  const activeCompany =
+    (companyId ? companies.find((c) => c.id === companyId) : null) ||
+    (companyId ? null : companies[0]) ||
+    companies[0];
 
   useEffect(() => {
     // Multi-tab: keep tab-specific selection stable; auto-pick first only when no saved company exists anywhere.
     if (!companyId && companies.length > 0 && !hasAnySelectedCompanyId()) {
-      setCompanyId(companies[0].id);
+      const sorted = [...companies].sort((a, b) => {
+        const nameCmp = String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" });
+        if (nameCmp !== 0) return nameCmp;
+        return String(a.id || "").localeCompare(String(b.id || ""));
+      });
+      setCompanyId(sorted[0]!.id);
     }
   }, [companyId, companies, setCompanyId]);
 

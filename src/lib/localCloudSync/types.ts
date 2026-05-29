@@ -50,6 +50,9 @@ export type CloudSyncIntervalSec = (typeof CLOUD_SYNC_INTERVAL_SEC_OPTIONS)[numb
 export const DEFAULT_CLOUD_SYNC_INTERVAL_SEC: CloudSyncIntervalSec = 30;
 export const MIN_CLOUD_SYNC_TICK_MS = 10_000;
 
+/** Save/edit ke baad turant sync — `enqueueFromWrite` dispatch, manager listen. */
+export const CLOUD_SYNC_POKE_EVENT = "pl-cloud-sync-poke";
+
 /** Drive folder share row — Drive par hamesha writer; appRole company permissions ke liye. */
 export type CloudSyncDriveShareUser = {
   email: string;

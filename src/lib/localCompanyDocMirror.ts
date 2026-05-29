@@ -17,6 +17,7 @@ import { firestore } from "@/lib/firebase";
 import { clearBrowserDbCache, getBrowserDb } from "@/lib/localSqlite";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { shouldUseLocalCloudSync } from "@/lib/localCloudSync/companyConfig";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { decryptFirestoreCompanyDocIfNeeded, isEncryptedServerBackupDoc } from "@/lib/serverBackupEncryption";
 import { stampLocalMirrorBackedByFirestore } from "@/lib/localMirrorServerMeta";
@@ -44,6 +45,40 @@ export function notifyBrowserDbCollectionUpdated(companyId: string, collectionNa
  */
 function shouldMirrorToBrowserDb(): boolean {
   return isLocalOnlyMode() || apkEmbeddedSqliteFirstWritesPreferred();
+}
+
+/** Pure-local + Drive sync: SQLite mirror band ho to bhi delta queue ke liye likho (web Firebase mode fix). */
+async function shouldPersistCompanyDocToBrowserDb(
+  companyId: string,
+  options?: UpsertCompanyBrowserOptions
+): Promise<boolean> {
+  if (options?.force === true) return true;
+  if (shouldMirrorToBrowserDb()) return true;
+  try {
+    return await shouldUseLocalCloudSync(companyId);
+  } catch {
+    return false;
+  }
+}
+
+/** SQLite write ke baad cloud_sync_outbox — retry path me bhi call karo. */
+async function enqueueCloudSyncDeltaAfterMirrorWrite(input: {
+  companyId: string;
+  collectionName: string;
+  docId: string;
+  data: Record<string, unknown>;
+  skipCloudSyncEnqueue?: boolean;
+}): Promise<void> {
+  if (input.skipCloudSyncEnqueue === true) return;
+  const { maybeEnqueueLocalCloudSyncFromWrite } = await import("@/lib/localCloudSync/enqueueFromWrite");
+  const { inferCloudSyncActionFromPayload } = await import("@/lib/localCloudSync/conflict");
+  await maybeEnqueueLocalCloudSyncFromWrite({
+    companyId: input.companyId,
+    collectionName: input.collectionName,
+    docId: input.docId,
+    data: input.data,
+    operation: inferCloudSyncActionFromPayload(input.data, "update"),
+  });
 }
 
 const MIRROR_SQLITE_ERROR_WINDOW_MS = 30_000;
@@ -397,7 +432,8 @@ export async function upsertCompanyDocInBrowserDb(
   data: Record<string, unknown>,
   options?: UpsertCompanyBrowserOptions
 ): Promise<void> {
-  if ((!options?.force && !shouldMirrorToBrowserDb()) || !companyId || !collectionName || !docId) return;
+  if (!companyId || !collectionName || !docId) return;
+  if (!(await shouldPersistCompanyDocToBrowserDb(companyId, options))) return;
   if (shouldSkipMirrorWritesNow()) return;
   const shouldNotify = options?.notify !== false;
   try {
@@ -419,17 +455,13 @@ export async function upsertCompanyDocInBrowserDb(
     ).run(companyId, collectionName, docId, json, now);
     await upsertVoucherProjection(companyId, collectionName, docId, data);
     // Local-company Drive/Dropbox delta queue (Firestore `sync_outbox` se alag)
-    if (options?.skipCloudSyncEnqueue !== true) {
-      const { maybeEnqueueLocalCloudSyncFromWrite } = await import("@/lib/localCloudSync/enqueueFromWrite");
-      const { inferCloudSyncActionFromPayload } = await import("@/lib/localCloudSync/conflict");
-      void maybeEnqueueLocalCloudSyncFromWrite({
-        companyId,
-        collectionName,
-        docId,
-        data,
-        operation: inferCloudSyncActionFromPayload(data),
-      });
-    }
+    await enqueueCloudSyncDeltaAfterMirrorWrite({
+      companyId,
+      collectionName,
+      docId,
+      data,
+      skipCloudSyncEnqueue: options?.skipCloudSyncEnqueue,
+    });
     // Single-write paths: bump UI; Firestore snapshot batches pass notify false (React already has fresh state).
     if (shouldNotify) notifyBrowserDbCollectionUpdated(companyId, collectionName);
   } catch (e) {
@@ -451,6 +483,13 @@ export async function upsertCompanyDocInBrowserDb(
             )
             .run(companyId, collectionName, docId, retryJson, now);
           await upsertVoucherProjection(companyId, collectionName, docId, data);
+          await enqueueCloudSyncDeltaAfterMirrorWrite({
+            companyId,
+            collectionName,
+            docId,
+            data,
+            skipCloudSyncEnqueue: options?.skipCloudSyncEnqueue,
+          });
           if (shouldNotify) notifyBrowserDbCollectionUpdated(companyId, collectionName);
           return;
         }

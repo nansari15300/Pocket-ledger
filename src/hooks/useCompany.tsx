@@ -56,6 +56,7 @@ import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import {
   embeddedClientRequiresServerPlanSyncWhenOnline,
+  embeddedClientUsesFirestoreCompanyList,
   shouldSkipPeriodicPlanSyncForLocalOnlyMode,
 } from "@/lib/planSyncClientPolicy";
 import { shouldSkipEmbeddedStartupAuthChurn } from "@/lib/embeddedWarmBootstrapFlags";
@@ -673,7 +674,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     clearSelectedCompanyId();
     setCompanyIdState(null);
     setCompany(null);
-    setAllCompanies([]);
+    // Poori company list mat hatao — mirror/list reload par auto-select [0] flicker + rapid switch hota tha.
   }, []);
 
   const setCompanyId = useCallback((newCompanyId: string) => {
@@ -1127,9 +1128,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- burst sirf company switch par
   }, [companyId, user?.uid, authLoading]);
 
-  // Local-only: turant sirf SQLite se list + selected row; defer mirror default 90s, static/APK/`build:static` par ~1.6s (shared jaldi dikhen).
+  // Local-only (pure web): turant sirf SQLite se list; static/APK Firestore listener path use karta hai — yahan mat chalao.
   useEffect(() => {
-    if (!isLocalOnlyMode()) return;
+    if (!isLocalOnlyMode() || embeddedClientUsesFirestoreCompanyList()) return;
     let cancelled = false;
     if (deferredLocalRegistryMirrorTimerRef.current) {
       clearTimeout(deferredLocalRegistryMirrorTimerRef.current);
@@ -1137,7 +1138,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     }
 
     void (async () => {
-      if (companyId) setLoading(true);
+      const liveCompanyId = companyIdLiveRef.current;
+      if (liveCompanyId) setLoading(true);
       let needImmediateFullMirror = false;
       try {
         const rawLocals = await listLocalCompanies();
@@ -1160,12 +1162,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         });
         setAllCompanies(filteredFast);
 
-        if (!companyId) {
+        if (!liveCompanyId) {
           setCompany(null);
           setLoading(false);
           needImmediateFullMirror = normalizedLocalCompanies.length === 0 && !!user?.uid && !!user?.email;
         } else {
-          const sel = await getLocalCompanyById(companyId);
+          const sel = await getLocalCompanyById(liveCompanyId);
           if (cancelled) return;
           if (!sel) {
             needImmediateFullMirror = true;
@@ -1176,7 +1178,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           setLoading(false);
         }
       } catch {
-        if (companyId) setCompany(null);
+        if (companyIdLiveRef.current) setCompany(null);
         setLoading(false);
         needImmediateFullMirror = !!user?.uid && !!user?.email;
       }
@@ -1201,11 +1203,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         deferredLocalRegistryMirrorTimerRef.current = null;
       }
     };
-  }, [user, companyId, normalizeLocalCompany, isSuperAdminUser, performLocalRegistryFirestoreMirror]);
+  }, [user, normalizeLocalCompany, isSuperAdminUser, performLocalRegistryFirestoreMirror]);
 
   // `reloadLocalCompanyRegistry` bump: turant Firestore mirror (Stripe/demote) + deferred timer cancel taaki double-sync na ho.
   useEffect(() => {
-    if (!isLocalOnlyMode()) return;
+    if (!isLocalOnlyMode() || embeddedClientUsesFirestoreCompanyList()) return;
     if (lastLocalRegistryEpochForMirrorRef.current === null) {
       lastLocalRegistryEpochForMirrorRef.current = localRegistryEpoch;
       return;
@@ -1378,7 +1380,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   }, [user?.uid, user?.email, normalizeLocalCompany, isSuperAdminUser]);
 
   useEffect(() => {
-    if (isLocalOnlyMode()) {
+    // Static/APK: Firebase company list chalao — sirf pure web local-only me listeners band.
+    if (isLocalOnlyMode() && !embeddedClientUsesFirestoreCompanyList()) {
       // Local-only mode: Firebase company listeners disable (no server dependency).
       return;
     }
@@ -1472,9 +1475,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     }
 }, [user?.email, user?.uid, authLoading, isSuperAdmin, handleSnapshotUpdate, registryVersion]);
 
-  /** Chuni gayi company par direct doc snapshot — collection+SQLite merge se settings live na aane ki gap band (khula voucher + doosra tab/admin). */
+  /** Chuni gayi company par direct doc snapshot — static/APK bhi online firebase companies ke liye chalao. */
   useEffect(() => {
-    if (isLocalOnlyMode()) return;
+    if (isLocalOnlyMode() && !embeddedClientUsesFirestoreCompanyList()) return;
     if (!companyId?.trim() || !user?.uid) return;
 
     let cancelled = false;
@@ -1608,7 +1611,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
     // Online shared: khali list par bhi grace (sidebar nav)
     let graceMs = allCompanies.length === 0 ? 0 : 2000;
-    if (user?.uid && !isLocalOnlyMode()) {
+    if (user?.uid && (!isLocalOnlyMode() || embeddedClientUsesFirestoreCompanyList())) {
       graceMs = allCompanies.length === 0 ? LIST_RECOVERY_ONLINE_EMPTY_GRACE_MS : LIST_RECOVERY_ONLINE_NONEMPTY_GRACE_MS;
     }
     if (Date.now() - mountedAtRef.current < graceMs) return;
@@ -1661,7 +1664,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         return;
       }
       // Shared user: SQLite mirror baad me — Firestore doc se recover + upsert (sidebar /company clear kam)
-      if (!localRow && user?.uid && !isLocalOnlyMode()) {
+      if (!localRow && user?.uid && (!isLocalOnlyMode() || embeddedClientUsesFirestoreCompanyList())) {
         try {
           const snap = await getDoc(doc(firestore, "companies", companyId));
           if (snap.exists()) {
@@ -1710,10 +1713,15 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     if (!allCompanies || allCompanies.length === 0) return;
     const livePath = normalizeAppPath(getBrowserPathname());
     if (pathExemptFromAutoSelectCompanyPush(livePath)) return;
-    // Fallback auto-select: companyId race me missing rahe to tab-click ka wait na ho.
-    setCompanyId(allCompanies[0].id);
+    // Stable order — list merge par [0] badalne se rapid company switch na ho.
+    const sorted = [...allCompanies].sort((a, b) => {
+      const nameCmp = String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" });
+      if (nameCmp !== 0) return nameCmp;
+      return String(a.id || "").localeCompare(String(b.id || ""));
+    });
+    setCompanyId(sorted[0]!.id);
     plNavDbg("useCompany.autoSelectFirstCompany (companyId was null)", {
-      firstHint: plNavDbgIdHint(allCompanies[0].id),
+      firstHint: plNavDbgIdHint(sorted[0]!.id),
       listLen: allCompanies.length,
     });
   }, [companyId, allCompanies, setCompanyId, user, loading, authLoading]);

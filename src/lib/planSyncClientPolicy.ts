@@ -26,3 +26,11 @@ export function shouldSkipPeriodicPlanSyncForLocalOnlyMode(isLocalOnly: boolean)
   // Static/native embedded clients: local SQLite par bhi server plan sync mandatory jab online ho.
   return !embeddedClientRequiresServerPlanSyncWhenOnline();
 }
+
+/**
+ * Static/APK/Capacitor: Firebase company list + realtime sync chalao — Drive/Dropbox sirf storage option hai,
+ * pehle se Firestore wali companies dikhni/sync honi chahiye (`isLocalOnlyMode` SQLite path se alag).
+ */
+export function embeddedClientUsesFirestoreCompanyList(): boolean {
+  return embeddedClientRequiresServerPlanSyncWhenOnline();
+}

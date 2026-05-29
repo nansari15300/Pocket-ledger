@@ -11,6 +11,7 @@ import { collection, query, where, onSnapshot, getDoc, doc, DocumentData } from 
 import { auth, firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { embeddedClientUsesFirestoreCompanyList } from "@/lib/planSyncClientPolicy";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { registerCompanyPickerFirestoreDetach } from "@/lib/companyPickerFirestoreDetach";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
@@ -69,8 +70,8 @@ function SelectCompanyPageContent() {
   const [isCreateCompanyDialogOpen, setIsCreateCompanyDialogOpen] = useState(false);
 
   useEffect(() => {
-    // Local-only: page-level Firestore listeners skip — data companyContextLoading + contextCompanies se.
-    if (isLocalOnlyMode()) {
+    // Static/APK: Firestore company list — pure web local-only me page-level listeners skip.
+    if (isLocalOnlyMode() && !embeddedClientUsesFirestoreCompanyList()) {
       registerCompanyPickerFirestoreDetach(null);
       return;
     }
@@ -158,7 +159,7 @@ function SelectCompanyPageContent() {
 
   // Online web: SQLite local / Drive-restored companies context se — sirf Firestore listeners se missing the.
   useEffect(() => {
-    if (isLocalOnlyMode()) return;
+    if (isLocalOnlyMode() && !embeddedClientUsesFirestoreCompanyList()) return;
     reloadLocalCompanyRegistry();
     triggerSync();
   }, [reloadLocalCompanyRegistry, triggerSync]);
@@ -200,8 +201,8 @@ function SelectCompanyPageContent() {
   }, [newCompanyId, user?.uid, ownedCompanies, sharedCompanies]);
 
   const allCompanies = useMemo(() => {
-    // Local-first: useCompany context list = local SQLite + optional cloud mirror; isOwned ownerId/email se.
-    if (isLocalOnlyMode()) {
+    // Pure web local-only: useCompany context list; static/APK hybrid Firestore + SQLite merge.
+    if (isLocalOnlyMode() && !embeddedClientUsesFirestoreCompanyList()) {
       const isOwnedByUser = (c: Company) =>
         c.ownerId === user?.uid ||
         (!!c.ownerEmail && !!user?.email && c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
@@ -237,8 +238,8 @@ function SelectCompanyPageContent() {
     return Array.from(companyMap.values());
 }, [ownedCompanies, sharedCompanies, user, newlyCreatedCompany, contextCompanies]);
 
-  // Local: company list hydrate hone tak skeleton (same source as header selector).
-  if (authLoading || (isLocalOnlyMode() ? companyContextLoading : loading)) {
+  // Static/APK: Firestore hydrate; pure web local-only: SQLite context loading.
+  if (authLoading || (isLocalOnlyMode() && !embeddedClientUsesFirestoreCompanyList() ? companyContextLoading : loading)) {
     return (
         <div className="flex min-h-screen items-center justify-center">
             <Card className="w-full max-w-lg">

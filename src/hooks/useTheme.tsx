@@ -2,7 +2,15 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState } from 'react';
-import { DEFAULT_PRIMARY_CLASS, DEFAULT_THEME_CLASS } from "@/lib/proTheme";
+import {
+  PRO_PRIMARY_CLASS,
+  PRO_THEME_CLASS,
+  resolveStoredThemePreference,
+  THEME_DEFAULT_REV,
+  THEME_DEFAULT_REV_KEY,
+  THEME_STORAGE_KEY,
+  PRIMARY_STORAGE_KEY,
+} from "@/lib/proTheme";
 
 type Theme = "theme-pure-white" | "theme-vagawa" | "theme-soft-green" | "theme-dim-soft-green" | "theme-soft-blue" | "theme-sky-blue" | "theme-soft-yellow" | "theme-soft-pink" | "theme-colorfull" | "theme-pro";
 type PrimaryColor = "primary-pure-white" | "primary-vagawa" | "primary-soft-green" | "primary-dim-soft-green" | "primary-soft-blue" | "primary-sky-blue" | "primary-soft-yellow" | "primary-soft-pink" | "primary-colorfull" | "primary-pro";
@@ -18,32 +26,34 @@ type ThemeContextType = {
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
-  // Naya device / localStorage khali: Light theme default — Pro Settings se ON kar sakte hain
-  const [theme, setThemeState] = useState<Theme>(DEFAULT_THEME_CLASS);
-  const [primaryColor, setPrimaryColorState] = useState<PrimaryColor>(DEFAULT_PRIMARY_CLASS);
-  const [isClient, setIsClient] = useState(false);
+  // SSR + first paint: Pro — localStorage read se pehle Light mat likho.
+  const [theme, setThemeState] = useState<Theme>(PRO_THEME_CLASS);
+  const [primaryColor, setPrimaryColorState] = useState<PrimaryColor>(PRO_PRIMARY_CLASS);
+  const [themeHydrated, setThemeHydrated] = useState(false);
 
   useEffect(() => {
-    setIsClient(true);
-    const storedTheme = localStorage.getItem('theme') as Theme;
-    const storedPrimaryColor = localStorage.getItem('primaryColor') as PrimaryColor;
-    if (storedTheme) {
-      setThemeState(storedTheme);
+    const storedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+    const storedPrimary = localStorage.getItem(PRIMARY_STORAGE_KEY);
+    const rev = localStorage.getItem(THEME_DEFAULT_REV_KEY);
+    const resolved = resolveStoredThemePreference(storedTheme, storedPrimary, rev);
+    setThemeState(resolved.theme as Theme);
+    setPrimaryColorState(resolved.primary as PrimaryColor);
+    if (resolved.migrated || rev !== THEME_DEFAULT_REV) {
+      localStorage.setItem(THEME_DEFAULT_REV_KEY, THEME_DEFAULT_REV);
+      localStorage.setItem(THEME_STORAGE_KEY, resolved.theme);
+      localStorage.setItem(PRIMARY_STORAGE_KEY, resolved.primary);
     }
-    if (storedPrimaryColor) {
-      setPrimaryColorState(storedPrimaryColor);
-    }
+    setThemeHydrated(true);
   }, []);
 
   useEffect(() => {
-    if (isClient) {
-      document.body.className = '';
-      // Root layout jaisa typography + theme; sirf theme classes se base Tailwind classes wipe na hon
-      document.body.classList.add("font-body", "antialiased", theme, primaryColor);
-      localStorage.setItem('theme', theme);
-      localStorage.setItem('primaryColor', primaryColor);
-    }
-  }, [theme, primaryColor, isClient]);
+    if (!themeHydrated) return;
+    document.body.className = "";
+    // Root layout jaisa typography + theme; sirf theme classes se base Tailwind classes wipe na hon
+    document.body.classList.add("font-body", "antialiased", theme, primaryColor);
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+    localStorage.setItem(PRIMARY_STORAGE_KEY, primaryColor);
+  }, [theme, primaryColor, themeHydrated]);
 
   const setTheme = (newTheme: Theme) => {
     setThemeState(newTheme);

@@ -61,10 +61,16 @@ async function loadDriveTokens(uid: string): Promise<DriveTokens> {
 }
 
 function oauthClient(tokens: DriveTokens) {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (!clientId || !clientSecret) {
+    throw new Error("Missing GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET");
+  }
   const client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID!,
-    process.env.GOOGLE_CLIENT_SECRET!,
-    `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/callback/google`
+    clientId,
+    clientSecret,
+    `${String(appUrl || "").replace(/\/+$/, "")}/api/auth/callback/google`
   );
   client.setCredentials({
     access_token: tokens.accessToken,

@@ -280,6 +280,16 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     return { ok: false, error: msg, uploaded, downloaded };
   } finally {
     syncLocks.delete(cid);
+    // Crash/abort par UI "syncing" atka reh jata tha — lock release ke baad idle restore.
+    try {
+      const cur = await getCloudSyncCursor(cid);
+      if (cur.syncStatus === "syncing") {
+        await setCloudSyncCursor(cid, { syncStatus: "idle" });
+        await patchLocalCompanyCloudSyncFields(cid, { cloudSyncStatus: "idle" });
+      }
+    } catch {
+      /* ignore */
+    }
   }
 }
 

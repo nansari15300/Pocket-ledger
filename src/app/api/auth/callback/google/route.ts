@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
 import { getAdminDb } from "@/lib/firebaseAdmin";
+import { resolveDriveOAuthAppOrigin } from "@/lib/localCloudSync/server/driveOAuthServer";
 
 type OAuthState = {
   returnPath?: string;
@@ -26,11 +27,7 @@ export async function GET(req: NextRequest) {
   const code = url.searchParams.get("code");
   const stateB64 = url.searchParams.get("state");
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
-  if (!appUrl) {
-    return NextResponse.json({ error: "NEXT_PUBLIC_APP_URL missing" }, { status: 500 });
-  }
-
+  const appUrl = resolveDriveOAuthAppOrigin(req);
   const decoded = decodeState(stateB64);
   const returnPath = decoded?.returnPath || "/company";
 

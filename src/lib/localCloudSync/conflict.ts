@@ -7,6 +7,20 @@ function rowUpdatedAt(payload: Record<string, unknown>): number {
     const n = Date.parse(v);
     if (Number.isFinite(n)) return n;
   }
+  // SQLite/Firestore mirror: `{ seconds }` / `Timestamp` JSON — edit merge ke liye zaroori.
+  if (v && typeof v === "object") {
+    const o = v as { seconds?: number; _seconds?: number; toMillis?: () => number };
+    if (typeof o.toMillis === "function") {
+      try {
+        const ms = o.toMillis();
+        if (typeof ms === "number" && Number.isFinite(ms)) return ms;
+      } catch {
+        /* ignore */
+      }
+    }
+    const sec = typeof o.seconds === "number" ? o.seconds : o._seconds;
+    if (typeof sec === "number" && Number.isFinite(sec)) return sec * 1000;
+  }
   return 0;
 }
 

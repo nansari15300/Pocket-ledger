@@ -57,7 +57,10 @@ export function ThemeSettings({ localOnlyHint }: { localOnlyHint?: boolean }) {
             {themes.map((t) => (
               <div
                 key={t.themeValue}
-                onClick={() => setTheme(t.themeValue as any)}
+                onClick={() => {
+                  setTheme(t.themeValue as any);
+                  setPrimaryColor(t.primaryValue as any);
+                }}
                 className={cn(
                   "cursor-pointer rounded-lg border-2 p-2 flex items-center justify-between",
                   theme === t.themeValue

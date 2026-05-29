@@ -767,115 +767,101 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
           <div className="min-h-0 flex-1" aria-hidden />
         )}
 
-        {/* Footer — sync actions left, Join shared right */}
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-black/10 pt-3 mt-auto">
-          <div className="flex flex-wrap items-center gap-2">
-          {enabled && provider === "google_drive" ? (
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="rounded-full px-4"
-                disabled={busy}
-                onClick={() => void connectDrive()}
-              >
-                Connect account
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="rounded-full px-4"
-                disabled={busy}
-                onClick={() => void disconnectDrive()}
-              >
-                Disconnect
-              </Button>
-            </>
-          ) : null}
+        {/* Footer — mobile/APK: 2 row × 3 column grid (overlap fix) */}
+        <div className="mt-auto shrink-0 border-t border-black/10 pt-3">
           {enabled ? (
-            <>
+            <div className="grid grid-cols-3 gap-2">
+              {provider === "google_drive" ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-10 w-full min-w-0 rounded-lg px-1.5 text-[11px] leading-tight sm:h-9 sm:px-4 sm:text-sm"
+                    disabled={busy}
+                    onClick={() => void connectDrive()}
+                  >
+                    Connect
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-10 w-full min-w-0 rounded-lg px-1.5 text-[11px] leading-tight sm:h-9 sm:px-4 sm:text-sm"
+                    disabled={busy}
+                    onClick={() => void disconnectDrive()}
+                  >
+                    Disconnect
+                  </Button>
+                </>
+              ) : null}
               <Button
                 type="button"
                 size="sm"
-                className="rounded-full px-4"
+                className="h-10 w-full min-w-0 rounded-lg px-1.5 text-[11px] leading-tight sm:h-9 sm:px-4 sm:text-sm"
                 disabled={busy}
                 onClick={() => void forceSync()}
               >
-                {busy ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <RefreshCw className="h-4 w-4 mr-1.5" />}
-                Force sync now
+                {busy ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : "Force sync"}
               </Button>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="rounded-full px-4"
+                className="h-10 w-full min-w-0 rounded-lg px-1.5 text-[11px] leading-tight sm:h-9 sm:px-4 sm:text-sm"
                 disabled={busy}
                 onClick={() => void redownloadFromDrive()}
               >
-                Re-download from Drive
+                Re-download
               </Button>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="rounded-full px-4"
-                disabled={busy || !enabled}
+                className="h-10 w-full min-w-0 rounded-lg px-1.5 text-[11px] leading-tight sm:h-9 sm:px-4 sm:text-sm"
+                disabled={busy}
                 onClick={() => void saveAllCloudSyncSettings()}
               >
-                <Save className="h-4 w-4 mr-1.5" />
-                Save
+                <Save className="mx-auto h-4 w-4" />
+                <span className="sr-only">Save</span>
               </Button>
-              <CloudSyncHelpPopover
-                label="Sync status & actions"
-                hasError={!!status.lastError || localSyntheticAuth}
-                description={
-                  <>
-                    <p>
-                      <strong>Connect account:</strong> link Google Drive on this device for upload/download.
-                    </p>
-                    <p>
-                      <strong>Disconnect:</strong> remove the Drive link from this device (data on Drive stays).
-                    </p>
-                    <p>
-                      <strong>Force sync now:</strong> upload pending changes and download updates from Drive.
-                    </p>
-                    <p>
-                      <strong>Re-download from Drive:</strong> reset sync cursor and pull all operations again (use when
-                      another device has data but this one does not).
-                    </p>
-                    <hr className="border-border my-2" />
-                    <p>
-                      Status: <strong>{status.status}</strong>
-                    </p>
-                    <p>
-                      Pending operations: <strong>{status.pending}</strong>
-                    </p>
-                    <p>
-                      Last sync:{" "}
-                      <strong>
-                        {status.lastSyncAt ? formatDistanceToNow(status.lastSyncAt, { addSuffix: true }) : "never"}
-                      </strong>
-                    </p>
-                    {renderCloudSyncStatusError(status.lastError, localSyntheticAuth)}
-                  </>
-                }
-              />
-            </>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-10 w-full min-w-0 rounded-lg px-1.5 text-[11px] leading-tight sm:h-9 sm:px-4 sm:text-sm"
+                disabled={busy}
+                onClick={() => setJoinOpen(true)}
+              >
+                <Share2 className="mx-auto h-4 w-4" />
+                <span className="sr-only">Join shared</span>
+              </Button>
+              <div className="col-span-3 flex justify-end pt-0.5 sm:col-span-1 sm:col-start-3 sm:pt-0">
+                <CloudSyncHelpPopover
+                  label="Sync status & actions"
+                  hasError={!!status.lastError || localSyntheticAuth}
+                  description={
+                    <>
+                      <p>
+                        <strong>Connect:</strong> link Google Drive on this device.
+                      </p>
+                      <p>
+                        <strong>Force sync:</strong> upload edits + download from Drive (master/voucher changes included).
+                      </p>
+                      <p>
+                        <strong>Re-download:</strong> reset cursor and pull all ops again.
+                      </p>
+                      <hr className="border-border my-2" />
+                      <p>
+                        Status: <strong>{status.status}</strong> · Pending: <strong>{status.pending}</strong>
+                      </p>
+                      {renderCloudSyncStatusError(status.lastError, localSyntheticAuth)}
+                    </>
+                  }
+                />
+              </div>
+            </div>
           ) : null}
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="rounded-full px-4 ml-auto shrink-0"
-            disabled={busy}
-            onClick={() => setJoinOpen(true)}
-          >
-            <Share2 className="mr-2 h-4 w-4" />
-            Join shared local company
-          </Button>
         </div>
       </CardContent>
 

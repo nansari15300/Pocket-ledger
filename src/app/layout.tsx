@@ -41,7 +41,12 @@ export default function RootLayout({
         <meta name="color-scheme" content="light only" />
         <meta name="theme-color" content="#f1f5f9" />
       </head>
-      <body className="font-body antialiased">
+      <body className="font-body antialiased theme-pro primary-pro">
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var R="pl-theme-default-rev",V="2",TK="theme",PK="primaryColor";var rev=localStorage.getItem(R),t=localStorage.getItem(TK),p=localStorage.getItem(PK);if(!rev||rev!==V){if(!t||t==="theme-pure-white"){t="theme-pro";p="primary-pro";}localStorage.setItem(R,V);localStorage.setItem(TK,t);localStorage.setItem(PK,p||"primary-pro");}if(!t){t="theme-pro";p="primary-pro";}document.body.className="font-body antialiased "+t+" "+(p||"primary-pro");}catch(e){}})();`,
+          }}
+        />
         <PocketSerwistProvider>
           <Providers>
             {children}

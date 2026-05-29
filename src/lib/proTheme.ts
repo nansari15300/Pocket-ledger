@@ -8,11 +8,35 @@ import { cn } from "@/lib/utils";
 export const PRO_THEME_CLASS = "theme-pro" as const;
 export const PRO_PRIMARY_CLASS = "primary-pro" as const;
 
-/** Naya install / khali localStorage — Light theme default (Pro band). */
+/** Purana "Default Light" — Settings se choose kar sakte hain; app default Pro hai. */
 export const LIGHT_THEME_CLASS = "theme-pure-white" as const;
 export const LIGHT_PRIMARY_CLASS = "primary-pure-white" as const;
-export const DEFAULT_THEME_CLASS = LIGHT_THEME_CLASS;
-export const DEFAULT_PRIMARY_CLASS = LIGHT_PRIMARY_CLASS;
+
+/** Naya install / khali storage — Pro theme forced default (Light mat bake karo). */
+export const DEFAULT_THEME_CLASS = PRO_THEME_CLASS;
+export const DEFAULT_PRIMARY_CLASS = PRO_PRIMARY_CLASS;
+
+export const THEME_STORAGE_KEY = "theme" as const;
+export const PRIMARY_STORAGE_KEY = "primaryColor" as const;
+/** Default light → pro one-time migrate (`useTheme` + layout boot script). */
+export const THEME_DEFAULT_REV_KEY = "pl-theme-default-rev" as const;
+export const THEME_DEFAULT_REV = "2" as const;
+
+/** localStorage se theme — legacy `theme-pure-white` auto-default ko Pro par migrate. */
+export function resolveStoredThemePreference(
+  storedTheme: string | null,
+  storedPrimary: string | null,
+  rev: string | null
+): { theme: string; primary: string; migrated: boolean } {
+  const legacyLightDefault = !rev || rev !== THEME_DEFAULT_REV;
+  if (legacyLightDefault && (!storedTheme || storedTheme === LIGHT_THEME_CLASS)) {
+    return { theme: PRO_THEME_CLASS, primary: PRO_PRIMARY_CLASS, migrated: true };
+  }
+  if (storedTheme && storedPrimary) {
+    return { theme: storedTheme, primary: storedPrimary, migrated: false };
+  }
+  return { theme: DEFAULT_THEME_CLASS, primary: DEFAULT_PRIMARY_CLASS, migrated: !storedTheme };
+}
 
 /** Settings → Theme picker — pehli row */
 export const PRO_THEME_DISPLAY_NAME = "Pro";

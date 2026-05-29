@@ -1,8 +1,6 @@
-"use client";
-
 import { getBillingApiUrl } from "@/lib/billingApiOrigin";
 import { getFirebaseIdTokenForApi } from "@/lib/firebaseAuthForApi";
-import { hostedApiFetch } from "@/lib/hostedApiFetch";
+import { hostedApiFetch, parseHostedApiResponseJson } from "@/lib/hostedApiFetch";
 
 /** Shared Drive API POST — client modules se duplicate fetch na ho. */
 export async function postDriveJsonViaClient<T>(path: string, body: unknown): Promise<T> {
@@ -15,7 +13,7 @@ export async function postDriveJsonViaClient<T>(path: string, body: unknown): Pr
     },
     body: JSON.stringify(body),
   });
-  const json = (await res.json().catch(() => ({}))) as T & { error?: string };
+  const json = await parseHostedApiResponseJson<T & { error?: string }>(res);
   if (!res.ok) {
     throw new Error(String((json as { error?: string }).error || res.statusText || "Request failed"));
   }

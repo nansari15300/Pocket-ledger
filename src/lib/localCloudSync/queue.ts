@@ -159,12 +159,17 @@ export async function getCloudSyncCursor(companyId: string): Promise<{
   lastLocalOpSeq: number;
   lastSyncedOp: number;
   lastSyncAt: number | null;
+  /** finally block — stuck "syncing" reset ke liye SQLite meta se padho. */
+  syncStatus: string;
+  lastError: string | null;
 }> {
   const meta = await ensureMetaRow(companyId);
   return {
     lastLocalOpSeq: Number(meta.last_local_op_seq) || 0,
     lastSyncedOp: Number(meta.last_synced_op) || 0,
     lastSyncAt: meta.last_sync_at ?? null,
+    syncStatus: String(meta.sync_status || "idle"),
+    lastError: meta.last_error ?? null,
   };
 }
 

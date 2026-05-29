@@ -88,3 +88,20 @@ export async function hostedApiFetch(url: string, init?: RequestInit): Promise<R
   }
   return fetch(absoluteUrl, init);
 }
+
+/** Static/HTML 404 par clear message — galat server (static export) vs JSON API. */
+export async function parseHostedApiResponseJson<T extends Record<string, unknown>>(
+  res: Response
+): Promise<T> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    if (/^\s*</.test(text) || /<!DOCTYPE/i.test(text)) {
+      throw new Error(
+        "Drive API unavailable — npm run dev chalao, http://127.0.0.1:3000 kholo, aur port 3000 par purana static/Electron server band karo."
+      );
+    }
+    throw new Error(res.statusText || "Request failed");
+  }
+}
