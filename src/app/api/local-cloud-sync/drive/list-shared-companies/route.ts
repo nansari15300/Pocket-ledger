@@ -20,6 +20,10 @@ export async function POST(req: NextRequest) {
     return driveHostedApiJson(req, { companies });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return driveHostedApiJson(req, { error: msg }, 500);
+    // Google token endpoint errors ko user-friendly reconnect hint me convert karo.
+    const normalizedMsg = /invalid_request|invalid_grant/i.test(msg)
+      ? "Google Drive session expired. Please use Connect Google Drive again."
+      : msg;
+    return driveHostedApiJson(req, { error: normalizedMsg }, 500);
   }
 }

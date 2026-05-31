@@ -60,8 +60,17 @@ export async function GET(req: NextRequest) {
       throw new Error("No access token received from Google");
     }
 
-    // ✅ Save tokens to Firestore using Admin SDK
     const db = getAdminDb();
+    // Reconnect flow me Google refresh_token skip kar sakta hai; existing valid token preserve karo.
+    const tokenDocRef = db.collection("user_tokens").doc(decoded.uid).collection("google").doc("drive");
+    const existingTokenSnap = await tokenDocRef.get();
+    const existingRefreshToken =
+      existingTokenSnap.exists && existingTokenSnap.data()?.refreshToken
+        ? String(existingTokenSnap.data()?.refreshToken)
+        : null;
+    const refreshToken = tokens.refresh_token || existingRefreshToken || null;
+
+    // ✅ Save tokens to Firestore using Admin SDK
     await db
       .collection("user_tokens")
       .doc(decoded.uid)
@@ -70,7 +79,8 @@ export async function GET(req: NextRequest) {
       .set(
         {
           accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token || null,
+          // Missing refresh_token aane par null overwrite mat karo (varna next refresh invalid_request deta hai).
+          refreshToken,
           expiryDate: tokens.expiry_date || null,
           scope: tokens.scope || null,
           tokenType: tokens.token_type || null,
