@@ -13,6 +13,8 @@ function buildSafeEnvDiagnostics() {
   // Sirf boolean/safe fields return karo taaki production me env injection quickly verify ho jaaye.
   const appUrl = String(process.env.NEXT_PUBLIC_APP_URL || "").trim().replace(/\/+$/, "");
   const hasClientId = Boolean(String(process.env.GOOGLE_CLIENT_ID || "").trim());
+  // Server fallback path: GOOGLE_CLIENT_ID blank ho to NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID use kiya ja sakta hai.
+  const hasWebClientId = Boolean(String(process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID || "").trim());
   const hasClientSecret = Boolean(String(process.env.GOOGLE_CLIENT_SECRET || "").trim());
   const hasFirebaseProjectId = Boolean(String(process.env.FIREBASE_PROJECT_ID || "").trim());
 
@@ -20,10 +22,13 @@ function buildSafeEnvDiagnostics() {
     ok: true,
     env_present: {
       GOOGLE_CLIENT_ID: hasClientId,
+      NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID: hasWebClientId,
       GOOGLE_CLIENT_SECRET: hasClientSecret,
       FIREBASE_PROJECT_ID: hasFirebaseProjectId,
       NEXT_PUBLIC_APP_URL: Boolean(appUrl),
     },
+    // Effective server client id source visible rahe, taaki env fallback se rollout verify ho sake.
+    effective_google_oauth_client_id_present: hasClientId || hasWebClientId,
     // Callback preview se Google Console redirect URI match turant compare ho sake.
     oauth_callback_preview: appUrl ? `${appUrl}/api/auth/callback/google` : null,
   };

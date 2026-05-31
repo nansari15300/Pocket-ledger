@@ -76,7 +76,8 @@ export function resolveDriveOAuthAppOrigin(
 
 /** Server-only — `googleapis` browser bundle me nahi aata. */
 export function buildGoogleDriveAuthUrl(state: DriveOAuthState, appOrigin?: string): string {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
+  // Runtime me GOOGLE_CLIENT_ID miss ho to Firebase web client id fallback se Drive OAuth URL build karo.
+  const clientId = process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const appUrl = String(appOrigin || process.env.NEXT_PUBLIC_APP_URL || "").trim().replace(/\/+$/, "");
 

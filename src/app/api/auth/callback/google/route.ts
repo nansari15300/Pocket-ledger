@@ -48,11 +48,13 @@ export async function GET(req: NextRequest) {
   try {
     const redirectUri = `${appUrl}/api/auth/callback/google`;
 
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID!,
-      process.env.GOOGLE_CLIENT_SECRET!,
-      redirectUri
-    );
+    // Runtime me GOOGLE_CLIENT_ID empty ho to web client id fallback se callback token exchange chalne do.
+    const oauthClientId = process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID;
+    const oauthClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    if (!oauthClientId || !oauthClientSecret) {
+      throw new Error("Missing GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET");
+    }
+    const oauth2Client = new google.auth.OAuth2(oauthClientId, oauthClientSecret, redirectUri);
 
     const { tokens } = await oauth2Client.getToken(code);
 

@@ -61,7 +61,8 @@ async function loadDriveTokens(uid: string): Promise<DriveTokens> {
 }
 
 function oauthClient(tokens: DriveTokens) {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
+  // Refresh/read/write calls me GOOGLE_CLIENT_ID miss ho to web client id fallback use karo.
+  const clientId = process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   const redirectUri = `${String(appUrl || "").replace(/\/+$/, "")}/api/auth/callback/google`;
