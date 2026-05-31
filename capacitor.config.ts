@@ -37,10 +37,11 @@ const config: CapacitorConfig = {
   appName: "Pocket Ledger",
   webDir: "out",
   server: serverConfig,
-  // APK: `fetch` → native HTTP (CORS bypass) — Drive connect / billing / plan sync ke liye zaroori.
+  // Firestore WebChannel (`Listen/Write`) ko stable rakhne ke liye global fetch patch band rakho;
+  // native HTTP jahan chahiye wahan `hostedApiFetch` already explicit `CapacitorHttp.request` use karta hai.
   plugins: {
     CapacitorHttp: {
-      enabled: true,
+      enabled: false,
     },
     GoogleAuth: {
       scopes: ["profile", "email"],

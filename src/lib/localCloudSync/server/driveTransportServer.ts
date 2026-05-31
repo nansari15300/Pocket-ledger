@@ -64,14 +64,11 @@ function oauthClient(tokens: DriveTokens) {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
-  if (!clientId || !clientSecret) {
-    throw new Error("Missing GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET");
-  }
-  const client = new google.auth.OAuth2(
-    clientId,
-    clientSecret,
-    `${String(appUrl || "").replace(/\/+$/, "")}/api/auth/callback/google`
-  );
+  const redirectUri = `${String(appUrl || "").replace(/\/+$/, "")}/api/auth/callback/google`;
+  // Hosted env me client secret temporary missing ho to existing access-token based calls phir bhi chalne do.
+  const client = clientId && clientSecret
+    ? new google.auth.OAuth2(clientId, clientSecret, redirectUri)
+    : new google.auth.OAuth2();
   client.setCredentials({
     access_token: tokens.accessToken,
     refresh_token: tokens.refreshToken ?? undefined,

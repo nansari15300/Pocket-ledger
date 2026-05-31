@@ -9,12 +9,15 @@ import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { getEmbeddedLockShellKind } from "@/lib/embeddedDeviceLock";
 
-/** `build:static`, Capacitor native, ya packaged Electron shell. */
+/** `build:static`, Capacitor native, ya packaged Electron shell — `npm run dev` par STATIC_BUILD env se mat chalao. */
 export function isEmbeddedOfflinePreloadClient(): boolean {
-  if (isStaticAppBuild()) return true;
-  if (typeof window === "undefined") return false;
+  if (typeof window === "undefined") {
+    return isStaticAppBuild() && process.env.NODE_ENV !== "development";
+  }
   if (isCapacitorNativeApp()) return true;
   if (getEmbeddedLockShellKind() === "exe") return true;
   if (window.location.protocol === "file:") return true;
+  // Asli static export (out/APK) — dev me `.env.local` STATIC_BUILD=1 par Firestore enable/disable race (c050) avoid.
+  if (isStaticAppBuild() && process.env.NODE_ENV !== "development") return true;
   return false;
 }

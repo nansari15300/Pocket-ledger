@@ -96,9 +96,16 @@ export function resolveHostedApiAbsoluteUrl(apiPathOrUrl: string): string {
   }
   const path = raw.startsWith("/") ? raw : `/${raw}`;
   let origin = getBillingApiBaseOrigin();
-  // Full Next dev / production same-origin — env khali ho to current page origin (localhost ya pocket-ledger.com).
-  if (!origin && typeof window !== "undefined" && window.location?.origin) {
-    // Browser same-origin fallback — dev me localhost hostname ko 127.0.0.1 par map karo.
+  // Same-origin fallback sirf dev me: production/static localhost preview par route handlers nahi hote.
+  // Wahan hosted API force karna zaroori hai, warna Drive auth local server (missing secrets) pe chala jata hai.
+  if (
+    !origin &&
+    typeof window !== "undefined" &&
+    window.location?.origin &&
+    typeof process !== "undefined" &&
+    process.env.NODE_ENV === "development"
+  ) {
+    // Dev browser fallback — localhost hostname ko 127.0.0.1 par map karo.
     origin = normalizeDevLoopbackBillingOrigin(window.location.origin);
   }
   if (!origin) {

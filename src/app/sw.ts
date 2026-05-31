@@ -21,9 +21,8 @@ declare global {
 declare const self: ServiceWorkerGlobalScope;
 
 /**
- * `defaultCache` (Serwist/Next) antima `!sameOrigin` + `NetworkFirst` + cache plugins rakhta —
- * Firebase Storage / Firestore jasta cross-origin requests yahi intercept hokar noisy `no-response` / CORS
- * console flood karta. In hosts ko **pehle** plain `NetworkOnly` se handle karo (cache mat chipka).
+ * Firebase / Google SDK hosts — SW se bypass (mat intercept karo).
+ * NetworkOnly bhi respondWith(fetch) use karta hai — Firestore Listen/Write streaming (ca9) toot jati hai.
  */
 function isFirebaseOrGoogleCloudSdkHost(hostname: string): boolean {
   const h = hostname.toLowerCase();
@@ -36,30 +35,60 @@ function isFirebaseOrGoogleCloudSdkHost(hostname: string): boolean {
     h === "securetoken.googleapis.com" ||
     h === "firebaseinstallations.googleapis.com" ||
     h === "oauth2.googleapis.com" ||
-    h === "play.googleapis.com"
+    h === "play.googleapis.com" ||
+    h === "www.googleapis.com" ||
+    h.endsWith(".googleapis.com")
   );
+}
+
+// Static/APK: hosted billing/Drive/plan-sync API — cross-origin NetworkFirst se mat chipkao.
+function isHostedPocketLedgerApiRequest(url: URL): boolean {
+  const h = url.hostname.toLowerCase();
+  return (h === "pocket-ledger.com" || h === "www.pocket-ledger.com") && url.pathname.startsWith("/api/");
+}
+
+/** In URLs par koi Serwist route match na ho — browser native fetch/stream chalao. */
+function shouldBypassServiceWorkerRouting(url: URL): boolean {
+  return isFirebaseOrGoogleCloudSdkHost(url.hostname) || isHostedPocketLedgerApiRequest(url);
+}
+
+// defaultCache ke har matcher par bypass guard — antima GET catch-all Firestore ko phir pakad leta tha.
+function wrapRuntimeCachingRouteExcludingBypass<T extends (typeof defaultCache)[number]>(route: T): T {
+  const originalMatcher = route.matcher;
+  if (typeof originalMatcher === "function") {
+    return {
+      ...route,
+      matcher: (options) => {
+        if (shouldBypassServiceWorkerRouting(options.url)) return false;
+        return originalMatcher(options);
+      },
+    };
+  }
+  return {
+    ...route,
+    matcher: (options) => {
+      if (shouldBypassServiceWorkerRouting(options.url)) return false;
+      return (originalMatcher as RegExp).test(options.url.href);
+    },
+  };
 }
 
 const serwist = new Serwist({
   precacheEntries: self.__SW_MANIFEST,
-  // `skipWaiting: true` naya SW activate hote hi purane tab control le leta — APK/Capacitor me online aane par navigate/shell mismatch se “restart” feel aata tha.
+  // skipWaiting: true naya SW activate hote hi purane tab control le leta — APK/Capacitor me online aane par navigate/shell mismatch se restart feel aata tha.
   skipWaiting: false,
-  // Reconnect/update par open clients turant claim karne se app "refresh/restart" feel de sakta hai; manual next navigation par takeover hone do.
+  // Reconnect/update par open clients turant claim karne se app refresh/restart feel de sakta hai; manual next navigation par takeover hone do.
   clientsClaim: false,
-  /** `true` kabhi‑kabhi preload response fail hone par offline navigate `~offline` fallback de deta (Capacitor WebView). */
+  // navigationPreload true kabhi-kabhi preload fail par offline navigate ~offline fallback de deta (Capacitor WebView).
   navigationPreload: false,
   runtimeCaching: [
-    {
-      matcher: ({ url }) => isFirebaseOrGoogleCloudSdkHost(url.hostname),
-      handler: new NetworkOnly(),
-    },
     {
       matcher: ({ url, sameOrigin }) =>
         Boolean(sameOrigin && url.pathname.endsWith("/pdf.worker.min.mjs")),
       handler: new NetworkOnly(),
     },
     {
-      // Next.js App Router Flight / `_rsc` — `defaultCache` intercept se `GET …/__next.….txt?_rsc=…` 404; hamesha network
+      // Next.js App Router Flight / _rsc — defaultCache intercept se RSC txt 404; hamesha network
       matcher: ({ url, request, sameOrigin }) =>
         Boolean(
           sameOrigin &&
@@ -83,7 +112,7 @@ const serwist = new Serwist({
         ],
       }),
     },
-    ...defaultCache,
+    ...defaultCache.map(wrapRuntimeCachingRouteExcludingBypass),
   ],
   fallbacks: {
     entries: [

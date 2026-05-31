@@ -169,6 +169,7 @@ export function planSyncFailureUserMessage(reason?: string): string {
   }
   if (reason === "token_error") return "Could not verify your login. Sign out and sign in again.";
   if (reason === "missing_ids" || reason === "no_context") return "No company selected to sync.";
+  if (reason === "local_only_company") return "Local-only company does not require server plan sync yet.";
   if (reason.startsWith("http_")) return "Plan server returned an error. Try again later.";
   return reason;
 }
@@ -204,6 +205,23 @@ export async function syncCompanyPlanFromServer(opts: {
   const localCompanyId = opts.localCompanyId.trim();
   if (!firebaseCompanyId || !localCompanyId) {
     return { ok: false, applied: false, reason: "missing_ids" };
+  }
+
+  // Pure local company (no authoritative cloud id yet): hosted `/sync-plan` par 404 noise avoid.
+  try {
+    const localRow = await getLocalCompanyById(localCompanyId);
+    if (localRow) {
+      const storage = String((localRow as { storageOption?: string }).storageOption || "local")
+        .toLowerCase()
+        .trim();
+      const authoritative = String((localRow as { authoritativeCompanyId?: string }).authoritativeCompanyId || "")
+        .trim();
+      if (storage === "local" && !authoritative) {
+        return { ok: true, applied: false, reason: "local_only_company" };
+      }
+    }
+  } catch {
+    // Local DB read fail par sync ko block mat karo; fallback path continue kare.
   }
 
   let token: string;

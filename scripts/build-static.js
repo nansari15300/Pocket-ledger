@@ -18,7 +18,7 @@ const adminComponentsPath = path.join(root, "src", "components", "admin");
 const adminComponentsBakPath = path.join(root, ".build-static-bak", "admin-components");
 const deleteCompanyPath = path.join(root, "src", "lib", "actions", "deleteCompanyAction.ts");
 const deleteCompanyBakPath = path.join(root, ".build-static-bak", "deleteCompanyAction.ts");
-const nextStaticPath = path.join(root, ".next", "static");
+const nextBuildDir = path.join(root, ".next");
 /** Static APK client bundle — dev `.env.local` localhost billing origin override (billingApiOrigin.ts ke saath). */
 const POCKET_LEDGER_HOSTED_API_ORIGIN = "https://pocket-ledger.com";
 
@@ -87,6 +87,39 @@ function rmPathRobust(targetPath, options = {}) {
   }
 }
 
+/** Next static export route-group RSC files: `__next.!group/child.txt` ke saath flat `__next.!group.child.txt` alias bhi banao (localhost static serve compatibility). */
+function createRouteGroupRscCompatAliases(outDir) {
+  if (!fs.existsSync(outDir)) return;
+  const visit = (dir) => {
+    for (const name of fs.readdirSync(dir)) {
+      const abs = path.join(dir, name);
+      if (!fs.statSync(abs).isDirectory()) continue;
+      if (name.startsWith("__next.!")) {
+        const parentDir = dir;
+        const groupDir = abs;
+        const walkGroup = (subDir) => {
+          for (const child of fs.readdirSync(subDir)) {
+            const childAbs = path.join(subDir, child);
+            if (fs.statSync(childAbs).isDirectory()) {
+              walkGroup(childAbs);
+              continue;
+            }
+            const relInsideGroup = path.relative(groupDir, childAbs).replace(/\\/g, "/");
+            const flatAliasName = `${name}.${relInsideGroup.replace(/\//g, ".")}`;
+            const aliasAbs = path.join(parentDir, flatAliasName);
+            if (!fs.existsSync(aliasAbs)) {
+              fs.copyFileSync(childAbs, aliasAbs);
+            }
+          }
+        };
+        walkGroup(groupDir);
+      }
+      visit(abs);
+    }
+  };
+  visit(outDir);
+}
+
 try {
   restoreStaticBuildBackupsIfOrphaned();
 
@@ -138,13 +171,13 @@ try {
     }
   }
 
-  // Next static chunk dir kabhi stale file-handle se ENOTEMPTY deta hai; pre-clean karne se `next build` stable hota hai.
-  if (fs.existsSync(nextStaticPath)) {
+  // Next build temp/manifest files stale hone par ENOENT/ENOTEMPTY race aati hai; static build se pehle poora `.next` reset karo.
+  if (fs.existsSync(nextBuildDir)) {
     try {
-      rmPathRobust(nextStaticPath);
-      console.log("[build-static] Cleaned .next/static to avoid ENOTEMPTY on Windows");
+      rmPathRobust(nextBuildDir);
+      console.log("[build-static] Cleaned .next to avoid stale manifest/cache races on Windows");
     } catch (e) {
-      console.error("[build-static] Cannot clean .next/static — close Android Studio preview/dev server and retry.");
+      console.error("[build-static] Cannot clean .next — close dev servers/preview tools and retry.");
       throw e;
     }
   }
@@ -188,6 +221,9 @@ try {
     fs.copyFileSync(indexHtml, notFoundHtml);
     console.log("[build-static] out/404.html copied from index.html (fallback refresh)");
   }
+  // Route groups `(...)` se nikle RSC txt files kuch static hosts par dotted lookup path maangte hain; alias file se 404/crash avoid.
+  createRouteGroupRscCompatAliases(outDir);
+  console.log("[build-static] Added route-group RSC compatibility aliases");
 } finally {
   if (fs.existsSync(apiBakPath)) {
     fs.mkdirSync(path.dirname(apiPath), { recursive: true });

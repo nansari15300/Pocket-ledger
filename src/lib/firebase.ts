@@ -8,6 +8,7 @@ import {
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
+  persistentSingleTabManager,
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { setLogLevel } from 'firebase/app';
@@ -45,6 +46,12 @@ function isFirestoreWatchTeardownAssertionMessage(message: string): boolean {
   );
 }
 
+function shouldSuppressFirestoreWatchAssertionNow(): boolean {
+  // Embedded static runtime me Firebase SDK ka known watch-state assertion user-facing uncaught popup deta hai.
+  if (isEmbeddedOfflinePreloadClient()) return true;
+  return Date.now() < firestoreWatchTeardownSuppressionUntil;
+}
+
 // Suppress Firebase console errors for offline/unavailable; track PERMISSION_DENIED (skip when logged out)
 if (typeof window !== 'undefined') {
   const originalError = console.error;
@@ -67,7 +74,7 @@ if (typeof window !== 'undefined') {
     }
     // Firestore 12.12: signOut + snapshot teardown → ca9; AsyncQueue sometimes wraps it as b815 (SDK bug).
     if (
-      Date.now() < firestoreWatchTeardownSuppressionUntil &&
+      shouldSuppressFirestoreWatchAssertionNow() &&
       isFirestoreWatchTeardownAssertionMessage(errorMessage)
     ) {
       return;
@@ -130,7 +137,7 @@ if (typeof window !== 'undefined') {
     (event) => {
       const msg = stringifyReason(event.reason);
       if (
-        Date.now() < firestoreWatchTeardownSuppressionUntil &&
+        shouldSuppressFirestoreWatchAssertionNow() &&
         isFirestoreWatchTeardownAssertionMessage(msg)
       ) {
         event.preventDefault();
@@ -144,7 +151,7 @@ if (typeof window !== 'undefined') {
     (event) => {
       const msg = `${event.message ?? ''}\n${(event.error as Error)?.message ?? ''}\n${(event.error as Error)?.stack ?? ''}`;
       if (
-        Date.now() < firestoreWatchTeardownSuppressionUntil &&
+        shouldSuppressFirestoreWatchAssertionNow() &&
         isFirestoreWatchTeardownAssertionMessage(msg)
       ) {
         event.preventDefault();
@@ -164,11 +171,16 @@ function initFirestoreInstance() {
     return getFirestore(app);
   }
   const forceLongPolling = process.env.NEXT_PUBLIC_FIRESTORE_FORCE_LONG_POLLING === '1';
+  // Static/APK/EXE runtime usually single-window hota hai; multi-tab manager se b815/ve:-1 races zyada hit ho rahi thi.
+  const useSingleTabPersistence = isEmbeddedOfflinePreloadClient();
   try {
     return initializeFirestore(app, {
-      /** Hosted web + installed PWA: multi-tab IndexedDB taaki installs / SQLite-local companies Firestore reads cache share karen */
+      /** Hosted web par multi-tab cache share; static embed par single-tab manager se watch-state assertions kam. */
       localCache: persistentLocalCache({
-        tabManager: persistentMultipleTabManager(),
+        tabManager: useSingleTabPersistence
+          // Firebase 12.8 API: single-tab manager settings object required (empty default config).
+          ? persistentSingleTabManager({})
+          : persistentMultipleTabManager(),
       }),
       /** Agar avi bhi Listen/channel 400 dikhe: `.env.local` me `NEXT_PUBLIC_FIRESTORE_FORCE_LONG_POLLING=1` + restart. */
       ...(forceLongPolling
@@ -213,6 +225,8 @@ export async function settleAfterFirestoreNetworkEnabled(): Promise<void> {
  * Har flush par `enableNetwork` + active `onSnapshot` race = Firestore 12.x INTERNAL ASSERTION (ca9 / ve:-1) offline→online.
  */
 export let firestoreNetworkDisabledByApi = false;
+/** Embedded runtime: startup par ek hi baar proactive `enableNetwork` karo; repeat calls watcher churn badhate hain. */
+let embeddedInitialNetworkEnsureDone = false;
 
 /** Admin panel / tests: `disableNetwork` yahan ke alawa bhi ho sakta hai — outbox flush ko sahi `enableNetwork` chahiye. */
 export function markFirestoreNetworkDisabledByApi(disabled: boolean): void {
@@ -246,6 +260,27 @@ export async function enqueueSyncFirestoreNetworkFromLocalConfig(): Promise<void
 }
 
 /**
+ * APK/static/EXE: company list / mirror se pehle Firestore server on — cache khali fresh install par "no company".
+ */
+export async function ensureEmbeddedFirestoreOnlineForCloudCompanyLoad(): Promise<void> {
+  if (typeof window === "undefined") return;
+  if (!isEmbeddedOfflinePreloadClient()) return;
+  if (isClientNavigatorOffline()) return;
+  await queueFirestoreNetworkOp(async () => {
+    try {
+      // Firestore already online ho aur pehle ensure ho chuka ho to duplicate `enableNetwork` skip (Target ID churn guard).
+      if (!firestoreNetworkDisabledByApi && embeddedInitialNetworkEnsureDone) return;
+      await enableNetwork(firestore);
+      await settleAfterFirestoreNetworkEnabled();
+      firestoreNetworkDisabledByApi = false;
+      embeddedInitialNetworkEnsureDone = true;
+    } catch {
+      /* non-blocking */
+    }
+  });
+}
+
+/**
  * APK/static/EXE: offline par Firestore Write/Listen streams band — SQLite/outbox only;
  * online par dubara enable taaki `flushVoucherOutbox` / plan sync chal sake.
  */
@@ -258,13 +293,19 @@ export async function syncEmbeddedFirestoreTransportFromNavigator(): Promise<voi
       if (offline) {
         await disableNetwork(firestore);
         firestoreNetworkDisabledByApi = true;
+        // Offline transition ke baad next online event par ek controlled re-enable allow karo.
+        embeddedInitialNetworkEnsureDone = false;
         return;
       }
-      if (firestoreNetworkDisabledByApi) {
-        await enableNetwork(firestore);
-        await settleAfterFirestoreNetworkEnabled();
+      // Online: tabhi enable jab app ne network disable kiya ho; unnecessary repeat enable se watch target collisions aate hain.
+      if (!firestoreNetworkDisabledByApi) {
+        embeddedInitialNetworkEnsureDone = true;
+        return;
       }
+      await enableNetwork(firestore);
+      await settleAfterFirestoreNetworkEnabled();
       firestoreNetworkDisabledByApi = false;
+      embeddedInitialNetworkEnsureDone = true;
     } catch {
       /* non-blocking */
     }

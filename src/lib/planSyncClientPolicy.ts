@@ -14,6 +14,9 @@ import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
  * `sync-plan` chain optional skip; static/native kabhi skip mat karo.
  */
 export function embeddedClientRequiresServerPlanSyncWhenOnline(): boolean {
+  if (process.env.NODE_ENV === "development") {
+    return isCapacitorNativeApp();
+  }
   return isStaticAppBuild() || isCapacitorNativeApp();
 }
 

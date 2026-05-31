@@ -120,6 +120,11 @@ function isEmbeddedFastAuthShell(): boolean {
   return isStaticAppBuild() || isCapacitorNativeApp() || isElectronEnvironment();
 }
 
+/** Embedded shells (APK/EXE/static) me local synthetic auth se Firestore company list hide ho jati hai, isliye yahan real Firebase login mandatory. */
+function canUseLocalSyntheticAuthFallback(): boolean {
+  return !isEmbeddedFastAuthShell();
+}
+
 function applyEmbeddedFastAuthSession(
   firebaseUser: User,
   setUser: React.Dispatch<React.SetStateAction<User | null>>,
@@ -173,7 +178,13 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
 
   // `useEffect` se pehle paint: login/dashboard pe spinner flash kam — remembered local company turant hydrate.
   useLayoutEffect(() => {
-    if (tryApplyRememberedLocalCompanyAuth(setUser, setCustomUser, setLoading, fastLocalAuthRef)) return;
+    // Embedded runtime: app access ke liye real account login enforce karo (local synthetic session sirf web fallback ke liye).
+    if (
+      canUseLocalSyntheticAuthFallback() &&
+      tryApplyRememberedLocalCompanyAuth(setUser, setCustomUser, setLoading, fastLocalAuthRef)
+    ) {
+      return;
+    }
     // Online cold open: IndexedDB me Firebase session ho to observer se pehle turant paint (offline jaisa).
     if (isEmbeddedFastAuthShell() && auth.currentUser) {
       applyEmbeddedFastAuthSession(auth.currentUser, setUser, setCustomUser, setLoading);
@@ -540,7 +551,11 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
               bootstrapUserSession(cu);
               return;
             }
-            if (fastLocalAuthRef.current && tryApplyRememberedLocalCompanyAuth(setUser, setCustomUser, setLoading, fastLocalAuthRef)) {
+            if (
+              canUseLocalSyntheticAuthFallback() &&
+              fastLocalAuthRef.current &&
+              tryApplyRememberedLocalCompanyAuth(setUser, setCustomUser, setLoading, fastLocalAuthRef)
+            ) {
               return;
             }
             finalizeSignedOut();

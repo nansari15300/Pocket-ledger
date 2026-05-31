@@ -47,6 +47,12 @@ export default function RootLayout({
             __html: `(function(){try{var R="pl-theme-default-rev",V="2",TK="theme",PK="primaryColor";var rev=localStorage.getItem(R),t=localStorage.getItem(TK),p=localStorage.getItem(PK);if(!rev||rev!==V){if(!t||t==="theme-pure-white"){t="theme-pro";p="primary-pro";}localStorage.setItem(R,V);localStorage.setItem(TK,t);localStorage.setItem(PK,p||"primary-pro");}if(!t){t="theme-pro";p="primary-pro";}document.body.className="font-body antialiased "+t+" "+(p||"primary-pro");}catch(e){}})();`,
           }}
         />
+        {/* localhost static test (serve out): purana SW Firestore Listen/Write tod deta — React se pehle hatao */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var h=location.hostname;if(h!=="localhost"&&h!=="127.0.0.1")return;if(!("serviceWorker"in navigator))return;navigator.serviceWorker.getRegistrations().then(function(r){r.forEach(function(x){x.unregister();});});}catch(e){}})();`,
+          }}
+        />
         <PocketSerwistProvider>
           <Providers>
             {children}

@@ -4,8 +4,13 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef, useMemo } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "./useAuth";
-import { onSnapshot, collection, query, where, Timestamp, getDocs, doc, getDoc } from "firebase/firestore";
-import { auth, firestore, syncEmbeddedFirestoreTransportFromNavigator } from "@/lib/firebase";
+import { onSnapshot, collection, query, where, Timestamp, getDocs, getDocsFromServer, doc, getDoc } from "firebase/firestore";
+import {
+  auth,
+  firestore,
+  ensureEmbeddedFirestoreOnlineForCloudCompanyLoad,
+  syncEmbeddedFirestoreTransportFromNavigator,
+} from "@/lib/firebase";
 import type { PermissionConfig } from "./usePermissions";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import {
@@ -444,6 +449,31 @@ function embeddedStaticRegistryDeferMs(): number {
   return LOCAL_REGISTRY_GLOBAL_MIRROR_DELAY_MS;
 }
 
+/** Legacy owner migration: kuch companies ka `ownerId` अभी bhi old `users/{docId}` par ho sakta hai, isliye uid + userDocId dono query karo. */
+function resolveOwnerIdQueryCandidates(
+  firebaseUid: string | null | undefined,
+  userDocId: string | null | undefined
+): string[] {
+  const seen = new Set<string>();
+  const add = (raw: string | null | undefined) => {
+    const id = String(raw || "").trim();
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+  };
+  add(firebaseUid);
+  add(userDocId);
+  return Array.from(seen);
+}
+
+/** Local-only company without `authoritativeCompanyId`: server `/sync-plan` call se 404 spam hota hai, isliye skip. */
+function canRunServerPlanSyncForCompanyRow(row: Company | null | undefined): boolean {
+  if (!row) return false;
+  const storage = String((row.storageOption || "local") as string).toLowerCase().trim();
+  const authoritative = String((row.authoritativeCompanyId || "") as string).trim();
+  if (storage === "local" && !authoritative) return false;
+  return true;
+}
+
 /** Online shared: list/SQLite race — khali list par 0ms grace = turant clear */
 const LIST_RECOVERY_ONLINE_EMPTY_GRACE_MS = 4500;
 const LIST_RECOVERY_ONLINE_NONEMPTY_GRACE_MS = 3200;
@@ -460,6 +490,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true);
   /** Online mode: company doc / sharing change par listener re-subscribe (light). */
   const [registryVersion, setRegistryVersion] = useState(0);
+  /** Firestore listener `already-exists` par controlled re-subscribe trigger — APK fresh boot me company list blank avoid. */
+  const [companyFirestoreListenerRetryEpoch, setCompanyFirestoreListenerRetryEpoch] = useState(0);
   /** Local-only APK: heavy registry effect sirf jab list/mirror sach me badla ho — registryVersion se alag. */
   const [localRegistryEpoch, setLocalRegistryEpoch] = useState(0);
   const router = useRouter();
@@ -472,6 +504,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const latestLocalNormalizedCompaniesRef = useRef<Company[]>([]);
   const { user, customUser, loading: authLoading } = useAuth();
   const ownedSnapRef = useRef<any>(null);
+  const ownedLegacySnapRef = useRef<any>(null);
   const sharedSnapRef = useRef<any>(null);
   const ownedByEmailSnapRef = useRef<any>(null);
   /** Doc-snapshot async callback stale company switch na kare — `setCompany` se pehle match karo. */
@@ -506,8 +539,29 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     }
     setLocalRegistryEpoch((v) => v + 1);
   }, []);
+  const scheduleCompanyFirestoreListenerRetry = useCallback((source: string) => {
+    // Firestore Target-ID collision par ek hi bounded retry schedule karo; tight loop se UI churn avoid.
+    if (companyListenerRetryTimerRef.current) return;
+    companyListenerRetryTimerRef.current = setTimeout(() => {
+      companyListenerRetryTimerRef.current = null;
+      void syncEmbeddedFirestoreTransportFromNavigator();
+      void ensureEmbeddedFirestoreOnlineForCloudCompanyLoad();
+      setCompanyFirestoreListenerRetryEpoch((v) => v + 1);
+    }, 320);
+    console.warn("[useCompany] scheduling Firestore listener retry", { source });
+  }, []);
 
   companyIdLiveRef.current = companyId;
+
+  useEffect(() => {
+    return () => {
+      // Unmount par pending retry timer clean rakho taaki stale setState warning na aaye.
+      if (companyListenerRetryTimerRef.current) {
+        clearTimeout(companyListenerRetryTimerRef.current);
+        companyListenerRetryTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const on = (e: Event) => {
@@ -638,6 +692,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const hasCheckedStorageRef = useRef(false);
   /** Logout par company clear thoda defer — `auth.currentUser` verify (static WebView race). */
   const clearCompanyOnLogoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** `already-exists` burst me multiple timers na banen — single retry window guard. */
+  const companyListenerRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /**
    * Company list `loading` false hone par recovery effect dubara chalane ke liye bump.
    * `loading` ko useEffect deps me mat rakho — Fast Refresh/HMR par deps array size badalne se React error aata hai.
@@ -790,17 +846,49 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       if (touchLoading) setLoading(true);
       try {
         let cloudMirrorAllowedIds: Set<string> | null = null;
-        if (user?.uid && user?.email) {
+        if (user?.uid) {
           try {
-            const ownedSnap = await getDocs(query(collection(firestore, "companies"), where("ownerId", "==", user.uid)));
-            const sharedSnap = await getDocs(query(collection(firestore, "companies"), where("sharedWithEmails", "array-contains", user.email)));
-            const ownedByEmailSnap = await getDocs(
-              query(collection(firestore, "companies"), where("ownerEmail", "==", user.email))
+            // Fresh APK: cache khali — server se pull (network on ke baad).
+            if (embeddedClientUsesFirestoreCompanyList()) {
+              await ensureEmbeddedFirestoreOnlineForCloudCompanyLoad();
+            }
+            const ownerIdCandidates = resolveOwnerIdQueryCandidates(user.uid, customUser?.userDocId);
+            // Owner migration-safe pull: uid + legacy users-doc id dono par company rows collect karo.
+            const ownedQueries = ownerIdCandidates.map((ownerId) =>
+              query(collection(firestore, "companies"), where("ownerId", "==", ownerId))
             );
-            const mergedDocs = [...ownedSnap.docs, ...ownedByEmailSnap.docs, ...sharedSnap.docs];
+            const sharedQ = user.email
+              ? query(
+                  collection(firestore, "companies"),
+                  where("sharedWithEmails", "array-contains", user.email)
+                )
+              : null;
+            const ownedByEmailQ = user.email
+              ? query(collection(firestore, "companies"), where("ownerEmail", "==", user.email))
+              : null;
+            const pullSnap = async (q: ReturnType<typeof query>) => {
+              if (embeddedClientUsesFirestoreCompanyList() && typeof navigator !== "undefined" && navigator.onLine !== false) {
+                try {
+                  return await getDocsFromServer(q);
+                } catch {
+                  return await getDocs(q);
+                }
+              }
+              return await getDocs(q);
+            };
+            const ownedSnaps = await Promise.all(ownedQueries.map((q) => pullSnap(q)));
+            const sharedSnap = sharedQ ? await pullSnap(sharedQ) : { docs: [] as any[] };
+            const ownedByEmailSnap = ownedByEmailQ ? await pullSnap(ownedByEmailQ) : { docs: [] as any[] };
+            const mergedDocs = [
+              ...ownedSnaps.flatMap((snap) => snap.docs),
+              ...ownedByEmailSnap.docs,
+              ...sharedSnap.docs,
+            ];
             cloudMirrorAllowedIds = new Set(mergedDocs.map((d) => String(d.id || "")).filter(Boolean));
             for (const d of mergedDocs) {
-              const raw = { id: d.id, ...(d.data() || {}) } as Record<string, unknown>;
+              // `pullSnap` union se `data()` spread — explicit cast taaki static build TypeScript pass ho.
+              const docData = (d.data() ?? {}) as Record<string, unknown>;
+              const raw = { id: d.id, ...docData } as Record<string, unknown>;
               const rid = String(raw.id ?? "");
               if (!rid) continue;
               const isCloudDeleted = raw.isDeleted === true;
@@ -847,14 +935,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         if (
           cloudMirrorAllowedIds !== null &&
           cloudMirrorAllowedIds.size > 0 &&
-          user?.uid &&
-          user.email
+          user?.uid
         ) {
           const locals = await listLocalCompanies({ includeDeleted: true });
           for (const row of locals) {
             const id = row.id;
             if (!id || cloudMirrorAllowedIds.has(id)) continue;
-            const isOwner = isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user.email });
+            const isOwner = isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user.email ?? null });
             const isPureLocalRow = String((row as { storageOption?: string }).storageOption || "").toLowerCase() === "local";
             const isDriveSharedJoin = (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;
             if (isOwner && isPureLocalRow) continue;
@@ -922,7 +1009,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         if (touchLoading) setLoading(false);
       }
     },
-    [user, normalizeLocalCompany, isSuperAdminUser, clearCompanyId, router]
+    [user, customUser?.userDocId, normalizeLocalCompany, isSuperAdminUser, clearCompanyId, router]
   );
 
   /**
@@ -940,6 +1027,10 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       setPlanSyncInFlight(true);
       try {
         const row = await getLocalCompanyById(companyId);
+        // Local-only company ko cloud plan route hit karane ki zarurat nahi (404 noise reduce).
+        if (!canRunServerPlanSyncForCompanyRow(row as Company | null | undefined)) {
+          return { ok: true, applied: false, reason: "local_only_company" };
+        }
         const firebaseCompanyId =
           String(row?.authoritativeCompanyId || companyId).trim() || companyId;
         const r = await syncCompanyPlanFromServer({
@@ -1123,6 +1214,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     if (!user?.uid || !companyId?.trim() || authLoading) return;
     if (shouldSkipPeriodicPlanSyncForLocalOnlyMode(isLocalOnlyMode())) return;
     const row = allCompanies.find((c) => c.id === companyId);
+    if (!canRunServerPlanSyncForCompanyRow(row)) return;
     if (!row || isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user.email ?? null })) return;
     void refreshAuthoritativePlan();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- burst sirf company switch par
@@ -1165,7 +1257,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         if (!liveCompanyId) {
           setCompany(null);
           setLoading(false);
-          needImmediateFullMirror = normalizedLocalCompanies.length === 0 && !!user?.uid && !!user?.email;
+          // Email kabhi late hydrate hota hai; uid milte hi mirror allow karo taaki APK list blank na rahe.
+          needImmediateFullMirror = normalizedLocalCompanies.length === 0 && !!user?.uid;
         } else {
           const sel = await getLocalCompanyById(liveCompanyId);
           if (cancelled) return;
@@ -1180,11 +1273,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       } catch {
         if (companyIdLiveRef.current) setCompany(null);
         setLoading(false);
-        needImmediateFullMirror = !!user?.uid && !!user?.email;
+        // Transient email-null window me bhi uid-based mirror retry chalne do.
+        needImmediateFullMirror = !!user?.uid;
       }
 
       if (cancelled) return;
-      if (!user?.uid || !user?.email) return;
+      if (!user?.uid) return;
 
       if (needImmediateFullMirror) {
         await performLocalRegistryFirestoreMirror({ mode: "immediate-empty" }).catch(() => {});
@@ -1211,9 +1305,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
    */
   useEffect(() => {
     if (!embeddedClientUsesFirestoreCompanyList()) return;
-    if (!user?.uid || !user?.email || authLoading) return;
+    if (!user?.uid || authLoading) return;
 
     let cancelled = false;
+    // Listener effect har rerender par aa sakta hai; yahan repeated network-enable avoid karke Firestore targets stable rakho.
+    void ensureEmbeddedFirestoreOnlineForCloudCompanyLoad();
     void syncEmbeddedFirestoreTransportFromNavigator();
 
     void (async () => {
@@ -1245,7 +1341,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       cancelled = true;
     };
-  }, [user?.uid, user?.email, authLoading, normalizeLocalCompany, isSuperAdminUser, performLocalRegistryFirestoreMirror]);
+  }, [user?.uid, authLoading, normalizeLocalCompany, isSuperAdminUser, performLocalRegistryFirestoreMirror]);
 
   // `reloadLocalCompanyRegistry` bump: turant Firestore mirror (Stripe/demote) + deferred timer cancel taaki double-sync na ho.
   useEffect(() => {
@@ -1277,6 +1373,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       }
       return;
     }
+    const logoutClearDelayMs = embeddedClientUsesFirestoreCompanyList() ? 2600 : 400;
     clearCompanyOnLogoutTimerRef.current = setTimeout(() => {
       clearCompanyOnLogoutTimerRef.current = null;
       try {
@@ -1284,8 +1381,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       } catch {
         /* ignore */
       }
+      // Embedded shell me transient auth null aane par selected company turant clear mat karo.
       clearCompanyId();
-    }, 400);
+    }, logoutClearDelayMs);
     return () => {
       if (clearCompanyOnLogoutTimerRef.current) {
         clearTimeout(clearCompanyOnLogoutTimerRef.current);
@@ -1427,21 +1525,31 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       // Local-only mode: Firebase company listeners disable (no server dependency).
       return;
     }
-    if (!user?.email) {
+    if (!user?.uid) {
       setAllCompanies([]);
       if(!authLoading) setLoading(false);
       ownedSnapRef.current = null;
+      ownedLegacySnapRef.current = null;
       sharedSnapRef.current = null;
       return;
     };
-    
+
+    void ensureEmbeddedFirestoreOnlineForCloudCompanyLoad();
     setLoading(true);
     // Reset refs when user changes
     ownedSnapRef.current = null;
+    ownedLegacySnapRef.current = null;
     sharedSnapRef.current = null;
 
-    const ownedQuery = query(collection(firestore, "companies"), where("ownerId", "==", user.uid));
-    const sharedQuery = query(collection(firestore, "companies"), where("sharedWithEmails", "array-contains", user.email));
+    const ownerIdCandidates = resolveOwnerIdQueryCandidates(user.uid, customUser?.userDocId);
+    const ownedQuery = query(collection(firestore, "companies"), where("ownerId", "==", ownerIdCandidates[0] || user.uid));
+    const ownedLegacyQuery =
+      ownerIdCandidates.length > 1
+        ? query(collection(firestore, "companies"), where("ownerId", "==", ownerIdCandidates[1]!))
+        : null;
+    const sharedQuery = user.email
+      ? query(collection(firestore, "companies"), where("sharedWithEmails", "array-contains", user.email))
+      : null;
     // Email login — ownerEmail se owned companies (sirf SuperAdmin nahi, sab users)
     const ownedByEmailQuery = user.email
       ? query(collection(firestore, "companies"), where("ownerEmail", "==", user.email))
@@ -1453,7 +1561,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     /** Har snapshot par taaza SQLite — purana cache delete ke baad bhi company dikhata tha; recycle bin move ke baad live list */
     const triggerUpdate = () => {
       void (async () => {
-        const owned = ownedSnapRef.current ?? emptySnap();
+        const ownedPrimary = ownedSnapRef.current ?? emptySnap();
+        const ownedLegacy = ownedLegacySnapRef.current ?? emptySnap();
+        const owned = {
+          docs: [...ownedPrimary.docs, ...ownedLegacy.docs],
+        };
         const shared = sharedSnapRef.current ?? emptySnap();
         const ownedByEmail = needsOwnedByEmail ? (ownedByEmailSnapRef.current ?? emptySnap()) : undefined;
         let localRows: Company[] = [];
@@ -1473,27 +1585,59 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       ownedSnapRef.current = snap;
       triggerUpdate();
     }, (err: any) => {
+      if (String(err?.code || "") === "already-exists") {
+        // Firestore SDK watch target collision: listener chain ko clean retry do.
+        scheduleCompanyFirestoreListenerRetry("owned");
+      }
       if (err?.code === 'permission-denied' || err?.code === 'PERMISSION_DENIED' || String(err?.message || '').includes('permission')) {
         console.warn('[PERMISSION_DENIED TRACK] source=useCompany query=owned (companies where ownerId==uid)', { code: err?.code });
       }
       console.error("Owned Companies listener error:", err);
     });
     
-    const unsubShared = onSnapshot(sharedQuery, (snap) => {
-      sharedSnapRef.current = snap;
-      triggerUpdate();
-    }, (err: any) => {
-      if (err?.code === 'permission-denied' || err?.code === 'PERMISSION_DENIED' || String(err?.message || '').includes('permission')) {
-        console.warn('[PERMISSION_DENIED TRACK] source=useCompany query=shared (companies where sharedWithEmails contains email)', { code: err?.code });
-      }
-      console.error("Shared Companies listener error:", err);
-    });
+    const unsubShared = sharedQuery
+      ? onSnapshot(sharedQuery, (snap) => {
+          sharedSnapRef.current = snap;
+          triggerUpdate();
+        }, (err: any) => {
+          if (String(err?.code || "") === "already-exists") {
+            // Firestore SDK watch target collision: listener chain ko clean retry do.
+            scheduleCompanyFirestoreListenerRetry("shared");
+          }
+          if (err?.code === 'permission-denied' || err?.code === 'PERMISSION_DENIED' || String(err?.message || '').includes('permission')) {
+            console.warn('[PERMISSION_DENIED TRACK] source=useCompany query=shared (companies where sharedWithEmails contains email)', { code: err?.code });
+          }
+          console.error("Shared Companies listener error:", err);
+        })
+      : () => {};
+    if (!sharedQuery) sharedSnapRef.current = null;
+
+    const unsubOwnedLegacy = ownedLegacyQuery
+      ? onSnapshot(ownedLegacyQuery, (snap) => {
+          ownedLegacySnapRef.current = snap;
+          triggerUpdate();
+        }, (err: any) => {
+          if (String(err?.code || "") === "already-exists") {
+            // Firestore SDK watch target collision: listener chain ko clean retry do.
+            scheduleCompanyFirestoreListenerRetry("ownedLegacy");
+          }
+          if (err?.code === 'permission-denied' || err?.code === 'PERMISSION_DENIED' || String(err?.message || '').includes('permission')) {
+            console.warn('[PERMISSION_DENIED TRACK] source=useCompany query=ownedLegacy (companies where ownerId==legacyUserDocId)', { code: err?.code });
+          }
+          console.error("Owned legacy-id companies listener error:", err);
+        })
+      : () => {};
+    if (!ownedLegacyQuery) ownedLegacySnapRef.current = null;
 
     const unsubOwnedByEmail = ownedByEmailQuery
       ? onSnapshot(ownedByEmailQuery, (snap) => {
           ownedByEmailSnapRef.current = snap;
           triggerUpdate();
         }, (err: any) => {
+          if (String(err?.code || "") === "already-exists") {
+            // Firestore SDK watch target collision: listener chain ko clean retry do.
+            scheduleCompanyFirestoreListenerRetry("ownedByEmail");
+          }
           if (err?.code === 'permission-denied' || err?.code === 'PERMISSION_DENIED') {
             console.warn('[PERMISSION_DENIED TRACK] source=useCompany query=ownedByEmail — deploy firestore.rules (ownerEmail list)', { code: err?.code });
             ownedByEmailSnapRef.current = emptySnap();
@@ -1509,13 +1653,15 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
     return () => {
         unsubOwned();
+        unsubOwnedLegacy();
         unsubShared();
         unsubOwnedByEmail();
         ownedSnapRef.current = null;
+        ownedLegacySnapRef.current = null;
         sharedSnapRef.current = null;
         ownedByEmailSnapRef.current = null;
     }
-}, [user?.email, user?.uid, authLoading, isSuperAdmin, handleSnapshotUpdate, registryVersion]);
+}, [user?.uid, user?.email, customUser?.userDocId, authLoading, isSuperAdmin, handleSnapshotUpdate, registryVersion, companyFirestoreListenerRetryEpoch, scheduleCompanyFirestoreListenerRetry]);
 
   /** Chuni gayi company par direct doc snapshot — static/APK bhi online firebase companies ke liye chalao. */
   useEffect(() => {
@@ -1566,6 +1712,10 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       (err: unknown) => {
         const code =
           err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code) : "";
+        if (code === "already-exists") {
+          // Active doc listener bhi same watch target collision se gir sakta hai — full company listener cycle retry.
+          scheduleCompanyFirestoreListenerRetry("activeCompanyDoc");
+        }
         if (code === "permission-denied" || code === "PERMISSION_DENIED") {
           console.warn("[PERMISSION_DENIED TRACK] source=useCompany doc=companies/{companyId}", { companyId });
         }
@@ -1577,7 +1727,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       cancelled = true;
       unsub();
     };
-  }, [companyId, user?.uid, normalizeLocalCompany]);
+  }, [companyId, user?.uid, normalizeLocalCompany, scheduleCompanyFirestoreListenerRetry]);
 
   // Har "online" SQLite row ke liye Firestore root verify: doc gayab → owner = local me demote, shared = row delete.
   useEffect(() => {
