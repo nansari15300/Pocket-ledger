@@ -23,9 +23,9 @@ PWA / static website (Serwist
 Android APK Native/static
 
 1st — npm run build:static
-2nd — npm run cap:sync
+2nd — npm run cap:sync:bundled
   or  npm run cap:copy:android
-   Or npm run cap:sync:bundled 
+   Or npm run cap:sync
 3rd — android folder: .\gradlew.bat assembleDebug  
   Or  (release ke liye assembleRelease)
 ---------------------------------------------------------------------------------------------------
