@@ -28,6 +28,7 @@ import { firestore } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import {
   applyClientDateRangeFilter,
+  mergeReconciliationLedgerRows,
   rowsWithOpeningFromSnapshot,
   shareDocDateRange,
 } from "@/lib/reconciliation/ledgerSnapshot";
@@ -969,15 +970,15 @@ export default function ReconciliationPage() {
       const viewerOnSenderSide = myCtx?.companyId === s.senderCompanyId;
 
       const myBuilt = await buildLiveReconciliationSideRows(myCtx);
-      if (myBuilt) {
-        mine = myBuilt.rows;
+      const mySnapshotRows = viewerOnSenderSide ? senderSide.rows : receiverSide.rows;
+      const mySnapshotOpening = viewerOnSenderSide ? senderSide.openingBalance : receiverSide.openingBalance;
+      if (myBuilt && myBuilt.rows.length > 0) {
+        // Owned side — live + snapshot union (local mirror adhoora ho to bhi)
+        mine = mergeReconciliationLedgerRows(myBuilt.rows, mySnapshotRows, myBuilt.openingBalance);
         myOpening = myBuilt.openingBalance;
-      } else if (viewerOnSenderSide) {
-        mine = senderSide.rows;
-        myOpening = senderSide.openingBalance;
       } else {
-        mine = receiverSide.rows;
-        myOpening = receiverSide.openingBalance;
+        mine = mySnapshotRows;
+        myOpening = mySnapshotOpening;
       }
 
       remote = viewerOnSenderSide ? receiverSide.rows : senderSide.rows;
@@ -1008,13 +1009,22 @@ export default function ReconciliationPage() {
     try {
       const s = await getReconciliationShare(shareId, companyId ?? undefined);
       if (!s || s.status !== "linked") return;
-      const side = s.senderUserId === user.uid ? "sender" : "receiver";
+      // Viewer ki owned side — sender+receiver same uid par galat side refresh na ho
+      const viewerSide = reconciliationViewerSide(s, user.uid, companyId ?? undefined);
+      const side =
+        viewerSide === "receiver"
+          ? "receiver"
+          : viewerSide === "sender"
+            ? "sender"
+            : s.senderUserId === user.uid
+              ? "sender"
+              : "receiver";
       await refreshReconciliationSideSnapshot({ shareId: s.id, side });
     } catch {
       /* snapshot fail — live voucher load phir bhi try karo */
     }
     await load({ silent: true });
-  }, [shareId, user?.uid, load]);
+  }, [shareId, user?.uid, companyId, load]);
 
   React.useEffect(() => {
     if (!enabled || !canView) return;
@@ -1027,10 +1037,20 @@ export default function ReconciliationPage() {
     [myRowsSource, myOpeningSource, myDateRange]
   );
 
-  const pairs = React.useMemo(
-    () => sortReconciliationPairs(pairReconciliationRows(myRows, remoteRows), sortBy, sortOrder),
-    [myRows, remoteRows, sortBy, sortOrder]
-  );
+  const pairs = React.useMemo(() => {
+    const myCtx =
+      share && user?.uid ? getMyReconciliationSideContext(share, user.uid, companyId ?? "") : null;
+    const remoteCtx =
+      share && user?.uid ? getRemoteReconciliationSideContext(share, user.uid, companyId ?? "") : null;
+    return sortReconciliationPairs(
+      pairReconciliationRows(myRows, remoteRows, {
+        leftCompanyId: myCtx?.companyId,
+        rightCompanyId: remoteCtx?.companyId,
+      }),
+      sortBy,
+      sortOrder
+    );
+  }, [myRows, remoteRows, sortBy, sortOrder, share, user?.uid, companyId]);
 
   const pagination = React.useMemo(
     () => paginateReconciliationPairs(pairs, rowsPerPage, currentPage),
@@ -1049,22 +1069,24 @@ export default function ReconciliationPage() {
     if (currentPage > totalPages) setCurrentPage(totalPages);
   }, [currentPage, totalPages]);
 
-  const leftFooterCounts = React.useMemo(
-    () => ({
-      before: countReconciliationSideRows(pairs, "left", 0, pagination.sliceStart),
-      after: countReconciliationSideRows(pairs, "left", pagination.sliceEnd, pairs.length),
-      total: countReconciliationSideRows(pairs, "left"),
-    }),
-    [pairs, pagination.sliceStart, pagination.sliceEnd]
+  // Side totals — meta pills ke liye; pagination ek hi bar (pair slice counts).
+  const leftTotalCount = React.useMemo(
+    () => countReconciliationSideRows(pairs, "left"),
+    [pairs]
   );
 
-  const rightFooterCounts = React.useMemo(
+  const rightTotalCount = React.useMemo(
+    () => countReconciliationSideRows(pairs, "right"),
+    [pairs]
+  );
+
+  const pairFooterCounts = React.useMemo(
     () => ({
-      before: countReconciliationSideRows(pairs, "right", 0, pagination.sliceStart),
-      after: countReconciliationSideRows(pairs, "right", pagination.sliceEnd, pairs.length),
-      total: countReconciliationSideRows(pairs, "right"),
+      before: pagination.sliceStart,
+      after: pairs.length - pagination.sliceEnd,
+      total: pairs.length,
     }),
-    [pairs, pagination.sliceStart, pagination.sliceEnd]
+    [pairs.length, pagination.sliceStart, pagination.sliceEnd]
   );
 
   /** Paginated pair index — same date+amount dono side green highlight */
@@ -1154,6 +1176,12 @@ export default function ReconciliationPage() {
     return getMyReconciliationSideContext(share, user.uid, companyId ?? "")?.companyId ?? companyId ?? null;
   }, [share, user?.uid, companyId]);
 
+  /** Other party company — remote ledger live refresh listener ke liye */
+  const remoteReconCompanyId = React.useMemo(() => {
+    if (!share || !user?.uid) return null;
+    return getRemoteReconciliationSideContext(share, user.uid, companyId ?? "")?.companyId ?? null;
+  }, [share, user?.uid, companyId]);
+
   /** Owned company vouchers change → debounced background refresh (live row add/remove) */
   React.useEffect(() => {
     const cid = myReconCompanyId;
@@ -1178,6 +1206,30 @@ export default function ReconciliationPage() {
       if (liveRefreshTimerRef.current) clearTimeout(liveRefreshTimerRef.current);
     };
   }, [myReconCompanyId, enabled, canView, refreshMySideSilent]);
+
+  /** Other party vouchers change → poori table silent reload (super admin sender company se dekhe) */
+  React.useEffect(() => {
+    const cid = remoteReconCompanyId;
+    if (!cid || cid === myReconCompanyId || !enabled || !canView || isLocalOnlyMode()) return;
+
+    let skipInitial = true;
+    const schedule = () => {
+      if (skipInitial) {
+        skipInitial = false;
+        return;
+      }
+      if (liveRefreshTimerRef.current) clearTimeout(liveRefreshTimerRef.current);
+      liveRefreshTimerRef.current = setTimeout(() => {
+        liveRefreshTimerRef.current = null;
+        void load({ silent: true });
+      }, 700);
+    };
+
+    const unsub = onSnapshot(collection(firestore, `companies/${cid}/vouchers`), schedule);
+    return () => {
+      unsub();
+    };
+  }, [remoteReconCompanyId, myReconCompanyId, enabled, canView, load]);
 
   /** You-side row double-click — voucher edit dialog (share wali company se load). */
   const handleEditMyVoucher = React.useCallback(
@@ -1408,12 +1460,11 @@ export default function ReconciliationPage() {
         setCurrentPage={setCurrentPage}
         rowsPerPageSelectValue={rowsPerPageSelectValue}
         onRowsPerPageChange={handleRowsPerPageChange}
-        leftBeforeCount={leftFooterCounts.before}
-        leftAfterCount={leftFooterCounts.after}
-        leftTotalCount={leftFooterCounts.total}
-        rightBeforeCount={rightFooterCounts.before}
-        rightAfterCount={rightFooterCounts.after}
-        rightTotalCount={rightFooterCounts.total}
+        pairBeforeCount={pairFooterCounts.before}
+        pairAfterCount={pairFooterCounts.after}
+        pairTotalCount={pairFooterCounts.total}
+        leftTotalCount={leftTotalCount}
+        rightTotalCount={rightTotalCount}
         leftOwnedCompanyName={mySideMeta.companyName}
         leftOwnedAccountName={mySideMeta.accountName}
         rightOtherCompanyName={remoteSideMeta.companyName}

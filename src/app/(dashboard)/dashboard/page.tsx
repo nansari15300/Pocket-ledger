@@ -587,6 +587,8 @@ function DashboardPageContent() {
   const calendarMonths = useCalendarMonths();
   
   const [loading, setLoading] = React.useState(true);
+  // First successful voucher hydration ke baad background revalidation par full-page skeleton mat dikhao (startup flicker cut).
+  const [initialVoucherBootSettled, setInitialVoucherBootSettled] = React.useState(false);
   
   const [userNames, setUserNames] = React.useState<Record<string, string>>({});
   
@@ -852,6 +854,13 @@ function DashboardPageContent() {
     }
     setLoading(vouchersLoading);
   }, [companyId, vouchersLoading]);
+
+  React.useEffect(() => {
+    if (!vouchersLoading) {
+      // Voucher list ek baar stable milte hi future loading toggles ko inline revalidate samjho.
+      setInitialVoucherBootSettled(true);
+    }
+  }, [vouchersLoading]);
 
   React.useEffect(() => {
     if (vouchers.length > 0) {
@@ -1897,7 +1906,7 @@ function DashboardPageContent() {
   );
   }
   
-  if (vouchersLoading) {
+  if (vouchersLoading && !initialVoucherBootSettled) {
     return (
       <div className="p-4 space-y-4">
         <Skeleton className="w-full h-32" />

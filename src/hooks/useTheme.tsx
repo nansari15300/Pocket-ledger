@@ -24,6 +24,31 @@ type ThemeContextType = {
 };
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
+// Theme swap par body ka pura className wipe na ho; sirf known theme/primary classes replace karo.
+const THEME_CLASS_NAMES: Theme[] = [
+  "theme-pure-white",
+  "theme-vagawa",
+  "theme-soft-green",
+  "theme-dim-soft-green",
+  "theme-soft-blue",
+  "theme-sky-blue",
+  "theme-soft-yellow",
+  "theme-soft-pink",
+  "theme-colorfull",
+  "theme-pro",
+];
+const PRIMARY_CLASS_NAMES: PrimaryColor[] = [
+  "primary-pure-white",
+  "primary-vagawa",
+  "primary-soft-green",
+  "primary-dim-soft-green",
+  "primary-soft-blue",
+  "primary-sky-blue",
+  "primary-soft-yellow",
+  "primary-soft-pink",
+  "primary-colorfull",
+  "primary-pro",
+];
 
 export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
   // SSR + first paint: Pro — localStorage read se pehle Light mat likho.
@@ -48,8 +73,9 @@ export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
 
   useEffect(() => {
     if (!themeHydrated) return;
-    document.body.className = "";
-    // Root layout jaisa typography + theme; sirf theme classes se base Tailwind classes wipe na hon
+    // Startup flicker fix: static dashboard load par body reset (blank frame) ki jagah targeted class replace karo.
+    document.body.classList.remove(...THEME_CLASS_NAMES, ...PRIMARY_CLASS_NAMES);
+    // Root layout jaisa typography + theme; base classes stable rakhkar sirf active theme apply karo.
     document.body.classList.add("font-body", "antialiased", theme, primaryColor);
     localStorage.setItem(THEME_STORAGE_KEY, theme);
     localStorage.setItem(PRIMARY_STORAGE_KEY, primaryColor);

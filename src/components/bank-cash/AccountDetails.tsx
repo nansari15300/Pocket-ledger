@@ -141,7 +141,9 @@ import { getOpeningBalanceBaseAmount, getOpeningBalanceVoucherLabel, SPEND_WISE_
 import {
   attachSpendWisePageEdgeFlags,
   buildSpendWiseDisplayBlocks,
+  computeStatementFooterCountsFromPage,
   packFlatListByDataLineBudgetFromEnd,
+  reorderSpendWiseRowsByDate,
 } from "@/lib/spendWisePagination";
 
 interface AccountDetailsProps {
@@ -619,7 +621,7 @@ export function AccountDetails({
       rows.push(remainderRow);
       if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}`, _rowKey: nextRowKey() });
     });
-    const result = rows.length ? rows : baseTransactions;
+    const result = rows.length ? reorderSpendWiseRowsByDate(rows) : baseTransactions;
     // Perf debug: spend-wise grouping total time + output size, freeze hotspot trace ke liye.
     perfDebugLog("bank.accountDetails.displayTransactions", perfStart, {
       vouchersCount: vouchers.length,
@@ -678,10 +680,28 @@ export function AccountDetails({
     openingBalanceForPeriod,
   ]);
 
-  const displayTransactionCount = useMemo(
-    () => ledgerSortedTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length,
-    [ledgerSortedTransactions]
-  );
+  // Footer Total/(before)/(after) — statement voucher list; spend-wise me bhi wahi count
+  const statementListForCounts = useMemo(() => {
+    if (!spendWiseView) return ledgerSortedTransactions as any[];
+    const rows = filterByUnapprovedOnly(baseTransactions);
+    const sorted = sortTransactionsWithFiscalMergeForCompany(rows, sortBy, sortOrder, undefined, company);
+    const filtered = statementCheck.filterTransactions([...sorted]);
+    if (statementCheck.checkModeActive) {
+      return recomputeRunningBalanceTopToBottom(filtered, openingBalanceForPeriod);
+    }
+    return filtered;
+  }, [
+    spendWiseView,
+    ledgerSortedTransactions,
+    baseTransactions,
+    filterByUnapprovedOnly,
+    sortBy,
+    sortOrder,
+    company,
+    openingBalanceForPeriod,
+    statementCheck.filterTransactions,
+    statementCheck.checkModeActive,
+  ]);
 
   /** One row per block in statement; spend-wise: groups + spacers (used for search + pagination). */
   const displayBlocks = useMemo(
@@ -730,6 +750,13 @@ export function AccountDetails({
       desktopLedgerSliceFlatStart: start,
     };
   }, [sortedTransactions, displayBlocks, spendWiseView, rowsPerPage, currentPage]);
+
+  // Statement jaisa voucher-based footer counts — spend-wise linked rows alag na gino
+  const ledgerFooterPagingCounts = useMemo(() => {
+    const pageRows = (paginatedTransactions as any[]).filter((t: any) => !(t as any)?._spendWiseSpacer);
+    return computeStatementFooterCountsFromPage(statementListForCounts as any[], pageRows);
+  }, [statementListForCounts, paginatedTransactions]);
+
   // Page-break dynamic opening: first visible txn se pehle ka running balance opening row me dikhana.
   const desktopPageLedgerStats = useMemo(() => {
     const pageRows = (paginatedTransactions as any[]).filter((t: any) => !(t as any)?._spendWiseSpacer);
@@ -763,11 +790,8 @@ export function AccountDetails({
       periodCrForPage = adjusted.periodCrForPage;
       closingForPage = adjusted.closingForPage;
     }
-    const pageRowsCount = pageRows.length;
-    const beforeCount = desktopLedgerSliceFlatStart;
-    const afterCount = Math.max(0, displayTransactionCount - beforeCount - pageRowsCount);
-    return { openingForPage, periodDrForPage, periodCrForPage, closingForPage, beforeCount, afterCount };
-  }, [paginatedTransactions, ledgerSortedTransactions, openingBalanceForPeriod, statementCheck.adjustPeriodTotals, desktopLedgerSliceFlatStart, displayTransactionCount]);
+    return { openingForPage, periodDrForPage, periodCrForPage, closingForPage };
+  }, [paginatedTransactions, ledgerSortedTransactions, openingBalanceForPeriod, statementCheck.adjustPeriodTotals]);
 
   const isFilterActive =
     dateRange !== undefined || Object.values(filters).some((v) => v);
@@ -1809,9 +1833,9 @@ export function AccountDetails({
           setCurrentPage={setCurrentPage}
           rowsPerPageSelectValue={rowsPerPageSelectValue}
           onRowsPerPageChange={handleRowsPerPageChange}
-          beforeCount={desktopPageLedgerStats.beforeCount}
-          afterCount={desktopPageLedgerStats.afterCount}
-          totalCount={displayTransactionCount}
+          beforeCount={ledgerFooterPagingCounts.beforeCount}
+          afterCount={ledgerFooterPagingCounts.afterCount}
+          totalCount={ledgerFooterPagingCounts.totalCount}
         />
       </div>
   );

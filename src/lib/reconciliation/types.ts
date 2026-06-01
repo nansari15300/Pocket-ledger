@@ -20,6 +20,8 @@ export type ReconciliationLedgerRow = {
   amount: number;
   /** Running balance after row (Dr − Cr ledger style). */
   balance?: number;
+  /** Sync/copy se opposite company voucher link — smart pair match ke liye. */
+  crossCopySourceRef?: { companyId: string; voucherId: string };
 };
 
 /** Firestore `reconciliation_shares/{shareId}` */

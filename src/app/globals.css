@@ -577,6 +577,19 @@ body.theme-colorfull [data-theme-table="transactions"] table tfoot td {
   border-bottom-color: transparent !important;
 }
 
+/* Spend-wise group card: cards ke beech line nahi — sirf card ke andar txn separator row se */
+[data-pl-spend-group-card] tbody tr.spend-wise-inner-txn-sep > td {
+  padding: 0 !important;
+  margin: 0 !important;
+  height: 0 !important;
+  line-height: 0 !important;
+  font-size: 0 !important;
+  border: none !important;
+  border-top: 1px solid #000 !important;
+  vertical-align: middle;
+  background: transparent !important;
+}
+
 /* Colorfull: action btn — bg + border same hue se thoda dark (pic-4 jaisa match) */
 body.theme-colorfull [data-theme-btn="add-sale"] { background: hsl(142 55% 42%) !important; color: white !important; border-color: hsl(142 55% 30%) !important; }
 body.theme-colorfull [data-theme-btn="add-sale"]:hover { background: hsl(142 55% 36%) !important; border-color: hsl(142 55% 26%) !important; }
@@ -1471,6 +1484,24 @@ button.day_selected.is-today.has-transactions {
     border-bottom-width: 1px !important;
     border-bottom-color: #000000 !important;
   }
+  /* Spend-wise: cards ke beech gap / inner sep par admin global border mat lagao */
+  html.pl-admin-route [data-theme-table="transactions"] tbody tr.spend-wise-gap-row,
+  html.pl-admin-route [data-theme-table="transactions"] tbody tr.spend-wise-gap-row > td {
+    border-bottom-width: 0 !important;
+    border-top-width: 0 !important;
+  }
+  html.pl-admin-route [data-theme-table="transactions"] tbody tr.spend-wise-group-card-row,
+  html.pl-admin-route [data-theme-table="transactions"] tbody tr.spend-wise-group-card-row > td {
+    border-bottom-width: 0 !important;
+    border-top-width: 0 !important;
+  }
+  html.pl-admin-route [data-pl-spend-group-card] tbody tr.spend-wise-inner-txn-sep {
+    border-bottom-width: 0 !important;
+  }
+  html.pl-admin-route [data-pl-spend-group-card] tbody tr.spend-wise-inner-txn-sep > td {
+    border-bottom-width: 0 !important;
+    border-top: 1px solid #000 !important;
+  }
   html.pl-admin-route .scrollbar-slim-dim {
     scrollbar-color: rgba(0, 0, 0, 0.35) transparent;
   }
@@ -1684,6 +1715,14 @@ button.day_selected.is-today.has-transactions {
   [data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td {
     border-bottom-width: 0 !important;
     box-shadow: inset 0 -1px 0 0 #000;
+  }
+  [data-pl-spend-group-card] tbody tr.spend-wise-inner-txn-sep > td {
+    padding: 0 !important;
+    height: 0 !important;
+    line-height: 0 !important;
+    border: none !important;
+    border-top: 1px solid #000 !important;
+    background: transparent !important;
   }
   [data-theme-table="transactions"] tbody tr.narration-row > td:first-child,
   [data-theme-table="transactions"] tbody tr.narration-row > td:last-child {
@@ -3727,6 +3766,12 @@ body[class*="theme-"] [data-pl-spend-group-card] .transaction-main-row + .narrat
 body[class*="theme-"] [data-pl-spend-group-card] .transaction-main-row + .narration-row[data-pl-spend-in-group-card] {
   border-top-width: 0 !important;
   border-bottom-width: 0 !important;
+}
+/* Spend-wise card ke andar txn separator — theme border reset se line na ude */
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.spend-wise-inner-txn-sep > td {
+  border-top: 1px solid #000 !important;
+  border-bottom: none !important;
+  background: transparent !important;
 }
 /* Admin route: tbody tr par global border-bottom — spend-wise main↔narration par band */
 html.pl-admin-route [data-pl-spend-group-card] tbody tr.transaction-main-row:has(+ .narration-row),

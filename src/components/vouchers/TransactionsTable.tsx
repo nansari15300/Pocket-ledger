@@ -81,6 +81,9 @@ export type VisibleColumns = Partial<Record<TransactionColumnKey, boolean>>;
 
 export { TransactionRow, getConversionFactor, formatQuantity };
 
+/** Spend-wise table-fixed: type pill ("direct expense") — 75px par voucher no overlap hota tha. */
+const SPEND_WISE_TYPE_COL_PX = 112;
+
 /** Firestore Timestamp | plain `{seconds}` | Date | string — opening / period row; OB noon parse shared helper */
 function normalizeLedgerObDateField(v: unknown): Date | null {
   return parseOpeningBalanceDateToLocalNoon(v);
@@ -970,7 +973,12 @@ export function TransactionsTable({
   ) => (
     <>
       {showCol("type") && (
-        <TableCell className={cn("align-middle", ensureMinGaps && "min-w-[75px] px-[5px]")}>
+        <TableCell
+          className={cn(
+            "align-middle overflow-hidden",
+            ensureMinGaps && (hasSpendWiseGroups ? "min-w-[112px] px-[5px]" : "min-w-[75px] px-[5px]")
+          )}
+        >
           <div className="flex flex-wrap items-center gap-2">
             {showSearchSlot ? openingBalanceLeftContent : null}
             {showSearchSlot ? openingBalanceSearch : null}
@@ -1093,7 +1101,7 @@ export function TransactionsTable({
         w.push(112);
       }
     }
-    if (showCol("type")) w.push(75);
+    if (showCol("type")) w.push(SPEND_WISE_TYPE_COL_PX);
     if (showCol("voucherNo")) w.push(105);
     if (context === "daybook") w.push(120);
     if (isItemPartyContext && showItemPartyColumn) w.push(90);
@@ -1651,7 +1659,7 @@ export function TransactionsTable({
           ) : (
             renderHeaderWithFilter("date", "Date", false, ensureMinGaps ? 112 : undefined)
           ))}
-          {showCol("type") && renderHeaderWithFilter("type", "Type", false, ensureMinGaps ? 75 : undefined)}
+          {showCol("type") && renderHeaderWithFilter("type", "Type", false, ensureMinGaps ? (hasSpendWiseGroups ? SPEND_WISE_TYPE_COL_PX : 75) : undefined)}
           {showCol("voucherNo") && renderHeaderWithFilter("voucherNumber", "Voucher No.", false, ensureMinGaps ? 105 : undefined)}
           {context === 'daybook' && renderHeaderWithFilter("accounts", "Accounts", false, ensureMinGaps ? 120 : undefined)}
           {/* Item + Item-group page: Party header visibility follows Columns dropdown toggle. */}
@@ -2014,7 +2022,7 @@ export function TransactionsTable({
                           !clippedTop && !clippedBottom && (colorIndex === 0 || colorIndex === 3) && "outline outline-1 outline-blue-500/80"
                         );
                       return (
-                        <tr key={groupKey}>
+                        <tr key={groupKey} className="spend-wise-group-card-row">
                           <td
                             colSpan={fullRowColSpan}
                             className="p-0 align-top border-none bg-transparent"
@@ -2038,57 +2046,65 @@ export function TransactionsTable({
                                   </colgroup>
                                 )}
                                 <tbody>
-                                  {block.items.map((t: any) => {
+                                  {block.items.map((t: any, itemIdx: number) => {
                                     const rowKey = (t as any)._rowKey ?? (t as any).id;
                                     const txnStripeIndex = txnStripeSeq++;
+                                    const innerColSpan = spendWiseColWidths.length || fullRowColSpan;
                                     return (
-                                      <TransactionRow
-                                        key={rowKey}
-                                        txnStripeIndex={txnStripeIndex}
-                                        transaction={t}
-                                        fullRowColSpan={fullRowColSpan}
-                                        animateLayout={true}
-                                        layoutTransition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
-                                        isSpendWiseChild={!!(t as any)._spendWiseChild}
-                                        isSpendWiseGroupFirst={!!(t as any)._spendWiseGroupFirst}
-                                        isSpendWiseGroupLast={!!(t as any)._spendWiseGroupLast}
-                                        spendWiseRunningBalance={(t as any)._spendWiseRunningBalance}
-                                        spendWiseGroupColorIndex={(t as any)._spendWiseGroupColorIndex}
-                                        spendWiseGroupSize={block.items.length}
-                                        spendWiseInGroupCard
-                                        blinkMode={blinkMode}
-                                        showNarration={showNarration}
-                                        userNames={userNames}
-                                        journalAccountNames={journalAccountNames}
-                                        accountNames={accountNames}
-                                        context={context}
-                                        contextId={contextId}
-                                        groupEntityType={groupEntityType}
-                                        showItemPartyColumn={showItemPartyColumn}
-                                        stockView={stockView}
-                                        displayUnit={displayUnit}
-                                        item={item}
-                                        onRowClick={onRowClick}
-                                        onAddLink={onAddLink}
-                                        onHistoryVoucher={onHistoryVoucher}
-                                        onApproveVoucher={effectiveOnApproveVoucher}
-                                        {...getStatementCheckRowProps(t)}
-                                        isRelatedBlink={getIsRelatedBlink(t)}
-                                        isSelectedRowBlink={getIsSelectedRowBlink(t)}
-                                        getDisplayValue={getDisplayValue}
-                                        isTaxContext={isTaxContext}
-                                        isBalanceMasked={isBalanceMasked}
-                                        hideBalanceColumn={hideBalanceColumn}
-                                        hideStatusColumn={hideStatusColumn}
-                                        visibleColumns={visibleColumns}
-                                        useOutstandingForBalance={shouldUseOutstandingBalance}
-                                        isBillWise={isBillWiseMode}
-                                        ensureMinGaps={ensureMinGaps}
-                                        showFileColumn={showFileBySelection}
-                                        statusBillWiseOnly={statusBillWiseOnly}
-                                        highlightPendingApproval={highlightPendingApproval}
-                                        textSearchHighlight={transactionCardSearchHighlight}
-                                      />
+                                      <React.Fragment key={rowKey}>
+                                        <TransactionRow
+                                          txnStripeIndex={txnStripeIndex}
+                                          transaction={t}
+                                          fullRowColSpan={fullRowColSpan}
+                                          animateLayout={true}
+                                          layoutTransition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
+                                          isSpendWiseChild={!!(t as any)._spendWiseChild}
+                                          isSpendWiseGroupFirst={!!(t as any)._spendWiseGroupFirst}
+                                          isSpendWiseGroupLast={!!(t as any)._spendWiseGroupLast}
+                                          spendWiseRunningBalance={(t as any)._spendWiseRunningBalance}
+                                          spendWiseGroupColorIndex={(t as any)._spendWiseGroupColorIndex}
+                                          spendWiseGroupSize={block.items.length}
+                                          spendWiseInGroupCard
+                                          blinkMode={blinkMode}
+                                          showNarration={showNarration}
+                                          userNames={userNames}
+                                          journalAccountNames={journalAccountNames}
+                                          accountNames={accountNames}
+                                          context={context}
+                                          contextId={contextId}
+                                          groupEntityType={groupEntityType}
+                                          showItemPartyColumn={showItemPartyColumn}
+                                          stockView={stockView}
+                                          displayUnit={displayUnit}
+                                          item={item}
+                                          onRowClick={onRowClick}
+                                          onAddLink={onAddLink}
+                                          onHistoryVoucher={onHistoryVoucher}
+                                          onApproveVoucher={effectiveOnApproveVoucher}
+                                          {...getStatementCheckRowProps(t)}
+                                          isRelatedBlink={getIsRelatedBlink(t)}
+                                          isSelectedRowBlink={getIsSelectedRowBlink(t)}
+                                          getDisplayValue={getDisplayValue}
+                                          isTaxContext={isTaxContext}
+                                          isBalanceMasked={isBalanceMasked}
+                                          hideBalanceColumn={hideBalanceColumn}
+                                          hideStatusColumn={hideStatusColumn}
+                                          visibleColumns={visibleColumns}
+                                          useOutstandingForBalance={shouldUseOutstandingBalance}
+                                          isBillWise={isBillWiseMode}
+                                          ensureMinGaps={ensureMinGaps}
+                                          showFileColumn={showFileBySelection}
+                                          statusBillWiseOnly={statusBillWiseOnly}
+                                          highlightPendingApproval={highlightPendingApproval}
+                                          textSearchHighlight={transactionCardSearchHighlight}
+                                        />
+                                        {/* Card ke andar txn ke beech — alag sep row (zoom-stable border-top) */}
+                                        {itemIdx < block.items.length - 1 ? (
+                                          <tr aria-hidden="true" className="spend-wise-inner-txn-sep">
+                                            <td colSpan={innerColSpan} />
+                                          </tr>
+                                        ) : null}
+                                      </React.Fragment>
                                     );
                                   })}
                                 </tbody>

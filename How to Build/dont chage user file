@@ -68,4 +68,8 @@ Android APK Native/static
 ===== Sab ek baar me (static + cap android/ios copy + Electron win+linux) =====
 
 1st — npm run build:static:all       (ye hi poore chain ko chalata hai — alag steps manually nahi)
+
+
+
+Out Folder Run            npx serve out -l 4173
 ----------------------------------------------------------------------------------------------------

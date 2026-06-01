@@ -212,6 +212,59 @@ const FLAT_SELECT_TRIGGER = "h-9 w-full border-0 shadow-none focus-visible:ring-
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
+/** Qty — amount se derive karte waqt 6 decimal (2000÷175 = 11.428571, save par amount 2000 hi rahe) */
+const round6 = (n: number) => Math.round((n + Number.EPSILON) * 1_000_000) / 1_000_000;
+
+/** Sale line: item ki default sale unit — amount type par khali unit par auto-select */
+function getItemDefaultSaleUnit(item: { salePriceUnit?: string; unitConversions?: unknown[] }): string {
+  const conversions = (item.unitConversions || []) as { fromUnit?: string }[];
+  return item.salePriceUnit || conversions[0]?.fromUnit || "";
+}
+
+/** Qty × rate → line amount (tax inclusive/exclusive) */
+function calcSaleLineAmountFromQty(
+  qty: number,
+  rate: number,
+  taxRate: number,
+  isTaxInclusive: boolean
+): { amount: number; taxAmount: number } {
+  if (isTaxInclusive) {
+    const amount = round2(qty * (rate / (1 + taxRate)));
+    return { amount, taxAmount: round2(amount * taxRate) };
+  }
+  const amount = round2(qty * rate);
+  return { amount, taxAmount: round2(amount * taxRate) };
+}
+
+/** Amount type → qty (6 decimal — amount save value preserve) */
+function calcSaleLineQtyFromAmount(
+  amount: number,
+  rate: number,
+  taxRate: number,
+  isTaxInclusive: boolean
+): number {
+  if (amount <= 0 || rate <= 0) return 0;
+  if (isTaxInclusive) {
+    return round6((amount * (1 + taxRate)) / rate);
+  }
+  return round6(amount / rate);
+}
+
+/** Edit/load: saved amount ≠ qty×rate → amount-driven line (amount overwrite na ho) */
+function savedSaleAmountDiffersFromQtyCalc(
+  qty: number,
+  rate: number,
+  savedAmount: number,
+  taxRate: number,
+  isTaxInclusive: boolean
+): boolean {
+  if (rate <= 0 || savedAmount <= 0) return false;
+  const { amount: derived } = calcSaleLineAmountFromQty(qty, rate, taxRate, isTaxInclusive);
+  return Math.abs(round2(derived) - round2(savedAmount)) >= 0.01;
+}
+
+type SaleLineCalcMode = "qty" | "amount";
+
 const getVoucherPrefix = (
   type: "item" | "service",
   prefixes?: Record<string, string[]>
@@ -373,6 +426,10 @@ export function CreateSaleForm({
   const initialFilesRef = useRef<string[]>([]);
   /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
   const lastResetVoucherIdRef = useRef<string | null>(null);
+  /** Line id → qty-driven ya amount-driven calc (amount field se qty derive) */
+  const lineCalcModeRef = useRef<Map<string, SaleLineCalcMode>>(new Map());
+  /** Voucher badle to calc mode dubara seed — edit par amount 2000 preserve */
+  const lineCalcSeededVoucherKeyRef = useRef<string | null>(null);
   const [taxRowIndex, setTaxRowIndex] = useState<number | null>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isDueDateCalendarOpen, setIsDueDateCalendarOpen] = useState(false);
@@ -755,6 +812,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
   }, [voucher, form]);
 
+  // Voucher/draft badle → line calc mode reset (edit load par amount-driven detect dubara)
+  useEffect(() => {
+    const key = voucher?.id
+      ? String(voucher.id)
+      : voucher
+        ? `draft:${String(voucher.partyId || "")}:${String(voucher.voucherNumber || "")}`
+        : "new";
+    if (lineCalcSeededVoucherKeyRef.current !== key) {
+      lineCalcModeRef.current.clear();
+      lineCalcSeededVoucherKeyRef.current = key;
+    }
+  }, [voucher?.id, voucher?.partyId, voucher?.voucherNumber, voucher]);
+
   /* ---------------------- AUTO VOUCHER NUMBER GENERATION ------------------ */
 
   const fetchVoucherNumber = useCallback(
@@ -850,6 +920,76 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     return targetPrice;
   };
 
+  const markLineQtyDriven = useCallback((lineId: string) => {
+    lineCalcModeRef.current.set(lineId, "qty");
+  }, []);
+
+  const markLineAmountDriven = useCallback((lineId: string) => {
+    lineCalcModeRef.current.set(lineId, "amount");
+  }, []);
+
+  /** Amount type: unit khali → base unit; rate 0 → item master se rate (qty derive ke liye) */
+  const prepareLineForAmountEntry = useCallback(
+    (index: number, itemId: string): { unit: string; rate: number } => {
+      const sel = allProcessedItems.find((i) => i.id === itemId);
+      if (!sel) return { unit: "", rate: 0 };
+
+      let unit = String(form.getValues(`lineItems.${index}.unit`) ?? "").trim();
+      if (!unit) {
+        unit = getItemDefaultSaleUnit(sel);
+        if (unit) {
+          form.setValue(`lineItems.${index}.unit`, unit, { shouldDirty: true });
+        }
+      }
+
+      let rate = Number(form.getValues(`lineItems.${index}.rate`) ?? 0);
+      if (rate <= 0 && unit) {
+        rate = getUnitBasedPrice(sel, unit, "sale");
+      }
+      // Unit set hai par rate 0 — base unit ka rate try karo
+      if (rate <= 0) {
+        const baseUnit = getItemDefaultSaleUnit(sel);
+        if (baseUnit) {
+          const baseRate = getUnitBasedPrice(sel, baseUnit, "sale");
+          if (baseRate > 0) {
+            unit = baseUnit;
+            rate = baseRate;
+            form.setValue(`lineItems.${index}.unit`, unit, { shouldDirty: true });
+          }
+        }
+      }
+      if (rate > 0) {
+        const curRate = Number(form.getValues(`lineItems.${index}.rate`) ?? 0);
+        if (curRate !== rate) {
+          form.setValue(`lineItems.${index}.rate`, rate, { shouldDirty: true });
+        }
+      }
+      return { unit, rate };
+    },
+    [allProcessedItems, form]
+  );
+
+  const handleLineAmountChange = useCallback(
+    (index: number, lineId: string, raw: string, fieldOnChange: (v: number) => void) => {
+      const itemId = form.getValues(`lineItems.${index}.itemId`);
+      if (!itemId) return;
+      markLineAmountDriven(lineId);
+      const { rate } = prepareLineForAmountEntry(index, itemId);
+      const parsed = raw === "" ? 0 : Number(raw);
+      const amount = Number.isFinite(parsed) ? round2(parsed) : 0;
+      fieldOnChange(amount);
+
+      // Amount type par qty turant fill — sirf useEffect par mat chhodo
+      const taxId = String(form.getValues(`lineItems.${index}.taxAccountId`) ?? "");
+      const taxRow = processedTaxes.find((t) => t.id === taxId);
+      const taxRate = taxRow ? Number(taxRow.rate) / 100 : 0;
+      const isTaxInclusive = !!form.getValues(`lineItems.${index}.isTaxInclusive`);
+      const qty = calcSaleLineQtyFromAmount(amount, rate, taxRate, isTaxInclusive);
+      form.setValue(`lineItems.${index}.quantity`, qty, { shouldDirty: true });
+    },
+    [form, markLineAmountDriven, prepareLineForAmountEntry, processedTaxes]
+  );
+
   useEffect(() => {
     const taxMap = new Map<string, number>(processedTaxes.map((t) => [t.id, Number(t.rate) / 100]));
 
@@ -858,36 +998,93 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     let totalPurchasePrice = 0;
 
     (watchedLineItems || []).forEach((item, index) => {
-      const qty = Number(item?.quantity ?? 0);
+      const lineId = fields[index]?.id;
+      const taxRate = taxMap.get(String(item?.taxAccountId)) ?? 0;
       const rate = Number(item?.rate ?? 0);
+      const qty = Number(item?.quantity ?? 0);
+
+      // Pehli baar: saved amount ≠ qty×rate → amount mode (edit par 2000 → 2000.25 na ho)
+      let mode: SaleLineCalcMode = lineId ? lineCalcModeRef.current.get(lineId) ?? "qty" : "qty";
+      if (lineId && !lineCalcModeRef.current.has(lineId)) {
+        const savedAmount = round2(Number(item?.amount ?? 0));
+        if (
+          item.itemId &&
+          rate > 0 &&
+          savedAmount > 0 &&
+          savedSaleAmountDiffersFromQtyCalc(qty, rate, savedAmount, taxRate, !!item.isTaxInclusive)
+        ) {
+          lineCalcModeRef.current.set(lineId, "amount");
+          mode = "amount";
+        } else {
+          lineCalcModeRef.current.set(lineId, "qty");
+        }
+      }
+
       let amount = 0;
       let taxAmount = 0;
+      let effectiveQty = qty;
 
-      const taxRate = taxMap.get(String(item?.taxAccountId)) ?? 0;
-
-      if (item.isTaxInclusive) {
-        amount = round2(qty * (rate / (1 + taxRate)));
+      if (mode === "amount") {
+        amount = round2(Number(item?.amount ?? 0));
+        let effectiveRate = rate;
+        // Rate 0 ho to item master se resolve — amount se qty derive ho sake
+        if (effectiveRate <= 0 && item.itemId) {
+          const itemData = allProcessedItems.find((i) => i.id === item.itemId);
+          if (itemData) {
+            const unitForRate =
+              String(item.unit ?? "").trim() || getItemDefaultSaleUnit(itemData);
+            effectiveRate = unitForRate ? getUnitBasedPrice(itemData, unitForRate, "sale") : 0;
+            if (effectiveRate <= 0) {
+              const baseUnit = getItemDefaultSaleUnit(itemData);
+              effectiveRate = baseUnit ? getUnitBasedPrice(itemData, baseUnit, "sale") : 0;
+            }
+            if (effectiveRate > 0 && rate !== effectiveRate) {
+              form.setValue(`lineItems.${index}.rate`, effectiveRate, {
+                shouldDirty: false,
+                shouldTouch: false,
+                shouldValidate: false,
+              });
+            }
+          }
+        }
+        effectiveQty = calcSaleLineQtyFromAmount(amount, effectiveRate, taxRate, !!item.isTaxInclusive);
         taxAmount = round2(amount * taxRate);
+
+        const currQty = Number(form.getValues(`lineItems.${index}.quantity`) ?? 0);
+        if (currQty !== effectiveQty) {
+          form.setValue(`lineItems.${index}.quantity`, effectiveQty, {
+            shouldDirty: false,
+            shouldTouch: false,
+            shouldValidate: false,
+          });
+        }
+        const currTaxAmt = Number(form.getValues(`lineItems.${index}.taxAmount`) ?? 0);
+        if (currTaxAmt !== taxAmount) {
+          form.setValue(`lineItems.${index}.taxAmount`, taxAmount, {
+            shouldDirty: false,
+            shouldTouch: false,
+            shouldValidate: false,
+          });
+        }
       } else {
-        amount = round2(qty * rate);
-        taxAmount = round2(amount * taxRate);
-      }
-      
-      const itemData = allProcessedItems.find(i => i.id === item.itemId);
-      const purchasePriceForLine = itemData ? getUnitBasedPrice(itemData, item.unit || '', 'purchase') : 0;
-      const linePurchasePrice = qty * purchasePriceForLine;
-      totalPurchasePrice += linePurchasePrice;
+        const derived = calcSaleLineAmountFromQty(qty, rate, taxRate, !!item.isTaxInclusive);
+        amount = derived.amount;
+        taxAmount = derived.taxAmount;
 
+        const currAmount = Number(form.getValues(`lineItems.${index}.amount`) ?? 0);
+        const currTaxAmt = Number(form.getValues(`lineItems.${index}.taxAmount`) ?? 0);
 
-      const currAmount = Number(form.getValues(`lineItems.${index}.amount`) ?? 0);
-      const currTaxAmt = Number(form.getValues(`lineItems.${index}.taxAmount`) ?? 0);
+        if (currAmount !== amount) {
+          form.setValue(`lineItems.${index}.amount`, amount, { shouldDirty: false, shouldTouch: false, shouldValidate: false });
+        }
+        if (currTaxAmt !== taxAmount) {
+          form.setValue(`lineItems.${index}.taxAmount`, taxAmount, { shouldDirty: false, shouldTouch: false, shouldValidate: false });
+        }
+      }
 
-      if (currAmount !== amount) {
-        form.setValue(`lineItems.${index}.amount`, amount, { shouldDirty: false, shouldTouch: false, shouldValidate: false });
-      }
-      if (currTaxAmt !== taxAmount) {
-        form.setValue(`lineItems.${index}.taxAmount`, taxAmount, { shouldDirty: false, shouldTouch: false, shouldValidate: false });
-      }
+      const itemData = allProcessedItems.find((i) => i.id === item.itemId);
+      const purchasePriceForLine = itemData ? getUnitBasedPrice(itemData, item.unit || "", "purchase") : 0;
+      totalPurchasePrice += effectiveQty * purchasePriceForLine;
 
       subTotal += amount;
       totalTax += taxAmount;
@@ -915,7 +1112,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     if (currTotal !== total) {
       form.setValue("total", total, { shouldDirty: false, shouldTouch: false, shouldValidate: false });
     }
-  }, [watchedLineItems, watchedDiscount, processedTaxes, form, allProcessedItems]);
+  }, [watchedLineItems, watchedDiscount, processedTaxes, form, allProcessedItems, fields]);
 
   /* ------------------------------ HANDLERS -------------------------------- */
 
@@ -1020,8 +1217,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
         const lineItemsWithTax = data.lineItems.map((li) => ({
           ...li,
-          quantity: Number(li.quantity),
-          taxAmount: li.taxAmount || 0,
+          quantity: round6(Number(li.quantity)),
+          amount: round2(Number(li.amount ?? 0)),
+          taxAmount: round2(Number(li.taxAmount ?? 0)),
           // Bina item = blank; select karke save par id Firestore me persist ho.
           itemId: String(li.itemId ?? "").trim(),
         }));
@@ -2147,11 +2345,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     } else {
                                       const itemId = lineItemIdFromComboboxValue(val);
                                       field.onChange(itemId);
+                                      markLineQtyDriven(line.id);
                                       const sel = itemId
                                         ? allProcessedItems.find((i) => i.id === itemId)
                                         : undefined;
                                       if (sel) {
-                                        const defaultUnit = sel.salePriceUnit || (sel.unitConversions as any)?.[0]?.fromUnit || "";
+                                        const defaultUnit = getItemDefaultSaleUnit(sel);
                                         const rate = getUnitBasedPrice(sel, defaultUnit, 'sale');
                                         form.setValue(`lineItems.${index}.rate`, rate, { shouldDirty: true });
                                         form.setValue(`lineItems.${index}.unit`, defaultUnit, { shouldDirty: true });
@@ -2192,7 +2391,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 <FormItem>
                                   <FormLabel className="text-xs">Qty</FormLabel>
                                   <FormControl>
-                                    <Input type="number" {...field} className="h-9 text-xs text-right" disabled={itemFieldsDisabled} />
+                                    <Input
+                                      type="number"
+                                      {...field}
+                                      value={field.value ?? ""}
+                                      step="0.000001"
+                                      min={0}
+                                      className="h-9 text-xs text-right tabular-nums"
+                                      disabled={itemFieldsDisabled}
+                                      onChange={(e) => {
+                                        markLineQtyDriven(line.id);
+                                        field.onChange(e);
+                                      }}
+                                    />
                                   </FormControl>
                                 </FormItem>
                               )}
@@ -2212,6 +2423,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                             <Input
                                               type="number"
                                               {...field}
+                                              onChange={(e) => {
+                                                markLineQtyDriven(line.id);
+                                                field.onChange(e);
+                                              }}
                                               disabled={saleRateDisabled(index, itemFieldsDisabled)}
                                               className={cn("h-9 min-w-0 flex-1 text-xs text-right", saleRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
                                               title={
@@ -2282,6 +2497,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         disabled={itemFieldsDisabled}
                                         onChange={(val, newName) => {
                                           const unitVal = val === "add-new" ? (newName || "").trim() : val;
+                                          markLineQtyDriven(line.id);
                                           field.onChange(unitVal);
                                           onPersistNewUnit(val, unitVal);
                                           const sel = allProcessedItems.find((i) => i.id === form.getValues(`lineItems.${index}.itemId`));
@@ -2393,19 +2609,32 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <FormField
                               control={form.control}
                               name={`lineItems.${index}.amount`}
-                              render={({ field }: any) => (
+                              render={({ field }: any) => {
+                                const lineAmountEditable =
+                                  Boolean(watchedLineItems?.[index]?.itemId) && !itemFieldsDisabled;
+                                return (
                                 <FormItem>
                                   <FormLabel className="text-xs">Amount</FormLabel>
                                   <FormControl>
                                     <Input
                                       type="number"
                                       {...field}
-                                      readOnly
-                                      className="h-9 text-xs text-right bg-muted"
+                                      value={field.value ?? ""}
+                                      readOnly={!lineAmountEditable}
+                                      disabled={!lineAmountEditable}
+                                      title={lineAmountEditable ? "Amount type karo — unit (base) aur qty auto fill" : "Pehle item select karo"}
+                                      className={cn(
+                                        "h-9 text-xs text-right tabular-nums",
+                                        !lineAmountEditable && "bg-muted"
+                                      )}
+                                      onChange={(e) =>
+                                        handleLineAmountChange(index, line.id, e.target.value, field.onChange)
+                                      }
                                     />
                                   </FormControl>
                                 </FormItem>
-                              )}
+                                );
+                              }}
                             />
                           </div>
                         </div>
@@ -2453,11 +2682,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     } else {
                                       const itemId = lineItemIdFromComboboxValue(val);
                                       field.onChange(itemId);
+                                      markLineQtyDriven(line.id);
                                       const sel = itemId
                                         ? allProcessedItems.find((i) => i.id === itemId)
                                         : undefined;
                                       if (sel) {
-                                        const defaultUnit = sel.salePriceUnit || (sel.unitConversions as any)?.[0]?.fromUnit || "";
+                                        const defaultUnit = getItemDefaultSaleUnit(sel);
                                         const rate = getUnitBasedPrice(sel, defaultUnit, 'sale');
                                         form.setValue(`lineItems.${index}.rate`, rate, { shouldDirty: true });
                                         form.setValue(`lineItems.${index}.unit`, defaultUnit, { shouldDirty: true });
@@ -2493,7 +2723,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             name={`lineItems.${index}.quantity`}
                             render={({ field }: any) => (
                               <FormControl>
-                                <Input type="number" {...field} className={cn(FLAT_INPUT, "text-right")} disabled={itemFieldsDisabled} />
+                                <Input type="number" {...field} step="0.000001" min={0} className={cn(FLAT_INPUT, "text-right tabular-nums")} disabled={itemFieldsDisabled} onChange={(e) => { markLineQtyDriven(line.id); field.onChange(e); }} />
                               </FormControl>
                             )}
                           />
@@ -2516,6 +2746,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                       disabled={itemFieldsDisabled}
                                       onChange={(val, newName) => {
                                         const unitVal = val === "add-new" ? (newName || "").trim() : val;
+                                        markLineQtyDriven(line.id);
                                         field.onChange(unitVal);
                                         onPersistNewUnit(val, unitVal);
                                         const sel = allProcessedItems.find((i) => i.id === form.getValues(`lineItems.${index}.itemId`));
@@ -2549,6 +2780,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         <Input
                                           type="number"
                                           {...field}
+                                          onChange={(e) => {
+                                            markLineQtyDriven(line.id);
+                                            field.onChange(e);
+                                          }}
                                           disabled={saleRateDisabled(index, itemFieldsDisabled)}
                                           className={cn(FLAT_INPUT, "min-w-0 flex-1 text-right", saleRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
                                           title={
@@ -2678,16 +2913,30 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           <FormField
                             control={form.control}
                             name={`lineItems.${index}.amount`}
-                            render={({ field }: any) => (
+                            render={({ field }: any) => {
+                              const lineAmountEditable =
+                                Boolean(watchedLineItems?.[index]?.itemId) && !itemFieldsDisabled;
+                              return (
                               <FormControl>
                                 <Input
                                   type="number"
                                   {...field}
-                                  readOnly
-                                  className={cn(FLAT_INPUT, "bg-muted text-right")}
+                                  value={field.value ?? ""}
+                                  readOnly={!lineAmountEditable}
+                                  disabled={!lineAmountEditable}
+                                  title={lineAmountEditable ? "Amount type karo — unit (base) aur qty auto fill" : "Pehle item select karo"}
+                                  className={cn(
+                                    FLAT_INPUT,
+                                    "text-right tabular-nums",
+                                    !lineAmountEditable && "bg-muted"
+                                  )}
+                                  onChange={(e) =>
+                                    handleLineAmountChange(index, line.id, e.target.value, field.onChange)
+                                  }
                                 />
                               </FormControl>
-                            )}
+                              );
+                            }}
                           />
                         </div>
 
@@ -2828,11 +3077,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         } else {
                                           const itemId = lineItemIdFromComboboxValue(val);
                                           field.onChange(itemId);
+                                          markLineQtyDriven(line.id);
                                           const sel = itemId
                                             ? allProcessedItems.find((i) => i.id === itemId)
                                             : undefined;
                                           if (sel) {
-                                            const defaultUnit = sel.salePriceUnit || (sel.unitConversions as any)?.[0]?.fromUnit || "";
+                                            const defaultUnit = getItemDefaultSaleUnit(sel);
                                             const rate = getUnitBasedPrice(sel, defaultUnit, 'sale');
                                             form.setValue(`lineItems.${index}.rate`, rate, { shouldDirty: true });
                                             form.setValue(`lineItems.${index}.unit`, defaultUnit, { shouldDirty: true });
@@ -2855,7 +3105,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 name={`lineItems.${index}.quantity`}
                                 render={({ field }: any) => (
                                   <FormControl>
-                                    <Input type="number" {...field} className={cn(FLAT_INPUT, "text-right tabular-nums")} disabled={itemFieldsDisabled} />
+                                    <Input type="number" {...field} step="0.000001" min={0} className={cn(FLAT_INPUT, "text-right tabular-nums")} disabled={itemFieldsDisabled} onChange={(e) => { markLineQtyDriven(line.id); field.onChange(e); }} />
                                   </FormControl>
                                 )}
                               />
@@ -2878,6 +3128,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                           disabled={itemFieldsDisabled}
                                           onChange={(val, newName) => {
                                             const unitVal = val === "add-new" ? (newName || "").trim() : val;
+                                            markLineQtyDriven(line.id);
                                             field.onChange(unitVal);
                                             onPersistNewUnit(val, unitVal);
                                             const sel = allProcessedItems.find((i) => i.id === form.getValues(`lineItems.${index}.itemId`));
@@ -2911,6 +3162,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                             <Input
                                               type="number"
                                               {...field}
+                                              onChange={(e) => {
+                                                markLineQtyDriven(line.id);
+                                                field.onChange(e);
+                                              }}
                                               disabled={saleRateDisabled(index, itemFieldsDisabled)}
                                               className={cn(FLAT_INPUT, "min-w-0 flex-1 text-right tabular-nums", saleRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
                                               title={
@@ -3030,16 +3285,30 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               <FormField
                                 control={form.control}
                                 name={`lineItems.${index}.amount`}
-                                render={({ field }: any) => (
+                                render={({ field }: any) => {
+                                  const lineAmountEditable =
+                                    Boolean(watchedLineItems?.[index]?.itemId) && !itemFieldsDisabled;
+                                  return (
                                   <FormControl>
                                     <Input
                                       type="number"
                                       {...field}
-                                      readOnly
-                                      className={cn(FLAT_INPUT, "bg-muted text-right tabular-nums")}
+                                      value={field.value ?? ""}
+                                      readOnly={!lineAmountEditable}
+                                      disabled={!lineAmountEditable}
+                                      title={lineAmountEditable ? "Amount type karo — unit (base) aur qty auto fill" : "Pehle item select karo"}
+                                      className={cn(
+                                        FLAT_INPUT,
+                                        "text-right tabular-nums",
+                                        !lineAmountEditable && "bg-muted"
+                                      )}
+                                      onChange={(e) =>
+                                        handleLineAmountChange(index, line.id, e.target.value, field.onChange)
+                                      }
                                     />
                                   </FormControl>
-                                )}
+                                  );
+                                }}
                               />
                             </div>
 

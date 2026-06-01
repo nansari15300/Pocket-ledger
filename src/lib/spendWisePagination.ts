@@ -34,6 +34,39 @@ export function buildSpendWiseDisplayBlocks(list: any[], spendWise: boolean): an
   return blocks;
 }
 
+/** Block ki pehli data row se chronological sort key — statement jaisa date + createdAt + id. */
+function spendWiseBlockSortKey(block: any[]): [number, number, string] {
+  const opening = block.some(
+    (r) => r?.id === "__opening_balance_group__" || (r?.type === "opening_balance" && r?._spendWiseGroupFirst)
+  );
+  if (opening) return [-1, 0, ""];
+
+  const row = block.find((r) => r && !r._spendWiseSpacer);
+  if (!row?.date) return [Number.MAX_SAFE_INTEGER, 0, String(row?.id || "")];
+
+  const d = row.date?.toDate ? row.date.toDate() : new Date(row.date);
+  const dateMs = d instanceof Date && !isNaN(d.getTime()) ? d.getTime() : Number.MAX_SAFE_INTEGER;
+  const creationMs = row.createdAt?.toDate ? row.createdAt.toDate().getTime() : 0;
+  return [dateMs, creationMs, String(row.id || "")];
+}
+
+/**
+ * Spend-wise blocks ko date order me — unlinked RCPT upar na aaye, outflows ke saath chronological mix.
+ * Linked groups ek block rehte hain (inflow + linked outs); sirf block order badalta hai.
+ */
+export function reorderSpendWiseRowsByDate(list: any[]): any[] {
+  if (!list.length) return list;
+  const blocks = buildSpendWiseDisplayBlocks(list, true);
+  const sorted = [...blocks].sort((a, b) => {
+    const [da, ca, ida] = spendWiseBlockSortKey(a);
+    const [db, cb, idb] = spendWiseBlockSortKey(b);
+    if (da !== db) return da - db;
+    if (ca !== cb) return ca - cb;
+    return ida.localeCompare(idb);
+  });
+  return sorted.flat();
+}
+
 /** Newest page first: page 1 = last `maxDataRows` *data* lines, slice includes spacers between those indices. */
 export function packFlatListByDataLineBudgetFromEnd(
   list: any[],
@@ -88,6 +121,72 @@ export function packFlatListByDataLineBudgetFromStart(
     remaining -= take;
   }
   return pageRanges;
+}
+
+/** Spend-wise synthetic row id → asli voucher id (statement count ke liye). */
+export function resolveSpendWiseRowBaseVoucherId(row: any): string {
+  const rawId = String(row?.id ?? "").trim();
+  if (!rawId || rawId === "__opening_balance_group__") return rawId;
+  if (row?._baseVoucherId) return String(row._baseVoucherId).trim();
+  if (rawId.includes("-in-")) return rawId.substring(0, rawId.indexOf("-in-"));
+  if (rawId.endsWith("-ob-link")) return rawId.substring(0, rawId.length - "-ob-link".length);
+  return rawId;
+}
+
+/**
+ * Footer (before) / (after) / Total — statement voucher list ke hisaab se.
+ * Spend-wise page par linked child rows ho to bhi count statement jaisa rahe.
+ */
+export function computeStatementFooterCountsFromPage(
+  statementList: any[],
+  pageRows: any[]
+): { beforeCount: number; afterCount: number; totalCount: number } {
+  const total = statementList.length;
+  if (total === 0) {
+    return { beforeCount: 0, afterCount: 0, totalCount: 0 };
+  }
+  const idToIndex = new Map<string, number>();
+  statementList.forEach((t, i) => {
+    const id = String(t?.id ?? "").trim();
+    if (id) idToIndex.set(id, i);
+  });
+  const indices: number[] = [];
+  for (const row of pageRows) {
+    if ((row as any)?._spendWiseSpacer) continue;
+    const baseId = resolveSpendWiseRowBaseVoucherId(row);
+    if (!baseId || baseId === "__opening_balance_group__") continue;
+    const idx = idToIndex.get(baseId);
+    if (idx !== undefined) indices.push(idx);
+  }
+  if (indices.length === 0) {
+    return { beforeCount: 0, afterCount: 0, totalCount: total };
+  }
+  const minIdx = Math.min(...indices);
+  const maxIdx = Math.max(...indices);
+  return {
+    beforeCount: minIdx,
+    afterCount: Math.max(0, total - maxIdx - 1),
+    totalCount: total,
+  };
+}
+
+/** Flat list me index se pehle kitni data lines (spacer skip) — rows/page budget ke liye. */
+export function countSpendWiseDataLinesBeforeIndex(list: any[], flatIndex: number): number {
+  let count = 0;
+  const end = Math.min(flatIndex, list.length);
+  for (let i = 0; i < end; i++) {
+    if (!(list[i] as any)?._spendWiseSpacer) count++;
+  }
+  return count;
+}
+
+/** Flat slice [start,end) me kitni data lines — footer page size verify ke liye. */
+export function countSpendWiseDataLinesInSlice(list: any[], start: number, end: number): number {
+  let count = 0;
+  for (let i = Math.max(0, start); i < Math.min(end, list.length); i++) {
+    if (!(list[i] as any)?._spendWiseSpacer) count++;
+  }
+  return count;
 }
 
 /** Split-group box: which horizontal edges to draw on this page (open toward other pages). */

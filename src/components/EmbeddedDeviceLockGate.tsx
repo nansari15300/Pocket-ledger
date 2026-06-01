@@ -17,6 +17,7 @@ import {
   embeddedPinLength,
   getEmbeddedLockShellKind,
   hasEmbeddedLockConfigured,
+  hasEmbeddedLockSetupSkipped,
   hasEmbeddedPinConfigured,
   hasUserChosenEmbeddedPin,
   isEmbeddedDeviceLockShell,
@@ -26,6 +27,7 @@ import {
   readBiometricUnlockEnabled,
   saveEmbeddedPinHash,
   setBiometricUnlockEnabled,
+  setEmbeddedLockSetupSkipped,
   setUserChosenEmbeddedPin,
   verifyEmbeddedPin,
 } from "@/lib/embeddedDeviceLock";
@@ -54,16 +56,19 @@ export function EmbeddedDeviceLockGate() {
   const uid = user?.uid ?? "";
   const localSynthetic = uid.startsWith("local:");
   const sessionUnlocked = unlockedNow || isEmbeddedSessionUnlocked();
+  const setupSkipped = hasEmbeddedLockSetupSkipped(uid);
   const needsGate = useMemo(() => {
     void unlockBump;
+    const lockConfigured = hasEmbeddedLockConfigured(uid);
     return (
       !loading &&
       Boolean(user) &&
       !localSynthetic &&
       isEmbeddedDeviceLockShell() &&
-      (!hasEmbeddedLockConfigured(uid) || !sessionUnlocked)
+      // Setup-mode only: user ne skip choose kiya ho to gate force mat karo; lock configured ho to unlock required rahe.
+      (lockConfigured ? !sessionUnlocked : !setupSkipped)
     );
-  }, [loading, user, localSynthetic, uid, unlockBump, sessionUnlocked]);
+  }, [loading, user, localSynthetic, uid, unlockBump, sessionUnlocked, setupSkipped]);
 
   const setupMode = !hasEmbeddedLockConfigured(uid);
   const bioEnabled = uid ? readBiometricUnlockEnabled(uid) : false;
@@ -228,6 +233,8 @@ export function EmbeddedDeviceLockGate() {
     setBusy(true);
     try {
       await saveEmbeddedPinHash(user.uid, userPin);
+      // Biometric setup bhi lock-enabled state hai; skip flag clear rakho.
+      setEmbeddedLockSetupSkipped(user.uid, false);
       await saveNativeBiometricLockPin(user.uid, userPin);
       setBiometricUnlockEnabled(user.uid, true);
       setUserChosenEmbeddedPin(user.uid, true);
@@ -254,6 +261,8 @@ export function EmbeddedDeviceLockGate() {
       setBusy(true);
       try {
         await saveEmbeddedPinHash(user.uid, pin);
+        // PIN setup complete: skip preference hatao, ab startup lock enabled maana jaaye.
+        setEmbeddedLockSetupSkipped(user.uid, false);
         setUserChosenEmbeddedPin(user.uid, true);
         finishUnlock();
         toast({ title: "App lock ready", description: "Your backup PIN is set. Enable biometric in Settings if you want." });
@@ -279,6 +288,8 @@ export function EmbeddedDeviceLockGate() {
     setBusy(true);
     try {
       await saveEmbeddedPinHash(user.uid, pin);
+      // PIN setup complete: skip preference hatao, ab startup lock enabled maana jaaye.
+      setEmbeddedLockSetupSkipped(user.uid, false);
       setUserChosenEmbeddedPin(user.uid, true);
       finishUnlock();
       toast({ title: "App lock ready", description: "Your device is secured with a PIN." });
@@ -309,6 +320,17 @@ export function EmbeddedDeviceLockGate() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const onSkipSetup = () => {
+    if (!user) return;
+    // User preference: startup par compulsory gate band karo; settings se kabhi bhi lock re-enable ho sakta hai.
+    setEmbeddedLockSetupSkipped(user.uid, true);
+    finishUnlock();
+    toast({
+      title: "PIN skipped",
+      description: "App lock setup skipped for now. You can enable it later from Settings > App Lock.",
+    });
   };
 
   if (!needsGate) return null;
@@ -391,6 +413,9 @@ export function EmbeddedDeviceLockGate() {
                       Biometric hardware not detected. Save PIN above, or enable biometrics in Android settings.
                     </p>
                   ) : null}
+                  <Button type="button" variant="outline" className="w-full" disabled={busy} onClick={onSkipSetup}>
+                    Skip PIN for now
+                  </Button>
                 </>
               ) : (
                 <>
@@ -426,6 +451,9 @@ export function EmbeddedDeviceLockGate() {
                   </div>
                   <Button type="button" className="w-full" disabled={busy} onClick={() => void onSetup()}>
                     Save and continue
+                  </Button>
+                  <Button type="button" variant="outline" className="w-full" disabled={busy} onClick={onSkipSetup}>
+                    Skip PIN for now
                   </Button>
                 </>
               )}

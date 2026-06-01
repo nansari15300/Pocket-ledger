@@ -14,9 +14,11 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import {
+  clearEmbeddedSessionUnlock,
   embeddedPinLength,
   getEmbeddedLockShellKind,
   hasEmbeddedLockConfigured,
+  hasEmbeddedLockSetupSkipped,
   hasEmbeddedPinConfigured,
   hasUserChosenEmbeddedPin,
   isEmbeddedDeviceLockShell,
@@ -25,6 +27,7 @@ import {
   readBiometricUnlockEnabled,
   saveEmbeddedPinHash,
   setBiometricUnlockEnabled,
+  setEmbeddedLockSetupSkipped,
   setUserChosenEmbeddedPin,
   verifyEmbeddedPin,
   wipeEmbeddedDeviceLockForUser,
@@ -54,6 +57,7 @@ export function AppLockSettings() {
   const [shellKind, setShellKind] = useState<ReturnType<typeof getEmbeddedLockShellKind>>("none");
   const [pinConfigured, setPinConfigured] = useState(false);
   const [lockConfigured, setLockConfigured] = useState(false);
+  const [setupSkipped, setSetupSkipped] = useState(false);
   const [userPinChosen, setUserPinChosen] = useState(false);
   const [bioHardware, setBioHardware] = useState(false);
   const [bioOn, setBioOn] = useState(false);
@@ -74,6 +78,7 @@ export function AppLockSettings() {
     if (!uid || localSynthetic) return;
     setPinConfigured(hasEmbeddedPinConfigured(uid));
     setLockConfigured(hasEmbeddedLockConfigured(uid));
+    setSetupSkipped(hasEmbeddedLockSetupSkipped(uid));
     setUserPinChosen(hasUserChosenEmbeddedPin(uid));
     setBioOn(readBiometricUnlockEnabled(uid));
     let cancelled = false;
@@ -90,6 +95,7 @@ export function AppLockSettings() {
     if (!uid || localSynthetic) return;
     setPinConfigured(hasEmbeddedPinConfigured(uid));
     setLockConfigured(hasEmbeddedLockConfigured(uid));
+    setSetupSkipped(hasEmbeddedLockSetupSkipped(uid));
     setUserPinChosen(hasUserChosenEmbeddedPin(uid));
     setBioOn(readBiometricUnlockEnabled(uid));
   };
@@ -264,6 +270,17 @@ export function AppLockSettings() {
     }
   };
 
+  const onEnableSetupNow = () => {
+    // User ne skip kiya ho to settings se turant gate wapas laane ka manual re-enable path.
+    setEmbeddedLockSetupSkipped(uid, false);
+    clearEmbeddedSessionUnlock();
+    refreshLocalState();
+    toast({
+      title: "App lock setup enabled",
+      description: "You will now be asked to set a PIN before continuing.",
+    });
+  };
+
   return (
     <div className="space-y-6 p-1">
       <Card>
@@ -291,7 +308,9 @@ export function AppLockSettings() {
                   : "No app lock yet"
                 : pinConfigured
                   ? "PIN is set on this device"
-                  : "No PIN set yet"}
+                  : setupSkipped
+                    ? "PIN setup skipped on this device"
+                    : "No PIN set yet"}
             </span>
             {shellKind === "apk" ? (
               <>
@@ -305,6 +324,22 @@ export function AppLockSettings() {
           </p>
         </CardContent>
       </Card>
+
+      {!lockConfigured ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Set up app lock</CardTitle>
+            <CardDescription>
+              App lock is optional for static startup. If you want PIN protection again, re-enable setup now.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button type="button" onClick={onEnableSetupNow}>
+              Require PIN setup now
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {shellKind === "apk" && lockConfigured && !userPinChosen ? (
         <Card>

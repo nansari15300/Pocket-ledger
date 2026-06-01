@@ -43,6 +43,8 @@ const PIN_SALT_SUFFIX = "pl_embedded_pin_salt_v1";
 const BIO_FLAG_SUFFIX = "pl_embedded_bio_on_v1";
 /** APK: user ne khud 6-digit backup PIN set kiya (biometric-only lock par ye false reh sakta hai). */
 const USER_PIN_FLAG_SUFFIX = "pl_embedded_user_pin_v1";
+/** User choice: setup gate par "Skip PIN for now" select kiya ho to startup par force setup mat karo. */
+const SETUP_SKIP_SUFFIX = "pl_embedded_lock_setup_skip_v1";
 
 function hashKey(uid: string) {
   return `${PIN_HASH_SUFFIX}_${uid}`;
@@ -55,6 +57,9 @@ function bioKey(uid: string) {
 }
 function userPinKey(uid: string) {
   return `${USER_PIN_FLAG_SUFFIX}_${uid}`;
+}
+function setupSkipKey(uid: string) {
+  return `${SETUP_SKIP_SUFFIX}_${uid}`;
 }
 
 export function embeddedPinLength(): number {
@@ -87,6 +92,24 @@ export function setUserChosenEmbeddedPin(firebaseUid: string, chosen: boolean): 
   try {
     if (chosen) localStorage.setItem(userPinKey(firebaseUid), "1");
     else localStorage.removeItem(userPinKey(firebaseUid));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Setup gate optional: user ne PIN setup postpone kiya hai ya nahi (per account, per device). */
+export function hasEmbeddedLockSetupSkipped(firebaseUid: string): boolean {
+  try {
+    return localStorage.getItem(setupSkipKey(firebaseUid)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setEmbeddedLockSetupSkipped(firebaseUid: string, skipped: boolean): void {
+  try {
+    if (skipped) localStorage.setItem(setupSkipKey(firebaseUid), "1");
+    else localStorage.removeItem(setupSkipKey(firebaseUid));
   } catch {
     /* ignore */
   }
@@ -207,6 +230,8 @@ export async function wipeEmbeddedDeviceLockForUser(firebaseUid: string): Promis
     localStorage.removeItem(saltKey(firebaseUid));
     localStorage.removeItem(bioKey(firebaseUid));
     localStorage.removeItem(userPinKey(firebaseUid));
+    // Reset flow: skip preference bhi clear ho taaki next setup decision fresh rahe.
+    localStorage.removeItem(setupSkipKey(firebaseUid));
   } catch {
     /* ignore */
   }

@@ -1000,14 +1000,32 @@ export const TransactionRow = React.memo(
             </TableCell>
           ))}
         {showCol("type") && (
-          <TableCell className={cn("align-middle", ensureMinGaps && "min-w-[75px] px-[5px]")}>
+          <TableCell
+            className={cn(
+              "align-middle overflow-hidden",
+              ensureMinGaps &&
+                (spendWiseInGroupCard ||
+                isSpendWiseChild ||
+                isSpendWiseGroupFirst ||
+                typeof spendWiseGroupColorIndex === "number"
+                  ? "min-w-[112px] px-[5px]"
+                  : "min-w-[75px] px-[5px]")
+            )}
+          >
             <Badge
               variant="outline"
-              className={voucherTypePillClassName(
-                isNote || transaction.type === "note"
-                  ? null
-                  : resolveTxnDrCrSide(debit, credit, balance),
-                { interCompanyReversed: isInterCompanyReversedVoucher(transaction) }
+              className={cn(
+                voucherTypePillClassName(
+                  isNote || transaction.type === "note"
+                    ? null
+                    : resolveTxnDrCrSide(debit, credit, balance),
+                  { interCompanyReversed: isInterCompanyReversedVoucher(transaction) }
+                ),
+                (spendWiseInGroupCard ||
+                  isSpendWiseChild ||
+                  isSpendWiseGroupFirst ||
+                  typeof spendWiseGroupColorIndex === "number") &&
+                  "max-w-full whitespace-nowrap"
               )}
             >
               {hl(getDisplayType(transaction))}
@@ -1372,11 +1390,6 @@ export const TransactionRow = React.memo(
           isSpendWiseInflowRow && !isSelected && "bg-green-100 dark:bg-green-900/30 [&>td]:bg-green-100 [&>td]:dark:bg-green-900/30 hover:bg-green-200 [&>td]:hover:bg-green-200 [&>td]:dark:hover:bg-green-900/40",
           (isSpendWiseOutflowRow || (context === "group" && isSpendWiseChild && !isSpendWiseInflowRow) || spendWiseGroupStandaloneOutflow) && !isSelected && "bg-gray-50 dark:bg-gray-900/20 [&>td]:bg-gray-50 [&>td]:dark:bg-gray-900/20 [&>td]:text-xs",
           spendWiseMainInset,
-          /* Group card: doosre voucher ke upar separator; main↔narration ke beech line nahi */
-          spendWiseInGroupCard &&
-            !isSpendWiseGroupFirst &&
-            "[&>td]:border-t [&>td]:border-solid [&>td]:border-black/15",
-          spendWiseInGroupCard && showNarrationRow && "[&>td]:border-b-0",
           spendWiseBorderFirst,
           spendWiseBorderLast,
           spendWiseBorderLastNarr,

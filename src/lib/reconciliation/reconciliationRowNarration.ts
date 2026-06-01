@@ -1,6 +1,6 @@
 import { ledgerNarrationFromVoucher } from "@/lib/copyLedgerCrossCompany";
 import type { ReconciliationSideContext } from "@/lib/reconciliation/buildSyncVoucherDraft";
-import { buildReconciliationLedgerSnapshot, loadCompanyVouchers } from "@/lib/reconciliation/ledgerSnapshot";
+import { buildReconciliationLedgerSnapshot, loadCompanyVouchers, mergeReconciliationLedgerRows } from "@/lib/reconciliation/ledgerSnapshot";
 import {
   getReconciliationShare,
   refreshReconciliationSideSnapshot,
@@ -70,7 +70,6 @@ export async function buildLiveReconciliationSideRows(
       collection: ctx.collection,
       shareScope: "all",
     });
-    if (built.rows.length === 0) return null;
     return built;
   } catch {
     return null;
@@ -126,13 +125,20 @@ export async function resolveRemoteReconciliationRows(params: {
   const { remoteCtx, snapshotRows, snapshotOpening } = params;
 
   const live = await buildLiveReconciliationSideRows(remoteCtx);
-  if (live) return live;
-
   let rows = applySnapshotRowDisplayNarration(snapshotRows);
-  if (remoteCtx?.companyId) {
+  const openingBalance = live?.openingBalance ?? snapshotOpening;
+
+  if (live && live.rows.length > 0) {
+    // Live + share snapshot union — sender company se dekhe to remote/other side poora aaye
+    rows = mergeReconciliationLedgerRows(live.rows, rows, openingBalance);
+    if (remoteCtx?.companyId) {
+      rows = await enrichReconciliationNoteTitlesInRows(rows, remoteCtx.companyId);
+    }
+  } else if (remoteCtx?.companyId) {
     rows = await enrichReconciliationNoteTitlesInRows(rows, remoteCtx.companyId);
   }
-  return { rows, openingBalance: snapshotOpening };
+
+  return { rows, openingBalance };
 }
 
 /**

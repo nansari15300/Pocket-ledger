@@ -114,17 +114,58 @@ export function withRunningBalances(
   });
 }
 
-/** Company ke vouchers load — Firestore ya local mirror; recycle bin wale skip. */
+/** Active vouchers — recycle bin / soft-delete skip. */
+function filterActiveVouchers(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return rows.filter((v) => v.isDeleted !== true && (v.deletedAt == null || v.deletedAt === ""));
+}
+
+/** Voucher docs merge — Firestore + SQLite (local pending); id pe live/local overwrite. */
+function mergeVoucherDocsById(
+  primary: Array<Record<string, unknown>>,
+  secondary: Array<Record<string, unknown>>
+): Array<Record<string, unknown>> {
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const v of primary) {
+    const id = String(v.id || "").trim();
+    if (id) byId.set(id, v);
+  }
+  for (const v of secondary) {
+    const id = String(v.id || "").trim();
+    if (id) byId.set(id, v);
+  }
+  return Array.from(byId.values());
+}
+
+/** Company ke vouchers load — recon cross-company: Firestore pehle (dusri company ka SQLite cache adhoora ho sakta hai). */
 export async function loadCompanyVouchers(companyId: string): Promise<Array<Record<string, unknown>>> {
   if (!companyId) return [];
-  let rows: Array<Record<string, unknown>> = [];
-  if (isLocalOnlyMode()) {
-    rows = (await listCompanyDocsFromBrowserDb(companyId, "vouchers")) as Array<Record<string, unknown>>;
-  } else {
+  let serverRows: Array<Record<string, unknown>> = [];
+
+  // Local/static me bhi remote side ke liye Firestore try — sirf selected company mirror kaafi nahi
+  try {
     const snap = await getDocs(collection(firestore, `companies/${companyId}/vouchers`));
-    rows = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Array<Record<string, unknown>>;
+    serverRows = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Array<Record<string, unknown>>;
+  } catch {
+    serverRows = [];
   }
-  return rows.filter((v) => v.isDeleted !== true && (v.deletedAt == null || v.deletedAt === ""));
+
+  if (isLocalOnlyMode()) {
+    try {
+      const localRows = (await listCompanyDocsFromBrowserDb(companyId, "vouchers")) as Array<
+        Record<string, unknown>
+      >;
+      serverRows =
+        serverRows.length === 0
+          ? localRows
+          : localRows.length > 0
+            ? mergeVoucherDocsById(serverRows, localRows)
+            : serverRows;
+    } catch {
+      /* Firestore / local jo mila wahi */
+    }
+  }
+
+  return filterActiveVouchers(serverRows);
 }
 
 /** Account ke ledger rows snapshot — share / link / recon page ke liye. */
@@ -155,6 +196,11 @@ export async function buildReconciliationLedgerSnapshot(params: {
       const v = voucherById.get(r.id);
       const title =
         v && String(v.type || "") === "note" ? String(v.title || "").trim() : "";
+      const crefRaw = v?.crossCopySourceRef as { companyId?: string; voucherId?: string } | undefined;
+      const crossCopySourceRef =
+        crefRaw?.companyId && crefRaw?.voucherId
+          ? { companyId: String(crefRaw.companyId), voucherId: String(crefRaw.voucherId) }
+          : undefined;
       return {
         id: r.id,
         voucherNumber: r.voucherNumber,
@@ -163,6 +209,7 @@ export async function buildReconciliationLedgerSnapshot(params: {
         dateLabel: r.dateLabel,
         narration: r.narration,
         ...(title ? { title } : {}),
+        ...(crossCopySourceRef ? { crossCopySourceRef } : {}),
         debit: r.debit,
         credit: r.credit,
         amount: r.amount,
@@ -177,6 +224,29 @@ export async function buildReconciliationLedgerSnapshot(params: {
     rows: withRunningBalances(sorted, openingBalance),
     openingBalance,
   };
+}
+
+/** Live + stored snapshot rows merge — remote side adhoora live load par bhi saari trxns (id union). */
+export function mergeReconciliationLedgerRows(
+  liveRows: ReconciliationLedgerRow[],
+  snapshotRows: ReconciliationLedgerRow[],
+  openingBalance: number
+): ReconciliationLedgerRow[] {
+  const byId = new Map<string, ReconciliationLedgerRow>();
+  for (const r of snapshotRows) {
+    const id = String(r.id || "").trim();
+    if (id) byId.set(id, r);
+  }
+  for (const r of liveRows) {
+    const id = String(r.id || "").trim();
+    if (id) byId.set(id, r);
+  }
+  const merged = Array.from(byId.values()).sort((a, b) => {
+    const ta = a.rawDate ? new Date(a.rawDate).getTime() : 0;
+    const tb = b.rawDate ? new Date(b.rawDate).getTime() : 0;
+    return ta - tb;
+  });
+  return withRunningBalances(merged, openingBalance);
 }
 
 /** Stored snapshot (purane shares) par opening se balance dubara. */

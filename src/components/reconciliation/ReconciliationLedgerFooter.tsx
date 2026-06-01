@@ -55,7 +55,7 @@ function ReconFooterSideMetaPill({
   );
 }
 
-/** Reconciling footer — left/right meta parent pills (green) + pagination; sort beech me. */
+/** Reconciling footer — owned/other meta pills alag; beech me ek shared pagination (dono side sync). */
 export function ReconciliationLedgerFooter({
   sortBy,
   sortOrder,
@@ -65,11 +65,10 @@ export function ReconciliationLedgerFooter({
   setCurrentPage,
   rowsPerPageSelectValue,
   onRowsPerPageChange,
-  leftBeforeCount,
-  leftAfterCount,
+  pairBeforeCount,
+  pairAfterCount,
+  pairTotalCount,
   leftTotalCount,
-  rightBeforeCount,
-  rightAfterCount,
   rightTotalCount,
   leftOwnedCompanyName,
   leftOwnedAccountName,
@@ -85,11 +84,11 @@ export function ReconciliationLedgerFooter({
   setCurrentPage: React.Dispatch<React.SetStateAction<number>>;
   rowsPerPageSelectValue: string;
   onRowsPerPageChange: (value: string) => void;
-  leftBeforeCount: number;
-  leftAfterCount: number;
+  /** Matched pair rows — tail paging (before)/(after) ek hi bar me. */
+  pairBeforeCount: number;
+  pairAfterCount: number;
+  pairTotalCount: number;
   leftTotalCount: number;
-  rightBeforeCount: number;
-  rightAfterCount: number;
   rightTotalCount: number;
   /** You / owned side company — footer left pill */
   leftOwnedCompanyName: string;
@@ -100,19 +99,6 @@ export function ReconciliationLedgerFooter({
   rightOtherAccountName?: string;
   className?: string;
 }) {
-  const paginationShared = {
-    sortBy,
-    sortOrder,
-    onSortChange,
-    viewMode: "statement" as const,
-    currentPage,
-    totalPages,
-    setCurrentPage,
-    rowsPerPageSelectValue,
-    onRowsPerPageChange,
-    hideTotalCount: true,
-  };
-
   const ownedCompanyLabel = String(leftOwnedCompanyName || "—").trim() || "—";
   const ownedAccountLabel = String(leftOwnedAccountName || "").trim();
   const otherCompanyLabel = String(rightOtherCompanyName || "—").trim() || "—";
@@ -126,26 +112,18 @@ export function ReconciliationLedgerFooter({
       )}
     >
       <div className="grid min-w-max grid-cols-1 items-center gap-y-2 md:grid-cols-[1fr_auto_1fr] md:gap-x-2">
-        {/* Left — owned meta parent pill (green) + pagination (You ledger) */}
-        <div className={cn(ledgerFooterRowCn, "justify-start md:justify-end flex-wrap md:flex-nowrap")}>
+        {/* Left — owned meta */}
+        <div className={cn(ledgerFooterRowCn, "justify-start md:justify-end")}>
           <ReconFooterSideMetaPill
             sideLabel="Owned"
             companyName={ownedCompanyLabel}
             accountName={ownedAccountLabel}
             trxnCount={leftTotalCount}
           />
-          <LedgerFooterPaginationBar
-            {...paginationShared}
-            hideSort
-            beforeCount={leftBeforeCount}
-            afterCount={leftAfterCount}
-            totalCount={leftTotalCount}
-            className="justify-start sm:ml-0"
-          />
         </div>
 
-        {/* Sort — dono side ek saath */}
-        <div className={cn(ledgerFooterRowCn, "justify-center px-1")}>
+        {/* Center — sort + pagination (sort pill ke right me) */}
+        <div className={cn(ledgerFooterRowCn, "justify-center flex-wrap gap-x-2 px-1")}>
           <TransactionTableSortDropdown
             sortBy={sortBy}
             sortOrder={sortOrder}
@@ -154,18 +132,27 @@ export function ReconciliationLedgerFooter({
             chromePill
             className={ledgerFooterPillBtnCn}
           />
+          <LedgerFooterPaginationBar
+            sortBy={sortBy}
+            sortOrder={sortOrder}
+            onSortChange={onSortChange}
+            viewMode="statement"
+            currentPage={currentPage}
+            totalPages={totalPages}
+            setCurrentPage={setCurrentPage}
+            rowsPerPageSelectValue={rowsPerPageSelectValue}
+            onRowsPerPageChange={onRowsPerPageChange}
+            hideSort
+            hideTotalCount
+            beforeCount={pairBeforeCount}
+            afterCount={pairAfterCount}
+            totalCount={pairTotalCount}
+            className="justify-center sm:ml-0"
+          />
         </div>
 
-        {/* Right — pagination + other company meta parent pill (green) */}
-        <div className={cn(ledgerFooterRowCn, "justify-start flex-wrap md:flex-nowrap")}>
-          <LedgerFooterPaginationBar
-            {...paginationShared}
-            hideSort
-            beforeCount={rightBeforeCount}
-            afterCount={rightAfterCount}
-            totalCount={rightTotalCount}
-            className="justify-start sm:ml-0"
-          />
+        {/* Right — other meta */}
+        <div className={cn(ledgerFooterRowCn, "justify-start md:justify-end")}>
           <ReconFooterSideMetaPill
             sideLabel="Other"
             companyName={otherCompanyLabel}

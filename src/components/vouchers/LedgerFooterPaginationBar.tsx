@@ -36,9 +36,9 @@ export type LedgerFooterPaginationBarProps = {
   onRowsPerPageChange: (value: string) => void;
   rowsPerPageOptions?: readonly number[];
   includeAllOption?: boolean;
-  /** Left (xx) — is page se pehle kitne txn (tail paging) */
+  /** Left (xx) — is page se pehle kitni data lines / txn (tail paging; spend-wise me flat index nahi) */
   beforeCount?: number;
-  /** Right (xx) — is page ke baad kitne txn */
+  /** Right (xx) — is page ke baad kitni data lines / txn */
   afterCount?: number;
   totalCount: number;
   className?: string;

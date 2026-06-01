@@ -73,7 +73,9 @@ import { getOpeningBalanceBaseAmount, getOpeningBalanceVoucherLabel, SPEND_WISE_
 import {
   attachSpendWisePageEdgeFlags,
   buildSpendWiseDisplayBlocks,
+  computeStatementFooterCountsFromPage,
   packFlatListByDataLineBudgetFromEnd,
+  reorderSpendWiseRowsByDate,
 } from "@/lib/spendWisePagination";
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from "@/lib/firebase";
@@ -520,7 +522,7 @@ export function AccountGroupDetails({
       rows.push(remainderRow);
       if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}`, _rowKey: `spacer-unlinked-${t.id}` });
     });
-    const result = rows.length ? rows : baseTransactions;
+    const result = rows.length ? reorderSpendWiseRowsByDate(rows) : baseTransactions;
     // Perf debug: group spend-wise builder duration + row expansion visibility.
     perfDebugLog("bank.groupDetails.displayTransactions", perfStart, {
       vouchersCount: vouchers.length,
@@ -553,11 +555,6 @@ export function AccountGroupDetails({
       openingBalanceForPeriod
     );
   }, [displayTransactions, filterByUnapprovedOnly, spendWiseView, sortBy, sortOrder, openingBalanceForPeriod, company]);
-
-  const displayTransactionCount = useMemo(
-    () => sortedTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length,
-    [sortedTransactions]
-  );
 
   /** Statement: one row per block; spend-wise: blocks for search â€” pagination uses @/lib/spendWisePagination (data-line budget + split borders). */
   const displayBlocks = useMemo(
@@ -622,6 +619,34 @@ export function AccountGroupDetails({
     : (statementCheckPaging.desktopPaginationMeta.sliceStart ?? 0);
   const { statementCheck } = statementCheckPaging;
 
+  // Footer counts statement voucher list se — spend-wise expanded rows ko alag mat gino
+  const statementListForCounts = useMemo(() => {
+    if (!spendWiseView) return statementCheckPaging.ledgerListForPaging as any[];
+    const rows = filterByUnapprovedOnly(baseTransactions);
+    const sorted = sortTransactionsWithFiscalMergeForCompany(rows, sortBy, sortOrder, undefined, company);
+    const filtered = statementCheck.filterTransactions([...sorted]);
+    if (statementCheck.checkModeActive) {
+      return recomputeRunningBalanceTopToBottom(filtered, openingBalanceForPeriod);
+    }
+    return filtered;
+  }, [
+    spendWiseView,
+    statementCheckPaging.ledgerListForPaging,
+    baseTransactions,
+    filterByUnapprovedOnly,
+    sortBy,
+    sortOrder,
+    company,
+    openingBalanceForPeriod,
+    statementCheck.filterTransactions,
+    statementCheck.checkModeActive,
+  ]);
+
+  const ledgerFooterPagingCounts = useMemo(() => {
+    const pageRows = (paginatedTransactions as any[]).filter((t: any) => !(t as any)?._spendWiseSpacer);
+    return computeStatementFooterCountsFromPage(statementListForCounts as any[], pageRows);
+  }, [statementListForCounts, paginatedTransactions]);
+
   // Page-break opening: first visible data row + pehle non-spacer ka running balance (AccountDetails jaisa).
   const spendWiseDesktopPageLedgerStats = useMemo(() => {
     const pageRows = (paginatedTransactions as any[]).filter((t: any) => !(t as any)?._spendWiseSpacer);
@@ -649,25 +674,16 @@ export function AccountGroupDetails({
     const periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
     const periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
     const closingForPage = openingForPage + periodDrForPage - periodCrForPage;
-    // LedgerDesktopFooter tail counts — statementCheck desktopPaginationMeta jaisa
-    const pageRowsCount = pageRows.length;
-    const beforeCount = desktopLedgerSliceFlatStart;
-    const afterCount = Math.max(0, displayTransactionCount - beforeCount - pageRowsCount);
     return {
       openingForPage,
       periodDrForPage,
       periodCrForPage,
       closingForPage,
-      beforeCount,
-      afterCount,
     };
   }, [
     paginatedTransactions,
     sortedTransactions,
     openingBalanceForPeriod,
-    spendWiseView,
-    desktopLedgerSliceFlatStart,
-    displayTransactionCount,
   ]);
 
   const desktopPageLedgerStats = spendWiseView
@@ -1811,9 +1827,9 @@ export function AccountGroupDetails({
           setCurrentPage={setCurrentPage}
           rowsPerPageSelectValue={rowsPerPageSelectValue}
           onRowsPerPageChange={handleRowsPerPageChange}
-          beforeCount={desktopPageLedgerStats.beforeCount}
-          afterCount={desktopPageLedgerStats.afterCount}
-          totalCount={displayTransactionCount}
+          beforeCount={ledgerFooterPagingCounts.beforeCount}
+          afterCount={ledgerFooterPagingCounts.afterCount}
+          totalCount={ledgerFooterPagingCounts.totalCount}
         />
       </div>
      <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>
