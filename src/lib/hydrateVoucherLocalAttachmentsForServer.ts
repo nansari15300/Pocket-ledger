@@ -10,6 +10,7 @@ import {
   getPendingPayloadForLocalRef,
   removePendingFile,
   isLocalFileRef,
+  resolvePendingAttachmentCloudSyncProvider,
 } from "@/lib/localPendingFiles";
 import { Timestamp } from "firebase/firestore";
 
@@ -28,6 +29,11 @@ export async function hydrateVoucherLocalAttachmentsForServer(
   const typeRaw = docFields.type;
   const voucherType =
     typeof typeRaw === "string" && typeRaw.trim() !== "" ? typeRaw.trim() : "voucher";
+  const localCloudProvider = await resolvePendingAttachmentCloudSyncProvider(cid);
+  if (localCloudProvider) {
+    // Local Drive/Dropbox company: bytes ka owner cloud-sync cycle hai; yahan Firebase Storage URL mat banao.
+    return docFields;
+  }
 
   // APK/native: `getPendingFiles()` sab rows ek saath read karta hai — koi row read fail / skip ho to
   // `find` miss ho kar flush throw → `local:` server tak kabhi nahi pahunchta. Preview jaisa per-id path use karo.
@@ -85,9 +91,9 @@ export async function hydrateVoucherLocalAttachmentsForServer(
         console.warn(
           `[sync] unassignedFile bytes missing for ${urlStr} — clearing for server push; dubara attach kar sakte ho.`
         );
-        const { unassignedFile: _drop, ...rest } = out;
-        out = rest;
-        return out;
+        const rest = { ...out };
+        delete rest.unassignedFile;
+        return rest;
       }
       const objectPath = `voucher-files/${cid}/${voucherType}/${Date.now()}_${safeStorageFileName(item.fileName)}`;
       const storageRef = ref(storage, objectPath);
@@ -132,6 +138,10 @@ function shouldRecurseIntoObjectForLocalHydrate(val: unknown): boolean {
 /** Ek `local:` ref ko Storage pe daal ke download URL — pending meta ka `storagePathPrefix` use (party/item/…). */
 async function uploadOnePendingLocalRefToHttps(fsCompanyId: string, entry: string): Promise<string> {
   const cid = String(fsCompanyId || "").trim();
+  if (await resolvePendingAttachmentCloudSyncProvider(cid)) {
+    // Masters/avatar hydrate path bhi local cloud-sync me Firebase fallback use na kare.
+    throw new Error("Local cloud-sync attachment must upload through the selected provider, not Firebase Storage.");
+  }
   const item = await getPendingPayloadForLocalRef(entry);
   if (!item?.blob) {
     throw new Error(

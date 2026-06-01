@@ -11,15 +11,24 @@ export async function POST(req: NextRequest) {
   if ("error" in auth) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
-  const body = (await req.json()) as {
-    companyId?: string;
-    companyName?: string;
-    fileId?: string;
-    remotePath?: string;
-    sha256Hex?: string;
-    contentType?: string;
-    base64?: string;
-  };
+  let body: {
+      companyId?: string;
+      companyName?: string;
+      driveSharedFolderId?: string;
+      fileId?: string;
+      remotePath?: string;
+      sha256Hex?: string;
+      contentType?: string;
+      base64?: string;
+    };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? `Invalid upload request body: ${e.message}` : "Invalid upload request body" },
+      { status: 400 }
+    );
+  }
   const companyId = String(body.companyId || "").trim();
   const companyName = typeof body.companyName === "string" ? body.companyName.trim() : undefined;
   const fileId = String(body.fileId || "").trim();
@@ -36,7 +45,9 @@ export async function POST(req: NextRequest) {
       remotePath,
       base64,
       body.contentType,
-      body.sha256Hex
+      body.sha256Hex,
+      // Joined/restored local companies upload into owner ka shared Drive folder.
+      typeof body.driveSharedFolderId === "string" ? body.driveSharedFolderId.trim() : undefined
     );
     return NextResponse.json({ ok: true, remotePath: res.remotePath, deduped: res.deduped ?? false });
   } catch (e) {

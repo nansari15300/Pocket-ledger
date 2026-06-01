@@ -63,6 +63,7 @@ import {
   saveOfflineUnlockSession,
 } from "@/lib/offlineCompanyUnlockRemember";
 import {
+  readCloudCompanyPasswordUnlockPreferenceDays,
   readCloudCompanyPasswordUnlockSession,
   saveCloudCompanyPasswordUnlockSession,
 } from "@/lib/cloudCompanyPasswordUnlockRemember";
@@ -239,7 +240,12 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
       setUsernameInput(remembered ?? "");
       setRememberSharedUsername(!!remembered);
       setPasswordInput("");
-      setRememberUnlockDays(0);
+      // Online company unlock dialog: last successful "Remember for" value preload karo taaki har baar reset na ho.
+      setRememberUnlockDays(
+        isOfflineCompanyStorage(company)
+          ? 0
+          : readCloudCompanyPasswordUnlockPreferenceDays(user?.uid, company.id)
+      );
     } else {
       maybeMarkEmbeddedPendingCompanyDataWarm(user?.uid, company);
       setCompanyId(company.id);
@@ -846,7 +852,12 @@ export function CompanyActions({
       setUsernameInput(remembered ?? "");
       setRememberSharedUsername(!!remembered);
       setPasswordInput("");
-      setRememberUnlockDays(0);
+      // Header switcher: remembered duration ko restore karo, warna accidental 0-day save se session clear ho jata hai.
+      setRememberUnlockDays(
+        isOfflineCompanyStorage(selectedCompany)
+          ? 0
+          : readCloudCompanyPasswordUnlockPreferenceDays(user?.uid, selectedCompany.id)
+      );
     } else {
         maybeMarkEmbeddedPendingCompanyDataWarm(user?.uid, selectedCompany);
         setCompanyId(selectedCompany.id);

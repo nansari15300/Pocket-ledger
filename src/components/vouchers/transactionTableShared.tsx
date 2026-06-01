@@ -25,6 +25,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import usePermissions from "@/hooks/usePermissions";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { isLedgerTransactionUnapproved } from "@/lib/ledgerPendingApproval";
 import { txnSelectedMainRowCn, txnSelectedNarrationRowCn, txnTableIconBtnCn } from "@/lib/listSelectionChrome";
@@ -872,7 +873,12 @@ export const TransactionRow = React.memo(
       swColor === "blue" && "[&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
       "[&>td:first-child]:border-l-2 [&>td:last-child]:border-r-2"
     );
-    const showCol = (key: string) => visibleColumns == null || visibleColumns[key] !== false;
+    const isMobileView = useIsMobile();
+    const showCol = (key: string) => {
+      // Mobile ledger rows: date column always visible rakho (desktop column-toggle se hide na ho).
+      if (isMobileView && key === "date") return true;
+      return visibleColumns == null || visibleColumns[key] !== false;
+    };
     const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
     const { effectiveNotificationSettings } = useCompany();
     const { user, customUser } = useAuth();

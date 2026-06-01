@@ -500,7 +500,12 @@ function SettingsPageContent() {
                 return can('configure_company_settings') ? <ManageDevices /> : null;
             case "local_cloud_sync":
                 // Local Drive sync — owner/admin/viewer sab dekh sakte; join + connect ke liye permission gate nahi.
-                return <LocalCloudSyncSettingsPage />;
+                return (
+                    <LocalCloudSyncSettingsPage
+                        onBack={backToSettingsListOnly}
+                        onOpenSettingsList={mobileSettingsUx ? openSettingsListSheet : undefined}
+                    />
+                );
             case "app_lock":
                 return <AppLockSettings />;
             case "voucher":
@@ -600,7 +605,15 @@ function SettingsPageContent() {
             <>
                 <div className={cn("flex h-full min-h-0 flex-col overflow-hidden touch-pan-y")}>
                     {/* Content pehle scroll; top bar hata kar neeche footer (user mobile UX) */}
-                    <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]">
+                    {/* Drive sync — andar scroll + fixed action bar; baaki tabs yahi scroll */}
+                    <div
+                        className={cn(
+                            "min-h-0 flex-1 overflow-x-hidden",
+                            activeView === "local_cloud_sync"
+                                ? "flex flex-col overflow-hidden"
+                                : "overflow-y-auto [scrollbar-gutter:stable]"
+                        )}
+                    >
                         {settingsNavStall ? (
                             <div className="flex min-h-[40vh] flex-col items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
                                 <Loader2 className="h-8 w-8 shrink-0 animate-spin" aria-hidden />
@@ -610,6 +623,8 @@ function SettingsPageContent() {
                             renderActiveView()
                         )}
                     </div>
+                    {/* Drive sync — andar hi Back + settings list; duplicate niche footer mat dikhao */}
+                    {activeView !== "local_cloud_sync" ? (
                     <div
                         className={cn(
                             "flex shrink-0 items-center gap-1.5 px-2 py-1 pb-[max(0.125rem,env(safe-area-inset-bottom))]",
@@ -644,6 +659,7 @@ function SettingsPageContent() {
                             <PanelRight className="h-3.5 w-3.5" />
                         </Button>
                     </div>
+                    ) : null}
                 </div>
                 <Sheet open={settingsListOpen} onOpenChange={setSettingsListOpen}>
                     {/* `SETTINGS_LIST_SHELL` me `w-full` hai — seedha SheetContent par mat (viewport = 100% width); andar wrapper par */}
@@ -693,7 +709,14 @@ function SettingsPageContent() {
 
           <main className="flex min-h-0 min-w-0 w-full flex-col overflow-hidden">
             {/* `scrollbar-gutter:stable` — toggle/toast se scrollbar on/off par poora layout shift na ho (multi-device switch shake). */}
-            <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]">
+            <div
+              className={cn(
+                "min-h-0 min-w-0 flex-1 overflow-x-hidden",
+                activeView === "local_cloud_sync"
+                  ? "flex flex-col overflow-hidden"
+                  : "overflow-y-auto [scrollbar-gutter:stable]"
+              )}
+            >
               {settingsNavStall ? (
                 <div className="flex min-h-[40vh] flex-col items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
                   <Loader2 className="h-8 w-8 shrink-0 animate-spin" aria-hidden />

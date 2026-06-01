@@ -38,6 +38,23 @@ export function resolveAttachmentCategoryFolder(collection: unknown): string {
 
 function parseVoucherDate(raw: unknown): Date {
   if (raw instanceof Date && !isNaN(raw.getTime())) return raw;
+  if (raw && typeof raw === "object") {
+    const o = raw as { toDate?: () => Date; seconds?: number; _seconds?: number };
+    // Firestore Timestamp / plain timestamp-object ko AD Date me normalize karo taaki folder date sahi baney.
+    if (typeof o.toDate === "function") {
+      try {
+        const d = o.toDate();
+        if (d instanceof Date && !isNaN(d.getTime())) return d;
+      } catch {
+        /* fallback below */
+      }
+    }
+    const sec = typeof o.seconds === "number" ? o.seconds : o._seconds;
+    if (typeof sec === "number" && Number.isFinite(sec)) {
+      const d = new Date(sec * 1000);
+      if (!isNaN(d.getTime())) return d;
+    }
+  }
   if (typeof raw === "number" && Number.isFinite(raw)) {
     const d = new Date(raw);
     if (!isNaN(d.getTime())) return d;
@@ -49,17 +66,13 @@ function parseVoucherDate(raw: unknown): Date {
   return new Date();
 }
 
-/** Company country NP ho to user mode; warna hamesha AD folder. */
+/** Drive date-folder mode always follows saved company preference (country-agnostic). */
 export function resolveDriveAttachmentDateFolderMode(
   company: Record<string, unknown> | null | undefined
 ): DriveAttachmentDateFolderMode {
-  const country = String(company?.country ?? company?.countryCode ?? "").trim().toUpperCase();
   const stored = String(company?.cloudSyncDriveDateFolderMode ?? "").trim().toLowerCase();
-  if (country === "NP" || country === "NEPAL") {
-    if (stored === "bs" || stored === "both") return stored;
-    if (stored === "ad") return "ad";
-    return "ad";
-  }
+  // UI selection should be honored for every company so attachment folders match user expectation.
+  if (stored === "bs" || stored === "both" || stored === "ad") return stored;
   return "ad";
 }
 

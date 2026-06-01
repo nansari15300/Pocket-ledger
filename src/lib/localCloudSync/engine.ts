@@ -21,6 +21,7 @@ import {
 import { logLocalCloudSync, warnLocalCloudSync } from "@/lib/localCloudSync/logger";
 import {
   FIREBASE_SIGN_IN_REQUIRED_FOR_DRIVE_MSG,
+  getFirebaseAuthUserForApi,
   hasRealFirebaseAuthSession,
   isDriveAuthRequiredError,
   waitForFirebaseAuthReady,
@@ -33,25 +34,38 @@ import {
   readCloudSyncDriveEncryptionFromCompany,
 } from "@/lib/localCloudSync/driveEncryption";
 import { uploadOpeningSnapshotToDrive, downloadAndMergeOpeningUsersFromDrive } from "@/lib/localCloudSync/openingDriveSnapshot";
-import { forceReencryptDriveIfNeeded } from "@/lib/localCloudSync/forceReencryptDrive";
-import { syncPendingFilesForCompany } from "@/lib/localPendingFiles";
+import { purgeLocalCompanyIfDriveFolderMissing } from "@/lib/localCloudSync/driveCompanyFolderLifecycle";
+import { isLocalFileRef, syncPendingFilesForCompany } from "@/lib/localPendingFiles";
 import {
   countPendingLocalCloudSyncOps,
   getCloudSyncCursor,
   listPendingLocalCloudSyncOps,
   markLocalCloudSyncOpsSynced,
+  rebasePendingLocalCloudSyncOps,
   setCloudSyncCursor,
 } from "@/lib/localCloudSync/queue";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import {
   countNewCloudSyncFileRefs,
-  countUniqueCloudSyncFileRefsInOps,
+  collectCloudSyncFileRefsFromValue,
 } from "@/lib/localCloudSync/syncSummaryAttachments";
+import { appendDeviceSyncSummaryHistory } from "@/lib/localCloudSync/deviceSyncSummaryHistory";
 import type { CloudSyncCompanyRef, CloudSyncProviderId, CloudSyncLastSyncSummary } from "@/lib/localCloudSync/types";
 
 const VOUCHER_SYNC_TABLE = "vouchers";
 
 const syncLocks = new Set<string>();
+
+/** Forensic toggle: remote op apply/download pipeline ko debug mode me hi verbose rakho. */
+function attachmentSyncForensicEnabled(): boolean {
+  return typeof process !== "undefined" && process.env.NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG === "1";
+}
+
+/** Cycle-level focused logger: op apply/skip aur file-ref extraction ko correlate karne ke liye. */
+function logAttachmentSyncForensic(tag: string, payload: Record<string, unknown>): void {
+  if (!attachmentSyncForensicEnabled()) return;
+  console.warn("[FORENSIC_ATTACHMENT_SYNC]", { tag, ...payload });
+}
 
 export async function runLocalCloudSyncCycle(companyId: string, options?: { force?: boolean }): Promise<{
   ok: boolean;
@@ -87,14 +101,11 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
   const providerId = cfg.cloudSyncProvider as CloudSyncProviderId;
   if (!providerId) return { ok: false, error: "no provider", uploaded: 0, downloaded: 0 };
 
-  const encCfg = readCloudSyncDriveEncryptionFromCompany(reg as Record<string, unknown>);
-  if (encCfg.encryptAny && !(await isCloudSyncEncryptionReady(cid))) {
-    return {
-      ok: false,
-      error: CLOUD_SYNC_ENCRYPTION_KEY_REQUIRED_MSG,
-      uploaded: 0,
-      downloaded: 0,
-    };
+  // Drive folder user ne delete kar diya ho to sync usko recreate/reupload na kare; local copy bhi hatao.
+  const firebaseUser = await getFirebaseAuthUserForApi();
+  const purged = await purgeLocalCompanyIfDriveFolderMissing(cid, firebaseUser.uid);
+  if (purged) {
+    return { ok: false, error: "Drive company folder missing; local company removed", uploaded: 0, downloaded: 0 };
   }
 
   syncLocks.add(cid);
@@ -118,19 +129,47 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
           : undefined,
     };
 
+    // Admin ke Drive manifest ko upload se pehle local registry me lao; stale false flags plain upload/untick na kar dein.
+    const manifestBeforeUpload = await provider.getManifest(syncRef);
+    const regAfterManifest =
+      (await mergeRemoteCloudSyncManifestIntoLocalCompany(cid, manifestBeforeUpload)) ?? reg;
+    const encCfg = readCloudSyncDriveEncryptionFromCompany(regAfterManifest as Record<string, unknown>);
+    if (encCfg.encryptAny && !(await isCloudSyncEncryptionReady(cid))) {
+      throw new Error(CLOUD_SYNC_ENCRYPTION_KEY_REQUIRED_MSG);
+    }
+
     const pendingBefore = await listPendingLocalCloudSyncOps(cid);
     // Sync enable se pehle ka data (journal, opening, masters) — pehli cycle par outbox khali rehta tha.
     if (pendingBefore.length === 0) {
       await backfillLocalDocsToCloudSyncOutbox(cid);
     }
 
+    // Upload se pehle remote latest cursor padho, phir local pending seq ko uske upar shift karo.
+    await rebasePendingLocalCloudSyncOps(cid, Math.max(cursor.lastSyncedOp, manifestBeforeUpload.latestOp));
+
     // Pending `local:` attachments/avatars → Drive `attachments/` + `opening/avatars/`.
     const attachSync = await syncPendingFilesForCompany(cid);
+    // Pending bytes uploader ka per-cycle outcome: upload fail/success ko ops download se separate dekho.
+    logAttachmentSyncForensic("pending_attachment_upload_cycle_result", {
+      companyId: cid,
+      synced: attachSync.synced,
+      failed: attachSync.failed,
+    });
     if (attachSync.synced > 0) {
       logLocalCloudSync("attachments uploaded to Drive", { companyId: cid, ...attachSync });
     }
+    if (attachSync.failed > 0) {
+      // Attachment bytes Drive par na jaayein to `local:` refs doosre device par broken ho jaate hain; data op upload rok kar retry safe rakho.
+      throw new Error(
+        `Attachment upload to ${providerId === "google_drive" ? "Google Drive" : "cloud storage"} failed for ${attachSync.failed} file(s). Voucher sync paused so files are not lost.`
+      );
+    }
 
     const pending = await listPendingLocalCloudSyncOps(cid);
+    // Device-local "Added vouchers" = isi device ke create ops (global download counts se alag).
+    const createdVouchersThisDevice = pending.filter(
+      (op) => op.table === VOUCHER_SYNC_TABLE && op.action === "create"
+    ).length;
     let maxUploadedSeq = cursor.lastSyncedOp;
     let uploadedVouchers = 0;
     for (const op of pending) {
@@ -159,6 +198,12 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     }
 
     const remoteOps = await provider.downloadOperations(syncRef, cursor.lastSyncedOp);
+    // Remote delta size: agar yahan 0 aata rahe to source device upload/cursor issue pakadna easy hota hai.
+    logAttachmentSyncForensic("remote_ops_downloaded", {
+      companyId: cid,
+      sinceOp: cursor.lastSyncedOp,
+      count: remoteOps.length,
+    });
     let maxRemoteSeq = cursor.lastSyncedOp;
     let addedVouchers = 0;
     let addedFiles = 0;
@@ -168,8 +213,33 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
 
     await runWithRemoteCloudSyncApply(async () => {
       for (const op of remoteOps) {
+        // Op payload se saare attachment refs nikaalo taaki apply/skip ke saath exact mapping mile.
+        const opFileRefs = new Set<string>();
+        collectCloudSyncFileRefsFromValue(op.payload, opFileRefs);
+        if ([...opFileRefs].some((ref) => isLocalFileRef(ref))) {
+          // Dusre device ka `local:` ref bytes ke bina unusable hota hai; corrected `drive:` op ka wait karo.
+          warnLocalCloudSync("remote op skipped because it contains unresolved local attachment refs", {
+            companyId: cid,
+            opSeq: op.opSeq,
+            table: op.table,
+            rowId: op.rowId,
+            fileRefs: [...opFileRefs],
+          });
+          if (op.opSeq > maxRemoteSeq) maxRemoteSeq = op.opSeq;
+          continue;
+        }
         const local = (await getCompanyDocFromBrowserDb(cid, op.table, op.rowId)) as Record<string, unknown> | null;
-        if (!shouldApplyRemoteCloudSyncOp(local, op)) continue;
+        if (!shouldApplyRemoteCloudSyncOp(local, op)) {
+          // Skip reason path: ref present hone par bhi op apply nahi hua to immediately visible hoga.
+          logAttachmentSyncForensic("remote_op_skipped", {
+            companyId: cid,
+            opSeq: op.opSeq,
+            table: op.table,
+            rowId: op.rowId,
+            fileRefs: [...opFileRefs],
+          });
+          continue;
+        }
         const merged = mergeRemotePayloadIntoLocal(local, op);
         await upsertCompanyDocInBrowserDb(cid, op.table, op.rowId, merged, {
           skipCloudSyncEnqueue: true,
@@ -186,6 +256,15 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
           addedFiles += newFileRefs;
           downloadedFiles += newFileRefs;
         }
+        // Applied op trace: payload refs vs newly-added refs compare karke missing-link cases isolate hote hain.
+        logAttachmentSyncForensic("remote_op_applied", {
+          companyId: cid,
+          opSeq: op.opSeq,
+          table: op.table,
+          rowId: op.rowId,
+          payloadFileRefs: [...opFileRefs],
+          newFileRefsDetected: newFileRefs,
+        });
         if (op.opSeq > maxRemoteSeq) maxRemoteSeq = op.opSeq;
       }
     });
@@ -237,12 +316,15 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
       });
     }
 
-    const openingUploaded = await uploadOpeningSnapshotToDrive(cid);
+    // Opening snapshot sync side-effect only; attachment counters below stay voucher-file focused.
+    await uploadOpeningSnapshotToDrive(cid);
 
-    // Pending bytes + ops metadata — voucher `fileUrls` jab pehle se `drive:` par hon.
-    const bytesUploadedThisCycle = attachSync.synced + openingUploaded;
-    const refsInUploadedOps = countUniqueCloudSyncFileRefsInOps(pending);
-    const uploadedFiles = Math.max(bytesUploadedThisCycle, refsInUploadedOps);
+    // IMPORTANT: summary card "files" = sirf real attachment/avatar uploads, opening snapshot files nahi.
+    const attachmentFilesUploadedThisCycle = attachSync.synced;
+    // Device-local "Added files" = isi device se nayi attachment bytes upload hui.
+    const createdFilesThisDevice = attachmentFilesUploadedThisCycle;
+    // Uploaded files row ko strict attachment-only rakho; payload ref count/opening sync se inflate na ho.
+    const uploadedFiles = attachmentFilesUploadedThisCycle;
 
     const lastSyncSummary: CloudSyncLastSyncSummary = {
       addedFiles,
@@ -252,10 +334,31 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
       downloadedFiles,
       downloadedVouchers,
     };
+    const hasCycleActivity =
+      uploaded > 0 ||
+      downloaded > 0 ||
+      uploadedFiles > 0 ||
+      uploadedVouchers > 0 ||
+      downloadedFiles > 0 ||
+      downloadedVouchers > 0;
+    // Idle tick par summary zero overwrite mat karo; last meaningful sync counters card me visible rehne do.
+    const summaryToPersist = hasCycleActivity
+      ? lastSyncSummary
+      : readCloudSyncConfigFromCompany(regForShare as Record<string, unknown>).cloudSyncLastSyncSummary;
 
     await patchLocalCompanyCloudSyncFields(cid, {
-      cloudSyncLastSyncSummary: lastSyncSummary,
+      cloudSyncLastSyncSummary: summaryToPersist,
     });
+    if (hasCycleActivity) {
+      // Date-range card ke liye per-device timeline row save karo (Drive par sync nahi hota).
+      appendDeviceSyncSummaryHistory({
+        companyId: cid,
+        summary: lastSyncSummary,
+        createdFiles: createdFilesThisDevice,
+        createdVouchers: createdVouchersThisDevice,
+        at: now,
+      });
+    }
 
     logLocalCloudSync("cycle ok", {
       companyId: cid,

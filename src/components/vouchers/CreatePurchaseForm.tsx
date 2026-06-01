@@ -379,6 +379,8 @@ export function CreatePurchaseForm({
   const [isDueDateCalendarOpen, setIsDueDateCalendarOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isLinkAdvancesOpen, setIsLinkAdvancesOpen] = useState(false);
+  // Static/copy-draft me rapid multi-click se parallel saves queue ho rahe the; ek hi submit ko allow karo.
+  const submitInFlightRef = useRef(false);
   // Link sections are collapsed by default in add/new; edit shows automatically only when already linked.
   const [showLinkSections, setShowLinkSections] = useState(false);
   const [pendingLinkAllocations, setPendingLinkAllocations] = useState<Record<string, number> | null>(null);
@@ -935,16 +937,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const handleFormSubmit = useCallback(
     (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
       e.preventDefault();
-      void form.handleSubmit(
-        async (data) => {
-          await processAndSaveRef.current?.(data, options);
-        },
-        (errors) => {
-          sonnerToast.error("Validation Failed", { description: formatPurchaseFormValidationErrors(errors) });
+      if (submitInFlightRef.current || isLoading) return;
+      submitInFlightRef.current = true;
+      void (async () => {
+        try {
+          await form.handleSubmit(
+            async (data) => {
+              await processAndSaveRef.current?.(data, options);
+            },
+            (errors) => {
+              sonnerToast.error("Validation Failed", { description: formatPurchaseFormValidationErrors(errors) });
+            }
+          )(e);
+        } finally {
+          submitInFlightRef.current = false;
         }
-      )(e);
+      })();
     },
-    [form]
+    [form, isLoading]
   );
 
    const processAndSave = useCallback(
@@ -1692,7 +1702,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               isMobile
                 ? "overflow-y-auto overflow-x-hidden [scrollbar-width:thin] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-400/80 [&::-webkit-scrollbar-track]:bg-gray-200/60"
                 : /* w-2 = vertical track patla (pehle sirf h-2 tha — horizontal patla, vertical mota) */
-                  "overflow-auto pr-6 -mr-6 touch-pan-x [scrollbar-width:thin] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-400 [&::-webkit-scrollbar-track]:bg-gray-200"
+                  // Tablet + PC-view touch drag fix: sirf scrollbar thumb nahi, content area se bhi x/y pan allow karo.
+                  "overflow-auto pr-6 -mr-6 touch-pan-x touch-pan-y [scrollbar-width:thin] [WebkitOverflowScrolling:touch] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-400 [&::-webkit-scrollbar-track]:bg-gray-200"
             )}
           >
             <div

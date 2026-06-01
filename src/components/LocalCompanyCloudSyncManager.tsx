@@ -12,7 +12,7 @@ import { logLocalCloudSync } from "@/lib/localCloudSync/logger";
 import { CLOUD_SYNC_POKE_EVENT, MIN_CLOUD_SYNC_TICK_MS } from "@/lib/localCloudSync/types";
 import { hasRealFirebaseAuthSession, waitForFirebaseAuthReady } from "@/lib/firebaseAuthForApi";
 
-/** Har MIN tick: enabled companies — har company ka apna interval (10–60 sec). */
+/** Har MIN tick: enabled companies — har company ka apna interval (live/sec/min presets). */
 export function LocalCompanyCloudSyncManager() {
   const { company, clearCompanyId, reloadLocalCompanyRegistry } = useCompany();
   const { user } = useAuth();
@@ -57,7 +57,7 @@ export function LocalCompanyCloudSyncManager() {
       runningRef.current = true;
       try {
         const now = Date.now();
-        // ~60 sec: shared user ke device se Drive gayab company hatao.
+        // ~60 sec: Drive ka main folder gayab ho to local company hatao, sync se recreate mat karne do.
         if (now - lastDrivePurgeAtRef.current >= 60_000) {
           lastDrivePurgeAtRef.current = now;
           const purged = await purgeAllLocalCompaniesMissingOnDrive(user?.uid ?? null);

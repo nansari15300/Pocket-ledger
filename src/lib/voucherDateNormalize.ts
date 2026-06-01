@@ -27,15 +27,34 @@ export function parseFirestoreDateFieldToJsDate(raw: unknown): Date | null {
     return isNaN(d.getTime()) ? null : d;
   }
   if (typeof raw === "object" && raw !== null) {
-    const o = raw as Record<string, unknown> & { __fsTs?: boolean; seconds?: unknown; nanoseconds?: unknown; toDate?: () => Date };
-    if (o.__fsTs === true && typeof o.seconds === "number" && Number.isFinite(o.seconds)) {
-      const ns = typeof o.nanoseconds === "number" && Number.isFinite(o.nanoseconds) ? o.nanoseconds : 0;
-      const d = new Timestamp(o.seconds, ns as number).toDate();
+    const o = raw as Record<string, unknown> & {
+      __fsTs?: boolean;
+      seconds?: unknown;
+      _seconds?: unknown;
+      nanoseconds?: unknown;
+      _nanoseconds?: unknown;
+      toDate?: () => Date;
+    };
+    const sec =
+      typeof o.seconds === "number" && Number.isFinite(o.seconds)
+        ? o.seconds
+        : typeof o._seconds === "number" && Number.isFinite(o._seconds)
+          ? o._seconds
+          : null;
+    const nsRaw =
+      typeof o.nanoseconds === "number" && Number.isFinite(o.nanoseconds)
+        ? o.nanoseconds
+        : typeof o._nanoseconds === "number" && Number.isFinite(o._nanoseconds)
+          ? o._nanoseconds
+          : 0;
+    if (o.__fsTs === true && sec !== null) {
+      // Legacy mirror timestamps may use underscored keys; normalize both to stable Date.
+      const d = new Timestamp(sec, nsRaw as number).toDate();
       return isNaN(d.getTime()) ? null : d;
     }
-    if (typeof o.seconds === "number" && Number.isFinite(o.seconds)) {
-      const ns = typeof o.nanoseconds === "number" && Number.isFinite(o.nanoseconds) ? o.nanoseconds : 0;
-      const d = new Timestamp(o.seconds, ns as number).toDate();
+    if (sec !== null) {
+      // Plain JSON timestamp objects without `toDate` should still parse correctly.
+      const d = new Timestamp(sec, nsRaw as number).toDate();
       return isNaN(d.getTime()) ? null : d;
     }
     if (typeof o.toDate === "function") {
@@ -109,16 +128,35 @@ export function coerceVoucherDocumentDate(data: Record<string, unknown> | null |
     return;
   }
   if (typeof raw === "object" && raw !== null) {
-    const o = raw as Record<string, unknown> & { __fsTs?: boolean; seconds?: unknown; nanoseconds?: unknown; toDate?: () => Date };
-    if (o.__fsTs === true && typeof o.seconds === "number" && Number.isFinite(o.seconds)) {
-      const ns = typeof o.nanoseconds === "number" && Number.isFinite(o.nanoseconds) ? o.nanoseconds : 0;
-      data["date"] = new Timestamp(o.seconds, ns as number);
+    const o = raw as Record<string, unknown> & {
+      __fsTs?: boolean;
+      seconds?: unknown;
+      _seconds?: unknown;
+      nanoseconds?: unknown;
+      _nanoseconds?: unknown;
+      toDate?: () => Date;
+    };
+    const sec =
+      typeof o.seconds === "number" && Number.isFinite(o.seconds)
+        ? o.seconds
+        : typeof o._seconds === "number" && Number.isFinite(o._seconds)
+          ? o._seconds
+          : null;
+    const nsRaw =
+      typeof o.nanoseconds === "number" && Number.isFinite(o.nanoseconds)
+        ? o.nanoseconds
+        : typeof o._nanoseconds === "number" && Number.isFinite(o._nanoseconds)
+          ? o._nanoseconds
+          : 0;
+    if (o.__fsTs === true && sec !== null) {
+      // Accept both canonical and underscored timestamp keys while coercing voucher date.
+      data["date"] = new Timestamp(sec, nsRaw as number);
       return;
     }
     // JSON / cache se sirf `{ seconds, nanoseconds }` — `toDate` nahi; pehle yahan gir kar `Timestamp.now()` ho jata tha
-    if (typeof o.seconds === "number" && Number.isFinite(o.seconds)) {
-      const ns = typeof o.nanoseconds === "number" && Number.isFinite(o.nanoseconds) ? o.nanoseconds : 0;
-      data["date"] = new Timestamp(o.seconds, ns as number);
+    if (sec !== null) {
+      // Underscored keys (`_seconds`) from serialized snapshots should not become "today" by mistake.
+      data["date"] = new Timestamp(sec, nsRaw as number);
       return;
     }
     if (typeof o.toDate === "function") {

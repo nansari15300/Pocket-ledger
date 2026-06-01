@@ -69,6 +69,7 @@ import { formatVoucherNumber, normalizePrefix, parseVoucherNumberPart } from "@/
 import { isRecurringVoucherGenerationEnabled } from "@/lib/recurringVoucherSettings";
 import { BTN_SAVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { stripIdsForCrossCompanyClone } from "@/lib/crossCompanyMasterPrefill";
+import { importVoucherAttachmentsAsFilesForLocalCloudCopy } from "@/lib/voucherLocalAttachmentUpload";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { persistLedgerModalParentFromBrowser } from "@/lib/modalUrlSync";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
@@ -785,7 +786,10 @@ function toEpochMs(value: unknown): number | null {
     return Number.isFinite(ms) ? ms : null;
   }
   if (typeof value === "object" && value !== null) {
-    const seconds = (value as { seconds?: unknown }).seconds;
+    // Drive/local JSON payload me Firestore timestamp `seconds` ya `_seconds` dono shape mil sakte hain.
+    const seconds =
+      (value as { seconds?: unknown; _seconds?: unknown }).seconds ??
+      (value as { seconds?: unknown; _seconds?: unknown })._seconds;
     if (typeof seconds === "number" && Number.isFinite(seconds)) return seconds * 1000;
   }
   return null;
@@ -2070,7 +2074,7 @@ export function AddVoucherDialog(props: any) {
   }, [isOpen, voucher?.id, companyId, postCopyNewFormSeed, voucher?.type, editCompanyId, ctxCompanyId, vouchers, voucherSqlMirrorFirst]);
 
   // Preserve clicked contra leg + ledger row context + attachments when live Firestore doc replaces table row.
-  const effectiveVoucher = liveVoucher
+  const effectiveVoucherBase = liveVoucher
     ? mergeAttachmentFieldsFromRowForEffectiveVoucher(
         mergeLedgerRowContextFromRow(liveVoucher, voucher, ledgerEntityId),
         voucher
@@ -2078,6 +2082,14 @@ export function AddVoucherDialog(props: any) {
     : voucher
       ? mergeLedgerRowContextFromRow(voucher, voucher, ledgerEntityId)
       : voucher;
+  const effectiveVoucher = useMemo(() => {
+    if (!effectiveVoucherBase || typeof effectiveVoucherBase !== "object") return effectiveVoucherBase;
+    const row = effectiveVoucherBase as Record<string, unknown>;
+    // Edit form date: Drive-synced rows me timestamp-object ho sakta hai, isliye yahan Date normalize karke sab forms ko stable value do.
+    const dateMs = toEpochMs(row.date) ?? toEpochMs(row.createdAt) ?? toEpochMs(row.updatedAt);
+    if (!dateMs) return effectiveVoucherBase;
+    return { ...row, date: new Date(dateMs) };
+  }, [effectiveVoucherBase]);
   // Dialog chrome / link-locks sirf saved edit par: copied-draft session me null rakho (nahi to source voucher id se locks lag jate hain).
   const voucherForDialogChrome = postCopyNewFormSeed ? null : effectiveVoucher;
   // Bill-wise: voucher's own allocations/linked refs, OR (sale/purchase) any payment has allocations to this voucher
@@ -2392,12 +2404,17 @@ export function AddVoucherDialog(props: any) {
         allCompanies
       );
       const { id: _sourceVoucherDocId, ...remappedSansId } = remapped as Record<string, unknown>;
-      const copyPayload = {
+      const copyPayloadBase = {
         ...remappedSansId,
         voucherNumber: nextVoucherNumber,
         // Cross-company create me stale approval carry na ho; target voucher fresh pending/editable rahe.
         isApproved: false,
       };
+      const importedCopy = await importVoucherAttachmentsAsFilesForLocalCloudCopy({
+        targetCompanyId: destinationCompanyId,
+        voucher: copyPayloadBase,
+      });
+      const copyPayload = importedCopy.voucher;
       const nextNewFormSeed = {
         ...copyPayload,
         // New form seed me voucher number fresh auto/entry ke liye blank rakho.

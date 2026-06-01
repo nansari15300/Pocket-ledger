@@ -151,6 +151,8 @@ export async function uploadOpeningSnapshotToDrive(companyId: string): Promise<n
     await postDriveJsonViaClient("/api/local-cloud-sync/drive/upload-json", {
       companyId: cid,
       companyName: ref.companyName,
+      // Opening JSON follows same owner/shared folder target as data ops.
+      driveSharedFolderId: ref.driveSharedFolderId,
       relativePath: f.relativePath,
       body,
       contentType: "application/json",

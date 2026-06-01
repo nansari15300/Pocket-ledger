@@ -23,7 +23,7 @@ import {
   flushVoucherOutbox,
 } from "@/lib/localVoucherOutbox";
 import { syncPendingFiles } from "@/lib/localPendingFiles";
-import { coerceVoucherDocumentDate } from "@/lib/voucherDateNormalize";
+import { coerceVoucherDocumentDate, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { getPlan, numericEntitlement, companyStorageIsLocal, type Entitlements, type PlanId } from "@/config/plans";
 import { getPlanFromPlans } from "@/hooks/useLivePlans";
 import { readCachedPlansRecord, defaultPlansRecordFallback } from "@/lib/plansCatalogCache";
@@ -63,6 +63,7 @@ import {
   recordContainsLocalPendingVoucherFileRef,
   voucherNewAttachmentsAlwaysStageAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
+import { parseAttachmentHoldClipboardText } from "@/lib/attachmentHoldClipboard";
 
 /**
  * Firestore offline error ke baad SQLite/outbox fallback — APK par sirf genuinely local-SQLite-first company (`storageOption: local`).
@@ -150,31 +151,48 @@ function removeUndefined(obj: any): any {
   return obj;
 }
 
+function normalizePersistableAttachmentUrl(raw: unknown): string | null {
+  const s = typeof raw === "string" ? raw.trim() : "";
+  if (!s) return null;
+  if (!s.startsWith("PL_ATTACH_V1:")) return s;
+  // Hold-clipboard marker should not be persisted; use decoded `src` so sync pipeline can process local/drive/http refs.
+  const payload = parseAttachmentHoldClipboardText(s);
+  const src = String(payload?.src || "").trim();
+  return src || null;
+}
+
+function normalizeVoucherAttachmentFieldsForPersistence(
+  data: Record<string, unknown>
+): void {
+  const rawFileUrls = data.fileUrls;
+  if (Array.isArray(rawFileUrls)) {
+    const normalized: string[] = [];
+    for (const entry of rawFileUrls) {
+      const url = normalizePersistableAttachmentUrl(entry);
+      if (url) normalized.push(url);
+    }
+    // Keep order stable but strip duplicates so repeated marker values do not inflate attachment arrays.
+    data.fileUrls = normalized.filter((u, i) => normalized.indexOf(u) === i);
+  } else if (typeof rawFileUrls === "string") {
+    const one = normalizePersistableAttachmentUrl(rawFileUrls);
+    data.fileUrls = one ? [one] : [];
+  }
+
+  const rawUf = data.unassignedFile;
+  if (rawUf && typeof rawUf === "object") {
+    const uf = { ...(rawUf as Record<string, unknown>) };
+    const normalizedUrl = normalizePersistableAttachmentUrl(uf.url);
+    // Invalid clipboard marker payload (`sid`-only etc.) should be dropped to avoid saving broken pseudo-URLs.
+    if (normalizedUrl) uf.url = normalizedUrl;
+    else delete uf.url;
+    data.unassignedFile = uf;
+  }
+}
+
 /** Date / Firestore Timestamp / ISO string → JS Date (update path me `new Date(ts)` galat Invalid Date deta tha) */
 function toJsDateFromVoucherField(value: unknown): Date | null {
-  if (value == null) return null;
-  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
-  if (value instanceof Timestamp) {
-    try {
-      const d = value.toDate();
-      return isNaN(d.getTime()) ? null : d;
-    } catch {
-      return null;
-    }
-  }
-  if (typeof value === "string" && value.trim()) {
-    const d = new Date(value);
-    return isNaN(d.getTime()) ? null : d;
-  }
-  if (typeof value === "object" && typeof (value as { toDate?: () => Date }).toDate === "function") {
-    try {
-      const d = (value as { toDate: () => Date }).toDate();
-      return d instanceof Date && !isNaN(d.getTime()) ? d : null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
+  // Reuse shared parser so `{ _seconds, _nanoseconds }` cached shapes also resolve instead of falling back to today.
+  return parseFirestoreDateFieldToJsDate(value);
 }
 
 /** Har save par `app_settings/plans` read throttle — voucher create latency kam (Firestore round-trip reuse). */
@@ -925,6 +943,8 @@ export async function saveVoucher(
   // Firestore-first companies: SQLite upsert se pehle bhi yahi gate — expired paid = seedha updateDoc bhi rokna.
   await assertCompanyAllowsLedgerMutations(companyId);
   const cleanVoucherData = removeUndefined(voucherData);
+  // Normalize clipboard marker URLs before any local-ref detection/sync routing.
+  normalizeVoucherAttachmentFieldsForPersistence(cleanVoucherData as Record<string, unknown>);
   const voucherPath = `companies/${companyId}/vouchers`;
   /** APK/static/EXE + offline: hamesha SQLite/outbox — Firestore/Storage await se "Saving…" (attachments) na atke. */
   const sqliteFirst =
@@ -955,11 +975,14 @@ export async function saveVoucher(
           }
         }
       }
+      const currentDate = toJsDateFromVoucherField(cleanVoucherData.date);
       const dMissing =
         cleanVoucherData.date === undefined ||
         cleanVoucherData.date === null ||
         (typeof cleanVoucherData.date === "string" && String(cleanVoucherData.date).trim() === "");
-      if (dMissing && oldRow?.date != null) {
+      const dInvalidButPresent = !dMissing && currentDate === null;
+      // Edit path: preserve previous voucher date when incoming payload carries an unparsable placeholder/object.
+      if ((dMissing || dInvalidButPresent) && oldRow?.date != null) {
         cleanVoucherData.date = oldRow.date as any;
       }
     } catch {
@@ -1157,9 +1180,10 @@ export async function saveVoucher(
   if (oldSnap?.exists()) {
     oldData = oldSnap.data();
   } else {
-    const loc = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId!);
-    if (!loc || typeof loc !== "object") throw new Error("Voucher not found");
-    oldData = loc;
+    // Local company / authoritative-id mismatch: SQLite me voucher same `companyId` ke alawa alias row me bhi ho sakta hai.
+    const resolvedLocal = await resolveVoucherSnapshotForLocalWrite(companyId, voucherId!);
+    if (!resolvedLocal?.voucher) throw new Error("Voucher not found");
+    oldData = resolvedLocal.voucher;
   }
   const { createdAt, updatedAt, ...restOfOldData } = (oldData || {}) as any;
   const changedFields = getChanges(restOfOldData, cleanVoucherData);

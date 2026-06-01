@@ -42,7 +42,12 @@ export async function POST(req: NextRequest) {
     if (!remotePath) {
       return NextResponse.json({ error: "remotePath or branchRelativePath required" }, { status: 400 });
     }
-    const file = await driveDownloadFileByRemotePath(auth.uid, remotePath);
+    // Attachment `drive:` refs are full paths; shared-folder id tells server where that company folder lives.
+    const file = await driveDownloadFileByRemotePath(
+      auth.uid,
+      remotePath,
+      typeof body.driveSharedFolderId === "string" ? body.driveSharedFolderId.trim() : undefined
+    );
     if (!file) return NextResponse.json({ base64: null, contentType: null });
     return NextResponse.json({ base64: file.base64, contentType: file.contentType });
   } catch (e) {

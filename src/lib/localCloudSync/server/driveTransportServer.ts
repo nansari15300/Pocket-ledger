@@ -1,5 +1,6 @@
 import "server-only";
 
+import { Readable } from "stream";
 import { google } from "googleapis";
 import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebaseAdmin";
 import type { CloudSyncManifest, LocalCloudSyncOperation } from "@/lib/localCloudSync/types";
@@ -11,6 +12,7 @@ import {
   buildPocketLedgerDriveRelativePath,
   legacyDriveCompanyFolderSegment,
   pocketLedgerCompanyFolderSegmentCandidates,
+  pocketLedgerDriveCompanyIdPart,
   pocketLedgerDriveBackupFileName,
   parsePocketLedgerCompanyFolderSegment,
   DRIVE_ENCRYPTED_FILE_SUFFIX,
@@ -219,6 +221,41 @@ async function findCompanyBranchFolder(
   return findChildFolder(drive, companyFolderId, POCKET_LEDGER_DRIVE_BRANCH[branch]);
 }
 
+/** Full `Pocket Ledger/{Company}/.../{file}` path ko shared-folder aware parent folder me resolve karo. */
+async function resolveRemotePathParentFolder(
+  drive: ReturnType<typeof google.drive>,
+  remotePath: string,
+  mode: "ensure" | "find",
+  driveSharedFolderId?: string
+): Promise<{ parentId: string; fileName: string } | null> {
+  const parts = String(remotePath || "")
+    .split("/")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length < 4 || parts[0] !== POCKET_LEDGER_DRIVE_ROOT) {
+    if (mode === "find") return null;
+    throw new Error("Invalid Pocket Ledger path");
+  }
+
+  const fileName = parts[parts.length - 1]!;
+  // Shared/joined company me `parts[1]` already company folder hai; parent walk uske andar se start karo.
+  const sharedFolderId = String(driveSharedFolderId || "").trim();
+  let parentId = sharedFolderId || (await findChildFolder(drive, "root", POCKET_LEDGER_DRIVE_ROOT));
+  if (!parentId) {
+    if (mode === "find") return null;
+    parentId = await ensureFolder(drive, "root", POCKET_LEDGER_DRIVE_ROOT);
+  }
+
+  const folderParts = sharedFolderId ? parts.slice(2, -1) : parts.slice(1, -1);
+  for (const seg of folderParts) {
+    const next =
+      mode === "ensure" ? await ensureFolder(drive, parentId, seg) : await findChildFolder(drive, parentId, seg);
+    if (!next) return null;
+    parentId = next;
+  }
+  return { parentId, fileName };
+}
+
 /** Manifest: pehle naya `data/`, warna legacy company root. */
 async function readManifestRaw(
   drive: ReturnType<typeof google.drive>,
@@ -402,16 +439,27 @@ async function upsertBinaryFileInFolder(
   mimeType: string
 ): Promise<void> {
   const q = `'${folderId}' in parents and name = '${fileName.replace(/'/g, "\\'")}' and trashed = false`;
-  const list = await drive.files.list({ q, fields: "files(id)", pageSize: 1 });
+  const list = await drive.files.list({
+    q,
+    fields: "files(id)",
+    pageSize: 1,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
   const existingId = list.data.files?.[0]?.id;
-  const media = { mimeType, body: body as unknown as string };
+  const media = {
+    mimeType,
+    // Google Drive multipart upload in Node expects a stream/string; Buffer-as-body can 500 in hosted builds.
+    body: Readable.from(body),
+  };
   if (existingId) {
-    await drive.files.update({ fileId: existingId, media });
+    await drive.files.update({ fileId: existingId, media, supportsAllDrives: true });
     return;
   }
   await drive.files.create({
     requestBody: { name: fileName, parents: [folderId] },
     media,
+    supportsAllDrives: true,
   });
 }
 
@@ -441,19 +489,6 @@ async function resolveFileIdByRemotePath(
   return list.data.files?.[0]?.id ?? null;
 }
 
-/** Attachment / backup bytes upload — parent folders ensure. */
-async function ensureNestedFolderChain(
-  drive: ReturnType<typeof google.drive>,
-  startFolderId: string,
-  segments: string[]
-): Promise<string> {
-  let parentId = startFolderId;
-  for (const seg of segments) {
-    parentId = await ensureFolder(drive, parentId, seg);
-  }
-  return parentId;
-}
-
 export async function driveUploadBackupFile(
   uid: string,
   companyId: string,
@@ -478,29 +513,17 @@ export async function driveUploadBinaryAtRemotePath(
   uid: string,
   remotePath: string,
   base64: string,
-  contentType = "application/octet-stream"
+  contentType = "application/octet-stream",
+  driveSharedFolderId?: string
 ): Promise<{ remotePath: string }> {
-  const parts = String(remotePath || "")
-    .split("/")
-    .map((p) => p.trim())
-    .filter(Boolean);
-  if (parts.length < 4 || parts[0] !== POCKET_LEDGER_DRIVE_ROOT) {
-    throw new Error("Invalid Pocket Ledger path");
-  }
-  const fileName = parts[parts.length - 1]!;
-  const folderParts = parts.slice(1, -1);
   const tokens = await loadDriveTokens(uid);
   const auth = oauthClient(tokens);
   const drive = google.drive({ version: "v3", auth });
-  let parentId = await findChildFolder(drive, "root", POCKET_LEDGER_DRIVE_ROOT);
-  if (!parentId) {
-    parentId = await ensureFolder(drive, "root", POCKET_LEDGER_DRIVE_ROOT);
-  }
-  for (const seg of folderParts) {
-    parentId = await ensureFolder(drive, parentId, seg);
-  }
+  // Attachments from joined devices must land inside owner ka shared company folder, not user's My Drive clone.
+  const target = await resolveRemotePathParentFolder(drive, remotePath, "ensure", driveSharedFolderId);
+  if (!target) throw new Error("Failed to resolve Pocket Ledger path");
   const buf = Buffer.from(base64, "base64");
-  await upsertBinaryFileInFolder(drive, parentId, fileName, buf, contentType);
+  await upsertBinaryFileInFolder(drive, target.parentId, target.fileName, buf, contentType);
   return { remotePath };
 }
 
@@ -509,21 +532,43 @@ export async function driveUploadAttachmentFile(
   remotePath: string,
   base64: string,
   contentType?: string,
-  sha256Hex?: string
+  sha256Hex?: string,
+  driveSharedFolderId?: string
 ): Promise<{ remotePath: string; deduped?: boolean }> {
   void sha256Hex;
-  const res = await driveUploadBinaryAtRemotePath(uid, remotePath, base64, contentType || "application/octet-stream");
+  const res = await driveUploadBinaryAtRemotePath(
+    uid,
+    remotePath,
+    base64,
+    contentType || "application/octet-stream",
+    driveSharedFolderId
+  );
   return { remotePath: res.remotePath };
 }
 
 export async function driveDownloadFileByRemotePath(
   uid: string,
-  remotePath: string
+  remotePath: string,
+  driveSharedFolderId?: string
 ): Promise<{ base64: string; contentType: string } | null> {
   const tokens = await loadDriveTokens(uid);
   const auth = oauthClient(tokens);
   const drive = google.drive({ version: "v3", auth });
-  const fileId = await resolveFileIdByRemotePath(drive, remotePath);
+  // Full-path download also supports shared company folder ids for attachments synced from other devices.
+  const target = await resolveRemotePathParentFolder(drive, remotePath, "find", driveSharedFolderId);
+  let fileId: string | null = null;
+  if (target) {
+    const q = `'${target.parentId}' in parents and name = '${target.fileName.replace(
+      /'/g,
+      "\\'"
+    )}' and trashed = false`;
+    const list = await drive.files.list({ q, fields: "files(id)", pageSize: 1 });
+    fileId = list.data.files?.[0]?.id ?? null;
+  }
+  if (!fileId) {
+    // Legacy fallback: pehle bug se user's My Drive clone me gaye files same device par ab bhi open ho sakein.
+    fileId = await resolveFileIdByRemotePath(drive, remotePath);
+  }
   if (!fileId) return null;
   const meta = await drive.files.get({ fileId, fields: "mimeType" });
   const media = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
@@ -796,44 +841,54 @@ export async function driveUploadJsonAtRemotePath(
   uid: string,
   remotePath: string,
   body: string,
-  contentType = "application/json"
+  contentType = "application/json",
+  driveSharedFolderId?: string
 ): Promise<{ remotePath: string }> {
-  const parts = String(remotePath || "")
-    .split("/")
-    .map((p) => p.trim())
-    .filter(Boolean);
-  if (parts.length < 4 || parts[0] !== POCKET_LEDGER_DRIVE_ROOT) {
-    throw new Error("Invalid Pocket Ledger path");
-  }
-  const fileName = parts[parts.length - 1]!;
-  const folderParts = parts.slice(1, -1);
   const tokens = await loadDriveTokens(uid);
   const auth = oauthClient(tokens);
   const drive = google.drive({ version: "v3", auth });
-  let parentId = await findChildFolder(drive, "root", POCKET_LEDGER_DRIVE_ROOT);
-  if (!parentId) throw new Error("Pocket Ledger root missing");
-  for (const seg of folderParts) {
-    parentId = await ensureFolder(drive, parentId, seg);
-  }
-  const q = `'${parentId}' in parents and name = '${fileName.replace(/'/g, "\\'")}' and trashed = false`;
+  // Encrypted attachment wrappers use JSON route, so shared folder routing must match binary uploads.
+  const target = await resolveRemotePathParentFolder(drive, remotePath, "ensure", driveSharedFolderId);
+  if (!target) throw new Error("Failed to resolve Pocket Ledger path");
+  const q = `'${target.parentId}' in parents and name = '${target.fileName.replace(
+    /'/g,
+    "\\'"
+  )}' and trashed = false`;
   const list = await drive.files.list({ q, fields: "files(id)", pageSize: 1 });
   const existingId = list.data.files?.[0]?.id;
   if (existingId) {
     await drive.files.update({ fileId: existingId, media: { mimeType: contentType, body } });
   } else {
     await drive.files.create({
-      requestBody: { name: fileName, parents: [parentId] },
+      requestBody: { name: target.fileName, parents: [target.parentId] },
       media: { mimeType: contentType, body },
     });
   }
   return { remotePath };
 }
 
-export async function driveDeleteFileByRemotePath(uid: string, remotePath: string): Promise<void> {
+export async function driveDeleteFileByRemotePath(
+  uid: string,
+  remotePath: string,
+  driveSharedFolderId?: string
+): Promise<void> {
   const tokens = await loadDriveTokens(uid);
   const auth = oauthClient(tokens);
   const drive = google.drive({ version: "v3", auth });
-  const fileId = await resolveFileIdByRemotePath(drive, remotePath);
+  // Re-encrypt cleanup must delete from the shared company folder when the local row was joined/restored.
+  const target = await resolveRemotePathParentFolder(drive, remotePath, "find", driveSharedFolderId);
+  let fileId: string | null = null;
+  if (target) {
+    const q = `'${target.parentId}' in parents and name = '${target.fileName.replace(
+      /'/g,
+      "\\'"
+    )}' and trashed = false`;
+    const list = await drive.files.list({ q, fields: "files(id)", pageSize: 1 });
+    fileId = list.data.files?.[0]?.id ?? null;
+  }
+  if (!fileId && !String(driveSharedFolderId || "").trim()) {
+    fileId = await resolveFileIdByRemotePath(drive, remotePath);
+  }
   if (fileId) {
     await drive.files.delete({ fileId, supportsAllDrives: true });
   }
@@ -924,7 +979,24 @@ export async function driveIsCompanyFolderAccessible(
   if (!cid) return false;
   const ref = toCompanyRef(cid, input.companyName, undefined);
   const resolved = await resolveCompanyRootFolderId(drive, ref, "find");
-  return !!resolved;
+  if (resolved) return true;
+
+  // Company rename ke baad bhi suffix stable rehta hai; missing-check me false purge avoid karo.
+  const rootId = await findChildFolder(drive, "root", POCKET_LEDGER_DRIVE_ROOT);
+  if (!rootId) return false;
+  const suffix = pocketLedgerDriveCompanyIdPart(cid);
+  let pageToken: string | undefined;
+  do {
+    const res = await drive.files.list({
+      q: `'${rootId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+      fields: "nextPageToken, files(id,name)",
+      pageSize: 200,
+      pageToken,
+    });
+    if ((res.data.files ?? []).some((f) => String(f.name || "").endsWith(`__${suffix}`))) return true;
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+  return false;
 }
 
 async function listFilesRecursive(

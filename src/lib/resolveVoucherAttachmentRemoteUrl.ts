@@ -7,11 +7,19 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 
 function isRemoteAttachmentUrl(u: string): boolean {
   const s = String(u || "").trim();
   if (!s || s.startsWith(LOCAL_FILE_PREFIX)) return false;
-  return s.startsWith("http://") || s.startsWith("https://") || s.startsWith("blob:") || s.startsWith("data:");
+  // Drive sync refs (`drive:...`) bhi remote attachment hi hain; stale local replace me inko accept karo.
+  return (
+    s.startsWith("http://") ||
+    s.startsWith("https://") ||
+    s.startsWith("blob:") ||
+    s.startsWith("data:") ||
+    isDriveFileRef(s)
+  );
 }
 
 /** Forensic: stale `local:` → remote HTTPS resolve path proof (`NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG=1`). */

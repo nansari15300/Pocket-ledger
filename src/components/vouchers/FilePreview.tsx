@@ -32,6 +32,7 @@ import {
   isLocalFileRef,
   LOCAL_FILE_PREFIX,
 } from "@/lib/localPendingFiles";
+import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 import { useVoucherAttachmentFallback } from "@/contexts/VoucherAttachmentFallbackContext";
 import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
@@ -858,6 +859,26 @@ export function FilePreview({
               resolvedUrl,
               resolvedType,
             });
+          }
+        }
+        // Drive ref: blob download karke preview type detect karo, taaki second device par bhi attachment dikh sake.
+        if (isDriveFileRef(file)) {
+          try {
+            const b = await getBlobFromLocalFileRef(file);
+            if (b && b.size > 0) {
+              const kind = await sniffBlobKindForPreview(b);
+              if (kind === "pdf") resolvedType = "pdf";
+              else if (kind === "image") {
+                resolvedType = "image";
+                objectUrl = URL.createObjectURL(b);
+                resolvedUrl = objectUrl;
+              } else {
+                resolvedType = "other";
+              }
+              resolvedName = file.split("/").pop() || "file";
+            }
+          } catch {
+            /* drive fetch fail — fallback remains generic */
           }
         }
         if (resolvedType === "other") {

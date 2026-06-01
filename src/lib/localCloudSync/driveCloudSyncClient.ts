@@ -13,6 +13,17 @@ import {
 } from "@/lib/localCloudSync/driveEncryption";
 import { postDriveJsonViaClient } from "@/lib/localCloudSync/driveApiClient";
 
+/** Forensic toggle: attachment upload/download trace sirf debug mode me verbose chalao. */
+function attachmentSyncForensicEnabled(): boolean {
+  return typeof process !== "undefined" && process.env.NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG === "1";
+}
+
+/** Single tag logger: Drive attachment pipeline ke key hops ko ek hi prefix se track karo. */
+function logAttachmentSyncForensic(tag: string, payload: Record<string, unknown>): void {
+  if (!attachmentSyncForensicEnabled()) return;
+  console.warn("[FORENSIC_ATTACHMENT_SYNC]", { tag, ...payload });
+}
+
 async function blobToBase64(blob: Blob): Promise<string> {
   const buf = await blob.arrayBuffer();
   const bytes = new Uint8Array(buf);
@@ -99,7 +110,20 @@ export async function uploadAttachmentBytesToDrive(input: {
   const logicalPath = input.remotePath;
   const reg = await getLocalCompanyById(input.companyId, { includeDeleted: true });
   const flags = readCloudSyncDriveEncryptionFromCompany(reg as Record<string, unknown>);
+  // Joined/restored local company: attachment bytes must use the owner shared company folder id.
+  const driveSharedFolderId =
+    typeof (reg as Record<string, unknown> | null)?.cloudSyncDriveFolderId === "string"
+      ? String((reg as Record<string, unknown>).cloudSyncDriveFolderId).trim() || undefined
+      : undefined;
   const blob = input.bytes instanceof Blob ? input.bytes : new Blob([input.bytes], { type: input.contentType });
+  // Upload request fingerprint: path/mode/size mismatch ko quickly isolate karne ke liye.
+  logAttachmentSyncForensic("upload_attachment_start", {
+    companyId: input.companyId,
+    logicalPath,
+    encryptFiles: flags.encryptFiles,
+    bytes: blob.size,
+    contentType: input.contentType || blob.type || "application/octet-stream",
+  });
 
   if (flags.encryptFiles) {
     const buf = await blob.arrayBuffer();
@@ -115,9 +139,16 @@ export async function uploadAttachmentBytesToDrive(input: {
     await postDriveJsonViaClient("/api/local-cloud-sync/drive/upload-json", {
       companyId: input.companyId,
       companyName: input.companyName,
+      driveSharedFolderId,
       relativePath: storagePath,
       body: encBody,
       contentType: "application/json",
+    });
+    // Encrypted route me Drive physical file alag (`.plenc.json`) hota hai, logical path alag rehta hai.
+    logAttachmentSyncForensic("upload_attachment_done_encrypted", {
+      companyId: input.companyId,
+      logicalPath,
+      storagePath,
     });
     return toDriveFileRef(logicalPath);
   }
@@ -126,10 +157,17 @@ export async function uploadAttachmentBytesToDrive(input: {
   const res = await postDriveJsonViaClient<{ remotePath: string }>("/api/local-cloud-sync/drive/upload-file", {
     companyId: input.companyId,
     companyName: input.companyName,
+    driveSharedFolderId,
     remotePath: logicalPath,
     contentType: input.contentType || blob.type || "application/octet-stream",
     sha256Hex: input.sha256Hex,
     base64,
+  });
+  // Plain route me server-returned remote path ko log karo taaki folder mismatch pakda ja sake.
+  logAttachmentSyncForensic("upload_attachment_done_plain", {
+    companyId: input.companyId,
+    logicalPath,
+    uploadedRemotePath: res.remotePath,
   });
   return toDriveFileRef(res.remotePath);
 }
@@ -143,17 +181,42 @@ export async function downloadDriveAttachmentBlob(
   const cid = companyId || (await resolveCompanyIdForDrivePath(logicalPath));
   const reg = cid ? await getLocalCompanyById(cid, { includeDeleted: true }) : null;
   const flags = readCloudSyncDriveEncryptionFromCompany(reg as Record<string, unknown>);
+  // Download side also needs the shared folder id, otherwise another device looks in its own My Drive.
+  const driveSharedFolderId =
+    typeof (reg as Record<string, unknown> | null)?.cloudSyncDriveFolderId === "string"
+      ? String((reg as Record<string, unknown>).cloudSyncDriveFolderId).trim() || undefined
+      : undefined;
 
   const tryPaths = flags.encryptFiles
     ? [driveStoragePathForLogicalFile(logicalPath, true), logicalPath]
     : [logicalPath];
+  // Download path order ko trace karo taaki encrypted/plain fallback behavior clear rahe.
+  logAttachmentSyncForensic("download_attachment_start", {
+    requestedPath: remotePath,
+    logicalPath,
+    companyId: cid ?? null,
+    encryptFiles: flags.encryptFiles,
+    tryPaths,
+  });
 
   for (const path of tryPaths) {
     const res = await postDriveJsonViaClient<{ base64: string | null; contentType?: string | null }>(
       "/api/local-cloud-sync/drive/download-file",
-      { remotePath: path }
+      {
+        companyId: cid,
+        companyName: typeof reg?.name === "string" ? reg.name : undefined,
+        driveSharedFolderId,
+        remotePath: path,
+      }
     );
-    if (!res.base64) continue;
+    if (!res.base64) {
+      // Missing file at this candidate path — अगला fallback path try hoga.
+      logAttachmentSyncForensic("download_attachment_path_miss", {
+        logicalPath,
+        attemptedPath: path,
+      });
+      continue;
+    }
     if (cid && (path.endsWith(".plenc.json") || res.contentType?.includes("json"))) {
       try {
         const text = atob(res.base64);
@@ -162,13 +225,32 @@ export async function downloadDriveAttachmentBlob(
           text,
           reg as Record<string, unknown>
         );
+        // Encrypted payload decrypt success: bytes/device-open pipeline yahin se verify hota hai.
+        logAttachmentSyncForensic("download_attachment_done_encrypted", {
+          logicalPath,
+          attemptedPath: path,
+          contentType,
+          bytes: bytes.byteLength,
+        });
         return new Blob([bytes], { type: contentType });
       } catch {
         /* plain fallback */
       }
     }
+    // Plain payload direct blob path.
+    logAttachmentSyncForensic("download_attachment_done_plain", {
+      logicalPath,
+      attemptedPath: path,
+      contentType: res.contentType || "application/octet-stream",
+    });
     return base64ToBlob(res.base64, res.contentType || "application/octet-stream");
   }
+  // Saare candidate paths fail hue: is case me preview/open ko explicit miss signal milega.
+  logAttachmentSyncForensic("download_attachment_not_found", {
+    requestedPath: remotePath,
+    logicalPath,
+    tryPaths,
+  });
   return null;
 }
 
@@ -382,6 +464,17 @@ export async function uploadPendingAttachmentPayloadToDrive(input: {
           originalFileName: input.fileName,
           company: input.company ?? null,
         });
+  // Final resolved remote path debug: category/date/fileName folder issue ka direct proof.
+  logAttachmentSyncForensic("pending_payload_resolved_remote_path", {
+    companyId: input.companyId,
+    collection: input.collection,
+    docId: input.docId,
+    field: input.field ?? null,
+    isAvatarField,
+    voucherNumber: voucherNumber ?? null,
+    voucherDate: voucherDate ?? null,
+    remotePath,
+  });
   const sha256Hex = await computeSha256HexFromBlob(input.blob);
   return uploadAttachmentBytesToDrive({
     companyId: input.companyId,

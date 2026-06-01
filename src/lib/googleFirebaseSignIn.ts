@@ -15,6 +15,8 @@ export async function signInWithGoogleForApp(): Promise<UserCredential | null> {
   const provider = new GoogleAuthProvider();
   provider.addScope("email");
   provider.addScope("profile");
+  // User ne dusra Google account choose karna ho to chooser force karo; last signed account auto-select na ho.
+  provider.setCustomParameters({ prompt: "select_account" });
 
   if (Capacitor.isNativePlatform()) {
     const { GoogleAuth } = await import("@codetrix-studio/capacitor-google-auth");

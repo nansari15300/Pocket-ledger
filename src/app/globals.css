@@ -2678,18 +2678,28 @@ body.theme-pro [data-pl-company-profile-chrome] select {
 }
 [data-pl-company-profile-chrome] button[role="combobox"],
 [data-pl-company-profile-chrome] button[data-theme-detail="date-range"],
-/* Radix Checkbox bhi `border` class use karta hai — gray field rule se checked tick hide na ho */
-/* `border-0` wale TabsTrigger is selector me mat aaye — warna active tab par safed text + gray bg (text dikhe nahi) */
-[data-pl-company-profile-chrome] button[class*="border"]:not([role="checkbox"]):not([role="tab"]),
 body.theme-colorfull main [data-pl-company-profile-chrome] button[role="combobox"],
 body.theme-colorfull main [data-pl-company-profile-chrome] button[data-theme-detail="date-range"],
-body.theme-colorfull main [data-pl-company-profile-chrome] button[class*="border"]:not([role="checkbox"]):not([role="tab"]),
 body.theme-pro [data-pl-company-profile-chrome] button[role="combobox"],
 body.theme-pro [data-pl-company-profile-chrome] button[data-theme-detail="date-range"],
-body.theme-pro [data-pl-company-profile-chrome] button[class*="border"]:not([role="checkbox"]):not([role="tab"]) {
+/* Radix Checkbox bhi `border` class use karta hai — gray field rule se checked tick hide na ho */
+/* `border-0` wale TabsTrigger is selector me mat aaye — warna active tab par safed text + gray bg (text dikhe nahi) */
+[data-pl-company-profile-chrome] button[class*="border"]:not([role="checkbox"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not([data-pl-settings-list-float]),
+body.theme-colorfull main [data-pl-company-profile-chrome] button[class*="border"]:not([role="checkbox"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not([data-pl-settings-list-float]),
+body.theme-pro [data-pl-company-profile-chrome] button[class*="border"]:not([role="checkbox"]):not([role="tab"]):not([data-pl-txn-icon-btn]):not([data-pl-settings-list-float]) {
   border-color: #000 !important;
   border-width: 1px !important;
   background-color: hsl(var(--muted) / 0.72) !important;
+}
+/* Drive sync footer — settings list float: sirf icon, box/border nahi */
+[data-pl-company-profile-chrome] button[data-pl-settings-list-float],
+body.theme-colorfull main [data-pl-company-profile-chrome] button[data-pl-settings-list-float],
+body.theme-pro [data-pl-company-profile-chrome] button[data-pl-settings-list-float] {
+  border: none !important;
+  border-width: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
 }
 /* Company Profile: checked checkbox — primary fill + tick visible (Pro theme) */
 [data-pl-company-profile-chrome] button[role="checkbox"][data-state="checked"],

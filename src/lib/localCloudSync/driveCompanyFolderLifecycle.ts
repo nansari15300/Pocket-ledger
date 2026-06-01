@@ -21,7 +21,7 @@ export function isLocalCompanyDriveFolderOwner(
   return !!uid && !!ownerId && uid === ownerId;
 }
 
-/** Drive shared join / non-owner — folder gayab ho to local company auto hatao. */
+/** Drive folder lifecycle: shared/non-owner + already-synced owner — folder gayab ho to local company auto hatao. */
 export function shouldPurgeLocalCompanyWhenDriveFolderMissing(
   reg: LocalCompanyDoc | Record<string, unknown>,
   firebaseUid: string | null | undefined
@@ -32,7 +32,11 @@ export function shouldPurgeLocalCompanyWhenDriveFolderMissing(
   if ((reg as { driveSharedJoin?: unknown }).driveSharedJoin === true) return true;
   const uid = String(firebaseUid || "").trim();
   const ownerId = String((reg as { ownerId?: unknown }).ownerId || "").trim();
-  return !!uid && !!ownerId && uid !== ownerId;
+  if (!!uid && !!ownerId && uid !== ownerId) return true;
+
+  const folderId = String((reg as { cloudSyncDriveFolderId?: unknown }).cloudSyncDriveFolderId ?? "").trim();
+  // Owner first setup par folder absent normal hai; once synced/restored, missing folder means user deleted Drive source.
+  return !!folderId || (cfg.cloudSyncLastSyncAt != null && cfg.cloudSyncLastSyncAt > 0);
 }
 
 /** Recycle bin permanent delete — pehle owner ka Drive folder, phir SQLite. */
@@ -89,7 +93,7 @@ export async function permanentDeleteLocalCompanyWithDriveCleanup(
 
 export type DriveMissingPurgeResult = { companyId: string; companyName: string };
 
-/** Shared user: Drive par company folder nahi — device se local row hatao. */
+/** Drive par company main folder nahi — device se local row hatao, re-upload/recreate mat karo. */
 export async function purgeLocalCompanyIfDriveFolderMissing(
   companyId: string,
   firebaseUid: string | null | undefined
@@ -104,9 +108,10 @@ export async function purgeLocalCompanyIfDriveFolderMissing(
 
   const folderId = String(reg.cloudSyncDriveFolderId ?? "").trim();
   const companyName = typeof reg.name === "string" ? reg.name : cid;
+  const isSharedJoin = (reg as { driveSharedJoin?: unknown }).driveSharedJoin === true;
 
-  // Join row bina folder id — orphan; hata do.
-  if (!folderId) {
+  // Shared join row bina folder id orphan hai; owner rows companyId/name se Drive folder lookup kar sakte hain.
+  if (!folderId && isSharedJoin) {
     await removeLocalCompanyById(cid, { firebaseUid: firebaseUid ?? null });
     logLocalCloudSync("purged local company — missing drive folder id", { companyId: cid });
     return { companyId: cid, companyName };
@@ -118,7 +123,8 @@ export async function purgeLocalCompanyIfDriveFolderMissing(
       {
         companyId: cid,
         companyName: typeof reg.name === "string" ? reg.name : undefined,
-        driveFolderId: folderId,
+        // Joined/restored rows have exact folder id; owner rows without id are checked by company folder name/id.
+        driveFolderId: folderId || undefined,
       }
     );
     if (res.accessible === true) return null;

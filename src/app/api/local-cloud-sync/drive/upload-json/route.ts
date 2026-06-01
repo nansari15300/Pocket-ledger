@@ -11,6 +11,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
   const body = (await req.json()) as {
+    driveSharedFolderId?: string;
     relativePath?: string;
     body?: string;
     contentType?: string;
@@ -25,7 +26,9 @@ export async function POST(req: NextRequest) {
       auth.uid,
       relativePath,
       payload,
-      body.contentType || "application/json"
+      body.contentType || "application/json",
+      // Encrypted attachment JSON wrappers follow the same shared-folder route as binary files.
+      typeof body.driveSharedFolderId === "string" ? body.driveSharedFolderId.trim() : undefined
     );
     return NextResponse.json({ ok: true, remotePath: res.remotePath });
   } catch (e) {

@@ -44,11 +44,12 @@ export type CloudSyncLastSyncSummary = {
   downloadedVouchers: number;
 };
 
-/** Background auto-sync interval (seconds) — UI + LocalCompanyCloudSyncManager. */
-export const CLOUD_SYNC_INTERVAL_SEC_OPTIONS = [10, 15, 20, 30, 40, 60] as const;
+/** Background auto-sync interval (seconds) — includes Live (1s) and minute presets. */
+export const CLOUD_SYNC_INTERVAL_SEC_OPTIONS = [1, 5, 10, 15, 20, 30, 40, 60, 120, 300, 600] as const;
 export type CloudSyncIntervalSec = (typeof CLOUD_SYNC_INTERVAL_SEC_OPTIONS)[number];
 export const DEFAULT_CLOUD_SYNC_INTERVAL_SEC: CloudSyncIntervalSec = 30;
-export const MIN_CLOUD_SYNC_TICK_MS = 10_000;
+/** Manager tick floor: 1s so Live option practical rahe, per-company interval gate alag se apply hota hai. */
+export const MIN_CLOUD_SYNC_TICK_MS = 1_000;
 
 /** Save/edit ke baad turant sync — `enqueueFromWrite` dispatch, manager listen. */
 export const CLOUD_SYNC_POKE_EVENT = "pl-cloud-sync-poke";
@@ -78,7 +79,7 @@ export type CloudSyncCompanyConfig = {
   /** Drive attachments + opening/avatars — AES encrypt file bytes. */
   cloudSyncEncryptDriveFiles: boolean;
   cloudSyncDriveEncryptionSalt: string | null;
-  /** Background sync timer — 10–60 sec (default 30). */
+  /** Background sync timer — Live/seconds/minutes presets (default 30 sec). */
   cloudSyncIntervalSec: CloudSyncIntervalSec;
   /** Last sync cycle counts — added/downloaded vs uploaded to Drive. */
   cloudSyncLastSyncSummary: CloudSyncLastSyncSummary;

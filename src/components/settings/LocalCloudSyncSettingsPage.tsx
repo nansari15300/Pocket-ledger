@@ -1,83 +1,83 @@
-"use client";
-
-import { useMemo } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Cloud } from "lucide-react";
-import { useCompany } from "@/hooks/useCompany";
-import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
-import { LocalCompanyCloudSyncSettings } from "@/components/company/LocalCompanyCloudSyncSettings";
-import { JoinSharedLocalCompanyPanel } from "@/components/company/JoinSharedLocalCompanyPanel";
-import { companyProfileChromeRoot, settingsDetailCardShell } from "@/lib/companyProfileChrome";
-import { settingsViewHref } from "@/lib/appNavHref";
-import { cn } from "@/lib/utils";
-
-/** Settings → Google Drive sync — company create/select optional; pehle Connect + join/restore. */
-export function LocalCloudSyncSettingsPage() {
-  const { company, allCompanies, setCompanyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
-
-  const localCompanies = useMemo(
-    () => allCompanies.filter((c) => isOfflineCompanyStorage(c as { storageOption?: string })),
-    [allCompanies]
-  );
-
-  const handleJoined = (joinedCompanyId: string) => {
-    reloadLocalCompanyRegistry();
-    triggerSync();
-    setCompanyId(joinedCompanyId);
-  };
-
-  const isLocalCompany = Boolean(
-    company && company.id && isOfflineCompanyStorage(company as { storageOption?: string })
-  );
-
-  return (
-    <div className="flex h-full min-h-full flex-col gap-4" {...{ [companyProfileChromeRoot]: "" }}>
-      {/* Hamesha upar: Drive connect + Drive par maujood companies join/restore — online company select par bhi */}
-      <JoinSharedLocalCompanyPanel
-        returnPath={settingsViewHref("local_cloud_sync")}
-        onJoined={handleJoined}
-      />
-
-      {isLocalCompany && company?.id ? (
-        <LocalCompanyCloudSyncSettings companyId={company.id} company={company} />
-      ) : company ? (
-        <Card className={cn(settingsDetailCardShell)}>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Cloud className="h-4 w-4 shrink-0" />
-              Selected: {company.name ?? "Company"}
-            </CardTitle>
-            <CardDescription>
-              Ye online (Firestore) company hai — upar se Drive connect karke pehle se Drive par maujood local company
-              restore/join karo. Full sync settings ke liye neeche device-local company select karo.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      ) : null}
-
-      {localCompanies.length > 0 && !isLocalCompany ? (
-        <Card className={cn(settingsDetailCardShell)}>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Local companies on this device</CardTitle>
-            <CardDescription>Select one to open sync enable / Force sync settings.</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            {localCompanies.map((c) => (
-              <Button
-                key={c.id}
-                type="button"
-                variant="outline"
-                size="sm"
-                className="rounded-full"
-                onClick={() => setCompanyId(c.id)}
-              >
-                {c.name ?? c.id}
-              </Button>
-            ))}
-          </CardContent>
-        </Card>
-      ) : null}
-    </div>
-  );
-}
+"use client";
+
+import { useMemo } from "react";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Cloud } from "lucide-react";
+import { useCompany } from "@/hooks/useCompany";
+import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { LocalCompanyCloudSyncSettings } from "@/components/company/LocalCompanyCloudSyncSettings";
+import { JoinSharedLocalCompanyPanel } from "@/components/company/JoinSharedLocalCompanyPanel";
+import { companyProfileChromeRoot, settingsDetailCardShell } from "@/lib/companyProfileChrome";
+import { settingsViewHref } from "@/lib/appNavHref";
+import { cn } from "@/lib/utils";
+
+type Props = {
+  /** Mobile footer Back — settings list par wapas */
+  onBack?: () => void;
+  /** Mobile settings list sheet — Force sync ke upar */
+  onOpenSettingsList?: () => void;
+};
+
+/** Settings → Google Drive sync — company create/select optional; pehle Connect + join/restore. */
+export function LocalCloudSyncSettingsPage({ onBack, onOpenSettingsList }: Props) {
+  const { company, allCompanies, setCompanyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
+
+  const localCompanies = useMemo(
+    () => allCompanies.filter((c) => isOfflineCompanyStorage(c as { storageOption?: string })),
+    [allCompanies]
+  );
+
+  /** Dropdown + sync — local company; global online select ho to pehli local */
+  const activeLocalCompany = useMemo(() => {
+    if (company && company.id && isOfflineCompanyStorage(company as { storageOption?: string })) {
+      return company;
+    }
+    return localCompanies[0] ?? null;
+  }, [company, localCompanies]);
+
+  const handleJoined = (joinedCompanyId: string) => {
+    reloadLocalCompanyRegistry();
+    triggerSync();
+    setCompanyId(joinedCompanyId);
+  };
+
+  const isOnlineCompanySelected = Boolean(
+    company && company.id && !isOfflineCompanyStorage(company as { storageOption?: string })
+  );
+
+  return (
+    <div
+      className="flex h-full min-h-0 w-full max-w-full flex-col gap-[2px] px-[2px]"
+      {...{ [companyProfileChromeRoot]: "" }}
+    >
+      <JoinSharedLocalCompanyPanel
+        className="w-full shrink-0"
+        returnPath={settingsViewHref("local_cloud_sync")}
+        onJoined={handleJoined}
+      />
+
+      {activeLocalCompany?.id ? (
+        <LocalCompanyCloudSyncSettings
+          className="min-h-0 flex-1"
+          companyId={activeLocalCompany.id}
+          company={activeLocalCompany}
+          onBack={onBack}
+          onOpenSettingsList={onOpenSettingsList}
+        />
+      ) : isOnlineCompanySelected ? (
+        <Card className={cn(settingsDetailCardShell, "w-full shrink-0")}>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Cloud className="h-4 w-4 shrink-0" />
+              Selected: {company?.name ?? "Company"}
+            </CardTitle>
+            <CardDescription>
+              Ye online (Firestore) company hai — upar se Drive connect karke pehle se Drive par maujood local company
+              restore/join karo.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      ) : null}
+    </div>
+  );
+}

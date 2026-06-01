@@ -20,6 +20,14 @@ function nextOpId(): string {
     : `op_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function hashDeviceIdToBucket(deviceId: string): number {
+  let h = 0;
+  for (let i = 0; i < deviceId.length; i++) {
+    h = (h * 31 + deviceId.charCodeAt(i)) % 997;
+  }
+  return h;
+}
+
 async function ensureMetaRow(companyId: string): Promise<CloudSyncMetaRow> {
   const db = await getBrowserDb();
   if (!db) throw new Error("cloud_sync: SQLite unavailable");
@@ -41,11 +49,17 @@ async function ensureMetaRow(companyId: string): Promise<CloudSyncMetaRow> {
   };
 }
 
-function allocNextOpSeq(db: NonNullable<Awaited<ReturnType<typeof getBrowserDb>>>, companyId: string): number {
+function allocNextOpSeq(
+  db: NonNullable<Awaited<ReturnType<typeof getBrowserDb>>>,
+  companyId: string,
+  deviceId: string
+): number {
   const row = db.prepare(`SELECT last_local_op_seq FROM cloud_sync_meta WHERE company_id = ?`).get(companyId) as
     | { last_local_op_seq: number }
     | undefined;
-  const next = (Number(row?.last_local_op_seq) || 0) + 1;
+  // Multi-device Drive sync: local incremental seq collide/skip ho jata tha, so time-based global-ish seq use karo.
+  const timeBase = Date.now() * 1000 + hashDeviceIdToBucket(deviceId);
+  const next = Math.max((Number(row?.last_local_op_seq) || 0) + 1, timeBase);
   db.prepare(`UPDATE cloud_sync_meta SET last_local_op_seq = ? WHERE company_id = ?`).run(next, companyId);
   return next;
 }
@@ -69,9 +83,9 @@ export async function enqueueLocalCloudSyncOp(input: {
 
   await ensureMetaRow(companyId);
   const updatedAt = typeof input.updatedAt === "number" ? input.updatedAt : Date.now();
-  const opSeq = allocNextOpSeq(db, companyId);
-  const opId = nextOpId();
   const deviceId = getOrCreateClientDeviceId();
+  const opSeq = allocNextOpSeq(db, companyId, deviceId);
+  const opId = nextOpId();
   const payload = {
     ...input.payload,
     id: rowId,
@@ -135,6 +149,42 @@ export async function listPendingLocalCloudSyncOps(companyId: string): Promise<L
     opSeq: Number(r.op_seq) || 0,
     payload: JSON.parse(r.payload) as Record<string, unknown>,
   }));
+}
+
+export async function rebasePendingLocalCloudSyncOps(
+  companyId: string,
+  minStartOpSeqExclusive: number
+): Promise<void> {
+  const db = await getBrowserDb();
+  if (!db) return;
+  const floor = Number(minStartOpSeqExclusive);
+  if (!Number.isFinite(floor) || floor < 0) return;
+  const rows = db
+    .prepare(
+      `SELECT op_id, op_seq
+       FROM cloud_sync_outbox
+       WHERE company_id = ? AND synced_at IS NULL
+       ORDER BY op_seq ASC`
+    )
+    .all(companyId) as Array<{ op_id: string; op_seq: number }>;
+  if (rows.length === 0) return;
+
+  // Cross-device gap recovery: pending ops ko remote latest ke upar pack karo, taaki download cursor skip na kare.
+  let nextSeq = Math.floor(floor) + 1;
+  for (const row of rows) {
+    const current = Number(row.op_seq) || 0;
+    if (current >= nextSeq) {
+      nextSeq = current + 1;
+      continue;
+    }
+    db.prepare(`UPDATE cloud_sync_outbox SET op_seq = ? WHERE op_id = ?`).run(nextSeq, row.op_id);
+    nextSeq += 1;
+  }
+  db.prepare(
+    `UPDATE cloud_sync_meta
+     SET last_local_op_seq = CASE WHEN last_local_op_seq > ? THEN last_local_op_seq ELSE ? END
+     WHERE company_id = ?`
+  ).run(nextSeq - 1, nextSeq - 1, companyId);
 }
 
 export async function markLocalCloudSyncOpsSynced(companyId: string, throughOpSeq: number): Promise<void> {

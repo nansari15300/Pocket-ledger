@@ -27,11 +27,13 @@ import {
   downloadDriveAttachmentBlob,
 } from "@/lib/localCloudSync/driveCloudSyncClient";
 import { isDriveFileRef, remotePathFromDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
-import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import type { CloudSyncProviderId } from "@/lib/localCloudSync/types";
+import { getLocalCompanyById, listLocalCompanies } from "@/lib/localCompanyStore";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 
 const STORE = "pendingFiles";
+const ATTACHMENT_HOLD_CLIPBOARD_PREFIX = "PL_ATTACH_V1:";
 
 /** Forensic: `NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG=1` — pending replace vs append + delete order proof. */
 function localPendingFilesForensicEnabled(): boolean {
@@ -78,15 +80,94 @@ async function patchPendingFileTargetField(
   const current = data[field];
   const needle = `${LOCAL_FILE_PREFIX}${localId}`;
   const docRef = firestoreDocRefFromPath(docPath);
+  const decodeMarkerLocalSrc = (value: unknown): string | null => {
+    const s = typeof value === "string" ? value.trim() : "";
+    if (!s.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return null;
+    const b64 = s.slice(ATTACHMENT_HOLD_CLIPBOARD_PREFIX.length);
+    try {
+      const json = decodeURIComponent(escape(atob(b64)));
+      const obj = JSON.parse(json) as { src?: unknown };
+      const src = typeof obj?.src === "string" ? obj.src.trim() : "";
+      // Marker payload carries original local ref; match it so we replace instead of append duplicate.
+      return src || null;
+    } catch {
+      return null;
+    }
+  };
   if (Array.isArray(current)) {
     const arr = [...current];
-    const idx = arr.findIndex((v) => v === needle);
+    const idx = arr.findIndex((v) => {
+      if (v === needle) return true;
+      const markerSrc = decodeMarkerLocalSrc(v);
+      return markerSrc === needle;
+    });
     if (idx >= 0) arr[idx] = newValue;
     else arr.push(newValue);
     await patchCompanyDocViaGateway(docRef, { [field]: arr });
     return;
   }
   await patchCompanyDocViaGateway(docRef, { [field]: newValue });
+}
+
+function companyIdFromStoragePrefix(prefix: string | undefined): string | null {
+  const m = /^voucher-files\/([^/]+)\//.exec(String(prefix || "").trim());
+  return m?.[1] ? m[1] : null;
+}
+
+function companyIdFromDocPath(docPath: string): string | null {
+  const m = /^companies\/([^/]+)\//.exec(String(docPath || "").trim());
+  return m?.[1] ? m[1] : null;
+}
+
+/** Pending upload route: docPath fallback fail ho to bhi storage prefix se company detect karke Drive path force karo. */
+function resolvePendingPayloadCompanyId(item: {
+  docPath?: string;
+  storagePathPrefix?: string;
+}): string | null {
+  return companyIdFromDocPath(String(item.docPath || "")) ?? companyIdFromStoragePrefix(item.storagePathPrefix);
+}
+
+/** Local cloud-sync provider detect — Firebase Storage fallback ko local company par block/reroute karne ke liye. */
+export async function resolvePendingAttachmentCloudSyncProvider(
+  companyId: string
+): Promise<CloudSyncProviderId | null> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return null;
+  if (await isGoogleDriveCloudSyncCompany(cid)) return "google_drive";
+  const reg = await getLocalCompanyById(cid, { includeDeleted: true });
+  const auth = String((reg as Record<string, unknown> | null)?.authoritativeCompanyId ?? "").trim();
+  // Registry id vs authoritative id mismatch: pending row kisi bhi alias se aaye to selected provider detect hona chahiye.
+  const aliases = new Set<string>([cid]);
+  if (auth) aliases.add(auth);
+  try {
+    const all = await listLocalCompanies({ includeDeleted: true });
+    for (const row of all) {
+      const rid = String(row.id || "").trim();
+      const rauth = String((row as Record<string, unknown>).authoritativeCompanyId ?? "").trim();
+      if (
+        aliases.has(rid) ||
+        (rauth && aliases.has(rauth)) ||
+        (rid && auth && rid === auth) ||
+        (rauth && rauth === cid)
+      ) {
+        aliases.add(rid);
+        if (rauth) aliases.add(rauth);
+      }
+    }
+  } catch {
+    /* alias expansion best-effort */
+  }
+  for (const alias of aliases) {
+    if (await isGoogleDriveCloudSyncCompany(alias)) return "google_drive";
+    const r = await getLocalCompanyById(alias, { includeDeleted: true });
+    if (!r || !isOfflineCompanyStorage(r as { storageOption?: string })) continue;
+    const provider = String((r as Record<string, unknown>).cloudSyncProvider ?? "").trim().toLowerCase();
+    const enabled = (r as Record<string, unknown>).cloudSyncEnabled === true;
+    if (!enabled) continue;
+    if (provider === "google_drive" || provider === "drive") return "google_drive";
+    if (provider === "dropbox") return "dropbox";
+  }
+  return null;
 }
 
 /** Party/Bank/Staff/Item pending sync ke liye bhi yahi ref (pehle sirf vouchers tha). */
@@ -408,14 +489,18 @@ export async function uploadPendingLocalFileRef(
   if (!item) return localFileRef;
 
   const docMatch = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(String(item.docPath || "").trim());
-  if (docMatch && (await isGoogleDriveCloudSyncCompany(docMatch[1]!))) {
-    const reg = await getLocalCompanyById(docMatch[1]!, { includeDeleted: true });
+  const targetCompanyId = resolvePendingPayloadCompanyId(item);
+  const provider = targetCompanyId ? await resolvePendingAttachmentCloudSyncProvider(targetCompanyId) : null;
+  if (targetCompanyId && provider === "google_drive") {
+    const collection = docMatch?.[2] || "vouchers";
+    const docId = docMatch?.[3] || item.id;
+    const reg = await getLocalCompanyById(targetCompanyId, { includeDeleted: true });
     const driveRef = await uploadPendingAttachmentPayloadToDrive({
-      companyId: docMatch[1]!,
+      companyId: targetCompanyId,
       companyName: reg?.name,
       company: reg,
-      collection: docMatch[2]!,
-      docId: docMatch[3]!,
+      collection,
+      docId,
       field: item.field,
       blob: item.blob,
       contentType: item.contentType,
@@ -424,6 +509,10 @@ export async function uploadPendingLocalFileRef(
     await patchPendingFileTargetField(item.docPath, item.field, item.id, driveRef);
     await removePendingFile(item.id);
     return driveRef;
+  }
+  if (provider === "dropbox") {
+    // Dropbox selected hai to Firebase fallback galat hoga; pending row retry ke liye rakho.
+    throw new Error("Dropbox attachment sync is not connected yet. File was not uploaded to Firebase Storage.");
   }
 
   // Upload one local file ref and return its final public URL for caller-side payload replacement.
@@ -610,11 +699,19 @@ export async function syncOnePendingFile(
   item: PendingFilePayload
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const docMatch = /^companies\/([^/]+)\//.exec(String(item.docPath || "").trim());
-    // Local company + Drive sync — Firebase Storage ki jagah Drive attachments/avatars.
-    if (docMatch && (await isGoogleDriveCloudSyncCompany(docMatch[1]!))) {
+    const targetCompanyId = resolvePendingPayloadCompanyId(item);
+    const provider = targetCompanyId ? await resolvePendingAttachmentCloudSyncProvider(targetCompanyId) : null;
+    // Local company + cloud sync — Firebase Storage ki jagah selected provider route.
+    if (targetCompanyId && provider === "google_drive") {
       await uploadPendingLocalFileRef(`${LOCAL_FILE_PREFIX}${item.id}`, item.storagePathPrefix);
       return { success: true };
+    }
+    if (provider === "dropbox") {
+      // Dropbox implementation ready nahi hai; Firebase URL bana dena selected-provider contract todta hai.
+      return {
+        success: false,
+        error: "Dropbox attachment sync is not connected yet. File was not uploaded to Firebase Storage.",
+      };
     }
 
     const storagePath = `${item.storagePathPrefix}/${Date.now()}_${item.fileName || "file"}`;
@@ -685,16 +782,17 @@ export async function syncOnePendingFile(
       });
     }
     return { success: true };
-  } catch (e: any) {
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
     if (localPendingFilesForensicEnabled()) {
       console.warn("[FORENSIC_PENDING_SYNC_ONE]", {
         phase: "syncOnePendingFile",
         localId: item.id,
         success: false,
-        error: e?.message || String(e),
+        error: msg,
       });
     }
-    return { success: false, error: e?.message || String(e) };
+    return { success: false, error: msg };
   }
 }
 
@@ -718,11 +816,34 @@ export async function syncPendingFilesForCompany(companyId: string): Promise<{ s
   const cid = String(companyId || "").trim();
   if (!cid) return { synced: 0, failed: 0 };
   const pending = await getPendingFiles();
+  const targetAliases = new Set<string>([cid]);
+  try {
+    const reg = await getLocalCompanyById(cid, { includeDeleted: true });
+    const auth = String((reg as Record<string, unknown> | null)?.authoritativeCompanyId ?? "").trim();
+    if (auth) targetAliases.add(auth);
+    const all = await listLocalCompanies({ includeDeleted: true });
+    for (const row of all) {
+      const rid = String(row.id || "").trim();
+      const rauth = String((row as Record<string, unknown>).authoritativeCompanyId ?? "").trim();
+      if (
+        targetAliases.has(rid) ||
+        (rauth && targetAliases.has(rauth)) ||
+        (rid && auth && rid === auth) ||
+        (rauth && rauth === cid)
+      ) {
+        if (rid) targetAliases.add(rid);
+        if (rauth) targetAliases.add(rauth);
+      }
+    }
+  } catch {
+    /* keep primary id only */
+  }
   let synced = 0;
   let failed = 0;
   for (const item of pending) {
-    const m = /^companies\/([^/]+)\//.exec(String(item.docPath || "").trim());
-    if (!m || m[1] !== cid) continue;
+    const itemCompanyId = resolvePendingPayloadCompanyId(item) ?? "";
+    // Pending rows should sync when docPath/prefix uses any known alias for this company.
+    if (!itemCompanyId || !targetAliases.has(itemCompanyId)) continue;
     const result = await syncOnePendingFile(item);
     if (result.success) synced++;
     else failed++;

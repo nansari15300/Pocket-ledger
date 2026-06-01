@@ -1236,7 +1236,10 @@ export function TransactionsTable({
           : credit > 0
             ? "text-red-600"
             : "text-green-600";
-      const d = t.date && (typeof t.date.toDate === "function" ? t.date.toDate() : new Date(t.date));
+      // Mobile/local-company rows me `date` Firestore-like object ho sakta hai; direct `new Date(obj)` se date blank ho jata hai.
+      const d =
+        parseFirestoreDateFieldToJsDate(t.date) ??
+        parseFirestoreDateFieldToJsDate((t as Record<string, unknown>).createdAt);
       const entryClock = formatVoucherEntryTimeLocal(t as Record<string, unknown>);
       const balanceSuffix = balance >= 0 ? "Dr" : "Cr";
       const balanceAbs = Math.abs(balance);
@@ -1361,7 +1364,16 @@ export function TransactionsTable({
               ) : null}
               <p className="text-xs text-muted-foreground">
                 {hl(
-                  `${d ? (dateSystem === "BS" ? formatDateBS(d) : formatDate(d)) : ""}${
+                  `${
+                    d
+                      ? // Mobile transaction row: keep date behavior aligned with opening card for AD/BS/Both.
+                        dateSystem === "Both"
+                        ? `${formatDateBS(d)} · ${formatDate(d)}`
+                        : dateSystem === "BS"
+                          ? formatDateBS(d)
+                          : formatDate(d)
+                      : ""
+                  }${
                     entryClock ? ` • ${entryClock}` : ""
                   }`
                 )}

@@ -50,7 +50,11 @@ export async function forceReencryptDriveFiles(companyId: string, ref: CloudSync
     if (f.encrypted) continue;
     const dl = await postDriveJsonViaClient<{ base64: string | null; contentType?: string }>(
       "/api/local-cloud-sync/drive/download-file",
-      { remotePath: f.storagePath }
+      {
+        // Plain source may live inside shared company folder, not this user's My Drive root.
+        driveSharedFolderId: ref.driveSharedFolderId,
+        remotePath: f.storagePath,
+      }
     );
     if (!dl.base64) continue;
     const bin = atob(dl.base64);
@@ -75,6 +79,8 @@ export async function forceReencryptDriveFiles(companyId: string, ref: CloudSync
     });
     if (f.storagePath !== storagePath) {
       await postDriveJsonViaClient("/api/local-cloud-sync/drive/delete-file", {
+        // Delete the original from the same shared/owner folder where it was listed.
+        driveSharedFolderId: ref.driveSharedFolderId,
         remotePath: f.storagePath,
       });
     }
