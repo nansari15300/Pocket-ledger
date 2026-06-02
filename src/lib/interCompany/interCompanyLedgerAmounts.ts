@@ -5,14 +5,18 @@
 import type { Context } from "@/components/vouchers/TransactionsTable";
 import type { InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
 import {
-  applyInterCompanyReversedLedgerNetZero,
   getInterCompanyLegAmounts,
+  interCompanyUsesConduitParty,
+  isInterCompanyOperationalEntityInvolved,
   resolveInterCompanyLegsForVoucher,
+  resolveInterCompanyViewerSide,
+  applyInterCompanyReversedLedgerNetZero,
 } from "@/lib/interCompany/interCompanyPostingLegs";
 import {
   interCompanyVoucherViewerSide,
   isInterCompanyVisibleOnTargetBank,
   isInterCompanyVisibleOnTargetEntity,
+  readInterCompanyCompanyBankId,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
 
 const PAYEE_FIELD: Record<InterCompanyEntityKind, string> = {
@@ -69,15 +73,45 @@ export function interCompanyVoucherTouchesEntity(
   const ctx = legKindToContext(kind);
   const legs = resolveInterCompanyLegsForVoucher(transaction as Record<string, unknown>);
   if (legs.length > 0) {
+    const icCounterpartyId = String(transaction.interCompanyCounterpartyPartyId || "").trim();
     for (const leg of legs) {
-      if (legKindToContext(leg.kind) === ctx && String(leg.accountId) === id) return true;
+      if (legKindToContext(leg.kind) !== ctx || String(leg.accountId) !== id) continue;
+      if (
+        kind === "party" &&
+        icCounterpartyId &&
+        id === icCounterpartyId
+      ) {
+        if (!interCompanyUsesConduitParty(transaction)) {
+          continue;
+        }
+        const side = resolveInterCompanyViewerSide(transaction);
+        if (
+          side &&
+          (side === "source" || side === "target") &&
+          !isInterCompanyOperationalEntityInvolved(transaction, side)
+        ) {
+          continue;
+        }
+      }
+      return true;
     }
   }
 
   if (kind === "party" && String(transaction.interCompanyCounterpartyPartyId || "").trim() === id) {
+    if (!interCompanyUsesConduitParty(transaction)) {
+      return false;
+    }
+    const side = resolveInterCompanyViewerSide(transaction);
+    if (
+      side &&
+      (side === "source" || side === "target") &&
+      !isInterCompanyOperationalEntityInvolved(transaction, side)
+    ) {
+      return false;
+    }
     return true;
   }
-  if (kind === "bank" && String(transaction.companyBankAccountId || "").trim() === id) {
+  if (kind === "bank" && readInterCompanyCompanyBankId(transaction) === id) {
     return true;
   }
 
@@ -129,7 +163,7 @@ export function getInterCompanyLedgerAmounts(
 ): InterCompanyLedgerAmountResult {
   const empty = { touched: false, debit: 0, credit: 0 };
   if (String(transaction?.type || "") !== "inter_company") return empty;
-  // Target: source approve se pehle bank/party/staff par kuch mat dikhao
+  // Target bank: IC save ke baad pending Dr; entity ke liye source + target approve alag
   if (!isInterCompanyVisibleOnTargetBank(transaction)) return empty;
   // Target entity: bank approve ke baad hi (party/staff/tax/expense)
   if (

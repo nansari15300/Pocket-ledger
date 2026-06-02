@@ -58,6 +58,7 @@ import {
   searchParamsStringAfterClosingModal,
   searchParamsStringForModalClose,
 } from "@/lib/modalUrlSync";
+import { useMobileLedgerModalUrlGuard } from "@/hooks/useMobileLedgerModalUrlGuard";
 import { mdc, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import AdCalendar from "@/components/ui/ad-calendar";
@@ -376,21 +377,15 @@ export function StaffDetails({
   }, [closeModalInUrl]);
   useUrlModalBack(urlModalOpen, closeUrlModal);
 
-  useEffect(() => {
-    if (!isMobile) return;
-    if (modalParam === "1") openingModalRef.current = false;
-    if (modalParam !== "1" && anyMobilePopupOpen && !openingModalRef.current) {
-      setMobileFooterDialogOpen(null);
-      setIsCalendarOpen(false);
-      setIsVoucherDialogOpen(false);
-      setSelectedVoucher(null);
-      setIsNoteOpen(false);
-      setIsEditStaffDialogOpen(false);
-      setHistoryVoucher(null);
-      setLinkAdvancesVoucher(null);
-      setLinkPaymentVoucher(null);
-    }
-  }, [isMobile, modalParam, anyMobilePopupOpen]);
+  useMobileLedgerModalUrlGuard({
+    isMobile,
+    modalParam,
+    anyPopupOpen: anyMobilePopupOpen,
+    openingModalRef,
+    pathname,
+    searchParams,
+    router,
+  });
 
   const handleShowNarrationChange = (checked: boolean) => {
     setShowNarration(checked);

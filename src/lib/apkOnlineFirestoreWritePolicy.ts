@@ -6,6 +6,7 @@
  */
 
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
@@ -69,6 +70,8 @@ export async function apkCloudCompanyUsesSqliteFirstWrites(companyId: string): P
 /** Master/item forms: mirror `EditItemDialog` / party — `company` sync available */
 export function apkEntityWriteUsesLocalSqliteMirror(company: { storageOption?: string } | null | undefined): boolean {
   if (apkEmbeddedSqliteFirstWritesPreferred()) return true;
+  // `storageOption: local` + Drive/Dropbox — web/APK/EXE sab par `local:` staging; Firebase Storage direct upload nahi.
+  if (company && isOfflineCompanyStorage(company)) return true;
   if (!isLocalOnlyMode()) return false;
   if (!company || !isCapacitorNativeApp()) return true;
   return String(company.storageOption ?? "").toLowerCase() === "local";

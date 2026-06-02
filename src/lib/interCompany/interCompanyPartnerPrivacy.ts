@@ -33,19 +33,8 @@ export const DEFAULT_PARTNER_SEARCH_BY: InterCompanyPartnerFieldFlags = {
   accountName: true,
   mobileNo: true,
   panNo: false,
-  /** Search me band — UI disabled; partners is field se lookup nahi kar sakte */
   pocketLedgerAcNo: false,
 };
-
-/** Search-by me kabhi ON nahi — legacy saved settings bhi force off */
-export const PARTNER_SEARCH_DISABLED_FIELDS: ReadonlySet<InterCompanyPartnerFieldKey> = new Set([
-  "pocketLedgerAcNo",
-]);
-
-/** View me bhi band — UI disabled; A/c No form par hamesha poora dikhe (mask nahi) */
-export const PARTNER_VIEW_DISABLED_FIELDS: ReadonlySet<InterCompanyPartnerFieldKey> = new Set([
-  "pocketLedgerAcNo",
-]);
 
 export const DEFAULT_PARTNER_VIEW_FIELDS: InterCompanyPartnerFieldFlags = {
   accountName: true,
@@ -56,6 +45,9 @@ export const DEFAULT_PARTNER_VIEW_FIELDS: InterCompanyPartnerFieldFlags = {
 
 /** Global mask ON = middle hidden in partner view */
 export const DEFAULT_PARTNER_MASK_IN_VIEW = true;
+
+/** Join tab — partner privacy block scroll target */
+export const IC_PARTNER_PRIVACY_SECTION_ID = "ic-partner-privacy";
 
 export function normalizePartnerFieldFlags(
   raw: Partial<InterCompanyPartnerFieldFlags> | undefined,
@@ -69,26 +61,18 @@ export function normalizePartnerFieldFlags(
   return out;
 }
 
-/** Partner search flags — disabled fields hamesha off */
+/** Partner search flags */
 export function normalizePartnerSearchBy(
   raw: Partial<InterCompanyPartnerFieldFlags> | undefined
 ): InterCompanyPartnerFieldFlags {
-  const out = normalizePartnerFieldFlags(raw, DEFAULT_PARTNER_SEARCH_BY);
-  for (const key of PARTNER_SEARCH_DISABLED_FIELDS) {
-    out[key] = false;
-  }
-  return out;
+  return normalizePartnerFieldFlags(raw, DEFAULT_PARTNER_SEARCH_BY);
 }
 
-/** Partner view flags — disabled fields hamesha off */
+/** Partner view flags */
 export function normalizePartnerViewFields(
   raw: Partial<InterCompanyPartnerFieldFlags> | undefined
 ): InterCompanyPartnerFieldFlags {
-  const out = normalizePartnerFieldFlags(raw, DEFAULT_PARTNER_VIEW_FIELDS);
-  for (const key of PARTNER_VIEW_DISABLED_FIELDS) {
-    out[key] = false;
-  }
-  return out;
+  return normalizePartnerFieldFlags(raw, DEFAULT_PARTNER_VIEW_FIELDS);
 }
 
 /** Ek token — left 3 + beech x + right 3 (PAN / phone / naam ke har shabd par) */

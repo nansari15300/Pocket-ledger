@@ -17,6 +17,9 @@ import {
 } from "@/lib/localCloudSync/types";
 import { normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
 import { mergeDriveShareUsersIntoLocalCompanyUsers, parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
+import { resolveCountryDriveAttachmentDateFolderMode } from "@/lib/localCloudSync/driveAttachmentPath";
+import { localCompanyRowIsDeleted } from "@/lib/localCompanyStore";
+import { isLocalCompanyDriveFolderOwner } from "@/lib/localCloudSync/driveCompanyFolderLifecycle";
 
 /** Registry se share user list — purani writer/reader ya `role` field migrate. */
 export function readCloudSyncDriveShareUsers(
@@ -101,12 +104,8 @@ export function readCloudSyncConfigFromCompany(
     cloudSyncLastError: typeof c.cloudSyncLastError === "string" ? c.cloudSyncLastError : null,
     cloudSyncSharedEmails: shareUsersToEmailList(readCloudSyncDriveShareUsers(c)),
     cloudSyncDriveShareUsers: readCloudSyncDriveShareUsers(c),
-    cloudSyncDriveDateFolderMode:
-      c.cloudSyncDriveDateFolderMode === "bs" ||
-      c.cloudSyncDriveDateFolderMode === "ad" ||
-      c.cloudSyncDriveDateFolderMode === "both"
-        ? c.cloudSyncDriveDateFolderMode
-        : null,
+    // Attachment folder mode: country-fixed (NP=both, else ad) — UI/manifest manual choice nahi.
+    cloudSyncDriveDateFolderMode: resolveCountryDriveAttachmentDateFolderMode(c),
     cloudSyncEncryptDrive: (() => {
       const legacy = c.cloudSyncEncryptDrive === true;
       const data =
@@ -175,6 +174,21 @@ export async function patchLocalCompanyCloudSyncFields(
   await upsertLocalCompany({ ...reg, ...patch } as LocalCompanyDoc);
 }
 
+/** Owner/manager hi Drive manifest par attachment folder mode change kar sakte hain. */
+export function canManageCloudSyncDriveAdminSettings(
+  company: LocalCompanyDoc | Record<string, unknown>,
+  firebaseUid: string | null | undefined,
+  firebaseEmail: string | null | undefined
+): boolean {
+  if (isLocalCompanyDriveFolderOwner(company, firebaseUid)) return true;
+  const email = String(firebaseEmail || "").trim().toLowerCase();
+  if (!email) return false;
+  const shareUsers = readCloudSyncDriveShareUsers(company);
+  const hit = shareUsers.find((u) => u.email === email);
+  const appRole = hit ? normalizeLocalCompanyAppRole(hit.appRole) : "viewer";
+  return appRole === "manager";
+}
+
 /** Drive `data/manifest.json` se share list + encryption salt — decrypt se pehle local registry me. */
 export async function mergeRemoteCloudSyncManifestIntoLocalCompany(
   companyId: string,
@@ -234,20 +248,42 @@ export async function mergeRemoteCloudSyncManifestIntoLocalCompany(
     changed = true;
   }
 
-  if (
-    manifest.cloudSyncDriveDateFolderMode === "ad" ||
-    manifest.cloudSyncDriveDateFolderMode === "bs" ||
-    manifest.cloudSyncDriveDateFolderMode === "both"
-  ) {
-    if (reg.cloudSyncDriveDateFolderMode !== manifest.cloudSyncDriveDateFolderMode) {
-      next = { ...next, cloudSyncDriveDateFolderMode: manifest.cloudSyncDriveDateFolderMode } as LocalCompanyDoc;
+  // Purana Drive manifest (ad/bs) local ko overwrite na kare — country rule hi registry + uploads par.
+  const countryFolderMode = resolveCountryDriveAttachmentDateFolderMode(reg as Record<string, unknown>);
+  if (reg.cloudSyncDriveDateFolderMode !== countryFolderMode) {
+    next = { ...next, cloudSyncDriveDateFolderMode: countryFolderMode } as LocalCompanyDoc;
+    changed = true;
+  }
+
+  // Company recycle-bin: remote `true` → sab devices bin me; remote `false` sirf explicit restore par.
+  if (manifest.companyRegistryIsDeleted === true) {
+    const wantDeletedAt =
+      typeof manifest.companyRegistryDeletedAt === "number" && Number.isFinite(manifest.companyRegistryDeletedAt)
+        ? manifest.companyRegistryDeletedAt
+        : Date.now();
+    if (!localCompanyRowIsDeleted(reg) || (reg.deletedAt ?? null) !== wantDeletedAt) {
+      next = {
+        ...next,
+        isDeleted: true,
+        deletedAt: wantDeletedAt,
+      } as LocalCompanyDoc;
       changed = true;
     }
+  } else if (manifest.companyRegistryIsDeleted === false && localCompanyRowIsDeleted(reg)) {
+    // Doosre device ne restore kiya — local bhi active karo.
+    next = { ...next, isDeleted: false, deletedAt: null } as LocalCompanyDoc;
+    changed = true;
   }
+  // `undefined` / missing: local delete ko remote `false` se mat hatao (race se pehle protect).
 
   if (!changed) return reg;
   const saved = { ...next, updatedAt: Date.now() } as LocalCompanyDoc;
   await upsertLocalCompany(saved);
+  // Recycle-bin registry sync: doosre device ka company dropdown turant update ho.
+  if (typeof manifest.companyRegistryIsDeleted === "boolean") {
+    const { bumpLocalCompanyRegistry } = await import("@/lib/applyStripePlanToLocalCompany");
+    bumpLocalCompanyRegistry();
+  }
   return saved;
 }
 
@@ -258,6 +294,8 @@ export function buildCloudSyncManifestFromCompany(
 ): CloudSyncManifest {
   const cfg = readCloudSyncConfigFromCompany(company);
   const shareUsers = readCloudSyncDriveShareUsers(company as Record<string, unknown>);
+  const reg = company as Record<string, unknown>;
+  const registryDeleted = localCompanyRowIsDeleted(reg);
   return {
     ...base,
     latestOp: base.latestOp,
@@ -266,6 +304,147 @@ export function buildCloudSyncManifestFromCompany(
     driveEncryptionSalt: cfg.cloudSyncDriveEncryptionSalt ?? undefined,
     cloudSyncEncryptDriveData: cfg.cloudSyncEncryptDriveData,
     cloudSyncEncryptDriveFiles: cfg.cloudSyncEncryptDriveFiles,
-    cloudSyncDriveDateFolderMode: cfg.cloudSyncDriveDateFolderMode ?? undefined,
+    cloudSyncDriveDateFolderMode: resolveCountryDriveAttachmentDateFolderMode(company),
+    companyRegistryIsDeleted: registryDeleted,
+    companyRegistryDeletedAt:
+      registryDeleted && typeof reg.deletedAt === "number" && Number.isFinite(reg.deletedAt)
+        ? reg.deletedAt
+        : registryDeleted
+          ? Date.now()
+          : undefined,
   };
+}
+
+/** Sirf manifest.json — bin/restore turant Drive par (attachment fail se block na ho). */
+export async function pushCompanyRegistryManifestToDrive(companyId: string): Promise<boolean> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return false;
+  if (!(await shouldUseLocalCloudSync(cid))) return false;
+
+  const reg = await getLocalCompanyById(cid, { includeDeleted: true });
+  if (!reg) return false;
+
+  const { getSyncProviderForCompany } = await import("@/lib/localCloudSync/providers");
+  const cfg = readCloudSyncConfigFromCompany(reg);
+  const providerId = cfg.cloudSyncProvider;
+  if (!providerId) return false;
+
+  const provider = getSyncProviderForCompany(providerId);
+  const syncRef = {
+    companyId: cid,
+    companyName: typeof reg.name === "string" ? reg.name : undefined,
+    driveSharedFolderId:
+      typeof reg.cloudSyncDriveFolderId === "string" && reg.cloudSyncDriveFolderId.trim()
+        ? reg.cloudSyncDriveFolderId.trim()
+        : undefined,
+  };
+  const remote = await provider.getManifest(syncRef);
+  const built = buildCloudSyncManifestFromCompany(reg, {
+    latestOp: Math.max(remote.latestOp || 0, 0),
+    updatedAt: Date.now(),
+    companyId: cid,
+    driveShareUsers: readCloudSyncDriveShareUsers(reg),
+  });
+  const localDeleted = localCompanyRowIsDeleted(reg);
+  // Push path: local delete/restore turant likho — attachment sync fail se block na ho.
+  await provider.updateManifest(syncRef, {
+    ...built,
+    cloudSyncDriveDateFolderMode: resolveCountryDriveAttachmentDateFolderMode(reg),
+    companyRegistryIsDeleted: localDeleted,
+    companyRegistryDeletedAt:
+      localDeleted && typeof reg.deletedAt === "number" && Number.isFinite(reg.deletedAt)
+        ? reg.deletedAt
+        : localDeleted
+          ? Date.now()
+          : undefined,
+  });
+  return true;
+}
+
+/** Doosre device se bin status — manifest pull + SQLite (full sync ki zaroorat nahi). */
+export async function pullCompanyRegistryManifestFromDrive(companyId: string): Promise<void> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return;
+  if (!(await shouldUseLocalCloudSync(cid))) return;
+
+  const { getSyncProviderForCompany } = await import("@/lib/localCloudSync/providers");
+  const reg = await getLocalCompanyById(cid, { includeDeleted: true });
+  if (!reg) return;
+  const cfg = readCloudSyncConfigFromCompany(reg);
+  const providerId = cfg.cloudSyncProvider;
+  if (!providerId) return;
+
+  const provider = getSyncProviderForCompany(providerId);
+  const syncRef = {
+    companyId: cid,
+    companyName: typeof reg.name === "string" ? reg.name : undefined,
+    driveSharedFolderId:
+      typeof reg.cloudSyncDriveFolderId === "string" && reg.cloudSyncDriveFolderId.trim()
+        ? reg.cloudSyncDriveFolderId.trim()
+        : undefined,
+  };
+  const remote = await provider.getManifest(syncRef);
+  await mergeRemoteCloudSyncManifestIntoLocalCompany(cid, remote);
+}
+
+/** Delete/restore ke baad Drive manifest turant — attachment sync fail se block na ho. */
+export async function syncCompanyRegistryStateToDriveManifest(companyId: string): Promise<void> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return;
+  try {
+    await pushCompanyRegistryManifestToDrive(cid);
+  } catch {
+    /* offline / auth */
+  }
+  if (typeof window !== "undefined") {
+    try {
+      const { CLOUD_SYNC_POKE_EVENT } = await import("@/lib/localCloudSync/types");
+      window.dispatchEvent(new CustomEvent(CLOUD_SYNC_POKE_EVENT, { detail: { companyId: cid } }));
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** Manifest upload (full sync end) — remote bin delete ko local active se overwrite mat karo. */
+export function applyDriveManifestUploadGuard(
+  built: CloudSyncManifest,
+  remoteManifest: CloudSyncManifest,
+  company: LocalCompanyDoc | Record<string, unknown>
+): CloudSyncManifest {
+  const localDeleted = localCompanyRowIsDeleted(company);
+  const remoteDeleted = remoteManifest.companyRegistryIsDeleted === true;
+  let registryDeleted: boolean;
+  let registryDeletedAt: number | undefined;
+  if (localDeleted) {
+    registryDeleted = true;
+    registryDeletedAt =
+      typeof (company as { deletedAt?: unknown }).deletedAt === "number"
+        ? Number((company as { deletedAt: number }).deletedAt)
+        : Date.now();
+  } else if (remoteDeleted) {
+    // Remote pehle bin me hai — is device par abhi active dikhe to Drive `false` mat likho.
+    registryDeleted = true;
+    registryDeletedAt =
+      typeof remoteManifest.companyRegistryDeletedAt === "number"
+        ? remoteManifest.companyRegistryDeletedAt
+        : Date.now();
+  } else {
+    registryDeleted = false;
+    registryDeletedAt = undefined;
+  }
+  return {
+    ...built,
+    cloudSyncDriveDateFolderMode: resolveCountryDriveAttachmentDateFolderMode(company),
+    companyRegistryIsDeleted: registryDeleted,
+    companyRegistryDeletedAt: registryDeletedAt,
+  };
+}
+
+/** @deprecated — `applyDriveManifestUploadGuard` */
+export function applyDriveManifestFolderModeGuard(
+  built: CloudSyncManifest,
+  company: LocalCompanyDoc | Record<string, unknown>
+): CloudSyncManifest {
+  return applyDriveManifestUploadGuard(built, { latestOp: 0 }, company);
 }

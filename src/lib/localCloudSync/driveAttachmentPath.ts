@@ -66,14 +66,27 @@ function parseVoucherDate(raw: unknown): Date {
   return new Date();
 }
 
-/** Drive date-folder mode always follows saved company preference (country-agnostic). */
+/** Country rule — user change nahi: Nepal → Both, baaki sab countries → AD only. */
+export function resolveCountryDriveAttachmentDateFolderMode(
+  company: Record<string, unknown> | null | undefined
+): DriveAttachmentDateFolderMode {
+  const country = String(company?.country ?? "").trim().toUpperCase();
+  if (country === "NP" || country === "NEPAL") return "both";
+  return "ad";
+}
+
+/** @deprecated — `resolveCountryDriveAttachmentDateFolderMode` use karo. */
+export function inferDefaultDriveAttachmentDateFolderMode(
+  company: Record<string, unknown> | null | undefined
+): DriveAttachmentDateFolderMode {
+  return resolveCountryDriveAttachmentDateFolderMode(company);
+}
+
+/** Upload path — hamesha country rule; purana manifest/local manual choice ignore. */
 export function resolveDriveAttachmentDateFolderMode(
   company: Record<string, unknown> | null | undefined
 ): DriveAttachmentDateFolderMode {
-  const stored = String(company?.cloudSyncDriveDateFolderMode ?? "").trim().toLowerCase();
-  // UI selection should be honored for every company so attachment folders match user expectation.
-  if (stored === "bs" || stored === "both" || stored === "ad") return stored;
-  return "ad";
+  return resolveCountryDriveAttachmentDateFolderMode(company);
 }
 
 function formatAdDateFolder(date: Date): string {

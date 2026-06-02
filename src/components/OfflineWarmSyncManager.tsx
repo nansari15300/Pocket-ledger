@@ -28,7 +28,9 @@ const EMBEDDED_MULTI_WALK_START_MS = 5_800;
 const EMBEDDED_MULTI_GAP_MS = 750;
 /** User se bina click: online rehne par periodic resweep se missed/failing attachments bhi dheere-dheere cache ho jayein. */
 const EMBEDDED_MULTI_RESWEEP_MS = 8 * 60 * 1000;
-const BACKGROUND_WARM_SYNC_ENABLED = false;
+import { backgroundWarmSyncEnabled } from "@/lib/firebaseBillingOptimization";
+
+const BACKGROUND_WARM_SYNC_ENABLED = backgroundWarmSyncEnabled();
 
 export function OfflineWarmSyncManager() {
   const { user } = useAuth();

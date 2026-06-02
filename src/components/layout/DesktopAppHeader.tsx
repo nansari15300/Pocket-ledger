@@ -38,6 +38,7 @@ import { firestore, auth, signOutWithFirestoreTeardown } from "@/lib/firebase";
 import { useEmbeddedLogout } from "@/contexts/EmbeddedLogoutContext";
 import { format } from "date-fns";
 import { CompanyActions } from "@/components/company/CompanySelector";
+import { CloudSyncNowButton } from "@/components/company/CloudSyncNowButton";
 import { useRouter, usePathname, useParams } from "next/navigation";
 import { useLocationSearchParams } from "@/hooks/useLocationSearchParams";
 import {
@@ -1662,6 +1663,7 @@ export function DesktopAppHeader() {
                 />
               </div>
               <div className="flex shrink-0 items-center gap-2">
+                <CloudSyncNowButton size="icon" />
                 <DateSystemSwitcher />
                 <HeaderViewModeToggle />
                 <MobileReportButtonsOnly />
@@ -1707,6 +1709,7 @@ export function DesktopAppHeader() {
                 isSuperAdminUser={isSuperAdminUser}
                 onCompanyCreated={onCompanyCreated}
               />
+              <CloudSyncNowButton />
               <DateSystemSwitcher />
               <HeaderViewModeToggle />
             </div>

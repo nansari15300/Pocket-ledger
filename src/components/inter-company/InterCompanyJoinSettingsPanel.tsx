@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Label } from "@/components/ui/label";
@@ -150,6 +150,16 @@ export function InterCompanyJoinSettingsPanel({ companyId, onSettingsChange }: P
   const [savedCompanyGroupId, setSavedCompanyGroupId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [loadingRemote, setLoadingRemote] = useState(true);
+  const savedSettingsRef = useRef(saved);
+  const savedCompanyGroupIdRef = useRef(savedCompanyGroupId);
+
+  useEffect(() => {
+    savedSettingsRef.current = saved;
+  }, [saved]);
+
+  useEffect(() => {
+    savedCompanyGroupIdRef.current = savedCompanyGroupId;
+  }, [savedCompanyGroupId]);
 
   // Firestore settings sync — shared user admin joins auto dekhe
   useEffect(() => {
@@ -158,10 +168,16 @@ export function InterCompanyJoinSettingsPanel({ companyId, onSettingsChange }: P
     const unsub = subscribeInterCompanyJoinSettings(
       companyId,
       ({ settings, companyGroupId: gid }) => {
-        setDraft(settings);
         setSaved(settings);
-        setCompanyGroupId(gid);
+        setDraft((current) =>
+          settingsEqual(current, savedSettingsRef.current) ? settings : current
+        );
+        savedSettingsRef.current = settings;
+        setCompanyGroupId((current) =>
+          current !== savedCompanyGroupIdRef.current ? current : gid
+        );
         setSavedCompanyGroupId(gid);
+        savedCompanyGroupIdRef.current = gid;
         setLoadingRemote(false);
       },
       () => setLoadingRemote(false)
@@ -579,51 +595,77 @@ export function InterCompanyJoinSettingsPanel({ companyId, onSettingsChange }: P
   const handleSave = async () => {
     if (!canWriteIc || !companyId || !user?.uid) return;
     setSaving(true);
+    const settingsToSave = draft;
+    const groupsChanged = JSON.stringify(groups) !== savedGroupsJson;
+    const groupAssignmentChanged = companyGroupId !== savedCompanyGroupId;
+
     try {
-      // Groups Firestore me persist — har group ki companyIds + IC member users
-      for (const g of groups) {
-        const groupCompanies = g.companyIds
-          .map((id) => (allCompanies || []).find((c) => c.id === id))
-          .filter(Boolean);
-        const memberUsers = collectInterCompanyMemberUsers(
-          groupCompanies as Parameters<typeof collectInterCompanyMemberUsers>[0]
-        );
-        const nextSummaries = {
-          ...(g.companySummaries ?? {}),
-          ...buildCompanySummariesForIds(g.companyIds, allCompanies || []),
-        };
-        const nextOwners = { ...(g.companyOwners ?? {}) };
-        const uid = user.uid;
-        const email = user.email?.toLowerCase().trim();
-        for (const cid of g.companyIds) {
-          const co = (allCompanies || []).find((c) => c.id === cid);
-          if (!co?.id) continue;
-          const isOwner =
-            (uid && co.ownerId === uid) ||
-            (email && String(co.ownerEmail || "").toLowerCase().trim() === email);
-          // Doosre user ki company ka owner overwrite mat karo
-          if (!isOwner) continue;
-          nextOwners[cid] = {
-            ownerUserId: co.ownerId || uid,
-            ownerEmail: co.ownerEmail || user.email || "",
+      await saveInterCompanyJoinSettings({
+        companyId,
+        settings: settingsToSave,
+        companyGroupId,
+        updatedByUid: user.uid,
+      });
+      setSaved({ ...settingsToSave });
+      savedSettingsRef.current = settingsToSave;
+    } catch (err) {
+      console.warn("[IC join] save settings failed:", err);
+      toast.error("Could not save settings");
+      return;
+    } finally {
+      setSaving(false);
+    }
+
+    if (!groupsChanged && !groupAssignmentChanged) {
+      onSettingsChange?.();
+      toast.success("Inter Company join settings saved");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      if (groupsChanged) {
+        for (const g of groups) {
+          const groupCompanies = g.companyIds
+            .map((id) => (allCompanies || []).find((c) => c.id === id))
+            .filter(Boolean);
+          const memberUsers = collectInterCompanyMemberUsers(
+            groupCompanies as Parameters<typeof collectInterCompanyMemberUsers>[0]
+          );
+          const nextSummaries = {
+            ...(g.companySummaries ?? {}),
+            ...buildCompanySummariesForIds(g.companyIds, allCompanies || []),
           };
+          const nextOwners = { ...(g.companyOwners ?? {}) };
+          const uid = user.uid;
+          const email = user.email?.toLowerCase().trim();
+          for (const cid of g.companyIds) {
+            const co = (allCompanies || []).find((c) => c.id === cid);
+            if (!co?.id) continue;
+            const isOwner =
+              (uid && co.ownerId === uid) ||
+              (email && String(co.ownerEmail || "").toLowerCase().trim() === email);
+            if (!isOwner) continue;
+            nextOwners[cid] = {
+              ownerUserId: co.ownerId || uid,
+              ownerEmail: co.ownerEmail || user.email || "",
+            };
+          }
+          await updateInterCompanyGroup(
+            g.id,
+            {
+              name: g.name,
+              companyIds: g.companyIds,
+              memberUsers,
+              visibility: g.visibility ?? "private",
+              companySummaries: nextSummaries,
+              companyOwners: nextOwners,
+            },
+            groupOwnerUid
+          );
         }
-        await updateInterCompanyGroup(
-          g.id,
-          {
-            name: g.name,
-            companyIds: g.companyIds,
-            memberUsers,
-            visibility: g.visibility ?? "private",
-            // View com — doosre users ke liye name/code alag column me
-            companySummaries: nextSummaries,
-            companyOwners: nextOwners,
-          },
-          groupOwnerUid
-        );
       }
 
-      // Company → group assignment sync
       for (const oc of ownedCompaniesForGroups) {
         const gid =
           oc.id === companyId
@@ -640,21 +682,15 @@ export function InterCompanyJoinSettingsPanel({ companyId, onSettingsChange }: P
         }
       }
 
-      await saveInterCompanyJoinSettings({
-        companyId,
-        settings: draft,
-        companyGroupId,
-        updatedByUid: user.uid,
-      });
-
-      setSaved({ ...draft });
       setSavedCompanyGroupId(companyGroupId);
+      savedCompanyGroupIdRef.current = companyGroupId;
       setSavedGroupsJson(JSON.stringify(groups));
       onSettingsChange?.();
       toast.success("Inter Company join settings saved");
     } catch (err) {
-      console.warn("[IC join] save failed:", err);
-      toast.error("Could not save settings");
+      console.warn("[IC join] save groups failed:", err);
+      onSettingsChange?.();
+      toast.warning("Privacy settings saved, but centralized system could not sync");
     } finally {
       setSaving(false);
     }
@@ -708,14 +744,10 @@ export function InterCompanyJoinSettingsPanel({ companyId, onSettingsChange }: P
         maskInView={draft.partnerMaskInView}
         onSearchByChange={(key: InterCompanyPartnerFieldKey, checked: boolean) => {
           if (!canWriteIc) return;
-          // Pocket ledger search UI disabled — draft me bhi force off
-          if (key === "pocketLedgerAcNo") return;
           patchDraft({ ...draft, partnerSearchBy: { ...draft.partnerSearchBy, [key]: checked } });
         }}
         onViewFieldsChange={(key: InterCompanyPartnerFieldKey, checked: boolean) => {
           if (!canWriteIc) return;
-          // Pocket ledger view UI disabled — draft me bhi force off
-          if (key === "pocketLedgerAcNo") return;
           patchDraft({ ...draft, partnerViewFields: { ...draft.partnerViewFields, [key]: checked } });
         }}
         onMaskInViewChange={(on) => {

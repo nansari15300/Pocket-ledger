@@ -64,8 +64,10 @@ import { approveVoucherWithHistory, softDeleteVoucherMoveToRecycleBin } from "@/
 import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { VoucherAttachmentFallbackContext } from "@/contexts/VoucherAttachmentFallbackContext";
+import { readInterCompanyLink } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
-import { formatVoucherNumber, normalizePrefix, parseVoucherNumberPart } from "@/lib/voucherNumberFormat";
+import { normalizePrefix } from "@/lib/voucherNumberFormat";
+import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { isRecurringVoucherGenerationEnabled } from "@/lib/recurringVoucherSettings";
 import { BTN_SAVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { stripIdsForCrossCompanyClone } from "@/lib/crossCompanyMasterPrefill";
@@ -75,10 +77,13 @@ import { persistLedgerModalParentFromBrowser } from "@/lib/modalUrlSync";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import {
   apkCloudCompanyOfflineViewOnly,
+  apkCloudEntityMasterReadFromSqliteMirror,
   apkEmbeddedSqliteFirstWritesPreferred,
   apkEntityWriteUsesLocalSqliteMirror,
   preferLocalLedgerReads,
 } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { shouldUseLocalCloudSync } from "@/lib/localCloudSync/companyConfig";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { useDate } from "@/hooks/useDate";
 import { recurringAutoVoucherLabels } from "@/lib/calendarDisplayLabels";
@@ -370,83 +375,6 @@ function mergeLedgerRowContextFromRow(live: any, row: any, ledgerEntityId?: stri
   };
 }
 
-// Voucher number fallback map: cross-company copy me target company ka next number nikalne ke लिए default prefix.
-const DEFAULT_PREFIX_LABELS: Record<string, string> = {
-  sale: "Sale Inv",
-  sale_service: "SS-",
-  purchase: "PUR-",
-  purchase_service: "PS-",
-  payment_in: "RCPT-",
-  payment_out: "PYMT-",
-  contra: "CNTR-",
-  direct_income: "DINC-",
-  direct_expense: "DEXP-",
-  journal: "JRNL-",
-  note: "NOTE-",
-  add_salary: "ADD-SAL-",
-  pay_salary: "PAY-SAL-",
-  production: "PROD-",
-  inter_company: "IC-",
-};
-
-function getPrefixKeyFromVoucher(v: Record<string, any>): string {
-  if (v.type === "journal" && v.subType === "add_salary") return "add_salary";
-  if (v.type === "payment_out" && v.subType === "pay_salary") return "pay_salary";
-  if (v.type === "sale") return v.lineItems?.[0]?.type === "service" ? "sale_service" : "sale";
-  if (v.type === "purchase") return v.lineItems?.[0]?.type === "service" ? "purchase_service" : "purchase";
-  return String(v.type || "sale");
-}
-
-async function getNextVoucherNumberForTarget(
-  targetCompanyId: string,
-  targetCompanyDoc: any,
-  voucherLike: Record<string, any>
-): Promise<string> {
-  const prefixKey = getPrefixKeyFromVoucher(voucherLike);
-  const configuredPrefixes = targetCompanyDoc?.voucherPrefixes?.[prefixKey];
-  const prefix = Array.isArray(configuredPrefixes) && configuredPrefixes[0]
-    ? configuredPrefixes[0]
-    : (DEFAULT_PREFIX_LABELS[prefixKey] || "V-");
-  const vouchersPath = collection(firestore, `companies/${targetCompanyId}/vouchers`);
-  const typeQuery = query(vouchersPath, where("type", "==", String(voucherLike.type || "sale")));
-  const fsRows = (await getDocs(typeQuery)).docs.map((d) => d.data() as Record<string, any>);
-  // APK + Firestore company: browser DB vouchers merge mat karo — duplicate/next-no galat ho sakta tha (`apkEntityWriteUsesLocalSqliteMirror`).
-  const localRows = apkEntityWriteUsesLocalSqliteMirror(targetCompanyDoc)
-    ? await listCompanyDocsFromBrowserDb(targetCompanyId, "vouchers")
-    : [];
-  const mergedRows = [...fsRows, ...localRows].filter((r) => {
-    if (voucherLike.type === "sale" || voucherLike.type === "purchase") {
-      const srcLineType = voucherLike?.lineItems?.[0]?.type || "item";
-      const rowLineType = (r as any)?.lineItems?.[0]?.type || "item";
-      return srcLineType === rowLineType;
-    }
-    if (voucherLike.type === "journal" && voucherLike.subType === "add_salary") return r.subType === "add_salary";
-    if (voucherLike.type === "payment_out" && voucherLike.subType === "pay_salary") return r.subType === "pay_salary";
-    if (voucherLike.type === "journal") return r.subType !== "add_salary";
-    if (voucherLike.type === "payment_out") return r.subType !== "pay_salary";
-    return true;
-  });
-  let maxNo = 0;
-  for (const row of mergedRows) {
-    const voucherCandidates =
-      // Contra me numbering aksar voucherNumberOut/In me hoti hai; generic voucherNumber missing ho sakta hai.
-      voucherLike.type === "contra"
-        ? [
-            String((row as any)?.voucherNumberOut || ""),
-            String((row as any)?.voucherNumberIn || ""),
-            String((row as any)?.voucherNumber || ""),
-          ]
-        : [String((row as any)?.voucherNumber || "")];
-    for (const voucherNo of voucherCandidates) {
-      if (!voucherNo) continue;
-      if (!voucherNo.startsWith(prefix) && !voucherNo.startsWith(normalizePrefix(prefix))) continue;
-      const parsed = parseVoucherNumberPart(voucherNo, prefix);
-      if (Number.isFinite(parsed) && parsed > maxNo) maxNo = parsed;
-    }
-  }
-  return formatVoucherNumber(prefix, maxNo + 1);
-}
-
 function resetCrossLinksForCopy(v: Record<string, any>): Record<string, any> {
   // Cross-company copy me stale link/payment ids hatake clean independent voucher banana hai.
   const out: Record<string, any> = { ...v };
@@ -623,19 +551,45 @@ function orderMasterCandidatesForCollection(
   return ordered;
 }
 
+/** Copy To remap: local/Drive company masters SQLite se — mobile par Firestore-only read kabhi khali reh jata tha. */
+async function copyRemapShouldReadSqliteMasters(
+  companyId: string,
+  laneCompany: { storageOption?: string } | null | undefined
+): Promise<boolean> {
+  if (apkEntityWriteUsesLocalSqliteMirror(laneCompany)) return true;
+  if (apkCloudEntityMasterReadFromSqliteMirror(laneCompany)) return true;
+  if (laneCompany && isOfflineCompanyStorage(laneCompany)) return true;
+  try {
+    return await shouldUseLocalCloudSync(companyId);
+  } catch {
+    return false;
+  }
+}
+
 async function loadCollectionRows(
   companyId: string,
   collectionName: CollectionName,
   /** Kis company lane par SQLite mirror merge karna hai — APK Firestore-company par skip */
   laneCompany: { storageOption?: string } | null | undefined
 ): Promise<Array<Record<string, any>>> {
-  const fsRows = (await getDocs(collection(firestore, `companies/${companyId}/${collectionName}`))).docs.map((d) => ({
-    id: d.id,
-    ...(d.data() as Record<string, any>),
-  }));
-  const localRows = apkEntityWriteUsesLocalSqliteMirror(laneCompany)
-    ? await listCompanyDocsFromBrowserDb(companyId, collectionName)
+  const readSqlite = await copyRemapShouldReadSqliteMasters(companyId, laneCompany);
+  // `forBackupMerge`: pure-local + Drive companies par bhi SQLite read allow (mobile web/APK).
+  const localRows = readSqlite
+    ? await listCompanyDocsFromBrowserDb(companyId, collectionName, { forBackupMerge: true })
     : [];
+  const skipFirestore = laneCompany != null && isOfflineCompanyStorage(laneCompany);
+  let fsRows: Array<Record<string, any>> = [];
+  if (!skipFirestore) {
+    try {
+      fsRows = (await getDocs(collection(firestore, `companies/${companyId}/${collectionName}`))).docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Record<string, any>),
+      }));
+    } catch {
+      // Mobile offline / permission: Firestore fail ho to SQLite hi source of truth.
+      fsRows = [];
+    }
+  }
   const byId = new Map<string, Record<string, any>>();
   [...fsRows, ...localRows].forEach((r) => {
     const id = String((r as any)?.id || "");
@@ -655,26 +609,64 @@ async function remapVoucherReferencesByName(
   const collections: CollectionName[] = ["parties", "bank_accounts", "staff", "taxes", "expense_accounts", "items"];
   const sourceRowsByCollection = new Map<CollectionName, Array<Record<string, any>>>();
   const targetNameToIdByCollection = new Map<CollectionName, Map<string, string>>();
-  for (const cname of collections) {
-    const [sourceRows, targetRows] = await Promise.all([
-      loadCollectionRows(sourceCompanyId, cname, lane(sourceCompanyId)),
-      loadCollectionRows(targetCompanyId, cname, lane(targetCompanyId)),
-    ]);
-    sourceRowsByCollection.set(cname, sourceRows);
-    const idx = new Map<string, string>();
-    // Bank/cash rows: `accountName` common; naam match `masterRowCanonicalName` se align karo (openCopyMasterDraft se bhi waahi canonical).
-    targetRows.forEach((row) => {
-      const n = normalizeMasterMatchKey(masterRowCanonicalName(row as Record<string, unknown>));
-      if (n) idx.set(n, String(row.id || ""));
-    });
-    targetNameToIdByCollection.set(cname, idx);
+
+  const allIdsProbe = new Set<string>();
+  collectLikelyReferenceIds(voucher, allIdsProbe);
+
+  // Mobile: company switch / SQLite wake par target masters thodi der baad ready — 2 retry.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    sourceRowsByCollection.clear();
+    targetNameToIdByCollection.clear();
+    for (const cname of collections) {
+      const [sourceRows, targetRows] = await Promise.all([
+        loadCollectionRows(sourceCompanyId, cname, lane(sourceCompanyId)),
+        loadCollectionRows(targetCompanyId, cname, lane(targetCompanyId)),
+      ]);
+      sourceRowsByCollection.set(cname, sourceRows);
+      const idx = new Map<string, string>();
+      targetRows.forEach((row) => {
+        const n = normalizeMasterMatchKey(masterRowCanonicalName(row as Record<string, unknown>));
+        if (n) idx.set(n, String(row.id || ""));
+      });
+      targetNameToIdByCollection.set(cname, idx);
+    }
+    const targetPartyCount = targetNameToIdByCollection.get("parties")?.size ?? 0;
+    const sourcePartyCount = sourceRowsByCollection.get("parties")?.length ?? 0;
+    // Journal/contra: account remap bank + expense indexes par depend — sirf party retry mobile par pehli switch fail karti thi.
+    const targetBankCount = targetNameToIdByCollection.get("bank_accounts")?.size ?? 0;
+    const targetExpenseCount = targetNameToIdByCollection.get("expense_accounts")?.size ?? 0;
+    const sourceBankCount = sourceRowsByCollection.get("bank_accounts")?.length ?? 0;
+    const sourceExpenseCount = sourceRowsByCollection.get("expense_accounts")?.length ?? 0;
+    const voucherType = String((voucher as { type?: string }).type || "");
+    const journalLike =
+      voucherType === "journal" ||
+      voucherType === "contra" ||
+      voucherType === "payment_in" ||
+      voucherType === "payment_out" ||
+      voucherType === "direct_income" ||
+      voucherType === "direct_expense";
+    const needsMasterIndex = allIdsProbe.size > 0;
+    const targetIndexWeak =
+      targetPartyCount === 0 ||
+      (journalLike && (targetBankCount === 0 || targetExpenseCount === 0));
+    const sourceIndexWeak =
+      sourcePartyCount === 0 ||
+      (journalLike && (sourceBankCount === 0 || sourceExpenseCount === 0));
+    if (
+      attempt < 2 &&
+      needsMasterIndex &&
+      (targetIndexWeak || sourceIndexWeak) &&
+      sourceCompanyId !== targetCompanyId
+    ) {
+      await new Promise<void>((r) => setTimeout(r, 280 * (attempt + 1)));
+      continue;
+    }
+    break;
   }
-  const allIds = new Set<string>();
-  collectLikelyReferenceIds(voucher, allIds);
   const idMap = new Map<string, string | null>();
   const unmatchedNames: string[] = [];
   const unmatchedCategories = new Set<string>();
-  for (const id of allIds) {
+  for (const id of allIdsProbe) {
     let mapped: string | null = null;
     let foundInSourceCompany = false;
     for (const cname of collections) {
@@ -1308,6 +1300,8 @@ export function AddVoucherDialog(props: any) {
   // Copy destination ke liye ref: Select change ke turant baad Copy click par bhi state batch se pehle stale `targetCompanyId` na ho.
   const targetCompanyIdRef = useRef<string>(targetCompanyId);
   targetCompanyIdRef.current = targetCompanyId;
+  /** Copy-draft target company: dropdown pehli switch par bhi re-seed force (`null` = effect chale). */
+  const lastReseededTargetRef = useRef<string | null>(null);
   const [isCopyingToCompany, setIsCopyingToCompany] = useState(false);
   // Edit mode label rule: if form has pending changes => "Sv & Copy To", otherwise only "Copy To".
   const [hasPendingEditChanges, setHasPendingEditChanges] = useState(false);
@@ -1463,6 +1457,9 @@ export function AddVoucherDialog(props: any) {
       // Inter Company: target company change nahi — sirf read-only current company.
       if (voucherFormActiveTab === "inter_company") return;
       if (postCopyNewFormSeed) {
+        // Copy-draft: ref turant — Select ke baad pehli remap attempt stale target na le (mobile journal accounts).
+        targetCompanyIdRef.current = v;
+        lastReseededTargetRef.current = null;
         setTargetCompanyId(v);
         return;
       }
@@ -1474,7 +1471,7 @@ export function AddVoucherDialog(props: any) {
       }
       setTargetCompanyId(v);
     },
-    [voucherFormActiveTab, postCopyNewFormSeed, apkLedgerPinsShellCompanyContext, setCompanyId]
+    [voucherFormActiveTab, postCopyNewFormSeed, apkLedgerPinsShellCompanyContext, setCompanyId, lastReseededTargetRef]
   );
 
   useEffect(() => {
@@ -1716,8 +1713,6 @@ export function AddVoucherDialog(props: any) {
     recurringTemplateSnapshot?.lastGeneratedPeriodKey,
   ]);
 
-  // Re-seed-on-target-change tracker: avoid loop when same target is auto-applied.
-  const lastReseededTargetRef = useRef<string | null>(null);
   // Copy-draft seed version: child form ko remount karke fresh defaults pick karne ke liye monotonic counter.
   const [copyDraftSeedVersion, setCopyDraftSeedVersion] = useState(0);
   /** Save & Copy To: pehle form save, phir copy — promise resolve jab `handleAction('saved',…, newId)` aaye. */
@@ -2346,33 +2341,41 @@ export function AddVoucherDialog(props: any) {
       toast.error("User not authenticated.");
       return null;
     }
-    const voucherIdToCopy = String(sourceVoucherId || effectiveVoucher?.id || "").trim();
+    const explicitSourceVoucherId = String(sourceVoucherId || "").trim();
     setIsCopyingToCompany(true);
     try {
       let sourceDoc: Record<string, any> | null = null;
-      if (voucherIdToCopy) {
+      // Company dropdown re-seed: immutable snapshot — warna DB fetch race / pehle-remapped seed journal accounts miss.
+      if (!explicitSourceVoucherId && copySourceVoucherSnapshot) {
+        sourceDoc = copySourceVoucherSnapshot;
+      } else if (explicitSourceVoucherId) {
+        const voucherIdToCopy = explicitSourceVoucherId;
+        const sourceIsLocalCompany =
+          sourceLaneCompany != null && isOfflineCompanyStorage(sourceLaneCompany);
         // Save & Copy To me stale seed fallback bilkul na ho: freshly saved voucher hi source hona chahiye.
         for (let attempt = 0; attempt < 6; attempt++) {
-          const snap = await getDoc(doc(firestore, `companies/${sourceCompanyId}/vouchers`, voucherIdToCopy));
-          if (snap.exists()) {
-            const docCandidate = { id: snap.id, ...(snap.data() as Record<string, any>) };
-            const updatedMs = toEpochMs((docCandidate as any).updatedAt);
-            // Save & Copy To: just-saved write ka updatedAt milne tak wait karo; purana snapshot copy na ho.
-            const isFreshEnough = minSavedAtMs == null || updatedMs == null || updatedMs >= (minSavedAtMs - 1200);
-            if (isFreshEnough) {
-              sourceDoc = docCandidate;
-              break;
-            }
-          }
-          // APK local lane: save ke baad row browser DB pehle aa sakta hai; Firestore lane par isse purana mirror copy na ho.
-          if (readLocalVoucherStaleFallback) {
+          // Local company: SQLite pehle (mobile par Firestore row aksar missing / late).
+          if (readLocalVoucherStaleFallback || sourceIsLocalCompany) {
             const localRow =
-              (await getCompanyDocFromBrowserDb(sourceCompanyId, "vouchers", voucherIdToCopy) as Record<string, any> | null) ?? null;
+              (await getCompanyDocFromBrowserDb(sourceCompanyId, "vouchers", voucherIdToCopy) as Record<string, any> | null) ??
+              null;
             if (localRow) {
               const updatedMs = toEpochMs((localRow as any).updatedAt);
               const isFreshEnough = minSavedAtMs == null || updatedMs == null || updatedMs >= (minSavedAtMs - 1200);
               if (isFreshEnough) {
                 sourceDoc = localRow;
+                break;
+              }
+            }
+          }
+          if (!sourceIsLocalCompany) {
+            const snap = await getDoc(doc(firestore, `companies/${sourceCompanyId}/vouchers`, voucherIdToCopy));
+            if (snap.exists()) {
+              const docCandidate = { id: snap.id, ...(snap.data() as Record<string, any>) };
+              const updatedMs = toEpochMs((docCandidate as any).updatedAt);
+              const isFreshEnough = minSavedAtMs == null || updatedMs == null || updatedMs >= (minSavedAtMs - 1200);
+              if (isFreshEnough) {
+                sourceDoc = docCandidate;
                 break;
               }
             }
@@ -2384,18 +2387,53 @@ export function AddVoucherDialog(props: any) {
           return null;
         }
       } else {
-        // Re-seed/company-change flow: explicit voucher id na ho to current in-memory draft snapshot use karo.
-        sourceDoc =
-          (postCopyNewFormSeed as Record<string, any> | null)
-          ?? (effectiveVoucher as Record<string, any> | null)
-          ?? (defaultVoucherData as Record<string, any> | null);
+        const fallbackId = String(effectiveVoucher?.id || "").trim();
+        if (fallbackId) {
+          const voucherIdToCopy = fallbackId;
+          const sourceIsLocalCompany =
+            sourceLaneCompany != null && isOfflineCompanyStorage(sourceLaneCompany);
+          for (let attempt = 0; attempt < 6; attempt++) {
+            if (readLocalVoucherStaleFallback || sourceIsLocalCompany) {
+              const localRow =
+                (await getCompanyDocFromBrowserDb(sourceCompanyId, "vouchers", voucherIdToCopy) as Record<string, any> | null) ??
+                null;
+              if (localRow) {
+                sourceDoc = localRow;
+                break;
+              }
+            }
+            if (!sourceIsLocalCompany) {
+              const snap = await getDoc(doc(firestore, `companies/${sourceCompanyId}/vouchers`, voucherIdToCopy));
+              if (snap.exists()) {
+                sourceDoc = { id: snap.id, ...(snap.data() as Record<string, any>) };
+                break;
+              }
+            }
+            await new Promise<void>((resolve) => setTimeout(resolve, 180));
+          }
+        }
+        if (!sourceDoc) {
+          sourceDoc =
+            (copySourceVoucherSnapshot as Record<string, any> | null)
+            ?? (postCopyNewFormSeed as Record<string, any> | null)
+            ?? (effectiveVoucher as Record<string, any> | null)
+            ?? (defaultVoucherData as Record<string, any> | null);
+        }
         if (!sourceDoc) {
           toast.error("Source voucher not found for copy.");
           return null;
         }
       }
       const targetCompanyDoc = allCompanies.find((c) => c.id === destinationCompanyId) || null;
-      const nextVoucherNumber = await getNextVoucherNumberForTarget(destinationCompanyId, targetCompanyDoc, sourceDoc);
+      const nextVoucherNumber = await getNextVoucherNumberForCompany({
+        companyId: destinationCompanyId,
+        companyDoc: targetCompanyDoc as Record<string, unknown>,
+        voucherLike: {
+          type: String(sourceDoc.type || "sale"),
+          subType: sourceDoc.subType,
+          lineItems: sourceDoc.lineItems,
+        },
+      });
       const cleaned = resetCrossLinksForCopy(sourceDoc);
       const { remapped, unmatchedNames, unmatchedCategories } = await remapVoucherReferencesByName(
         sourceCompanyId,
@@ -2435,7 +2473,18 @@ export function AddVoucherDialog(props: any) {
     } finally {
       setIsCopyingToCompany(false);
     }
-  }, [companyId, targetCompanyId, user?.uid, effectiveVoucher?.id, allCompanies, postCopyNewFormSeed, effectiveVoucher, defaultVoucherData, company]);
+  }, [
+    companyId,
+    targetCompanyId,
+    user?.uid,
+    effectiveVoucher?.id,
+    allCompanies,
+    postCopyNewFormSeed,
+    effectiveVoucher,
+    defaultVoucherData,
+    company,
+    copySourceVoucherSnapshot,
+  ]);
 
   /** Party/bank/target me create-save ke baad mismatch list dubara ginti — Copy buttons stale na rahein (`accountName` match ab mila ho). */
   const refreshCopyMismatchAfterMasterSave = useCallback(async () => {
@@ -2569,7 +2618,8 @@ export function AddVoucherDialog(props: any) {
     if (lastReseededTargetRef.current === targetCompanyId) return;
     let cancelled = false;
     (async () => {
-      const res = await prepareCopyDraftForCompany(voucher?.id ? String(voucher.id) : undefined);
+      // Snapshot-based remap — `voucher.id` pass karne se mobile par pehli company switch miss ho sakti thi.
+      const res = await prepareCopyDraftForCompany();
       if (cancelled || !res?.nextNewFormSeed) return;
       // NOTE: Global setCompanyId(targetCompanyId) deliberately skipped — main page ki company change nahi karni.
       // Dialog ke andar override CompanyContext provider naye target ko forms ka save target banata hai.
@@ -3856,11 +3906,27 @@ export function AddVoucherDialog(props: any) {
   );
 
   // Har render naya `{ companyId, voucherId }` object = FilePreview blob effect dubara + thumb flash; ref stable rakho.
-  const voucherAttachmentFallbackValue = useMemo(
-    () =>
-      companyId && effectiveVoucher?.id ? { companyId, voucherId: String(effectiveVoucher.id) } : null,
-    [companyId, effectiveVoucher?.id]
-  );
+  const voucherAttachmentFallbackValue = useMemo(() => {
+    if (!companyId || !effectiveVoucher?.id) return null;
+    const row = effectiveVoucher as Record<string, unknown>;
+    const link = readInterCompanyLink(row);
+    const shared = row.interCompanyShareAttachmentsWithPeer === true;
+    const interCompanyPeer =
+      shared &&
+      link?.role === "target" &&
+      link.peerCompanyId &&
+      link.peerVoucherId
+        ? {
+            peerCompanyId: String(link.peerCompanyId),
+            peerVoucherId: String(link.peerVoucherId),
+          }
+        : undefined;
+    return {
+      companyId,
+      voucherId: String(effectiveVoucher.id),
+      ...(interCompanyPeer ? { interCompanyPeer } : {}),
+    };
+  }, [companyId, effectiveVoucher]);
 
   // Dialog-scope CompanyContext override: copy/compare me target alag ho sakta hai. Capacitor plain add/edit: shell context direct use.
   const overriddenCompanyContextValue = useMemo(() => {

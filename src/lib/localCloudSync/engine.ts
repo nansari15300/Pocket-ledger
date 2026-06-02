@@ -1,17 +1,26 @@
 "use client";
 
 import {
+  deleteCompanyDocFromBrowserDb,
   getCompanyDocFromBrowserDb,
   upsertCompanyDocInBrowserDb,
 } from "@/lib/localCompanyDocMirror";
 import {
+  deleteDriveAttachmentRefsForDoc,
+  isPermanentPurgePayload,
+  removeLocalPendingRefsFromDoc,
+} from "@/lib/recycleBinEntityLifecycle";
+import {
+  applyDriveManifestUploadGuard,
   buildCloudSyncManifestFromCompany,
   mergeRemoteCloudSyncManifestIntoLocalCompany,
   patchLocalCompanyCloudSyncFields,
+  pushCompanyRegistryManifestToDrive,
   readCloudSyncConfigFromCompany,
   readCloudSyncDriveShareUsers,
   shouldUseLocalCloudSync,
 } from "@/lib/localCloudSync/companyConfig";
+import { auth } from "@/lib/firebase";
 import { maybeShareDriveCompanyFolder } from "@/lib/localCloudSync/driveCloudSyncClient";
 import { runWithRemoteCloudSyncApply } from "@/lib/localCloudSync/enqueueFromWrite";
 import {
@@ -44,7 +53,11 @@ import {
   rebasePendingLocalCloudSyncOps,
   setCloudSyncCursor,
 } from "@/lib/localCloudSync/queue";
-import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import {
+  getLocalCompanyById,
+  localCompanyRowIsDeleted,
+  wasLocalCompanyRecentlyRemoved,
+} from "@/lib/localCompanyStore";
 import {
   countNewCloudSyncFileRefs,
   collectCloudSyncFileRefsFromValue,
@@ -65,6 +78,15 @@ function attachmentSyncForensicEnabled(): boolean {
 function logAttachmentSyncForensic(tag: string, payload: Record<string, unknown>): void {
   if (!attachmentSyncForensicEnabled()) return;
   console.warn("[FORENSIC_ATTACHMENT_SYNC]", { tag, ...payload });
+}
+
+async function assertCompanyCanStillWriteDrive(companyId: string): Promise<void> {
+  if (wasLocalCompanyRecentlyRemoved(companyId)) {
+    // Local delete/purge ke immediately baad stale running sync ko Drive folder recreate karne se roko.
+    throw new Error("Company was removed locally; Drive sync stopped.");
+  }
+  const active = await getLocalCompanyById(companyId);
+  if (!active) throw new Error("Company was removed locally; Drive sync stopped.");
 }
 
 export async function runLocalCloudSyncCycle(companyId: string, options?: { force?: boolean }): Promise<{
@@ -133,6 +155,27 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     const manifestBeforeUpload = await provider.getManifest(syncRef);
     const regAfterManifest =
       (await mergeRemoteCloudSyncManifestIntoLocalCompany(cid, manifestBeforeUpload)) ?? reg;
+
+    // Company bin me hai — manifest pehle likho; attachment fail se doosre device ko status na roke.
+    if (localCompanyRowIsDeleted(regAfterManifest)) {
+      try {
+        await pushCompanyRegistryManifestToDrive(cid);
+      } catch (e) {
+        warnLocalCloudSync("registry manifest push (deleted company) failed", {
+          companyId: cid,
+          msg: e instanceof Error ? e.message : String(e),
+        });
+      }
+      const now = Date.now();
+      await setCloudSyncCursor(cid, { lastSyncAt: now, syncStatus: "idle", lastError: null });
+      await patchLocalCompanyCloudSyncFields(cid, {
+        cloudSyncLastSyncAt: now,
+        cloudSyncStatus: "idle",
+        cloudSyncLastError: null,
+      });
+      return { ok: true, uploaded: 0, downloaded: 0 };
+    }
+
     const encCfg = readCloudSyncDriveEncryptionFromCompany(regAfterManifest as Record<string, unknown>);
     if (encCfg.encryptAny && !(await isCloudSyncEncryptionReady(cid))) {
       throw new Error(CLOUD_SYNC_ENCRYPTION_KEY_REQUIRED_MSG);
@@ -148,6 +191,7 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     await rebasePendingLocalCloudSyncOps(cid, Math.max(cursor.lastSyncedOp, manifestBeforeUpload.latestOp));
 
     // Pending `local:` attachments/avatars → Drive `attachments/` + `opening/avatars/`.
+    await assertCompanyCanStillWriteDrive(cid);
     const attachSync = await syncPendingFilesForCompany(cid);
     // Pending bytes uploader ka per-cycle outcome: upload fail/success ko ops download se separate dekho.
     logAttachmentSyncForensic("pending_attachment_upload_cycle_result", {
@@ -160,8 +204,10 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     }
     if (attachSync.failed > 0) {
       // Attachment bytes Drive par na jaayein to `local:` refs doosre device par broken ho jaate hain; data op upload rok kar retry safe rakho.
+      const detail = attachSync.lastError?.trim();
       throw new Error(
-        `Attachment upload to ${providerId === "google_drive" ? "Google Drive" : "cloud storage"} failed for ${attachSync.failed} file(s). Voucher sync paused so files are not lost.`
+        detail ||
+          `Attachment upload to ${providerId === "google_drive" ? "Google Drive" : "cloud storage"} failed for ${attachSync.failed} file(s). Voucher sync paused so files are not lost.`
       );
     }
 
@@ -173,6 +219,7 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     let maxUploadedSeq = cursor.lastSyncedOp;
     let uploadedVouchers = 0;
     for (const op of pending) {
+      await assertCompanyCanStillWriteDrive(cid);
       await provider.uploadOperation(syncRef, op);
       uploaded += 1;
       if (op.table === VOUCHER_SYNC_TABLE) uploadedVouchers += 1;
@@ -229,6 +276,15 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
           continue;
         }
         const local = (await getCompanyDocFromBrowserDb(cid, op.table, op.rowId)) as Record<string, unknown> | null;
+        // Bin permanent delete: row + Drive/local attachments hatao — soft tombstone mat re-apply karo.
+        if (isPermanentPurgePayload(op.payload)) {
+          const docForFiles = { ...(local ?? {}), ...op.payload };
+          await removeLocalPendingRefsFromDoc(docForFiles);
+          await deleteDriveAttachmentRefsForDoc(cid, docForFiles);
+          await deleteCompanyDocFromBrowserDb(cid, op.table, op.rowId, { force: true, notify: true });
+          if (op.opSeq > maxRemoteSeq) maxRemoteSeq = op.opSeq;
+          continue;
+        }
         if (!shouldApplyRemoteCloudSyncOp(local, op)) {
           // Skip reason path: ref present hone par bhi op apply nahi hua to immediately visible hoga.
           logAttachmentSyncForensic("remote_op_skipped", {
@@ -284,15 +340,20 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
       });
     }
     const latestOpForManifest = Math.max(manifest.latestOp, maxUploadedSeq, maxRemoteSeq);
-    await provider.updateManifest(
-      syncRef,
-      buildCloudSyncManifestFromCompany(regForShare as Record<string, unknown>, {
-        latestOp: latestOpForManifest,
-        updatedAt: Date.now(),
-        companyId: cid,
-        driveShareUsers: readCloudSyncDriveShareUsers(regForShare as Record<string, unknown>),
-      })
+    await assertCompanyCanStillWriteDrive(cid);
+    const builtManifest = buildCloudSyncManifestFromCompany(regForShare as Record<string, unknown>, {
+      latestOp: latestOpForManifest,
+      updatedAt: Date.now(),
+      companyId: cid,
+      driveShareUsers: readCloudSyncDriveShareUsers(regForShare as Record<string, unknown>),
+    });
+    // Country mode + bin delete flag — remote delete ko active device se overwrite mat karo.
+    const manifestToUpload = applyDriveManifestUploadGuard(
+      builtManifest,
+      manifestBeforeUpload,
+      regForShare as Record<string, unknown>
     );
+    await provider.updateManifest(syncRef, manifestToUpload);
 
     const now = Date.now();
     await setCloudSyncCursor(cid, {
@@ -309,6 +370,7 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
 
     const sharedUsers = readCloudSyncDriveShareUsers(regForShare as Record<string, unknown>);
     if (sharedUsers.length > 0) {
+      await assertCompanyCanStillWriteDrive(cid);
       await maybeShareDriveCompanyFolder({
         companyId: cid,
         companyName: syncRef.companyName,
@@ -317,6 +379,7 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     }
 
     // Opening snapshot sync side-effect only; attachment counters below stay voucher-file focused.
+    await assertCompanyCanStillWriteDrive(cid);
     await uploadOpeningSnapshotToDrive(cid);
 
     // IMPORTANT: summary card "files" = sirf real attachment/avatar uploads, opening snapshot files nahi.

@@ -7,6 +7,7 @@ import { postDriveJsonViaClient } from "@/lib/localCloudSync/driveApiClient";
 import { getLocalCompanyById, listLocalCompanies, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
 import { mergeRemoteCloudSyncManifestIntoLocalCompany } from "@/lib/localCloudSync/companyConfig";
+import { resolveCountryDriveAttachmentDateFolderMode } from "@/lib/localCloudSync/driveAttachmentPath";
 import {
   CLOUD_SYNC_ENCRYPTION_KEY_REQUIRED_MSG,
   isCloudSyncEncryptionReady,
@@ -137,9 +138,10 @@ export async function joinDriveSharedLocalCompany(
     cloudSyncEncryptDriveData: encryptData,
     cloudSyncEncryptDriveFiles: encryptFiles,
     cloudSyncDriveEncryptionSalt: manifest.driveEncryptionSalt ?? null,
-    ...(manifest.cloudSyncDriveDateFolderMode
-      ? { cloudSyncDriveDateFolderMode: manifest.cloudSyncDriveDateFolderMode }
-      : {}),
+    // Join: country company profile se — mergeRemoteCloudSyncManifest bhi wahi rule lagata hai.
+    cloudSyncDriveDateFolderMode: resolveCountryDriveAttachmentDateFolderMode(
+      (existing ?? {}) as Record<string, unknown>
+    ),
     ...(companyPassword ? { password: companyPassword } : {}),
     updatedAt: Date.now(),
   });

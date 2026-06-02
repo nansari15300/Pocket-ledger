@@ -41,9 +41,15 @@ import { resolveInterCompanyLegsForVoucher } from "@/lib/interCompany/interCompa
 import {
   interCompanyVoucherViewerSide,
   isInterCompanyVisibleOnTargetBank,
+  readInterCompanyCompanyBankId,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
+import { getInterCompanyLedgerAmounts } from "@/lib/interCompany/interCompanyLedgerAmounts";
 import { isRecurringAutoUserDisplayLabel } from "@/lib/interCompany/interCompanyVoucherHistory";
 import { backfillInterCompanySourceApprovedFlags } from "@/lib/interCompany/interCompanyVisibilityBackfill";
+import {
+  batchFetchUserDisplayNamesFromFirestore,
+  displayNameFromUserFirestoreDoc,
+} from "@/lib/batchFetchUserDisplayNames";
 
 /** Offline company: vouchers me `userId` aksar owner ka Firebase uid ya `local` — sirf `user.uid` match se shared user ko 0 rows. */
 function localCompanyRoleAllowsViewAll(role: string | undefined): boolean {
@@ -120,12 +126,10 @@ function stripMirrorMetaForEntityListRow(row: any): any {
 
 /** SQLite bootstrap / prefetch: Firestore-merge jaisi strip taaki META forms me na jaye. */
 function sqliteCachedRowsForSetter(cached: any[], orderByField?: string): any[] {
-  const base = orderByField ? sortDocsByDateField(cached, orderByField) : cached;
+  const alive = cached.filter((x) => x?.isDeleted !== true);
+  const base = orderByField ? sortDocsByDateField(alive, orderByField) : alive;
   return base.map(stripMirrorMetaForEntityListRow);
 }
-
-/** Firestore `where('…','in', …)` discrete values cap — pura `users` scan ki jagah chunk queries. */
-const FIRESTORE_UID_IN_CHUNK = 30;
 
 /**
  * Ledger masters already hook state me ho to voucher-linked ids ko direct map se naam do;
@@ -153,72 +157,6 @@ function buildJournalLinkedEntityNameLookup(
   expenseAccounts.forEach((e) => put(e?.id, e?.name));
   items.forEach((it) => put(it?.id, it?.name));
   return m;
-}
-
-/** User doc snapshot → voucher “User column” text; email prefix heuristic raw-uid avoidance. */
-function displayNameFromUserFirestoreDoc(data: Record<string, unknown> | undefined, docId: string): string | null {
-  if (!data) return null;
-  const uid = (data.uid as string) || docId;
-  if (!uid) return null;
-  const email = typeof data.email === "string" ? data.email : "";
-  const emailPrefix = email.includes("@") ? email.split("@")[0] : "";
-  const raw = (data.displayName || data.name || emailPrefix || null) as string | null;
-  if (!raw || raw === "Unknown" || raw === "N/A") return null;
-  const isUIDPattern =
-    raw.length > 15 && /^[a-zA-Z0-9_-]+$/.test(raw) && !raw.includes("@") && !raw.includes(" ");
-  const name = isUIDPattern && emailPrefix ? emailPrefix : raw;
-  return name || null;
-}
-
-/**
- * Bulk uid → display name WITHOUT `getDocs(collection(users))` (poor scalability + freezes UI on company load).
- */
-async function batchFetchUserDisplayNamesFromFirestore(uidList: string[], shouldAbort: () => boolean): Promise<Record<string, string>> {
-  const out: Record<string, string> = {};
-  const uniq = [...new Set(uidList.map((u) => String(u || "").trim()).filter(Boolean))];
-  if (!uniq.length) return out;
-  for (let i = 0; i < uniq.length; i += FIRESTORE_UID_IN_CHUNK) {
-    if (shouldAbort()) return out;
-    const chunk = uniq.slice(i, i + FIRESTORE_UID_IN_CHUNK);
-    try {
-      const q = query(collection(firestore, "users"), where("uid", "in", chunk));
-      const snap = await getDocs(q);
-      snap.docs.forEach((docSnap) => {
-        const nm = displayNameFromUserFirestoreDoc(docSnap.data() as Record<string, unknown>, docSnap.id);
-        if (!nm) return;
-        const data = docSnap.data() as { uid?: string };
-        const u = typeof data.uid === "string" && data.uid.trim() ? data.uid : docSnap.id;
-        if ((out[u] || "") !== nm) out[u] = nm;
-      });
-    } catch {
-      /* rights / offline — per-uid fallback neeche */
-    }
-  }
-  const stale = uniq.filter((u) => !out[u]);
-  /** Chunked `where('uid','in',…)` baad fallback — parallel sirf UID scope (whole `users` scan nahi). */
-  const USER_UID_FETCH_PARALLEL = 12;
-  for (let j = 0; j < stale.length; j += USER_UID_FETCH_PARALLEL) {
-    if (shouldAbort()) return out;
-    const slice = stale.slice(j, j + USER_UID_FETCH_PARALLEL);
-    await Promise.all(
-      slice.map(async (uid) => {
-        try {
-          const dq = query(collection(firestore, "users"), where("uid", "==", uid));
-          const ds = await getDocs(dq);
-          let data = ds.docs[0]?.data() as Record<string, unknown> | undefined;
-          if (!data) {
-            const legacy = await getDoc(doc(firestore, "users", uid));
-            if (legacy.exists()) data = legacy.data() as Record<string, unknown>;
-          }
-          const nm = displayNameFromUserFirestoreDoc(data, uid);
-          if (nm && (out[uid] || "") !== nm) out[uid] = nm;
-        } catch {
-          /* skip */
-        }
-      })
-    );
-  }
-  return out;
 }
 
 /**
@@ -275,10 +213,13 @@ async function resolveJournalAccountFirestoreParallel(
 
 /** Parties/items/… — local cache merge; optional date sort sirf vouchers ke liye. */
 function mergeEntityListsById(prev: any[], cached: any[], orderByField?: string): any[] {
-  if (!cached.length) return prev;
-  const map = new Map<string, any>(prev.map((v: any) => [v.id, v]));
-  for (const v of cached) map.set(v.id, v);
-  const merged = [...map.values()];
+  if (!cached.length) return prev.filter(isAliveDoc);
+  const map = new Map<string, any>(prev.filter(isAliveDoc).map((v: any) => [v.id, v]));
+  for (const v of cached) {
+    if (!isAliveDoc(v)) continue;
+    map.set(v.id, v);
+  }
+  const merged = [...map.values()].filter(isAliveDoc);
   const sorted = orderByField ? sortDocsByDateField(merged, orderByField) : merged;
   return sorted.map(stripMirrorMetaForEntityListRow);
 }
@@ -365,6 +306,11 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   const vouchersForDisplay = useMemo(() => {
     // Defensive guard: agar stale source se deleted voucher aa bhi gaya, view layer se hata do.
     const activeVouchers = (vouchers || []).filter(isAliveDoc);
+    const applyTargetIcVisibility = <T extends { type?: string }>(list: T[]): T[] =>
+      list.filter((v) => {
+        if (String(v?.type || "") !== "inter_company") return true;
+        return isInterCompanyVisibleOnTargetBank(v as Record<string, unknown>);
+      });
     if (!user?.uid) return [];
     const localUser =
       isLocalCompanySelected && companyId ? getLocalAuthUser(companyId) : null;
@@ -373,23 +319,25 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       isLocalCompanySelected &&
       !!localUser &&
       localCompanyRoleAllowsViewAll(localUser.role);
-    if (viewAllRecords || localStaffSeeAll) return activeVouchers;
+    if (viewAllRecords || localStaffSeeAll) return applyTargetIcVisibility(activeVouchers);
 
     // Local + viewer/data-entry: apni rows — userId local id / `local` / Firebase uid
     if (isLocalCompanySelected && localUser?.id) {
       const uid = String(user.uid);
       const lid = String(localUser.id);
       const lname = (localUser.username || "").toLowerCase().trim();
-      return activeVouchers.filter((v) => {
-        const vid = v.userId != null ? String(v.userId) : "";
-        if (vid === uid || vid === lid) return true;
-        if (lname && vid.toLowerCase() === lname) return true;
-        if (vid === "local" || vid === "local_guest_user") return true;
-        return false;
-      });
+      return applyTargetIcVisibility(
+        activeVouchers.filter((v) => {
+          const vid = v.userId != null ? String(v.userId) : "";
+          if (vid === uid || vid === lid) return true;
+          if (lname && vid.toLowerCase() === lname) return true;
+          if (vid === "local" || vid === "local_guest_user") return true;
+          return false;
+        })
+      );
     }
 
-    return activeVouchers.filter((v) => v.userId === user.uid);
+    return applyTargetIcVisibility(activeVouchers.filter((v) => v.userId === user.uid));
   }, [vouchers, viewAllRecords, user?.uid, isLocalCompanySelected, companyId, localAuthEpoch]);
 
   // Target IC: source pehle approve ho chuka ho to `interCompanySourceApproved` backfill (bank/recent ke liye)
@@ -1445,21 +1393,44 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
             if (!isInterCompanyVisibleOnTargetBank(v as Record<string, unknown>)) {
                 // Target: source approve se pehle balance maps me mat jodo
             } else {
-            const legs = resolveInterCompanyLegsForVoucher(v as Record<string, unknown>);
+            const icVoucher = v as Record<string, unknown>;
+            const legs = resolveInterCompanyLegsForVoucher(icVoucher);
+            const bankId = readInterCompanyCompanyBankId(icVoucher);
+            if (bankId) {
+                const icBank = getInterCompanyLedgerAmounts(icVoucher, "account", bankId, amount);
+                if (icBank.touched) {
+                    if (icBank.debit > 0) addVal(accountMap, bankId, "debit", icBank.debit);
+                    if (icBank.credit > 0) addVal(accountMap, bankId, "credit", icBank.credit);
+                }
+            }
             if (legs.length > 0) {
                 legs.forEach((leg) => {
-                    const map =
+                    if (leg.kind === "bank") return;
+                    const context =
                         leg.kind === "party"
+                            ? ("party" as const)
+                            : leg.kind === "staff"
+                              ? ("staff" as const)
+                              : leg.kind === "tax"
+                                ? ("tax" as const)
+                                : ("expense" as const);
+                    const icEntity = getInterCompanyLedgerAmounts(
+                        icVoucher,
+                        context,
+                        leg.accountId,
+                        amount
+                    );
+                    if (!icEntity.touched) return;
+                    const map =
+                        context === "party"
                             ? partyMap
-                            : leg.kind === "bank"
-                              ? accountMap
-                              : leg.kind === "staff"
-                                ? staffMap
-                                : leg.kind === "tax"
-                                  ? taxMap
-                                  : expenseMap;
-                    if (leg.debit > 0) addVal(map, leg.accountId, "debit", leg.debit);
-                    if (leg.credit > 0) addVal(map, leg.accountId, "credit", leg.credit);
+                            : context === "staff"
+                              ? staffMap
+                              : context === "tax"
+                                ? taxMap
+                                : expenseMap;
+                    if (icEntity.debit > 0) addVal(map, leg.accountId, "debit", icEntity.debit);
+                    if (icEntity.credit > 0) addVal(map, leg.accountId, "credit", icEntity.credit);
                 });
             } else if (v.partyId) {
                 const side = String((v as { interCompanyLink?: { role?: string } }).interCompanyLink?.role || "");

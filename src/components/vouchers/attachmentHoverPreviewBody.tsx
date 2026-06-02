@@ -8,7 +8,6 @@ import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { tryGetStoragePathFromFirebaseDownloadUrl, looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
 import {
   isLocalFileRef,
-  getBlobFromLocalFileRef,
   getLocalFileRefMeta,
   getLocalFileRefMetaSync,
 } from "@/lib/localPendingFiles";
@@ -18,6 +17,9 @@ import { getRemoteAttachmentBlobPreferOfflineCache } from "@/lib/offlineAttachme
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { normalizeAttachmentUrlForDevicePreview } from "@/lib/attachmentHoldClipboard";
+import { getBlobFromAttachmentRefPreferLocalFirst } from "@/lib/attachmentPreviewResolve";
+import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 
 /** Dubara hover par turant — blob URL session `Map` (static/APK me repeat IndexedDB + decode kam) */
 const HOVER_HTTPS_UI_CACHE_MAX = 80;
@@ -244,7 +246,7 @@ function HoverPreviewHttpsAwareImage(props: {
 /** Multi-file row / local pending: gallery swipe App me */
 export type AttachmentPreviewGalleryOpts = { urls: readonly string[]; startIndex: number };
 
-/** `local:uuid` — IndexedDB blob se object URL; voucher table + avatar hover same preview */
+/** `local:` / `drive:` / `PL_ATTACH_V1` — PC hover preview: local/pending pehle, phir Drive (HTTPS image path alag). */
 export function LocalFileRefTooltipPreview({
   url,
   gallery,
@@ -253,6 +255,7 @@ export function LocalFileRefTooltipPreview({
   gallery?: AttachmentPreviewGalleryOpts;
 }) {
   const voucherAttachmentFb = useVoucherAttachmentFallback();
+  const effectiveUrl = React.useMemo(() => normalizeAttachmentUrlForDevicePreview(url), [url]);
   const [state, setState] = React.useState<
     { status: "loading" } | { status: "error" } | { status: "ready"; objectUrl: string; mime: string }
   >({ status: "loading" });
@@ -262,9 +265,9 @@ export function LocalFileRefTooltipPreview({
     const urlRef = { current: null as string | null };
     void (async () => {
       try {
-        if (isCapacitorNativeApp()) {
+        if (isCapacitorNativeApp() && isLocalFileRef(effectiveUrl)) {
           // Native fast-path: preview ke liye JS blob read mat karo; direct `convertFileSrc` display URL hi use karo.
-          const meta = getLocalFileRefMetaSync(url) ?? (await getLocalFileRefMeta(url));
+          const meta = getLocalFileRefMetaSync(effectiveUrl) ?? (await getLocalFileRefMeta(effectiveUrl));
           if (cancelled) return;
           if (!meta?.displayUrl) {
             setState({ status: "error" });
@@ -274,9 +277,9 @@ export function LocalFileRefTooltipPreview({
           setState({ status: "ready", objectUrl: meta.displayUrl, mime });
           return;
         }
-        const blob = await getBlobFromLocalFileRef(url, {
-          allowNativeRead: false,
-          context: "LocalFileRefTooltipPreview",
+        // Table/party preview: `local:` pending blob pehle; `drive:` par filename match / gallery `local:` phir Drive API.
+        const blob = await getBlobFromAttachmentRefPreferLocalFirst(url, {
+          galleryUrls: gallery?.urls,
         });
         if (cancelled) return;
         if (!blob || blob.size === 0) {
@@ -308,7 +311,7 @@ export function LocalFileRefTooltipPreview({
         urlRef.current = null;
       }
     };
-  }, [url]);
+  }, [url, effectiveUrl, gallery?.urls]);
 
   const openAttachment = React.useCallback(() => {
     const kind: "pdf" | "image" | "other" =
@@ -320,15 +323,19 @@ export function LocalFileRefTooltipPreview({
     const multi =
       gallery && gallery.urls.length > 1 ? { urls: gallery.urls, startIndex: gallery.startIndex } : undefined;
     const serverFallback =
-      voucherAttachmentFb && isLocalFileRef(url)
+      voucherAttachmentFb &&
+      voucherAttachmentFb.companyId &&
+      voucherAttachmentFb.voucherId &&
+      (isLocalFileRef(effectiveUrl) || voucherAttachmentFb.interCompanyPeer)
         ? {
             companyId: voucherAttachmentFb.companyId,
             voucherId: voucherAttachmentFb.voucherId,
             clientFileUrls: gallery?.urls,
+            interCompanyPeer: voucherAttachmentFb.interCompanyPeer,
           }
         : undefined;
-    void openAttachmentInApp(url, { kind, gallery: multi, serverFallback });
-  }, [url, state, gallery, voucherAttachmentFb]);
+    void openAttachmentInApp(effectiveUrl, { kind, gallery: multi, serverFallback });
+  }, [effectiveUrl, state, gallery, voucherAttachmentFb]);
 
   if (state.status === "loading") {
     return (
@@ -422,26 +429,30 @@ export function SingleAttachmentHoverPreviewBody({
     );
   }
   const u = String(normalized);
-  const cleanUrl = u.split("?")[0].toLowerCase();
-  const isLocalPending = isLocalFileRef(u);
-  const storagePathRaw = !isLocalPending ? tryGetStoragePathFromFirebaseDownloadUrl(u) : null;
+  const effectiveUrl = normalizeAttachmentUrlForDevicePreview(u);
+  const cleanUrl = effectiveUrl.split("?")[0].toLowerCase();
+  // `drive:` / `PL_ATTACH` ko HTTPS image branch mat bhejo — wahan spinner atka rehta tha.
+  const usesDeviceBlobPreview = isLocalFileRef(effectiveUrl) || isDriveFileRef(effectiveUrl);
+  const storagePathRaw = !usesDeviceBlobPreview ? tryGetStoragePathFromFirebaseDownloadUrl(u) : null;
   const pathLower = (storagePathRaw || "").toLowerCase();
-  const fmt = getAttachmentFormatLabel(u);
+  const fmt = getAttachmentFormatLabel(effectiveUrl || u);
   const isImage =
-    !isLocalPending &&
+    !usesDeviceBlobPreview &&
     (["JPG", "JPEG", "PNG", "GIF", "WEBP", "BMP", "SVG", "HEIC", "HEIF"].includes(fmt) ||
       u.startsWith("data:image/") ||
+      effectiveUrl.startsWith("data:image/") ||
       /\.(jpe?g|png|gif|webp|bmp|svg)(\?|$)/i.test(cleanUrl));
   const isPdf =
-    !isLocalPending &&
+    !usesDeviceBlobPreview &&
     (fmt === "PDF" ||
       u.startsWith("data:application/pdf") ||
+      effectiveUrl.startsWith("data:application/pdf") ||
       cleanUrl.endsWith(".pdf") ||
-      u.toLowerCase().includes(".pdf") ||
+      effectiveUrl.toLowerCase().includes(".pdf") ||
       pathLower.includes(".pdf"));
   const galleryOpts = gallery;
   const openAtt = () =>
-    void openAttachmentInApp(u, {
+    void openAttachmentInApp(effectiveUrl, {
       kind: isImage ? "image" : isPdf ? "pdf" : "other",
       gallery:
         galleryOpts && galleryOpts.urls.length > 1
@@ -458,7 +469,7 @@ export function SingleAttachmentHoverPreviewBody({
   /** Bahar AttachmentHoverPortal — yahi markup FilePreview hoverPanel ke image branch jaisa (taaki zoom/width sahi) */
   return (
     <div className="flex w-max max-w-none flex-col gap-1">
-      {isLocalPending ? (
+      {usesDeviceBlobPreview ? (
         <LocalFileRefTooltipPreview url={u} gallery={galleryOpts} />
       ) : isImage ? (
         <HoverPreviewHttpsAwareImage

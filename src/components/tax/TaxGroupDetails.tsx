@@ -38,6 +38,7 @@ import {
   searchParamsStringAfterClosingModal,
   searchParamsStringForModalClose,
 } from "@/lib/modalUrlSync";
+import { useMobileLedgerModalUrlGuard } from "@/hooks/useMobileLedgerModalUrlGuard";
 import { startOfDay, endOfDay, format } from "date-fns";
 import { Calendar } from "../ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -213,17 +214,15 @@ export function TaxGroupDetails({
   }, [closeModalInUrl]);
   useUrlModalBack(urlModalOpen, closeUrlModal);
 
-  React.useEffect(() => {
-    if (!isMobile) return;
-    if (modalParam === "1") openingModalRef.current = false;
-    if (modalParam !== "1" && anyMobilePopupOpen && !openingModalRef.current) {
-      setMobileFooterDialogOpen(null);
-      setIsCalendarOpen(false);
-      setIsVoucherDialogOpen(false);
-      setSelectedVoucher(null);
-      setIsNoteOpen(false);
-    }
-  }, [isMobile, modalParam, anyMobilePopupOpen]);
+  useMobileLedgerModalUrlGuard({
+    isMobile,
+    modalParam,
+    anyPopupOpen: anyMobilePopupOpen,
+    openingModalRef,
+    pathname,
+    searchParams,
+    router,
+  });
   
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     if (userNames && userNames[userId]) return userNames[userId];

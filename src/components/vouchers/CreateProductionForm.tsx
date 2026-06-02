@@ -22,7 +22,8 @@ import usePermissions from "@/hooks/usePermissions";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
 import { saveVoucher, isVoucherLimitError, patchVoucherFields, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
-import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
+import { normalizePrefix } from "@/lib/voucherNumberFormat";
+import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import {
@@ -251,20 +252,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     if (!companyId || !company || !isAutoVoucherEnabled) return;
     const prefix = selectedPrefix ?? voucherPrefixes[0];
     try {
-      const q = query(collection(firestore, `companies/${companyId}/vouchers`), where("type", "==", "production"));
-      const querySnapshot = await getDocs(q);
-      const voucherNumbers = querySnapshot.docs.map(doc => doc.data().productionNumber as string);
-      let maxNum = 0;
-      voucherNumbers.forEach(numStr => {
-        if (numStr) {
-          const usedPrefix = voucherPrefixes.find(p => numStr.startsWith(normalizePrefix(p)) || numStr.startsWith(p));
-          const num = usedPrefix ? parseVoucherNumberPart(numStr, usedPrefix) : parseInt(numStr.replace(/^\D+/, ''), 10);
-          if (!isNaN(num) && num > maxNum) maxNum = num;
-        }
+      const nextNo = await getNextVoucherNumberForCompany({
+        companyId,
+        companyDoc: company as Record<string, unknown>,
+        voucherLike: { type: "production" },
+        selectedPrefix: prefix,
       });
-      const nextVoucherNumber = maxNum + 1;
-      form.setValue("productionNumber", formatVoucherNumber(prefix, nextVoucherNumber));
-    } catch (error) { console.error(error); }
+      form.setValue("productionNumber", nextNo);
+    } catch (error) {
+      console.error(error);
+    }
   }, [companyId, company, form, isAutoVoucherEnabled, voucherPrefixes]);
 
   useEffect(() => {
@@ -1246,6 +1243,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 toast,
                               })
                             }
+                            voucherAttachmentReuse={{ currentFiles: files, setFiles, maxFiles: fileAttachmentLimits.maxFileCount }}
                             className={cn(
                               "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
                               allowAttachments && fileAttachmentLimits.maxFileCount > 0

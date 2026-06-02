@@ -6,8 +6,7 @@ import { Switch } from "@/components/ui/switch";
 import {
   IC_PARTNER_FIELD_LABELS,
   IC_PARTNER_FIELD_ORDER,
-  PARTNER_SEARCH_DISABLED_FIELDS,
-  PARTNER_VIEW_DISABLED_FIELDS,
+  IC_PARTNER_PRIVACY_SECTION_ID,
   type InterCompanyPartnerFieldFlags,
   type InterCompanyPartnerFieldKey,
 } from "@/lib/interCompany/interCompanyPartnerPrivacy";
@@ -67,7 +66,7 @@ export function InterCompanyPartnerPrivacySettings({
   onMaskInViewChange,
 }: Props) {
   return (
-    <div className="space-y-4">
+    <div id={IC_PARTNER_PRIVACY_SECTION_ID} className="space-y-4 scroll-mt-3">
       <div className={cn(interCompanySettingsCardClass, "space-y-2 p-3")}>
         <div>
           <Label className="text-sm font-medium">How partners find your accounts</Label>
@@ -76,19 +75,15 @@ export function InterCompanyPartnerPrivacySettings({
           </p>
         </div>
         <ul className="grid gap-2 sm:grid-cols-2">
-          {IC_PARTNER_FIELD_ORDER.map((key) => {
-            const searchDisabled = PARTNER_SEARCH_DISABLED_FIELDS.has(key);
-            return (
-              <FieldCheckboxRow
-                key={`search-${key}`}
-                idPrefix="ic-partner-search"
-                fieldKey={key}
-                checked={searchDisabled ? false : searchBy[key]}
-                disabled={searchDisabled}
-                onCheckedChange={(on) => onSearchByChange(key, on)}
-              />
-            );
-          })}
+          {IC_PARTNER_FIELD_ORDER.map((key) => (
+            <FieldCheckboxRow
+              key={`search-${key}`}
+              idPrefix="ic-partner-search"
+              fieldKey={key}
+              checked={searchBy[key]}
+              onCheckedChange={(on) => onSearchByChange(key, on)}
+            />
+          ))}
         </ul>
       </div>
 
@@ -100,19 +95,15 @@ export function InterCompanyPartnerPrivacySettings({
           </p>
         </div>
         <ul className="grid gap-2 sm:grid-cols-2">
-          {IC_PARTNER_FIELD_ORDER.map((key) => {
-            const viewDisabled = PARTNER_VIEW_DISABLED_FIELDS.has(key);
-            return (
-              <FieldCheckboxRow
-                key={`view-${key}`}
-                idPrefix="ic-partner-view"
-                fieldKey={key}
-                checked={viewDisabled ? false : viewFields[key]}
-                disabled={viewDisabled}
-                onCheckedChange={(on) => onViewFieldsChange(key, on)}
-              />
-            );
-          })}
+          {IC_PARTNER_FIELD_ORDER.map((key) => (
+            <FieldCheckboxRow
+              key={`view-${key}`}
+              idPrefix="ic-partner-view"
+              fieldKey={key}
+              checked={viewFields[key]}
+              onCheckedChange={(on) => onViewFieldsChange(key, on)}
+            />
+          ))}
         </ul>
         <div className="flex items-center justify-between gap-3 border-t pt-3">
           <div className="min-w-0">

@@ -4413,6 +4413,21 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-w
   border-bottom-width: 2px !important;
 }
 
+/* Inter Company voucher — source/target column row order: company, bank, account */
+.pl-inter-company-voucher .ic-voucher-side-rows {
+  display: flex;
+  flex-direction: column;
+}
+.pl-inter-company-voucher .ic-voucher-row-company {
+  order: 1;
+}
+.pl-inter-company-voucher .ic-voucher-row-bank {
+  order: 2;
+}
+.pl-inter-company-voucher .ic-voucher-row-account {
+  order: 3;
+}
+
 /* Inter Company — edit lock par bhi text select + copy (readOnly fields; `disabled` par select band hota hai) */
 .pl-inter-company-voucher.select-text,
 .pl-inter-company-voucher .select-text {

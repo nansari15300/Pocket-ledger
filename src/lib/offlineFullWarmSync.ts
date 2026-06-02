@@ -22,6 +22,13 @@ import { stampLocalMirrorBackedByFirestore } from "@/lib/localMirrorServerMeta";
 import { prefetchHttpsAttachmentUrls } from "@/lib/offlineAttachmentUrlCache";
 import { peekAttachmentPrefetchPrioritySnapshot } from "@/lib/attachmentPrefetchPriorityBuffer";
 import { looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
+import {
+  ATTACHMENT_HOLD_CLIPBOARD_PREFIX,
+  normalizeAttachmentUrlForDevicePreview,
+} from "@/lib/attachmentHoldClipboard";
+import { isLocalFileRef } from "@/lib/localPendingFiles";
+import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConfig";
 import { auth } from "@/lib/firebase";
 import { markEmbeddedFullWarmSucceeded } from "@/lib/embeddedWarmBootstrapFlags";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
@@ -42,6 +49,16 @@ export function isCloudBackedCompanyShape(c: Company | null): boolean {
   const anyC = c as any;
   if (String(anyC.authoritativeCompanyId || "").trim().length > 0) return true;
   return false;
+}
+
+/** APK/EXE: Firebase cloud companies + local company jisme Google Drive sync on ho. */
+export function shouldPrefetchAttachmentsForCompany(c: Company | null): boolean {
+  if (!c) return false;
+  if (isCloudBackedCompanyShape(c)) return true;
+  const so = String((c as { storageOption?: string }).storageOption || "").toLowerCase();
+  if (so !== "local") return false;
+  const cfg = readCloudSyncConfigFromCompany(c as Record<string, unknown>);
+  return cfg.cloudSyncEnabled === true && cfg.cloudSyncProvider === "google_drive";
 }
 
 const SCRAPE_SKIP_KEYS = new Set([
@@ -84,6 +101,16 @@ export function scrapeHttpsAttachmentUrlsFromDocTree(
     // Mirror/Firestore kabhi signed URL ke bina sirf Storage path string rakhta hai — pehle yahan miss → warm sync offline thumb nahi bharta tha.
     if (looksLikeFirebaseStorageObjectPath(s)) {
       out.add(s);
+      return;
+    }
+    // Local/Drive refs + clipboard marker — embedded preload inhe bhi IndexedDB me bharta hai.
+    if (isLocalFileRef(s) || isDriveFileRef(s)) {
+      out.add(s);
+      return;
+    }
+    if (s.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) {
+      const norm = normalizeAttachmentUrlForDevicePreview(s);
+      if (norm) out.add(norm);
       return;
     }
     if (offlineWarmForensicEnabled() && parentKey === "fileUrls") {
@@ -364,7 +391,7 @@ export async function runEmbeddedAttachmentPrefetchPhase(args: {
       phase: "entry",
       localCompanyId: localCompanyId.trim(),
       navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
-      isCloudBackedCompanyShape: isCloudBackedCompanyShape(company),
+      shouldPrefetchAttachmentsForCompany: shouldPrefetchAttachmentsForCompany(company),
     });
   }
   if (typeof navigator !== "undefined" && !navigator.onLine) {
@@ -378,13 +405,13 @@ export async function runEmbeddedAttachmentPrefetchPhase(args: {
     return null;
   }
   const trim = localCompanyId.trim();
-  if (!trim || !isCloudBackedCompanyShape(company)) {
+  if (!trim || !shouldPrefetchAttachmentsForCompany(company)) {
     onProgressPercent?.(100);
     if (offlineWarmForensicEnabled()) {
       console.warn("[FORENSIC_EMBEDDED_PREFETCH_PHASE]", {
-        phase: "early_exit_not_cloud_backed_or_empty_company_id",
+        phase: "early_exit_not_prefetch_eligible_or_empty_company_id",
         trim,
-        isCloudBackedCompanyShape: isCloudBackedCompanyShape(company),
+        shouldPrefetchAttachmentsForCompany: shouldPrefetchAttachmentsForCompany(company),
       });
     }
     return null;

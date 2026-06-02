@@ -12,6 +12,7 @@ import {
   readCloudSyncDriveEncryptionFromCompany,
 } from "@/lib/localCloudSync/driveEncryption";
 import { postDriveJsonViaClient } from "@/lib/localCloudSync/driveApiClient";
+import { blobToBase64Chunked } from "@/lib/capacitorAttachmentFs";
 
 /** Forensic toggle: attachment upload/download trace sirf debug mode me verbose chalao. */
 function attachmentSyncForensicEnabled(): boolean {
@@ -22,14 +23,6 @@ function attachmentSyncForensicEnabled(): boolean {
 function logAttachmentSyncForensic(tag: string, payload: Record<string, unknown>): void {
   if (!attachmentSyncForensicEnabled()) return;
   console.warn("[FORENSIC_ATTACHMENT_SYNC]", { tag, ...payload });
-}
-
-async function blobToBase64(blob: Blob): Promise<string> {
-  const buf = await blob.arrayBuffer();
-  const bytes = new Uint8Array(buf);
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
-  return btoa(bin);
 }
 
 function base64ToBlob(base64: string, contentType: string): Blob {
@@ -66,7 +59,7 @@ export async function maybeUploadCompanyBackupToDrive(input: {
       });
       return null;
     }
-    const base64 = await blobToBase64(input.blob);
+    const base64 = await blobToBase64Chunked(input.blob);
     const res = await postDriveJsonViaClient<{ remotePath?: string }>("/api/local-cloud-sync/drive/upload-backup", {
       companyId: input.companyId,
       companyName: input.companyName,
@@ -153,7 +146,7 @@ export async function uploadAttachmentBytesToDrive(input: {
     return toDriveFileRef(logicalPath);
   }
 
-  const base64 = await blobToBase64(blob);
+  const base64 = await blobToBase64Chunked(blob);
   const res = await postDriveJsonViaClient<{ remotePath: string }>("/api/local-cloud-sync/drive/upload-file", {
     companyId: input.companyId,
     companyName: input.companyName,

@@ -16,11 +16,10 @@ import {
 import { Button } from "../ui/button";
 import { Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { doc, serverTimestamp, updateDoc } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import type { Party } from "@/components/party/types";
+import { softDeleteCompanySubdocToRecycleBin } from "@/lib/recycleBinEntityLifecycle";
 
 export function DeletePartyDialog({
   party,
@@ -44,11 +43,9 @@ export function DeletePartyDialog({
     }
     setIsDeleting(true);
     try {
-      await updateDoc(doc(firestore, `companies/${companyId}/parties`, party.id), {
-        isDeleted: true,
-        deletedAt: serverTimestamp(),
-        deletedBy: user?.uid || "",
-      });
+      // Local+Drive: SQLite soft-delete + cloud_sync — recycle bin sab devices par.
+      const res = await softDeleteCompanySubdocToRecycleBin(companyId, "parties", party.id, user?.uid || "");
+      if (!res.ok) throw new Error("error" in res ? res.error : "Failed to move party to bin.");
       toast({
         title: "Party Moved to Bin",
         description: `"${party.name}" has been moved to the recycle bin.`,

@@ -80,6 +80,15 @@ function encodePayload(p: AttachmentHoldPayloadV1): string {
   return `${ATTACHMENT_HOLD_CLIPBOARD_PREFIX}${b64}`;
 }
 
+/** Voucher / hover preview: clipboard marker ko asli `local:` / `drive:` / https ref me karo. */
+export function normalizeAttachmentUrlForDevicePreview(raw: string): string {
+  const s = String(raw || "").trim();
+  if (!s.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return s;
+  const payload = parseAttachmentHoldClipboardText(s);
+  const src = String(payload?.src || "").trim();
+  return src || s;
+}
+
 export function parseAttachmentHoldClipboardText(raw: string): AttachmentHoldPayloadV1 | null {
   const s = String(raw || "").trim();
   if (!s.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return null;

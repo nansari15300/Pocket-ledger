@@ -3,13 +3,7 @@
 import { getBillingApiUrl } from "@/lib/billingApiOrigin";
 import { getFirebaseIdTokenForApi } from "@/lib/firebaseAuthForApi";
 import { hostedApiFetch } from "@/lib/hostedApiFetch";
-
-function arrayBufferToBase64(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf);
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
-  return btoa(bin);
-}
+import { blobToBase64Chunked } from "@/lib/capacitorAttachmentFs";
 import type { CloudSyncCompanyRef, CloudSyncManifest, LocalCloudSyncOperation } from "@/lib/localCloudSync/types";
 import type { SyncProvider } from "@/lib/localCloudSync/providers/types";
 import {
@@ -98,7 +92,7 @@ export class GoogleDriveSyncProvider implements SyncProvider {
       remotePath: meta.remotePath,
       contentType: meta.contentType,
       sha256Hex: meta.sha256Hex,
-      base64: arrayBufferToBase64(bytes),
+      base64: await blobToBase64Chunked(new Blob([bytes], { type: meta.contentType })),
     });
     return { remotePath: res.remotePath };
   }

@@ -120,17 +120,6 @@ export default function PartyPage() {
             const userDoc = await getDoc(doc(firestore, 'users', userId));
             if (userDoc.exists()) {
                 data = userDoc.data();
-            } else {
-                // Fallback 2: doc ID might be name_uid format - try to find by searching all docs ending with uid
-                // This is expensive, so only do if needed
-                const allUsersSnap = await getDocs(collection(firestore, "users"));
-                const matchingDoc = allUsersSnap.docs.find(d => {
-                    const docData = d.data();
-                    return docData.uid === userId || d.id.endsWith(userId);
-                });
-                if (matchingDoc) {
-                    data = matchingDoc.data();
-                }
             }
         }
         

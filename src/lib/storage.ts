@@ -5,6 +5,7 @@
 import { ref, uploadBytes, getDownloadURL, deleteObject, getBlob } from "firebase/storage";
 import { storage } from "./firebase";
 import { format } from "date-fns";
+import { shouldStageEntityProfileFilesLocally } from "@/lib/entityProfileLocalFiles";
 
 type ActionState = {
   returnPath: string;
@@ -103,6 +104,13 @@ export const uploadFile = async (
 ) => {
   try {
     if (!companyId) throw new Error("Company ID is missing");
+    if (await shouldStageEntityProfileFilesLocally(companyId)) {
+      return {
+        success: false,
+        error:
+          "Local company files use device storage and Google Drive/Dropbox sync — not Firebase Storage.",
+      };
+    }
 
     let fullPath: string;
     if (category === "vouchers") {

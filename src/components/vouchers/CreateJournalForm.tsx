@@ -49,7 +49,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
 import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
-import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
+import { normalizePrefix } from "@/lib/voucherNumberFormat";
+import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import {
@@ -495,24 +496,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   const fetchVoucherNumber = useCallback(async (selectedPrefix?: string) => {
     if (!companyId || !company || !isAutoVoucherEnabled) return;
-    const prefixes = company?.voucherPrefixes?.journal || [getVoucherPrefix(company.voucherPrefixes as Record<string, string[]> | undefined)];
-    const VOUCHER_PREFIX = selectedPrefix || prefixes[0];
     try {
-      const q = query(collection(firestore, `companies/${companyId}/vouchers`), where("type", "==", "journal"));
-      const querySnapshot = await getDocs(q);
-      const voucherNumbers = querySnapshot.docs.map(doc => doc.data().voucherNumber as string);
-      let maxNum = 0;
-      voucherNumbers.forEach(numStr => {
-        if(numStr) {
-          const num = parseVoucherNumberPart(numStr, VOUCHER_PREFIX);
-          if (!isNaN(num) && num > maxNum) maxNum = num;
-        }
+      // Local company: SQLite vouchers se serial — Firestore-only par hamesha `JRNL - 001` reh jata tha.
+      const nextNo = await getNextVoucherNumberForCompany({
+        companyId,
+        companyDoc: company as Record<string, unknown>,
+        voucherLike: { type: "journal", subType: voucher?.subType },
+        selectedPrefix,
       });
-      
-      const nextVoucherNumber = maxNum + 1;
-      form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextVoucherNumber));
-    } catch (error) { console.error(error); }
-  }, [companyId, company, form, isAutoVoucherEnabled]);
+      form.setValue("voucherNumber", nextNo);
+    } catch (error) {
+      console.error(error);
+    }
+  }, [companyId, company, form, isAutoVoucherEnabled, voucher?.subType]);
 
   // Journal line options: Party, Staff, Bank/Cash, Expense, Tax – label=full, nameOnly=for dropdown when entity selected & trigger display
   const allAccountsWithEntity = useMemo(() => {
@@ -650,7 +646,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     if (!copySaveTargetCompanyId) return;
     if (voucher?.id) return;
     fetchVoucherNumber();
-  }, [copySaveTargetCompanyId, voucher?.id, fetchVoucherNumber]);
+  }, [copySaveTargetCompanyId, voucher?.id, fetchVoucherNumber, isAutoVoucherEnabled]);
   // Keep a single label lookup so bill-wise card can show the exact account row user opened from.
   const accountLabelById = useMemo(() => {
     const map = new Map<string, string>();
@@ -2730,6 +2726,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               toast,
                             })
                           }
+                          voucherAttachmentReuse={{ currentFiles: files, setFiles, maxFiles: fileAttachmentLimits.maxFileCount }}
                           className={cn(
                             "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
                             allowAttachments && fileAttachmentLimits.maxFileCount > 0

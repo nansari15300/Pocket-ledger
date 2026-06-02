@@ -5,11 +5,16 @@ import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { listLocalCompanies } from "@/lib/localCompanyStore";
-import { readCloudSyncConfigFromCompany, shouldUseLocalCloudSync } from "@/lib/localCloudSync/companyConfig";
+import {
+  pullCompanyRegistryManifestFromDrive,
+  readCloudSyncConfigFromCompany,
+  shouldUseLocalCloudSync,
+} from "@/lib/localCloudSync/companyConfig";
 import { purgeAllLocalCompaniesMissingOnDrive } from "@/lib/localCloudSync/driveCompanyFolderLifecycle";
 import { runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
 import { logLocalCloudSync } from "@/lib/localCloudSync/logger";
 import { CLOUD_SYNC_POKE_EVENT, MIN_CLOUD_SYNC_TICK_MS } from "@/lib/localCloudSync/types";
+import { CLOUD_SYNC_POKE_DEBOUNCE_MS } from "@/lib/firebaseBillingOptimization";
 import { hasRealFirebaseAuthSession, waitForFirebaseAuthReady } from "@/lib/firebaseAuthForApi";
 
 /** Har MIN tick: enabled companies — har company ka apna interval (live/sec/min presets). */
@@ -18,6 +23,7 @@ export function LocalCompanyCloudSyncManager() {
   const { user } = useAuth();
   const { toast } = useToast();
   const runningRef = useRef(false);
+  const pokeDebounceRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   // Company-wise last run — alag interval respect karne ke liye.
   const lastRunByCompanyRef = useRef<Map<string, number>>(new Map());
   const lastDrivePurgeAtRef = useRef(0);
@@ -44,7 +50,14 @@ export function LocalCompanyCloudSyncManager() {
 
     const onPoke = (ev: Event) => {
       const cid = String((ev as CustomEvent<{ companyId?: string }>).detail?.companyId || "").trim();
-      if (cid) void runCycleForCompany(cid);
+      if (!cid) return;
+      const pending = pokeDebounceRef.current.get(cid);
+      if (pending) clearTimeout(pending);
+      const timer = setTimeout(() => {
+        pokeDebounceRef.current.delete(cid);
+        void runCycleForCompany(cid);
+      }, CLOUD_SYNC_POKE_DEBOUNCE_MS);
+      pokeDebounceRef.current.set(cid, timer);
     };
     window.addEventListener(CLOUD_SYNC_POKE_EVENT, onPoke);
 
@@ -75,6 +88,17 @@ export function LocalCompanyCloudSyncManager() {
           }
         }
 
+        // Pehle sab cloud-sync companies ka manifest pull — bin delete doosre device par (selector/recycle).
+        const allRows = await listLocalCompanies({ includeDeleted: true });
+        for (const c of allRows) {
+          if (!(await shouldUseLocalCloudSync(c.id))) continue;
+          try {
+            await pullCompanyRegistryManifestFromDrive(c.id);
+          } catch (e) {
+            logLocalCloudSync("registry manifest pull failed", { companyId: c.id, err: e });
+          }
+        }
+
         const companies = await listLocalCompanies();
         for (const c of companies) {
           if (!(await shouldUseLocalCloudSync(c.id))) continue;
@@ -96,6 +120,8 @@ export function LocalCompanyCloudSyncManager() {
     const id = window.setInterval(() => void tick(), MIN_CLOUD_SYNC_TICK_MS);
     return () => {
       window.removeEventListener(CLOUD_SYNC_POKE_EVENT, onPoke);
+      for (const timer of pokeDebounceRef.current.values()) clearTimeout(timer);
+      pokeDebounceRef.current.clear();
       window.clearInterval(id);
     };
   }, [company?.id, clearCompanyId, reloadLocalCompanyRegistry, toast, user?.uid]);

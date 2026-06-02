@@ -17,6 +17,7 @@ export type Party = {
   phone?: string;
   email?: string;
   isDeleted?: boolean;
+  isInterCompanyCounterparty?: boolean;
 };
 
 export type Group = {

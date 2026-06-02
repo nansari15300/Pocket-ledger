@@ -36,7 +36,10 @@ import { ensureCloudSyncDriveEncryptionSalt } from "@/lib/localCloudSync/driveEn
 import { patchLocalCompanyCloudSyncFields, readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConfig";
 import type { CloudSyncIntervalSec, CloudSyncProviderId } from "@/lib/localCloudSync/types";
 import { CLOUD_SYNC_INTERVAL_SEC_OPTIONS } from "@/lib/localCloudSync/types";
-import type { DriveAttachmentDateFolderMode } from "@/lib/localCloudSync/driveAttachmentPath";
+import {
+  type DriveAttachmentDateFolderMode,
+  resolveCountryDriveAttachmentDateFolderMode,
+} from "@/lib/localCloudSync/driveAttachmentPath";
 import { forceReencryptDriveIfNeeded } from "@/lib/localCloudSync/forceReencryptDrive";
 import { useDate } from "@/hooks/useDate";
 import {
@@ -232,14 +235,15 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
   const cfg = readCloudSyncConfigFromCompany(company);
   const [enabled, setEnabled] = useState(cfg.cloudSyncEnabled);
   const [provider, setProvider] = useState<CloudSyncProviderId>(cfg.cloudSyncProvider ?? "google_drive");
-  const [dateFolderMode, setDateFolderMode] = useState<DriveAttachmentDateFolderMode>(
-    cfg.cloudSyncDriveDateFolderMode ?? "ad"
-  );
   const [encryptDriveData, setEncryptDriveData] = useState(cfg.cloudSyncEncryptDriveData);
   const [encryptDriveFiles, setEncryptDriveFiles] = useState(cfg.cloudSyncEncryptDriveFiles);
   // Drive encryption policy admin-owned hai; shared/non-admin devices sirf synced state dekhte hain.
   const canManageDriveEncryption = role === "owner" || role === "manager";
   const encryptionControlsDisabled = busy || !canManageDriveEncryption;
+  // Country-fixed folder mode (NP=Both, else AD) — user change disabled.
+  const autoDateFolderMode = resolveCountryDriveAttachmentDateFolderMode(
+    company as Record<string, unknown>
+  );
   const [encryptionPasswordDialogOpen, setEncryptionPasswordDialogOpen] = useState(false);
   const [encryptionPasswordInput, setEncryptionPasswordInput] = useState("");
   const [encryptionPasswordSaving, setEncryptionPasswordSaving] = useState(false);
@@ -255,15 +259,10 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
   // Local unlock synthetic uid — UI signed-in dikhe par Firebase token nahi hota.
   const localSyntheticAuth = isLocalSyntheticAuthUid(user?.uid);
 
-  const savedDateFolderMode = cfg.cloudSyncDriveDateFolderMode ?? "ad";
-  // Folder mode card ab always visible hai, isliye dirty-state country/provider se independent rakho.
-  const folderModeDirty = dateFolderMode !== savedDateFolderMode;
-
   useEffect(() => {
     const next = readCloudSyncConfigFromCompany(company);
     setEnabled(next.cloudSyncEnabled);
     if (next.cloudSyncProvider) setProvider(next.cloudSyncProvider);
-    if (next.cloudSyncDriveDateFolderMode) setDateFolderMode(next.cloudSyncDriveDateFolderMode);
     setEncryptDriveData(next.cloudSyncEncryptDriveData);
     setEncryptDriveFiles(next.cloudSyncEncryptDriveFiles);
     setSyncIntervalSec(next.cloudSyncIntervalSec);
@@ -495,31 +494,15 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
     }
   };
 
-  const saveFolderMode = async () => {
-    if (!folderModeDirty) return;
-    // User-selected mode ko direct save karo taaki static/web dono par same behavior mile.
-    const folderModeToSave: DriveAttachmentDateFolderMode = dateFolderMode;
-    setBusy(true);
-    try {
-      await saveConfig({ cloudSyncDriveDateFolderMode: folderModeToSave });
-      toast({
-        title: "Folder option saved",
-        description: `Attachment folder: ${dateFolderModeLabel(folderModeToSave)} — new uploads use this mode.`,
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  /** Footer Save — provider, encrypt, interval, Nepal folder mode ek saath registry me. */
+  /** Footer Save — provider, encrypt, interval, country folder mode ek saath registry me. */
   const saveAllCloudSyncSettings = async () => {
     setBusy(true);
     try {
       const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
-      // Bulk save me bhi selected folder mode preserve karo (hide/show toggle par reset na ho).
-      const folderModeToSave: DriveAttachmentDateFolderMode = dateFolderMode;
       const savedEncryption = readCloudSyncConfigFromCompany(reg);
-      // Non-admin Save button provider/interval ke liye allowed hai, par encryption admin manifest se hi preserve hogi.
+      const folderModeToSave = resolveCountryDriveAttachmentDateFolderMode(
+        (reg ?? company) as Record<string, unknown>
+      );
       const dataToSave = canManageDriveEncryption ? encryptDriveData : savedEncryption.cloudSyncEncryptDriveData;
       const filesToSave = canManageDriveEncryption ? encryptDriveFiles : savedEncryption.cloudSyncEncryptDriveFiles;
       const salt =
@@ -538,9 +521,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
       });
       toast({
         title: "Settings saved",
-        description: folderModeDirty
-          ? `Cloud sync saved · attachment folder: ${dateFolderModeLabel(folderModeToSave)}.`
-          : "Cloud sync settings saved for this company.",
+        description: `Cloud sync saved · attachment folders: ${dateFolderModeLabel(folderModeToSave)} (${isNepalCompany ? "Nepal" : "international"}).`,
       });
     } catch (e) {
       toast({
@@ -818,47 +799,51 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
                 ) : null}
               </div>
 
-              {/* Attachment folder mode card: static/web par always visible rahe. */}
+              {/* Attachment folder mode — country-fixed; user change disabled (sync par sab devices same). */}
               {enabled ? (
-                <div className={cloudSyncNepalFolderCard}>
+                <div className={cn(cloudSyncNepalFolderCard, "opacity-80 pointer-events-none")}>
                   <div className="flex items-center gap-1.5">
                     <Label>Attachment date folder</Label>
                     <CloudSyncHelpPopover
                       label="Attachment date folders"
                       description={
                         <>
-                          <p>Choose AD, BS, or Both for new attachment uploads on cloud sync.</p>
-                          <p>Click Save folder option to apply. Existing folders stay as they are; only new uploads use the saved mode.</p>
                           <p>
-                            Saved: <strong>{dateFolderModeLabel(savedDateFolderMode)}</strong>
-                            {folderModeDirty ? " (unsaved change)" : null}
+                            <strong>Nepal</strong> companies: <strong>Both</strong> (BS + AD folder name). All other
+                            countries: <strong>AD only</strong>.
+                          </p>
+                          <p>Set automatically from company country — not editable here.</p>
+                          <p>After sync, every device and Drive manifest.json use the same rule.</p>
+                          <p>Existing Drive folders are not renamed; only new uploads use this rule.</p>
+                          <p>
+                            Active for this company: <strong>{dateFolderModeLabel(autoDateFolderMode)}</strong>
                           </p>
                         </>
                       }
                     />
                   </div>
-                  <div className="flex flex-wrap gap-3 text-sm">
+                  <div className="flex flex-wrap gap-3 text-sm" aria-disabled="true">
                     {(["ad", "bs", "both"] as const).map((mode) => (
-                      <label key={mode} className="flex items-center gap-2 cursor-pointer">
+                      <label key={mode} className="flex items-center gap-2 cursor-not-allowed">
                         <input
                           type="radio"
                           name="cloudSyncDriveDateFolderMode"
-                          checked={dateFolderMode === mode}
-                          onChange={() => setDateFolderMode(mode)}
+                          checked={autoDateFolderMode === mode}
+                          disabled
+                          readOnly
                         />
                         {dateFolderModeLabel(mode)}
                       </label>
                     ))}
                   </div>
-                  <Button
-                    type="button"
-                    variant={folderModeDirty ? "default" : "secondary"}
-                    size="sm"
-                    disabled={busy || !folderModeDirty}
-                    onClick={() => void saveFolderMode()}
-                  >
-                    Save folder option
-                  </Button>
+                  <p className="text-[11px] text-muted-foreground pointer-events-auto">
+                    {isNepalCompany
+                      ? "Nepal company — Both is applied automatically on every sync."
+                      : "Non-Nepal company — AD only is applied automatically on every sync."}
+                    {!isNepalCompany && autoDateFolderMode === "both" ? (
+                      <> Set company country to Nepal in Company Profile if you need Both.</>
+                    ) : null}
+                  </p>
                 </div>
               ) : null}
 

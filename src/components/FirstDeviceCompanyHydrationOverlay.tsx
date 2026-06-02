@@ -35,6 +35,7 @@ import { useEmbeddedAttachmentPrefetch } from "@/contexts/EmbeddedAttachmentPref
 import {
   runOfflineFullWarmSync,
   isCloudBackedCompanyShape,
+  shouldPrefetchAttachmentsForCompany,
   runEmbeddedAttachmentPrefetchPhase,
 } from "@/lib/offlineFullWarmSync";
 import {
@@ -91,7 +92,7 @@ export function FirstDeviceCompanyHydrationOverlay() {
     !!companyId &&
     company != null &&
     company.id === companyId &&
-    isCloudBackedCompanyShape(company);
+    shouldPrefetchAttachmentsForCompany(company);
 
   const eligible = firstSplashPending || pendingEmbeddedCompanyWarm;
 

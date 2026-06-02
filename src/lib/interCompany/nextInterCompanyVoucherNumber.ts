@@ -27,7 +27,7 @@ export async function getNextInterCompanyVoucherNumber(
   const typeQuery = query(vouchersPath, where("type", "==", "inter_company"));
   const fsRows = (await getDocs(typeQuery)).docs.map((d) => d.data() as Record<string, unknown>);
   const localRows = apkEntityWriteUsesLocalSqliteMirror(companyDoc)
-    ? await listCompanyDocsFromBrowserDb(companyId, "vouchers")
+    ? await listCompanyDocsFromBrowserDb(companyId, "vouchers", { forBackupMerge: true })
     : [];
   const mergedRows = [...fsRows, ...localRows].filter((r) => String(r.type || "") === "inter_company");
 

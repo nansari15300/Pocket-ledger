@@ -1,4 +1,5 @@
 import type { CloudSyncAction, LocalCloudSyncOperation } from "@/lib/localCloudSync/types";
+import { isPermanentPurgePayload } from "@/lib/recycleBinEntityLifecycle";
 
 function rowUpdatedAt(payload: Record<string, unknown>): number {
   const v = payload.updatedAt;
@@ -32,6 +33,8 @@ export function shouldApplyRemoteCloudSyncOp(
   const remoteTs = rowUpdatedAt(remote.payload);
   const localDeleted = localDoc?.isDeleted === true;
   const remoteDeleted = remote.action === "delete" || remote.payload.isDeleted === true;
+  // Permanent purge hamesha apply — bin se hard delete sab devices par.
+  if (isPermanentPurgePayload(remote.payload)) return true;
 
   if (remoteDeleted) return true;
   if (localDeleted) return false;

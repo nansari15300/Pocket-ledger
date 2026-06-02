@@ -56,7 +56,8 @@ import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
 import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
+import { normalizePrefix } from "@/lib/voucherNumberFormat";
+import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import {
   appendLocalOnlyVoucherFilesToUrls,
@@ -486,7 +487,7 @@ export function SalaryForm({
   const voucherPrefixes = useMemo(() => company?.voucherPrefixes?.[typeKey] || [getVoucherPrefix(company?.voucherPrefixes, isPaymentMode)], [company, typeKey, isPaymentMode]);
 
   const fetchVoucherNumber = useCallback(async (selectedPrefix?: string) => {
-    if (!firestore || !companyId || !company) return; 
+    if (!companyId || !company) return;
 
     const autoEnabled = company?.autoVoucherNumbering?.[typeKey] ?? true;
     if (!autoEnabled) return;
@@ -494,35 +495,21 @@ export function SalaryForm({
     const voucherType = isPaymentMode ? "payment_out" : "journal";
     const subType = isPaymentMode ? "pay_salary" : "add_salary";
 
-    const prefix =
-        selectedPrefix ||
-        (company?.voucherPrefixes?.[typeKey]?.[0] ??
-        getVoucherPrefix(company?.voucherPrefixes, isPaymentMode));
-
     try {
-        const q = query(
-        collection(firestore, `companies/${companyId}/vouchers`),
-        where("type", "==", voucherType),
-        where("subType", "==", subType)
-        );
-
-        const snapshot = await getDocs(q);
-        let maxNum = 0;
-
-        snapshot.forEach((doc) => {
-        const numStr = doc.data().voucherNumber as string;
-        if (numStr && (numStr.startsWith(normalizePrefix(prefix)) || numStr.startsWith(prefix))) {
-            const num = parseVoucherNumberPart(numStr, prefix);
-            if (!isNaN(num) && num > maxNum) maxNum = num;
-        }
-        });
-
-        const nextNumber = maxNum + 1;
-        form.setValue("voucherNumber", formatVoucherNumber(prefix, nextNumber));
+      const nextNo = await getNextVoucherNumberForCompany({
+        companyId,
+        companyDoc: company as Record<string, unknown>,
+        voucherLike: { type: voucherType, subType },
+        selectedPrefix:
+          selectedPrefix ||
+          company?.voucherPrefixes?.[typeKey]?.[0] ||
+          getVoucherPrefix(company?.voucherPrefixes, isPaymentMode),
+      });
+      form.setValue("voucherNumber", nextNo);
     } catch (error) {
-        console.error("Error generating voucher number:", error);
+      console.error("Error generating voucher number:", error);
     }
-    }, [company, companyId, form, isPaymentMode, typeKey]);
+  }, [company, companyId, form, isPaymentMode, typeKey]);
 
 
     useEffect(() => {
@@ -2655,6 +2642,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                     toast,
                                   })
                                 }
+                                voucherAttachmentReuse={{ currentFiles: files, setFiles, maxFiles: fileAttachmentLimits.maxFileCount }}
                                 className={cn(
                                   "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
                                   allowAttachments && fileAttachmentLimits.maxFileCount > 0

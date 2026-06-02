@@ -55,17 +55,46 @@ async function patchCompanyDocViaGateway(docRef: DocumentReference, patch: Recor
 }
 
 /** Pending file target doc — local company SQLite, online company Firestore. */
-async function readCompanyDocForPendingSync(docPath: string): Promise<Record<string, unknown> | null> {
+async function readCompanyDocForPendingSync(
+  docPath: string,
+  opts?: { includeDeleted?: boolean }
+): Promise<Record<string, unknown> | null> {
   const p = String(docPath || "").trim();
   const m = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(p);
   if (!m) return null;
   const [, companyId, collection, docId] = m;
   const reg = await getLocalCompanyById(companyId!, { includeDeleted: true });
   if (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) {
-    return (await getCompanyDocFromBrowserDb(companyId!, collection!, docId!)) as Record<string, unknown> | null;
+    return (await getCompanyDocFromBrowserDb(companyId!, collection!, docId!, {
+      includeDeleted: opts?.includeDeleted === true,
+    })) as Record<string, unknown> | null;
   }
   const snap = await getDoc(firestoreDocRefFromPath(p));
   return snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+}
+
+/**
+ * Pending patch se pehle target doc — recycle-bin (`isDeleted`) par bhi read;
+ * doc bilkul nahi mila to queue row hatao taaki Drive sync "Document not found" par na atke.
+ */
+async function resolvePendingTargetDocOrRemoveOrphan(
+  docPath: string,
+  localId: string
+): Promise<Record<string, unknown> | null> {
+  let data = await readCompanyDocForPendingSync(docPath);
+  if (!data) {
+    data = await readCompanyDocForPendingSync(docPath, { includeDeleted: true });
+  }
+  if (!data) {
+    try {
+      await removePendingFile(localId);
+    } catch {
+      /* ignore */
+    }
+    console.warn("[localPendingFiles] orphan pending removed — target doc missing", { docPath, localId });
+    return null;
+  }
+  return data;
 }
 
 /** `local:uuid` ko Drive URL / Storage URL se replace karke doc patch karo. */
@@ -75,8 +104,9 @@ async function patchPendingFileTargetField(
   localId: string,
   newValue: string
 ): Promise<void> {
-  const data = await readCompanyDocForPendingSync(docPath);
-  if (!data) throw new Error("Document not found");
+  const data = await resolvePendingTargetDocOrRemoveOrphan(docPath, localId);
+  // Orphan cleanup ho chuka — Drive bytes upload ho chuki ho to bhi sync cycle aage badhe.
+  if (!data) return;
   const current = data[field];
   const needle = `${LOCAL_FILE_PREFIX}${localId}`;
   const docRef = firestoreDocRefFromPath(docPath);
@@ -479,14 +509,20 @@ export async function getPendingPayloadForLocalRef(url: string): Promise<Pending
 
 export async function uploadPendingLocalFileRef(
   localFileRef: string,
-  storagePathPrefix: string
+  storagePathPrefix: string,
+  /** Sync cycle ne blob pehle hi padha ho to APK par dobara readFile/fetch avoid. */
+  preloaded?: PendingFilePayload | null
 ): Promise<string> {
   if (!isLocalFileRef(localFileRef)) return localFileRef;
   const localId = localFileRef.slice(LOCAL_FILE_PREFIX.length);
   if (!localId) return localFileRef;
-  const item = await getPendingFileById(localId);
-  // If the local payload is missing, keep original ref so caller can retry later without data loss.
-  if (!item) return localFileRef;
+  const item = preloaded ?? (await getPendingFileById(localId));
+  // Missing/corrupt bytes — caller ko fail dikhao; silent `local:` return sync "success" jaisa dikhta tha.
+  if (!item?.blob || item.blob.size <= 0) {
+    throw new Error(
+      "Pending attachment could not be read on this device. Re-open the file or re-attach, then save and sync again."
+    );
+  }
 
   const docMatch = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(String(item.docPath || "").trim());
   const targetCompanyId = resolvePendingPayloadCompanyId(item);
@@ -513,6 +549,13 @@ export async function uploadPendingLocalFileRef(
   if (provider === "dropbox") {
     // Dropbox selected hai to Firebase fallback galat hoga; pending row retry ke liye rakho.
     throw new Error("Dropbox attachment sync is not connected yet. File was not uploaded to Firebase Storage.");
+  }
+
+  const reg = targetCompanyId ? await getLocalCompanyById(targetCompanyId, { includeDeleted: true }) : null;
+  if (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) {
+    throw new Error(
+      "Local company files must sync via Google Drive or Dropbox. Enable cloud sync — not Firebase Storage."
+    );
   }
 
   // Upload one local file ref and return its final public URL for caller-side payload replacement.
@@ -703,7 +746,19 @@ export async function syncOnePendingFile(
     const provider = targetCompanyId ? await resolvePendingAttachmentCloudSyncProvider(targetCompanyId) : null;
     // Local company + cloud sync — Firebase Storage ki jagah selected provider route.
     if (targetCompanyId && provider === "google_drive") {
-      await uploadPendingLocalFileRef(`${LOCAL_FILE_PREFIX}${item.id}`, item.storagePathPrefix);
+      const uploaded = await uploadPendingLocalFileRef(
+        `${LOCAL_FILE_PREFIX}${item.id}`,
+        item.storagePathPrefix,
+        item
+      );
+      // Drive upload ke baad bhi `local:` reh gaya = bytes/path issue; voucher sync pause sahi rahe.
+      if (isLocalFileRef(uploaded)) {
+        return {
+          success: false,
+          error:
+            "Pending attachment was not uploaded to Google Drive. Re-attach the file and try sync again.",
+        };
+      }
       return { success: true };
     }
     if (provider === "dropbox") {
@@ -714,14 +769,23 @@ export async function syncOnePendingFile(
       };
     }
 
+    const reg = targetCompanyId ? await getLocalCompanyById(targetCompanyId, { includeDeleted: true }) : null;
+    if (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) {
+      return {
+        success: false,
+        error:
+          "Local company: enable Google Drive or Dropbox sync to upload files. Firebase Storage is not used.",
+      };
+    }
+
     const storagePath = `${item.storagePathPrefix}/${Date.now()}_${item.fileName || "file"}`;
     const storageRef = ref(storage, storagePath);
     await uploadBytes(storageRef, item.blob, { contentType: item.contentType || "application/octet-stream" });
     const url = await getDownloadURL(storageRef);
 
-    const data = await readCompanyDocForPendingSync(item.docPath);
+    const data = await resolvePendingTargetDocOrRemoveOrphan(item.docPath, item.id);
     if (!data) {
-      return { success: false, error: "Document not found" };
+      return { success: true };
     }
     const current = data[item.field];
 
@@ -799,20 +863,33 @@ export async function syncOnePendingFile(
 /**
  * Sync all pending files to Storage and update Firestore docs. Call when online.
  */
-export async function syncPendingFiles(): Promise<{ synced: number; failed: number }> {
+export async function syncPendingFiles(): Promise<{
+  synced: number;
+  failed: number;
+  /** Pehla failure reason — mobile sync status UI me generic count ke saath detail. */
+  lastError?: string;
+}> {
   const pending = await getPendingFiles();
   let synced = 0;
   let failed = 0;
+  let lastError: string | undefined;
   for (const item of pending) {
     const result = await syncOnePendingFile(item);
     if (result.success) synced++;
-    else failed++;
+    else {
+      failed++;
+      if (!lastError && result.error) lastError = result.error;
+    }
   }
-  return { synced, failed };
+  return { synced, failed, lastError };
 }
 
 /** Drive sync cycle — sirf is company ke pending attachments/avatars upload karo. */
-export async function syncPendingFilesForCompany(companyId: string): Promise<{ synced: number; failed: number }> {
+export async function syncPendingFilesForCompany(companyId: string): Promise<{
+  synced: number;
+  failed: number;
+  lastError?: string;
+}> {
   const cid = String(companyId || "").trim();
   if (!cid) return { synced: 0, failed: 0 };
   const pending = await getPendingFiles();
@@ -840,13 +917,17 @@ export async function syncPendingFilesForCompany(companyId: string): Promise<{ s
   }
   let synced = 0;
   let failed = 0;
+  let lastError: string | undefined;
   for (const item of pending) {
     const itemCompanyId = resolvePendingPayloadCompanyId(item) ?? "";
     // Pending rows should sync when docPath/prefix uses any known alias for this company.
     if (!itemCompanyId || !targetAliases.has(itemCompanyId)) continue;
     const result = await syncOnePendingFile(item);
     if (result.success) synced++;
-    else failed++;
+    else {
+      failed++;
+      if (!lastError && result.error) lastError = result.error;
+    }
   }
-  return { synced, failed };
+  return { synced, failed, lastError };
 }

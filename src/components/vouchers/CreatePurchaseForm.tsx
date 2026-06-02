@@ -60,7 +60,8 @@ import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateO
 import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_MOBILE_ATTACH_TILE_SLOT, VOUCHER_MOBILE_ATTACH_PREVIEW_CLASS, VOUCHER_MOBILE_ATTACH_ADD_SURFACE_CLASS, VOUCHER_DESKTOP_ATTACH_TILE_SLOT, VOUCHER_DESKTOP_ATTACH_PREVIEW_CLASS, VOUCHER_DESKTOP_ATTACH_ADD_SURFACE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
-import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
+import { normalizePrefix } from "@/lib/voucherNumberFormat";
+import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
@@ -759,42 +760,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   const fetchVoucherNumber = useCallback(
     async (prefix?: string) => {
-      const type = primaryLineItemType === "service" ? "purchase_service" : "purchase";
       if (!companyId || !company || !isAutoVoucherEnabled) return;
-
-      const prefixes =
-        company?.voucherPrefixes?.[type] || [getVoucherPrefix(primaryLineItemType)];
-      const VOUCHER_PREFIX = prefix || prefixes[0];
-
       try {
-        let voucherNumbers: string[] = [];
-        // APK/static offline: Firestore `getDocs` hang/empty — SQLite mirror se max number (Payment In jaisa).
-        if (preferLocalLedgerReads()) {
-          const rows = await listCompanyDocsFromBrowserDb(companyId, "vouchers");
-          voucherNumbers = rows
-            .filter((r: { type?: string }) => String(r?.type ?? "") === "purchase")
-            .filter((r: { lineItems?: { type?: string }[] }) => (r.lineItems?.[0]?.type || "item") === primaryLineItemType)
-            .map((r: { voucherNumber?: string }) => String(r?.voucherNumber ?? ""))
-            .filter(Boolean);
-        } else {
-          const q = query(collection(firestore, `companies/${companyId}/vouchers`), where("type", "==", "purchase"));
-          const querySnapshot = await getDocs(q);
-          voucherNumbers = querySnapshot.docs
-            .map((doc) => doc.data())
-            .filter((data) => (data.lineItems?.[0]?.type || "item") === primaryLineItemType)
-            .map((data) => data.voucherNumber as string);
-        }
-
-        let maxNum = 0;
-        voucherNumbers.forEach((numStr) => {
-          if (numStr && (numStr.startsWith(normalizePrefix(VOUCHER_PREFIX)) || numStr.startsWith(VOUCHER_PREFIX))) {
-            const num = parseVoucherNumberPart(numStr, VOUCHER_PREFIX);
-            if (!isNaN(num) && num > maxNum) maxNum = num;
-          }
+        const nextNo = await getNextVoucherNumberForCompany({
+          companyId,
+          companyDoc: company as Record<string, unknown>,
+          voucherLike: { type: "purchase", lineItems: [{ type: primaryLineItemType }] },
+          selectedPrefix: prefix,
         });
-
-        const nextVoucherNumber = maxNum + 1;
-        form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextVoucherNumber));
+        form.setValue("voucherNumber", nextNo);
       } catch (err) {
         console.error("fetchVoucherNumber error:", err);
       }
@@ -3035,6 +3009,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     toast,
                                   })
                                 }
+                                voucherAttachmentReuse={{ currentFiles: files, setFiles, maxFiles: fileAttachmentLimits.maxFileCount }}
                                 className={cn(
                                   VOUCHER_MOBILE_ATTACH_ADD_SURFACE_CLASS,
                                   allowAttachments && fileAttachmentLimits.maxFileCount > 0
@@ -3332,6 +3307,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     toast,
                                   })
                                 }
+                                voucherAttachmentReuse={{ currentFiles: files, setFiles, maxFiles: fileAttachmentLimits.maxFileCount }}
                                 className={cn(
                                   VOUCHER_DESKTOP_ATTACH_ADD_SURFACE_CLASS,
                                   allowAttachments && fileAttachmentLimits.maxFileCount > 0

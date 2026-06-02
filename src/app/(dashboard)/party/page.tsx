@@ -60,6 +60,7 @@ import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transac
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
+import { appendPreservedModalQueryToHref } from "@/lib/modalUrlSync";
 import { consumeMasterDetailSidebarListNav } from "@/lib/masterDetailSidebarNav";
 import { collectPartyIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesPartyLedger";
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
@@ -73,6 +74,7 @@ import {
   writeOverdueImportanceFilter,
   type OverdueImportanceFilter,
 } from "@/lib/overdueImportanceFilter";
+import { reconcileUnusedInterCompanyCounterpartyParties } from "@/lib/interCompany/cleanupInterCompanyCounterpartyParty";
 
 /** Tab `replaceState` ke baad `useSearchParams` stale reh sakta hai — address bar (location) pehle. */
 function readPartyPageUrlState(viewFromUrl: string | null, selectedIdFromUrl: string | null) {
@@ -133,6 +135,12 @@ function PartyPageContent() {
   const { company, companyId, loading: companyLoading, effectiveNotificationSettings } = useCompany();
   const { formatCurrency } = useDate();
   const { vouchers, loading: vouchersLoading, processedParties, processedPartiesForSelection, processedGroups: initialProcessedGroups, overdueTransactions, hasOverdueTransactions, userNames: voucherUserNames, journalAccountNames } = useVouchers();
+  useEffect(() => {
+    const cid = String(companyId || "").trim();
+    const uid = String(user?.uid || "").trim();
+    if (!cid || !uid) return;
+    void reconcileUnusedInterCompanyCounterpartyParties({ companyId: cid, deletedByUid: uid }).catch(() => {});
+  }, [companyId, user?.uid]);
   const waitingForCompany = Boolean(companyId && (companyLoading || !company));
   const pageDataLoading = waitingForCompany || vouchersLoading;
   const { can } = usePermissions();
@@ -585,8 +593,9 @@ function PartyPageContent() {
       view === "groups"
         ? `/party?view=groups&selected=${encodeURIComponent(selectedId)}`
         : `/party?selected=${encodeURIComponent(selectedId)}`;
-    if (shouldReplaceWithMasterDetailCanonical(canonical)) {
-      router.replace(canonical, { scroll: false });
+    const canonicalWithModal = appendPreservedModalQueryToHref(canonical);
+    if (shouldReplaceWithMasterDetailCanonical(canonicalWithModal)) {
+      router.replace(canonicalWithModal, { scroll: false });
     }
   }, [
     viewFromUrl,
@@ -705,16 +714,6 @@ function PartyPageContent() {
             const userDoc = await getDoc(doc(firestore, "users", userId));
             if (userDoc.exists()) {
                 data = userDoc.data();
-            } else {
-                // Fallback 2: scan for docs ending with uid.
-                const allUsersSnap = await getDocs(collection(firestore, "users"));
-                const matchingDoc = allUsersSnap.docs.find((d) => {
-                    const docData = d.data();
-                    return docData.uid === userId || d.id.endsWith(userId);
-                });
-                if (matchingDoc) {
-                    data = matchingDoc.data();
-                }
             }
         }
 

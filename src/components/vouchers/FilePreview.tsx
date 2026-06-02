@@ -35,6 +35,7 @@ import {
 import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 import { useVoucherAttachmentFallback } from "@/contexts/VoucherAttachmentFallbackContext";
 import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";
+import { tryResolveInterCompanyPeerAttachmentUrl } from "@/lib/interCompany/interCompanyAttachmentPeerResolve";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import {
@@ -259,7 +260,9 @@ interface FilePreviewProps {
   /** Square ke alawa fixed box (sirf gallery hover jaise); set ho to width/height yahi, PDF raster = max(edge) */
   previewBox?: { width: number; height: number };
   className?: string;
-  disabled?: boolean; // Make preview non-clickable
+  disabled?: boolean; // Block add/remove; preview optional via allowPreviewWhenDisabled
+  /** Edit locked par bhi thumbnail click se open allow (IC view-only) */
+  allowPreviewWhenDisabled?: boolean;
   /** Firebase Storage path (e.g. companies/xxx/unassigned/yyy.pdf). When set, PDF thumbnail is loaded via SDK to avoid CORS/fetch failures. */
   storagePath?: string;
   /** object-contain = full image visible at best quality; object-cover = crop to fill (default). */
@@ -300,6 +303,7 @@ export function FilePreview({
   previewBox,
   className,
   disabled = false,
+  allowPreviewWhenDisabled = false,
   storagePath,
   objectFit = "cover",
   enableHoverFullPreview = false,
@@ -864,7 +868,10 @@ export function FilePreview({
         // Drive ref: blob download karke preview type detect karo, taaki second device par bhi attachment dikh sake.
         if (isDriveFileRef(file)) {
           try {
-            const b = await getBlobFromLocalFileRef(file);
+            // Offline preload cache → pending `local:` → Drive (turant preview / edit jaisa).
+            const b =
+              (await getRemoteAttachmentBlobPreferOfflineCache(file, controller.signal)) ||
+              (await getBlobFromLocalFileRef(file));
             if (b && b.size > 0) {
               const kind = await sniffBlobKindForPreview(b);
               if (kind === "pdf") resolvedType = "pdf";
@@ -1003,12 +1010,22 @@ export function FilePreview({
               file,
               clientList
             );
-            if (remote && !isLocalFileRef(remote)) {
-              let probe: Blob | null = await getOfflineCachedAttachmentBlob(remote);
+            let openUrl = remote && !isLocalFileRef(remote) ? remote : null;
+            if (!openUrl && voucherAttachmentFb.interCompanyPeer) {
+              const peerUrl = await tryResolveInterCompanyPeerAttachmentUrl({
+                staleUrl: file,
+                clientFileUrls: clientList,
+                peerCompanyId: voucherAttachmentFb.interCompanyPeer.peerCompanyId,
+                peerVoucherId: voucherAttachmentFb.interCompanyPeer.peerVoucherId,
+              });
+              if (peerUrl && !isLocalFileRef(peerUrl)) openUrl = peerUrl;
+            }
+            if (openUrl) {
+              let probe: Blob | null = await getOfflineCachedAttachmentBlob(openUrl);
               const navOn =
                 typeof navigator !== "undefined" && (navigator.onLine || isCapacitorNativeApp());
               if ((!probe || probe.size === 0) && navOn && !controller.signal.aborted) {
-                probe = await getRemoteAttachmentBlobPreferOfflineCache(remote, controller.signal);
+                probe = await getRemoteAttachmentBlobPreferOfflineCache(openUrl, controller.signal);
               }
               if (probe && probe.size > 0 && !controller.signal.aborted) {
                 objectUrl = URL.createObjectURL(probe);
@@ -1017,10 +1034,10 @@ export function FilePreview({
                 if (kind === "pdf") resolvedType = "pdf";
                 else if (kind === "image") resolvedType = "image";
                 else resolvedType = "other";
-              } else if (navOn && /^https?:\/\//i.test(remote)) {
-                resolvedUrl = remote;
-                const lbl = getAttachmentFormatLabel(remote);
-                const cleanUrl = remote.split("?")[0].toLowerCase();
+              } else if (navOn && /^https?:\/\//i.test(openUrl)) {
+                resolvedUrl = openUrl;
+                const lbl = getAttachmentFormatLabel(openUrl);
+                const cleanUrl = openUrl.split("?")[0].toLowerCase();
                 if (lbl === "PDF" || cleanUrl.endsWith(".pdf") || cleanUrl.includes(".pdf")) {
                   resolvedType = "pdf";
                 } else if (
@@ -1033,9 +1050,9 @@ export function FilePreview({
                 }
               }
               try {
-                resolvedName = decodeURIComponent(remote.split("/").pop()?.split("?")[0] || "file");
+                resolvedName = decodeURIComponent(openUrl.split("/").pop()?.split("?")[0] || "file");
               } catch {
-                resolvedName = remote.split("/").pop()?.split("?")[0] || "file";
+                resolvedName = openUrl.split("/").pop()?.split("?")[0] || "file";
               }
             }
           } catch {
@@ -1228,13 +1245,14 @@ export function FilePreview({
       (attachmentGallery?.urls && attachmentGallery.urls.length > 0 ? [...attachmentGallery.urls] : undefined);
     const serverFallback =
       voucherAttachmentFb &&
-      isLocalFileRef(viewFileInfo.url) &&
       voucherAttachmentFb.companyId &&
-      voucherAttachmentFb.voucherId
+      voucherAttachmentFb.voucherId &&
+      (isLocalFileRef(viewFileInfo.url) || voucherAttachmentFb.interCompanyPeer)
         ? {
             companyId: voucherAttachmentFb.companyId,
             voucherId: voucherAttachmentFb.voucherId,
             clientFileUrls: clientList,
+            interCompanyPeer: voucherAttachmentFb.interCompanyPeer,
           }
         : undefined;
     void openAttachmentInApp(viewFileInfo.url, { title: viewFileInfo.name, kind, gallery: g, serverFallback });
@@ -1248,7 +1266,7 @@ export function FilePreview({
   ]);
 
   const handlePreviewClick = (e: React.MouseEvent) => {
-    if (children || disabled) return;
+    if (children || (disabled && !allowPreviewWhenDisabled)) return;
     /* Mobile: Copy chip khula ho to short tap se file open na ho — sirf Copy dabayein */
     if (tapInteractionMode && mobileCopyRevealed) return;
     e.preventDefault();
@@ -1362,9 +1380,10 @@ export function FilePreview({
     <div
       className={cn(
         "relative w-full h-full border rounded-lg overflow-hidden bg-background shadow-sm flex items-center justify-center touch-manipulation",
-        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+        disabled && !allowPreviewWhenDisabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
+        disabled && allowPreviewWhenDisabled && "opacity-90"
       )}
-      onClick={children || disabled ? undefined : handlePreviewClick}
+      onClick={children || (disabled && !allowPreviewWhenDisabled) ? undefined : handlePreviewClick}
       {...thumbHoldHandlers}
     >
       <ThumbnailContent />

@@ -12,6 +12,7 @@ import { showInAppImagePreview } from "@/lib/inAppImagePreview";
 import { openAttachmentGalleryInApp } from "@/lib/inAppAttachmentGallery";
 import { tryGetBlobFromFirebaseStorageDownloadUrl } from "@/lib/storageGetBlobFromDownloadUrl";
 import { looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
+import { isOfflineCacheableAttachmentRef } from "@/lib/attachmentRefBlobFetch";
 import {
   getOfflineCachedAttachmentBlob,
   getOfflineCachedAttachmentNativeRef,
@@ -26,6 +27,7 @@ import {
 import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";
+import { tryResolveInterCompanyPeerAttachmentUrl } from "@/lib/interCompany/interCompanyAttachmentPeerResolve";
 
 /** UI se pata ho to sniffing kam: pdf / image / unknown */
 export type AttachmentKindHint = "pdf" | "image" | "other";
@@ -42,6 +44,10 @@ export type OpenAttachmentServerFallback = {
   companyId: string;
   voucherId: string;
   clientFileUrls?: readonly string[] | null;
+  interCompanyPeer?: {
+    peerCompanyId: string;
+    peerVoucherId: string;
+  };
 };
 
 function pathLooksImage(pathLower: string): boolean {
@@ -60,11 +66,9 @@ function pathLooksPdf(pathLower: string): boolean {
   }
 }
 
-/** Click-open cache path: HTTPS download URL + raw Firebase object-path (`voucher-files/...`) dono ko remote-cacheable treat karo. */
+/** Click-open cache path: HTTPS + Firebase path + `local:`/`drive:` (embedded preload cache). */
 function isRemoteCacheableAttachmentSource(value: string): boolean {
-  const v = String(value || "").trim();
-  if (!v) return false;
-  return /^https?:\/\//i.test(v) || looksLikeFirebaseStorageObjectPath(v);
+  return isOfflineCacheableAttachmentRef(value);
 }
 
 function showInAppPdfOpenError(sourceUrl: string): void {
@@ -104,9 +108,11 @@ export async function openAttachmentInApp(
     }
   }
 
-  // Drive cloud sync ref — `drive:Pocket Ledger/...`
+  // Drive cloud sync ref — offline preload cache pehle, phir pending/local match, phir Drive API.
   if (isDriveFileRef(u)) {
-    const blob = await getBlobFromLocalFileRef(u);
+    const blob =
+      (await getRemoteAttachmentBlobPreferOfflineCache(u, undefined, { galleryUrls: g?.urls })) ||
+      (await getBlobFromLocalFileRef(u));
     if (!blob) {
       if (typeof window !== "undefined") {
         window.alert("Could not download this attachment from Google Drive. Check internet and Drive connection.");
@@ -184,6 +190,22 @@ export async function openAttachmentInApp(
             gallery: opts?.gallery,
           });
           return;
+        }
+        if (sf.interCompanyPeer) {
+          const peerUrl = await tryResolveInterCompanyPeerAttachmentUrl({
+            staleUrl: u,
+            clientFileUrls: sf.clientFileUrls,
+            peerCompanyId: sf.interCompanyPeer.peerCompanyId,
+            peerVoucherId: sf.interCompanyPeer.peerVoucherId,
+          });
+          if (peerUrl && peerUrl !== u) {
+            await openAttachmentInApp(peerUrl, {
+              title: opts?.title,
+              kind: opts?.kind,
+              gallery: opts?.gallery,
+            });
+            return;
+          }
         }
       }
       if (typeof window !== "undefined") {

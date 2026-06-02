@@ -12,7 +12,10 @@ import { useCompany } from "@/hooks/useCompany";
 import type { Company } from "@/hooks/useCompany";
 import { useFirstLoginWarmGate } from "@/contexts/FirstLoginWarmGateContext";
 import { useEmbeddedAttachmentPrefetch } from "@/contexts/EmbeddedAttachmentPrefetchContext";
-import { isCloudBackedCompanyShape, runEmbeddedAttachmentPrefetchPhase } from "@/lib/offlineFullWarmSync";
+import {
+  shouldPrefetchAttachmentsForCompany,
+  runEmbeddedAttachmentPrefetchPhase,
+} from "@/lib/offlineFullWarmSync";
 
 const DEBOUNCE_AFTER_COMPANY_MS = 2_800;
 
@@ -37,7 +40,7 @@ export function CompanyAttachmentOfflineBackfillManager() {
     runAbortRef.current = null;
 
     if (!user || loading || !companyId?.trim() || !company) return;
-    if (!isCloudBackedCompanyShape(company as Company)) return;
+    if (!shouldPrefetchAttachmentsForCompany(company as Company)) return;
     if (gateActive) return;
 
     const c = company as Company;

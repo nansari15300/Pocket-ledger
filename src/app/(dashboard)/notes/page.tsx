@@ -4,14 +4,11 @@ import { Button } from "@/components/ui/button";
 import { PermissionButton } from "@/components/permission";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PlusCircle, Search, Users, Landmark, Briefcase, Receipt, BookText, Package } from "lucide-react";
-import { useEffect, useState, useMemo, useCallback, useRef } from "react";
-import { collection, onSnapshot, query, where, orderBy, collectionGroup, getDoc, doc, getDocs } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
+import { useMemo, useState } from "react";
 import { useCompany } from "@/hooks/useCompany";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { Input } from "@/components/ui/input";
-import { useAuth } from "@/hooks/useAuth";
 import { PartyDetails } from "@/components/party/PartyDetails";
 import type { Party } from "@/components/party/types";
 import type { Staff } from "@/components/staff/types";
@@ -29,6 +26,7 @@ import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "@/comp
 import type { Tax } from "@/components/tax/types";
 import { Badge } from "@/components/ui/badge";
 import { NoteDetails } from "@/components/notes/NoteDetails";
+import { useVouchers } from "@/hooks/useVouchers";
 
 // ✅ Custom Hook Import
 import { usePageMemory } from "@/hooks/usePageMemory";
@@ -108,9 +106,16 @@ function NotedEntityList({ entities, selectedEntity, onSelectEntity, searchTerm 
 
 export default function NotesPage() {
     const { companyId } = useCompany();
-    const { user } = useAuth();
-    const [vouchers, setVouchers] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
+    const {
+        vouchers,
+        loading,
+        processedParties,
+        processedAccounts,
+        processedStaff,
+        processedTaxes,
+        processedItems,
+        userNames,
+    } = useVouchers();
     const [selectedEntity, setSelectedEntity] = useState<NotedEntity | null>(null);
     const [searchTerm, setSearchTerm] = useState("");
     const [isVoucherOpen, setIsVoucherOpen] = useState(false);
@@ -118,113 +123,9 @@ export default function NotesPage() {
     // Changed default to false so memory selection works
     const [showAllNotes, setShowAllNotes] = useState(false); 
 
-    const [parties, setParties] = useState<Party[]>([]);
-    const [accounts, setAccounts] = useState<Account[]>([]);
-    const [staff, setStaff] = useState<Staff[]>([]);
-    const [taxes, setTaxes] = useState<Tax[]>([]);
-    const [items, setItems] = useState<Item[]>([]);
-    
-    const [userNames, setUserNames] = useState<Record<string, string>>({});
-    const fetchedUserNames = useRef<Record<string, string>>({});
-
     const noteVouchers = useMemo(() => vouchers.filter(v => v.type === 'note'), [vouchers]);
-    
-    const fetchUserName = useCallback(async (userId: string): Promise<string> => {
-        if (fetchedUserNames.current[userId] && fetchedUserNames.current[userId] !== "Unknown") return fetchedUserNames.current[userId];
-        try {
-            // User doc ID may be name_uid format, so query by uid field first
-            const q = query(collection(firestore, "users"), where("uid", "==", userId));
-            const snap = await getDocs(q);
-            let data = snap.docs[0]?.data();
-            
-            if (!data) {
-                // Fallback: doc ID might be uid (legacy)
-                const userDoc = await getDoc(doc(firestore, 'users', userId));
-                if (userDoc.exists()) {
-                    data = userDoc.data();
-                }
-            }
-            
-            if (data) {
-                // Get displayName from user document - this is the primary field
-                const displayName = data.displayName || data.name || data.email || null;
-                if (displayName && displayName !== userId && !displayName.match(/^[a-zA-Z0-9_-]{20,}$/)) {
-                    fetchedUserNames.current[userId] = displayName;
-                    return displayName;
-                }
-            }
-        } catch (e) {
-            console.error("Error fetching user name:", e);
-        }
-        return "N/A"; // Return N/A instead of Unknown
-    }, []);
 
-    useEffect(() => {
-        const uidsToFetch = new Set<string>();
-        noteVouchers.forEach(t => {
-            if (t.userId && !fetchedUserNames.current[t.userId]) {
-                uidsToFetch.add(t.userId);
-            }
-        });
-
-        if (uidsToFetch.size > 0) {
-            const fetchAll = async () => {
-                const newNames: Record<string, string> = {};
-                for (const uid of Array.from(uidsToFetch)) {
-                    newNames[uid] = await fetchUserName(uid);
-                }
-                setUserNames(prev => ({ ...prev, ...newNames }));
-            };
-            fetchAll();
-        }
-    }, [noteVouchers, fetchUserName]);
-
-
-    useEffect(() => {
-        if (!companyId || !user) {
-            setLoading(false);
-            return;
-        };
-
-        setLoading(true);
-        const vouchersQuery = query(collection(firestore, `companies/${companyId}/vouchers`), where("type", "==", "note"), orderBy('date', 'desc'));
-        const unsubVouchers = onSnapshot(vouchersQuery, (snapshot) => {
-            setVouchers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        });
-
-        const collectionsToFetch = [
-            { path: 'parties', setter: setParties, type: undefined },
-            { path: 'bank_accounts', setter: setAccounts, type: undefined },
-            { path: 'staff', setter: setStaff, type: undefined },
-            { path: 'items', setter: setItems, type: undefined },
-            { path: 'taxes', setter: setTaxes, type: undefined },
-        ];
-
-        const unsubs = collectionsToFetch.map(({path, setter}) => 
-            onSnapshot(query(collection(firestore, `companies/${companyId}/${path}`)), (snap) => {
-                setter(snap.docs.map(d=>({id: d.id, ...d.data()})) as any);
-            })
-        );
-        
-        const initialFetches = Promise.all([
-            new Promise(res => onSnapshot(vouchersQuery, () => res(true), () => res(true))),
-            ...collectionsToFetch.map(({path}) => new Promise(res => {
-                 const unsub = onSnapshot(query(collection(firestore, `companies/${companyId}/${path}`)), () => {
-                    unsub();
-                    res(true);
-                }, () => res(true));
-            }))
-        ]);
-        
-        initialFetches.then(() => setLoading(false));
-
-        return () => {
-            unsubVouchers();
-            unsubs.forEach(unsub => unsub());
-        };
-    }, [companyId, user]);
-    
-     const notedEntities = useMemo(() => {
+    const notedEntities = useMemo(() => {
         if (loading || noteVouchers.length === 0) return [];
         
         const getEntitiesWithNotes = <T extends { id: string, name?: string, accountName?: string, balance?: number }>(entities: T[], context: string): NotedEntity[] => {
@@ -241,14 +142,14 @@ export default function NotesPage() {
         };
 
         return [
-            ...getEntitiesWithNotes(parties, 'Party'),
-            ...getEntitiesWithNotes(accounts, 'Bank/Cash'),
-            ...getEntitiesWithNotes(staff, 'Staff'),
-            ...getEntitiesWithNotes(taxes, 'Tax'),
-            ...getEntitiesWithNotes(items, 'Items'),
+            ...getEntitiesWithNotes(processedParties as Party[], 'Party'),
+            ...getEntitiesWithNotes(processedAccounts as Account[], 'Bank/Cash'),
+            ...getEntitiesWithNotes(processedStaff as Staff[], 'Staff'),
+            ...getEntitiesWithNotes(processedTaxes as Tax[], 'Tax'),
+            ...getEntitiesWithNotes(processedItems as Item[], 'Items'),
         ].sort((a,b) => a.name.localeCompare(b.name)); // Initial sort by name, hook re-sorts if needed
 
-    }, [noteVouchers, parties, accounts, staff, items, taxes, loading]);
+    }, [noteVouchers, processedParties, processedAccounts, processedStaff, processedItems, processedTaxes, loading]);
     
     // ========== MEMORY LOGIC ==========
     usePageMemory(

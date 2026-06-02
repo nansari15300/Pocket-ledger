@@ -166,6 +166,33 @@ export function clearPlModalParentQueryBackup(): void {
   }
 }
 
+/** Mobile: popup open hai lekin URL se `modal` hat gaya — replace se wapas lagao (dialog band mat karo). */
+export function buildModalRepairHref(pathname: string, fallbackSearchFromNextHook: string): string {
+  persistPlModalParentQuery(fallbackSearchFromNextHook);
+  const params = new URLSearchParams(searchParamsStringForModalClose(fallbackSearchFromNextHook));
+  params.set("modal", "1");
+  if (!params.has("modalts")) params.set("modalts", String(Date.now()));
+  const basePath = pathnameForModalRouterReplace(pathname);
+  const q = params.toString();
+  return q ? `${basePath}?${q}` : basePath;
+}
+
+/** Master-detail `router.replace(canonical)` se pehle/baad: open modal query preserve karo. */
+export function appendPreservedModalQueryToHref(href: string): string {
+  if (typeof window === "undefined") return href;
+  const cur = new URLSearchParams(window.location.search.replace(/^\?/, ""));
+  if (cur.get("modal") !== "1") return href;
+  try {
+    const u = new URL(href, window.location.origin);
+    u.searchParams.set("modal", "1");
+    const ts = cur.get("modalts");
+    if (ts) u.searchParams.set("modalts", ts);
+    return `${u.pathname}${u.search ? u.search : ""}`;
+  } catch {
+    return href;
+  }
+}
+
 /** Close handler: merge window+Next, phir backup se gaps bharo */
 export function searchParamsStringAfterClosingModal(fallbackFromNextHook: string): string {
   const base = searchParamsStringForModalClose(fallbackFromNextHook);

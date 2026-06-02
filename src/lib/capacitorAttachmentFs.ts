@@ -1,5 +1,6 @@
 "use client";
 
+import { Capacitor } from "@capacitor/core";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { Directory } from "@capacitor/filesystem";
 
@@ -35,8 +36,8 @@ async function getBlobWriter(): Promise<BlobWriterFn | null> {
   }
 }
 
-/** Blob -> base64 (Data URL prefix ke bina) — blob writer unavailable ho to Filesystem fallback. */
-async function blobToBase64Raw(blob: Blob): Promise<string> {
+/** Blob -> base64 (chunked) — Drive upload / Filesystem fallback; mobile par char-by-char loop OOM avoid. */
+export async function blobToBase64Chunked(blob: Blob): Promise<string> {
   const buf = await blob.arrayBuffer();
   const bytes = new Uint8Array(buf);
   let binary = "";
@@ -92,7 +93,7 @@ export async function writeAttachmentBlobToDataDir(path: string, blob: Blob): Pr
   if (!fs) return false;
   try {
     // Fallback only: base64 bridge slower hota hai, but reliability ke liye रखा.
-    const data = await blobToBase64Raw(blob);
+    const data = await blobToBase64Chunked(blob);
     await fs.Filesystem.writeFile({
       path,
       data,
@@ -117,6 +118,22 @@ export async function writeAttachmentBlobToDataDir(path: string, blob: Blob): Pr
   }
 }
 
+async function verifyAttachmentBlobSha256(
+  blob: Blob,
+  path: string,
+  expectedSha256Hex?: string | null
+): Promise<Blob | null> {
+  const exp = expectedSha256Hex?.trim().toLowerCase();
+  if (!exp) return blob.size > 0 ? blob : null;
+  const { computeSha256HexFromBlob } = await import("@/lib/security/sha256Hex");
+  const got = (await computeSha256HexFromBlob(blob)).toLowerCase();
+  if (got !== exp) {
+    console.warn("[capacitorAttachmentFs] sha256 mismatch on read", { path, exp, got });
+    return null;
+  }
+  return blob;
+}
+
 /** DataDirectory path -> Blob. */
 export async function readAttachmentBlobFromDataDir(
   path: string,
@@ -124,6 +141,33 @@ export async function readAttachmentBlobFromDataDir(
   /** Row se aaya `sha256_hex` — mismatch par tamper/corrupt treat karke null. */
   expectedSha256Hex?: string | null
 ): Promise<Blob | null> {
+  // APK: blob-writer binary files ko WebView fetch se padho — readFile base64 bridge corrupt/mismatch de sakta hai.
+  if (isCapacitorNativeApp()) {
+    const uri = await getAttachmentFileUriFromDataDir(path);
+    if (uri) {
+      try {
+        const webPath = Capacitor.convertFileSrc(uri);
+        const res = await fetch(webPath);
+        if (res.ok) {
+          const fetched = await res.blob();
+          if (fetched.size > 0) {
+            const typed =
+              contentType && !fetched.type
+                ? new Blob([fetched], { type: contentType })
+                : fetched;
+            const verified = await verifyAttachmentBlobSha256(typed, path, expectedSha256Hex);
+            if (verified) return verified;
+          }
+        }
+      } catch (e) {
+        console.warn("[capacitorAttachmentFs] fetch read failed, trying readFile", {
+          path,
+          message: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+  }
+
   const fs = await getFsModule();
   if (!fs) return null;
   try {
@@ -134,16 +178,7 @@ export async function readAttachmentBlobFromDataDir(
     const raw = typeof row.data === "string" ? row.data : "";
     if (!raw) return null;
     const blob = base64RawToBlob(raw, contentType);
-    const exp = expectedSha256Hex?.trim().toLowerCase();
-    if (exp) {
-      const { computeSha256HexFromBlob } = await import("@/lib/security/sha256Hex");
-      const got = (await computeSha256HexFromBlob(blob)).toLowerCase();
-      if (got !== exp) {
-        console.warn("[capacitorAttachmentFs] sha256 mismatch on read", { path, exp, got });
-        return null;
-      }
-    }
-    return blob;
+    return await verifyAttachmentBlobSha256(blob, path, expectedSha256Hex);
   } catch {
     return null;
   }

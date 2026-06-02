@@ -39,14 +39,27 @@ export function shouldPurgeLocalCompanyWhenDriveFolderMissing(
   return !!folderId || (cfg.cloudSyncLastSyncAt != null && cfg.cloudSyncLastSyncAt > 0);
 }
 
-/** Recycle bin permanent delete — pehle owner ka Drive folder, phir SQLite. */
+/** Company kabhi Drive par sync ho chuki thi — bin delete par folder hatao (ab sync OFF ho to bhi). */
+export function localCompanyHadGoogleDriveFolder(
+  reg: LocalCompanyDoc | Record<string, unknown>
+): boolean {
+  const r = reg as Record<string, unknown>;
+  if (String(r.cloudSyncDriveFolderId ?? "").trim()) return true;
+  const provider = String(r.cloudSyncProvider ?? "").trim().toLowerCase();
+  if (provider === "google_drive" || provider === "drive") return true;
+  if (r.cloudSyncEnabled === true) return true;
+  const lastSync = r.cloudSyncLastSyncAt;
+  return typeof lastSync === "number" && Number.isFinite(lastSync) && lastSync > 0;
+}
+
+/** Recycle bin permanent delete — pehle owner ka Drive main company folder, phir SQLite. */
 export async function deleteDriveCompanyFolderIfOwner(
   reg: LocalCompanyDoc | Record<string, unknown>,
   firebaseUid: string | null | undefined
 ): Promise<boolean> {
-  const cfg = readCloudSyncConfigFromCompany(reg as LocalCompanyDoc);
-  if (!cfg.cloudSyncEnabled || cfg.cloudSyncProvider !== "google_drive") return false;
+  if (!localCompanyHadGoogleDriveFolder(reg)) return false;
   if (!isLocalCompanyDriveFolderOwner(reg, firebaseUid)) return false;
+  if (!hasRealFirebaseAuthSession()) return false;
 
   const companyId = String((reg as { id?: unknown }).id || "").trim();
   if (!companyId) return false;
@@ -78,17 +91,30 @@ export async function deleteDriveCompanyFolderIfOwner(
 export async function permanentDeleteLocalCompanyWithDriveCleanup(
   companyId: string,
   options?: { firebaseUid?: string | null }
-): Promise<{ driveFolderDeleted: boolean }> {
+): Promise<{ driveFolderDeleted: boolean; driveDeleteAttempted: boolean }> {
   const cid = String(companyId || "").trim();
-  if (!cid) return { driveFolderDeleted: false };
+  if (!cid) return { driveFolderDeleted: false, driveDeleteAttempted: false };
 
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
   let driveFolderDeleted = false;
+  let driveDeleteAttempted = false;
   if (reg) {
+    driveDeleteAttempted =
+      localCompanyHadGoogleDriveFolder(reg) && isLocalCompanyDriveFolderOwner(reg, options?.firebaseUid ?? null);
     driveFolderDeleted = await deleteDriveCompanyFolderIfOwner(reg, options?.firebaseUid ?? null);
   }
   await removeLocalCompanyById(cid, { firebaseUid: options?.firebaseUid ?? null });
-  return { driveFolderDeleted };
+  return { driveFolderDeleted, driveDeleteAttempted };
+}
+
+/** Permanent delete toast — Drive folder delete miss ho to user ko hint. */
+export function permanentDeleteDriveFolderHint(result: {
+  driveFolderDeleted: boolean;
+  driveDeleteAttempted: boolean;
+}): string {
+  if (!result.driveDeleteAttempted) return "";
+  if (result.driveFolderDeleted) return " Google Drive company folder removed.";
+  return " Google Drive folder was not removed — sign in with Google and connect Drive, then retry if needed.";
 }
 
 export type DriveMissingPurgeResult = { companyId: string; companyName: string };

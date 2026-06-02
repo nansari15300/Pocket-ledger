@@ -14,6 +14,8 @@ import {
   resolvePendingAttachmentCloudSyncProvider,
 } from "@/lib/localPendingFiles";
 import { apkCloudCompanyUsesSqliteFirstWrites, isClientNavigatorOffline } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { getRemoteAttachmentBlobPreferOfflineCache } from "@/lib/offlineAttachmentUrlCache";
 import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageDownloadUrl";
@@ -65,7 +67,15 @@ function fileNameFromAttachmentRef(ref: string, fallbackIndex: number, contentTy
   return `copied_attachment_${fallbackIndex}.${ext}`;
 }
 
-async function blobFromAttachmentRefForCopy(ref: string): Promise<Blob | null> {
+export function fileNameFromInterCompanyAttachmentRef(
+  ref: string,
+  fallbackIndex: number,
+  contentType?: string
+): string {
+  return fileNameFromAttachmentRef(ref, fallbackIndex, contentType);
+}
+
+export async function blobFromAttachmentRefForCopy(ref: string): Promise<Blob | null> {
   if (isLocalFileRef(ref) || isDriveFileRef(ref)) {
     // Local/Drive refs already use app-aware readers; copy target should still get its own fresh File.
     return await getBlobFromLocalFileRef(ref);
@@ -77,13 +87,16 @@ async function blobFromAttachmentRefForCopy(ref: string): Promise<Blob | null> {
   return null;
 }
 
-/** Copy To: selected local cloud provider ho to source URL refs ko File blobs me convert karo. */
+/** Copy To: local (`storageOption: local`) target par Firebase/HTTPS refs ko File me — save par `local:` stage hoga. */
 export async function importVoucherAttachmentsAsFilesForLocalCloudCopy<T extends Record<string, unknown>>(params: {
   targetCompanyId: string;
   voucher: T;
 }): Promise<{ voucher: T; importedCount: number }> {
-  const provider = await resolvePendingAttachmentCloudSyncProvider(params.targetCompanyId);
-  if (!provider) return { voucher: params.voucher, importedCount: 0 };
+  const targetReg = await getLocalCompanyById(params.targetCompanyId);
+  // Sirf device-local company — cloud Firebase company me purane HTTPS URL pass-through theek hai.
+  if (!targetReg || !isOfflineCompanyStorage(targetReg as { storageOption?: string })) {
+    return { voucher: params.voucher, importedCount: 0 };
+  }
   if (typeof File === "undefined") return { voucher: params.voucher, importedCount: 0 };
 
   const source = params.voucher;
@@ -132,6 +145,85 @@ export async function importVoucherAttachmentsAsFilesForLocalCloudCopy<T extends
     },
     importedCount: importedFiles.length,
   };
+}
+
+function isFirebaseOrHttpsAttachmentRef(ref: string): boolean {
+  if (!ref) return false;
+  if (/^https?:\/\//i.test(ref)) return true;
+  return !!tryGetStoragePathFromFirebaseDownloadUrl(ref);
+}
+
+/** SQLite/local save se pehle: galati se bachi Firebase Storage URL ko `local:` pending me badlo. */
+export async function rewriteRemoteVoucherAttachmentsForOfflineCompany(
+  companyId: string,
+  data: Record<string, unknown>,
+  existingVoucherId: string | null
+): Promise<void> {
+  const reg = await getLocalCompanyById(companyId);
+  if (!reg || !isOfflineCompanyStorage(reg as { storageOption?: string })) return;
+
+  const storageFolder = String(data.type || "journal").trim() || "journal";
+  const rawUrls = Array.isArray(data.fileUrls) ? data.fileUrls : [];
+  const keepUrls: string[] = [];
+  const downloadRefs: string[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of rawUrls) {
+    if (entry instanceof File) continue;
+    const ref = typeof entry === "string" ? entry.trim() : "";
+    if (!ref) continue;
+    if (isLocalFileRef(ref) || isDriveFileRef(ref)) {
+      keepUrls.push(ref);
+      continue;
+    }
+    if (isFirebaseOrHttpsAttachmentRef(ref)) {
+      if (!seen.has(ref)) {
+        seen.add(ref);
+        downloadRefs.push(ref);
+      }
+      continue;
+    }
+    keepUrls.push(ref);
+  }
+
+  const uf = data.unassignedFile;
+  let unassignedRemote: string | null = null;
+  if (uf && typeof uf === "object" && uf !== null) {
+    const urlStr = typeof (uf as Record<string, unknown>).url === "string" ? String((uf as Record<string, unknown>).url).trim() : "";
+    if (urlStr && isFirebaseOrHttpsAttachmentRef(urlStr) && !seen.has(urlStr)) {
+      seen.add(urlStr);
+      unassignedRemote = urlStr;
+      downloadRefs.push(urlStr);
+    } else if (urlStr && !isFirebaseOrHttpsAttachmentRef(urlStr)) {
+      /* local/drive unassigned — rehne do */
+    }
+  }
+
+  if (downloadRefs.length === 0) return;
+
+  const newFiles: File[] = [];
+  for (const ref of downloadRefs) {
+    const blob = await blobFromAttachmentRefForCopy(ref);
+    if (!blob || blob.size <= 0) {
+      throw new Error(
+        "Could not download voucher attachment for local save. Open the file once while online, then save again."
+      );
+    }
+    const fileName = fileNameFromAttachmentRef(ref, newFiles.length + 1, blob.type);
+    newFiles.push(new File([blob], fileName, { type: blob.type || "application/octet-stream" }));
+  }
+
+  const maxFileCount = Math.max(keepUrls.length + newFiles.length, 20);
+  const staged = await appendLocalOnlyVoucherFilesToUrls({
+    companyId,
+    storageFolder,
+    existingFileUrls: keepUrls,
+    newFiles,
+    maxFileCount,
+    existingVoucherId,
+  });
+  data.fileUrls = staged.fileUrls;
+  if (unassignedRemote) data.unassignedFile = null;
 }
 
 /**

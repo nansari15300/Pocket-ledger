@@ -29,6 +29,13 @@ import {
 import { Capacitor } from "@capacitor/core";
 import { getBlob, ref } from "firebase/storage";
 import { computeSha256HexFromBlob } from "@/lib/security/sha256Hex";
+import {
+  fetchAttachmentRefBlob,
+  isOfflineCacheableAttachmentRef,
+  offlineCacheKeyForAttachmentRef,
+} from "@/lib/attachmentRefBlobFetch";
+import { isLocalFileRef } from "@/lib/localPendingFiles";
+import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 
 /** Forensic: build par `NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG=1` — cache HIT/MISS / stable-key proof (temporary trace only). */
 function offlineAttachmentForensicEnabled(): boolean {
@@ -85,18 +92,20 @@ function getStableFirebaseObjectKey(urlStr: string): string | null {
   }
 }
 
+/** Cache lookup: HTTPS/Firebase path + `local:`/`drive:`/`PL_ATTACH_V1` (mobile/APK preload). */
 function supportsOfflineAttachmentLookup(raw: string): boolean {
-  const v = String(raw || "").trim();
-  if (!v) return false;
-  if (/^https?:\/\//i.test(v)) return true;
-  // Some mirrored rows carry raw storage object-path (`voucher-files/...`) instead of signed URL.
-  if (looksLikeFirebaseStorageObjectPath(v)) return true;
-  return false;
+  return isOfflineCacheableAttachmentRef(raw);
+}
+
+/** IndexedDB/native key — `PL_ATTACH` decode karke stable ref. */
+function offlineAttachmentCacheLookupKey(raw: string): string {
+  const decoded = offlineCacheKeyForAttachmentRef(raw);
+  return decoded || String(raw || "").trim();
 }
 
 async function getOfflineAttachmentStoreIdsForLookup(urlStr: string): Promise<string[]> {
-  const trimmed = urlStr.trim();
-  if (!supportsOfflineAttachmentLookup(trimmed)) {
+  const trimmed = offlineAttachmentCacheLookupKey(urlStr);
+  if (!supportsOfflineAttachmentLookup(urlStr)) {
     if (offlineAttachmentForensicEnabled()) {
       console.warn("[FORENSIC_OFFLINE_CACHE_STORE_IDS]", {
         originalInput: urlStr,
@@ -156,6 +165,15 @@ async function getBlobFromFirebaseObjectPath(path: string): Promise<Blob | null>
   } catch {
     return null;
   }
+}
+
+/** Warm prefetch worker — HTTPS/Storage path only (cache miss; caller pehle `getOfflineCached` check kare). */
+export async function fetchHttpsAttachmentBlobForPrefetchMiss(
+  url: string,
+  signal?: AbortSignal
+): Promise<Blob | null> {
+  const r = await blobFromHybridFetch(url.trim(), signal);
+  return r.blob && r.blob.size > 0 ? r.blob : null;
 }
 
 async function blobFromHybridFetch(
@@ -562,12 +580,18 @@ async function putCachedBlob(urlStr: string, blob: Blob): Promise<void> {
 /**
  * Preview path: SDK/fetch ke pehle cache; successful download ko background me IndexedDB rakho (offline rerun).
  */
+export type RemoteAttachmentBlobPreferCacheOptions = {
+  /** `drive:` par gallery me parallel `local:` ho to pehle wahi bytes use karo. */
+  galleryUrls?: readonly string[];
+};
+
 export async function getRemoteAttachmentBlobPreferOfflineCache(
   urlStr: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  preferCacheOptions?: RemoteAttachmentBlobPreferCacheOptions
 ): Promise<Blob | null> {
-  const trimmed = urlStr.trim();
-  if (!supportsOfflineAttachmentLookup(trimmed)) {
+  const trimmed = offlineAttachmentCacheLookupKey(urlStr);
+  if (!supportsOfflineAttachmentLookup(urlStr)) {
     if (offlineAttachmentForensicEnabled()) {
       console.warn("[FORENSIC_OFFLINE_CACHE_REMOTE_PREFER]", {
         originalInput: urlStr,
@@ -630,24 +654,37 @@ export async function getRemoteAttachmentBlobPreferOfflineCache(
   }
 
   const fetchTarget = altKey && altKey !== trimmed && !/^https?:\/\//i.test(trimmed) ? altKey : trimmed;
-  const fetchResult = await blobFromHybridFetch(fetchTarget, signal, UI_ATTACHMENT_CACHE_MISS_TIMEOUT_MS);
-  const fresh = fetchResult.blob;
+  let fresh: Blob | null = null;
+  const isDeviceRef = isLocalFileRef(trimmed) || isDriveFileRef(trimmed);
+  let fetchResult: HybridFetchResult | null = null;
+  if (isDeviceRef) {
+    // `local:` / `drive:` — pending bytes pehle, phir Drive API (Firebase-style preload cache miss).
+    fresh = await fetchAttachmentRefBlob(urlStr, {
+      signal,
+      galleryUrls: preferCacheOptions?.galleryUrls,
+    });
+  } else {
+    fetchResult = await blobFromHybridFetch(fetchTarget, signal, UI_ATTACHMENT_CACHE_MISS_TIMEOUT_MS);
+    fresh = fetchResult.blob;
+  }
   if (offlineAttachmentForensicEnabled()) {
     console.warn("[FORENSIC_OFFLINE_CACHE_REMOTE_PREFER]", {
       originalInput: urlStr,
       trimmed,
       fetchTarget,
-      hybridFetchSource: fetchResult.source,
-      hybridFetchStatus: fetchResult.status,
-      hybridFetchError: fetchResult.error ?? null,
+      hybridFetchSource: fetchResult?.source ?? (isDeviceRef ? "device_ref_fetch" : null),
+      hybridFetchStatus: fetchResult?.status ?? null,
+      hybridFetchError: fetchResult?.error ?? null,
       outcome: fresh && fresh.size > 0 ? "network_or_sdk_fresh_blob" : "fetch_returned_empty",
       finalBlobSource:
         fresh && fresh.size > 0
-          ? fetchResult.source === "firebase_sdk"
-            ? "firebase_sdk_getBlob_or_tryGetBlobFromFirebaseStorageDownloadUrl"
-            : fetchResult.source === "http_fetch"
-              ? "http_fetch_cors"
-              : String(fetchResult.source)
+          ? isDeviceRef
+            ? "local_pending_or_drive_api"
+            : fetchResult?.source === "firebase_sdk"
+              ? "firebase_sdk_getBlob_or_tryGetBlobFromFirebaseStorageDownloadUrl"
+              : fetchResult?.source === "http_fetch"
+                ? "http_fetch_cors"
+                : String(fetchResult?.source ?? "unknown")
           : null,
       byteSize: fresh?.size ?? 0,
       navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
@@ -690,16 +727,14 @@ export async function prefetchHttpsAttachmentUrls(
 ): Promise<PrefetchAttachmentsProgress> {
   const uniq = [
     ...new Set(
-      [...urls].filter((u) => {
-        const value = String(u || "").trim();
-        // Full warm sync: HTTPS download URLs + raw Firebase object-path dono prefetch candidates hain.
-        return isEligibleAttachmentHttpsUrl(value) || looksLikeFirebaseStorageObjectPath(value);
-      })
+      [...urls]
+        .map((u) => offlineCacheKeyForAttachmentRef(String(u || "")) || String(u || "").trim())
+        .filter((value) => value && isOfflineCacheableAttachmentRef(value))
     ),
   ];
   if (offlineAttachmentForensicEnabled()) {
     const rawDistinct = [...new Set([...urls].map((u) => String(u || "").trim()).filter((s) => s.length > 0))];
-    const rejected = rawDistinct.filter((v) => !isEligibleAttachmentHttpsUrl(v) && !looksLikeFirebaseStorageObjectPath(v));
+    const rejected = rawDistinct.filter((v) => !isOfflineCacheableAttachmentRef(v));
     console.warn("[FORENSIC_PREFETCH_INPUT_FILTER]", {
       rawDistinctCount: rawDistinct.length,
       acceptedDistinctCount: uniq.length,
@@ -713,8 +748,8 @@ export async function prefetchHttpsAttachmentUrls(
   const seenOrdered = new Set<string>();
   const ordered: string[] = [];
   for (const raw of options?.prioritizeUrls ?? []) {
-    const value = String(raw || "").trim();
-    if (!isEligibleAttachmentHttpsUrl(value) && !looksLikeFirebaseStorageObjectPath(value)) continue;
+    const value = offlineCacheKeyForAttachmentRef(String(raw || "")) || String(raw || "").trim();
+    if (!value || !isOfflineCacheableAttachmentRef(value)) continue;
     if (seenOrdered.has(value)) continue;
     seenOrdered.add(value);
     ordered.push(value);
@@ -801,21 +836,37 @@ export async function prefetchHttpsAttachmentUrls(
         let wrote = false;
         for (let attempt = 1; attempt <= PREFETCH_MAX_RETRIES; attempt++) {
           if (options?.signal?.aborted) break;
-          const fetched = await blobFromHybridFetch(u, options?.signal);
-          const blob = fetched.blob;
+          let blob: Blob | null = null;
+          let prefetchStatus: number | null = 200;
+          let prefetchRetryable = false;
+          let prefetchNote = "cached_new";
+          if (isLocalFileRef(u) || isDriveFileRef(u)) {
+            blob = await fetchAttachmentRefBlob(u, { signal: options?.signal });
+            if (!blob?.size) {
+              prefetchStatus = null;
+              prefetchRetryable = true;
+              prefetchNote = "device_ref_fetch_failed";
+            }
+          } else {
+            const fetched = await blobFromHybridFetch(u, options?.signal);
+            blob = fetched.blob;
+            prefetchStatus = fetched.status;
+            prefetchRetryable = fetched.retryable;
+            prefetchNote = fetched.error || fetched.source;
+          }
           if (!blob?.size) {
             emitPrefetchLog(
               {
                 url: u,
                 attempt,
-                status: fetched.status,
+                status: prefetchStatus,
                 ok: false,
-                retryable: fetched.retryable,
-                note: fetched.error || fetched.source,
+                retryable: prefetchRetryable,
+                note: prefetchNote,
               },
               options?.onItemLog
             );
-            if (fetched.retryable && attempt < PREFETCH_MAX_RETRIES) {
+            if (prefetchRetryable && attempt < PREFETCH_MAX_RETRIES) {
               await new Promise((r) => setTimeout(r, backoffDelayMs(attempt)));
               continue;
             }
@@ -851,7 +902,7 @@ export async function prefetchHttpsAttachmentUrls(
             {
               url: u,
               attempt,
-              status: fetched.status,
+              status: prefetchStatus,
               ok: true,
               retryable: false,
               note: "cached_new",

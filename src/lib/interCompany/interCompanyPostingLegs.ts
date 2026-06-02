@@ -5,9 +5,12 @@
  */
 import type { InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
 import {
+  inferInterCompanyEntity,
   interCompanyVoucherViewerSide,
   isInterCompanyVisibleOnTargetBank,
   isInterCompanyVisibleOnTargetEntity,
+  readInterCompanyCompanyBankId,
+  readInterCompanyLink,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
 
 export type InterCompanyLedgerLeg = {
@@ -42,6 +45,42 @@ function finalizeIcLegAmounts(voucher: Record<string, unknown>, result: IcLegAmo
   return applyInterCompanyReversedLedgerNetZero(voucher, result);
 }
 
+/** Party/staff/tax/expense — bank sirf company rasta, IC conduit entity nahi. */
+export function isInterCompanyNonBankEntity(
+  kind: InterCompanyEntityKind | null | undefined,
+  entityId: unknown
+): boolean {
+  const id = String(entityId || "").trim();
+  if (!id) return false;
+  const k = String(kind || "")
+    .toLowerCase()
+    .trim();
+  return k !== "" && k !== "bank";
+}
+
+/** Dono sides par non-bank entity — tab hi IC · Due from/to conduit party. */
+export function interCompanyPairUsesConduitParty(args: {
+  sourceEntityKind: InterCompanyEntityKind;
+  sourceEntityId: string;
+  targetEntityKind: InterCompanyEntityKind;
+  targetEntityId: string;
+}): boolean {
+  return (
+    isInterCompanyNonBankEntity(args.sourceEntityKind, args.sourceEntityId) &&
+    isInterCompanyNonBankEntity(args.targetEntityKind, args.targetEntityId)
+  );
+}
+
+/** Saved voucher par IC conduit party use hoti hai ya nahi. */
+export function interCompanyUsesConduitParty(voucher: Record<string, unknown>): boolean {
+  const src = inferInterCompanyEntity(voucher, "source");
+  const tgt = inferInterCompanyEntity(voucher, "target");
+  return (
+    isInterCompanyNonBankEntity(src?.kind, src?.id) &&
+    isInterCompanyNonBankEntity(tgt?.kind, tgt?.id)
+  );
+}
+
 /** Source company — bhejne wali posting (save par). */
 export function buildSourceInterCompanyLegs(args: {
   amount: number;
@@ -49,44 +88,67 @@ export function buildSourceInterCompanyLegs(args: {
   entityId: string;
   companyBankAccountId: string;
   interCompanyCounterpartyPartyId: string;
+  useIcConduit?: boolean;
 }): InterCompanyLedgerLeg[] {
   const amt = round2(Number(args.amount) || 0);
   if (amt <= 0) return [];
   const { entityKind, entityId, companyBankAccountId: bankId, interCompanyCounterpartyPartyId: icId } = args;
+  const useConduit = args.useIcConduit === true;
+  const operational = isInterCompanyNonBankEntity(entityKind, entityId);
   const legs: InterCompanyLedgerLeg[] = [];
-  if (entityId && icId && bankId) {
+  if (operational && useConduit && icId && bankId) {
     legs.push({ kind: entityKind, accountId: entityId, debit: amt, credit: 0 });
     legs.push({ kind: "party", accountId: icId, debit: 0, credit: amt });
     legs.push({ kind: "party", accountId: icId, debit: amt, credit: 0 });
     legs.push({ kind: "bank", accountId: bankId, debit: 0, credit: amt });
     return legs;
   }
-  // Bank abhi select nahi — entity + IC conduit legs se source staff/party ledger me dikhe
-  if (entityId && icId) {
+  // Ek side party/staff — seedha entity ↔ bank; IC conduit mat
+  if (operational && bankId) {
+    legs.push({ kind: entityKind, accountId: entityId, debit: amt, credit: 0 });
+    legs.push({ kind: "bank", accountId: bankId, debit: 0, credit: amt });
+    return legs;
+  }
+  if (operational && useConduit && icId) {
     legs.push({ kind: entityKind, accountId: entityId, debit: amt, credit: 0 });
     legs.push({ kind: "party", accountId: icId, debit: 0, credit: amt });
     return legs;
   }
-  if (icId && bankId) {
-    legs.push({ kind: "party", accountId: icId, debit: amt, credit: 0 });
+  // Bank-to-bank — sirf bank Cr; auto IC conduit party ledger me mat
+  if (bankId) {
     legs.push({ kind: "bank", accountId: bankId, debit: 0, credit: amt });
   }
   return legs;
 }
 
-/** Target company — create par pending payable (unapproved). */
+/** Target company — pending legs; bank-to-bank par sirf bank Dr (IC conduit party mat). */
 export function buildTargetInterCompanyLegsPending(args: {
   amount: number;
+  entityKind?: InterCompanyEntityKind;
+  entityId?: string;
+  companyBankAccountId?: string;
   interCompanyCounterpartyPartyId: string;
+  useIcConduit?: boolean;
 }): InterCompanyLedgerLeg[] {
   const amt = round2(Number(args.amount) || 0);
+  if (amt <= 0) return [];
+  const entityKind = args.entityKind || "party";
+  const entityId = String(args.entityId || "").trim();
+  const bankId = String(args.companyBankAccountId || "").trim();
   const icId = String(args.interCompanyCounterpartyPartyId || "").trim();
-  if (amt <= 0 || !icId) return [];
-  return [{ kind: "party", accountId: icId, debit: 0, credit: amt }];
+  const useConduit = args.useIcConduit === true;
+  const operational = isInterCompanyNonBankEntity(entityKind, entityId);
+  if (operational && useConduit && icId) {
+    return [{ kind: "party", accountId: icId, debit: 0, credit: amt }];
+  }
+  if (bankId) {
+    return [{ kind: "bank", accountId: bankId, debit: amt, credit: 0 }];
+  }
+  return [];
 }
 
 /**
- * Source approve: bank par payment out (Dr+Cr) — target bank approve jaisa history me dono side.
+ * Source approve: entity involve ho to bank rasta (Dr+Cr); bank-to-bank par sirf Cr.
  */
 export function buildSourceInterCompanyLegsApproved(args: {
   amount: number;
@@ -94,28 +156,35 @@ export function buildSourceInterCompanyLegsApproved(args: {
   entityId: string;
   companyBankAccountId: string;
   interCompanyCounterpartyPartyId: string;
+  useIcConduit?: boolean;
 }): InterCompanyLedgerLeg[] {
   const amt = round2(Number(args.amount) || 0);
   if (amt <= 0) return [];
   const { entityKind, entityId, companyBankAccountId: bankId, interCompanyCounterpartyPartyId: icId } = args;
+  const useConduit = args.useIcConduit === true;
+  const operational = isInterCompanyNonBankEntity(entityKind, entityId);
   const legs: InterCompanyLedgerLeg[] = [];
-  if (entityId && icId && bankId) {
+  if (operational && useConduit && icId && bankId) {
     legs.push({ kind: entityKind, accountId: entityId, debit: amt, credit: 0 });
     legs.push({ kind: "party", accountId: icId, debit: 0, credit: amt });
     legs.push({ kind: "party", accountId: icId, debit: amt, credit: 0 });
     legs.push({ kind: "bank", accountId: bankId, debit: amt, credit: amt });
     return legs;
   }
-  if (icId && bankId) {
-    legs.push({ kind: "party", accountId: icId, debit: amt, credit: 0 });
+  if (operational && bankId) {
+    legs.push({ kind: entityKind, accountId: entityId, debit: amt, credit: 0 });
     legs.push({ kind: "bank", accountId: bankId, debit: amt, credit: amt });
+    return legs;
+  }
+  // Bank-to-bank approve — sirf bank Cr
+  if (bankId) {
+    legs.push({ kind: "bank", accountId: bankId, debit: 0, credit: amt });
   }
   return legs;
 }
 
 /**
- * Target approve: IC clear + entity Cr + bank par receive (Dr) + entity transfer (Cr) — net zero bank balance.
- * Unapproved par sirf bank Dr dikhta tha; approve par history me dono side clear.
+ * Target approve: entity involve ho to bank rasta (Dr+Cr); bank-to-bank par sirf Dr.
  */
 export function buildTargetInterCompanyLegsApproved(args: {
   amount: number;
@@ -123,20 +192,28 @@ export function buildTargetInterCompanyLegsApproved(args: {
   entityId: string;
   companyBankAccountId: string;
   interCompanyCounterpartyPartyId: string;
+  useIcConduit?: boolean;
 }): InterCompanyLedgerLeg[] {
   const amt = round2(Number(args.amount) || 0);
   if (amt <= 0) return [];
   const { entityKind, entityId, companyBankAccountId: bankId, interCompanyCounterpartyPartyId: icId } = args;
+  const useConduit = args.useIcConduit === true;
+  const operational = isInterCompanyNonBankEntity(entityKind, entityId);
   const legs: InterCompanyLedgerLeg[] = [];
-  if (entityId && icId && bankId) {
+  if (operational && useConduit && icId && bankId) {
     legs.push({ kind: "bank", accountId: bankId, debit: amt, credit: amt });
     legs.push({ kind: "party", accountId: icId, debit: amt, credit: 0 });
     legs.push({ kind: entityKind, accountId: entityId, debit: 0, credit: amt });
     return legs;
   }
-  if (icId && bankId) {
+  if (operational && bankId) {
     legs.push({ kind: "bank", accountId: bankId, debit: amt, credit: amt });
-    legs.push({ kind: "party", accountId: icId, debit: amt, credit: 0 });
+    legs.push({ kind: entityKind, accountId: entityId, debit: 0, credit: amt });
+    return legs;
+  }
+  // Bank-to-bank approve — sirf bank Dr
+  if (bankId) {
+    legs.push({ kind: "bank", accountId: bankId, debit: amt, credit: 0 });
   }
   return legs;
 }
@@ -162,19 +239,56 @@ export function resolveInterCompanyLegsForVoucher(
   return [];
 }
 
-function normEntityKind(raw: unknown): InterCompanyEntityKind | null {
-  const k = String(raw || "")
-    .toLowerCase()
-    .trim() as InterCompanyEntityKind;
-  return k === "party" || k === "bank" || k === "staff" || k === "tax" || k === "expense" ? k : null;
+/** Is side par party/staff/tax/expense involve — bank sirf rasta (approve par Dr+Cr). */
+export function isInterCompanyOperationalEntityInvolved(
+  voucher: Record<string, unknown>,
+  side: "source" | "target"
+): boolean {
+  const inferred = inferInterCompanyEntity(voucher, side);
+  if (inferred?.id) return isInterCompanyNonBankEntity(inferred.kind, inferred.id);
+  const kindKey = side === "source" ? "sourceEntityKind" : "targetEntityKind";
+  const idKey = side === "source" ? "sourceEntityId" : "targetEntityId";
+  return isInterCompanyNonBankEntity(
+    String(voucher[kindKey] || "").toLowerCase() as InterCompanyEntityKind,
+    voucher[idKey]
+  );
 }
 
-function entityKindToLegContext(kind: InterCompanyEntityKind): "party" | "account" | "staff" | "tax" | "expense" {
-  if (kind === "bank") return "account";
-  if (kind === "staff") return "staff";
-  if (kind === "tax") return "tax";
-  if (kind === "expense") return "expense";
-  return "party";
+/** Source/target role — link.role ya entity snapshot se infer. */
+export function resolveInterCompanyViewerSide(
+  voucher: Record<string, unknown> | null | undefined
+): "source" | "target" | null {
+  if (!voucher) return null;
+  const side = interCompanyVoucherViewerSide(voucher);
+  if (side === "source" || side === "target") return side;
+  const role = readInterCompanyLink(voucher)?.role;
+  if (role === "source" || role === "target") return role;
+  if (isInterCompanyOperationalEntityInvolved(voucher, "source")) return "source";
+  if (isInterCompanyOperationalEntityInvolved(voucher, "target")) return "target";
+  return null;
+}
+
+function isInterCompanyVoucherApproved(voucher: Record<string, unknown>): boolean {
+  return voucher?.isApproved === true;
+}
+
+/** Is side par party/staff/tax/expense (ya bank entity) involve — bank sirf rasta. */
+export function resolveInterCompanyOperationalEntity(args: {
+  side: "source" | "target";
+  voucher: Record<string, unknown>;
+}): { kind: InterCompanyEntityKind; id: string } | null {
+  return inferInterCompanyEntity(args.voucher, args.side);
+}
+
+/** Bank-to-bank IC — koi operational entity nahi; bank par net Dr/Cr. */
+export function isInterCompanyBankToBankOnly(voucher: Record<string, unknown>): boolean {
+  const side = resolveInterCompanyViewerSide(voucher);
+  if (side !== "source" && side !== "target") return true;
+  return !isInterCompanyOperationalEntityInvolved(voucher, side);
+}
+
+function resolveInterCompanyBankIdForLegs(voucher: Record<string, unknown>): string {
+  return readInterCompanyCompanyBankId(voucher);
 }
 
 /** Ledger context + account id — is voucher leg se Dr/Cr. */
@@ -188,7 +302,22 @@ export function getInterCompanyLegAmounts(
   const id = String(entityId || "").trim();
   if (!id) return empty;
 
-  const side = interCompanyVoucherViewerSide(voucher);
+  const icCounterpartyId = String(voucher.interCompanyCounterpartyPartyId || "").trim();
+  if (context === "party" && icCounterpartyId && id === icCounterpartyId) {
+    if (!interCompanyUsesConduitParty(voucher)) {
+      return empty;
+    }
+    const viewerSide = resolveInterCompanyViewerSide(voucher);
+    if (
+      viewerSide &&
+      (viewerSide === "source" || viewerSide === "target") &&
+      !isInterCompanyOperationalEntityInvolved(voucher, viewerSide)
+    ) {
+      return empty;
+    }
+  }
+
+  const side = resolveInterCompanyViewerSide(voucher);
   const amt = round2(Number(voucher.amount ?? voucher.total) || 0);
 
   // Target: source approve se pehle ledger me amount mat dikhao
@@ -205,17 +334,17 @@ export function getInterCompanyLegAmounts(
     return empty;
   }
 
-  if (voucher.isApproved !== true) {
+  if (!isInterCompanyVoucherApproved(voucher)) {
     // Target: unapproved par bank me receive (Dr); entity/staff approve ke baad
     if (side === "target" && context === "account" && amt > 0) {
-      const bankId = String(voucher.companyBankAccountId || "").trim();
+      const bankId = resolveInterCompanyBankIdForLegs(voucher);
       if (bankId && id === bankId) {
         return finalizeIcLegAmounts(voucher, { touched: true, debit: amt, credit: 0 });
       }
     }
     // Source: unapproved bank — sirf Cr (payment out); target jaisa ek side
     if (side === "source" && context === "account" && amt > 0) {
-      const bankId = String(voucher.companyBankAccountId || "").trim();
+      const bankId = resolveInterCompanyBankIdForLegs(voucher);
       if (bankId && id === bankId) {
         return finalizeIcLegAmounts(voucher, { touched: true, debit: 0, credit: amt });
       }
@@ -227,19 +356,27 @@ export function getInterCompanyLegAmounts(
     }
   }
 
-  // Target approved bank: receive (Dr) + transfer (Cr) — net zero, history clear
-  if (side === "target" && voucher.isApproved === true && context === "account" && amt > 0) {
-    const bankId = String(voucher.companyBankAccountId || "").trim();
+  // Approved bank — entity involve: rasta (Dr+Cr net zero); bank-to-bank: ek side Dr/Cr
+  if (isInterCompanyVoucherApproved(voucher) && context === "account" && amt > 0) {
+    const bankId = resolveInterCompanyBankIdForLegs(voucher);
     if (bankId && id === bankId) {
-      return finalizeIcLegAmounts(voucher, { touched: true, debit: amt, credit: amt });
-    }
-  }
-
-  // Source approved bank: payment out (Dr) + Cr — dono side, target mirror
-  if (side === "source" && voucher.isApproved === true && context === "account" && amt > 0) {
-    const bankId = String(voucher.companyBankAccountId || "").trim();
-    if (bankId && id === bankId) {
-      return finalizeIcLegAmounts(voucher, { touched: true, debit: amt, credit: amt });
+      const bankOnly = isInterCompanyBankToBankOnly(voucher);
+      if (side === "target") {
+        return finalizeIcLegAmounts(
+          voucher,
+          bankOnly
+            ? { touched: true, debit: amt, credit: 0 }
+            : { touched: true, debit: amt, credit: amt }
+        );
+      }
+      if (side === "source") {
+        return finalizeIcLegAmounts(
+          voucher,
+          bankOnly
+            ? { touched: true, debit: 0, credit: amt }
+            : { touched: true, debit: amt, credit: amt }
+        );
+      }
     }
   }
 

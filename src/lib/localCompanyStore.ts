@@ -12,6 +12,9 @@ import { clearCloudCompanyPasswordUnlockSession } from "@/lib/cloudCompanyPasswo
 import { clearOfflineUnlockSession } from "@/lib/offlineCompanyUnlockRemember";
 import { clearRememberedSharedUnlockUsername } from "@/lib/onlineSharedUnlockRememberUsername";
 
+const REMOVED_COMPANY_TOMBSTONE_PREFIX = "pl_removed_local_company_v1:";
+const REMOVED_COMPANY_TOMBSTONE_MS = 10 * 60 * 1000;
+
 export type LocalCompanyDoc = {
   id: string;
   name: string;
@@ -95,6 +98,33 @@ export type RemoveLocalCompanyOptions = {
   firebaseUid?: string | null;
 };
 
+function markLocalCompanyRecentlyRemoved(companyId: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    // Running cloud-sync cycle stale registry snapshot se Drive folder recreate na kare.
+    window.localStorage.setItem(`${REMOVED_COMPANY_TOMBSTONE_PREFIX}${companyId}`, String(Date.now()));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function wasLocalCompanyRecentlyRemoved(companyId: string): boolean {
+  if (typeof window === "undefined") return false;
+  const cid = String(companyId || "").trim();
+  if (!cid) return false;
+  try {
+    const key = `${REMOVED_COMPANY_TOMBSTONE_PREFIX}${cid}`;
+    const raw = window.localStorage.getItem(key);
+    const ts = Number(raw);
+    if (!Number.isFinite(ts) || ts <= 0) return false;
+    if (Date.now() - ts <= REMOVED_COMPANY_TOMBSTONE_MS) return true;
+    window.localStorage.removeItem(key);
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Device se company ka saara local data hatao: registry + company_docs + users + sync outbox + related localStorage.
  * Shared access revoke / recycle bin permanent delete dono yahi use karte hain.
@@ -107,6 +137,7 @@ export async function removeLocalCompanyById(
   if (!db || !companyId) return;
   const cid = String(companyId).trim();
   if (!cid) return;
+  markLocalCompanyRecentlyRemoved(cid);
 
   db.prepare(`DELETE FROM company_docs WHERE company_id = ?`).run(cid);
   db.prepare(`DELETE FROM company_users WHERE company_id = ?`).run(cid);

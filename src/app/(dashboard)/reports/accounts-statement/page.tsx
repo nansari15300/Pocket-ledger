@@ -37,6 +37,7 @@ import {
   searchParamsStringAfterClosingModal,
   searchParamsStringForModalClose,
 } from "@/lib/modalUrlSync";
+import { useMobileLedgerModalUrlGuard } from "@/hooks/useMobileLedgerModalUrlGuard";
 import { ChevronRight, ChevronDown, Landmark, Users, Crown, Building2, UserCheck, Receipt, TrendingUp, Briefcase, X, ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, BarChart2 } from "lucide-react";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
@@ -218,16 +219,6 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
         const userDoc = await getDoc(doc(firestore, 'users', userId));
         if (userDoc.exists()) {
           data = userDoc.data();
-        } else {
-          // Fallback 2: doc ID might be name_uid format - try to find by searching all docs ending with uid
-          const allUsersSnap = await getDocs(collection(firestore, "users"));
-          const matchingDoc = allUsersSnap.docs.find(d => {
-            const docData = d.data();
-            return docData.uid === userId || d.id.endsWith(userId);
-          });
-          if (matchingDoc) {
-            data = matchingDoc.data();
-          }
         }
       }
       
@@ -1430,15 +1421,15 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
 
   const modalParam = searchParams.get("modal");
   const anyReportPopupOpen = isVoucherDialogOpen || isCalendarOpen;
-  useEffect(() => {
-    if (!isMobile) return;
-    if (modalParam === "1") openingModalRef.current = false;
-    if (modalParam !== "1" && anyReportPopupOpen && !openingModalRef.current) {
-      setIsVoucherDialogOpen(false);
-      setSelectedVoucher(null);
-      setIsCalendarOpen(false);
-    }
-  }, [isMobile, modalParam, anyReportPopupOpen]);
+  useMobileLedgerModalUrlGuard({
+    isMobile,
+    modalParam,
+    anyPopupOpen: anyReportPopupOpen,
+    openingModalRef,
+    pathname,
+    searchParams,
+    router,
+  });
 
   const handleReportBack = useCallback(() => {
     if (isVoucherDialogOpen) {

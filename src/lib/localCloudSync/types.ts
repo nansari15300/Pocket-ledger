@@ -29,6 +29,9 @@ export type CloudSyncManifest = {
   cloudSyncEncryptDriveData?: boolean;
   cloudSyncEncryptDriveFiles?: boolean;
   cloudSyncDriveDateFolderMode?: "ad" | "bs" | "both";
+  /** Company recycle-bin move — joined devices par registry `isDeleted` sync (Firestore local-only companies). */
+  companyRegistryIsDeleted?: boolean;
+  companyRegistryDeletedAt?: number;
 };
 
 export type CloudSyncRunStatus = "idle" | "syncing" | "error";

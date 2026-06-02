@@ -49,7 +49,8 @@ import { format, startOfDay } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields, softDeleteVoucherMoveToRecycleBin } from "@/lib/voucherActionsClient";
-import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
+import { normalizePrefix } from "@/lib/voucherNumberFormat";
+import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import {
@@ -241,22 +242,18 @@ export function CreateNoteForm({
 
   const fetchVoucherNumber = useCallback(async (selectedPrefix?: string) => {
     if (!companyId || !company || !isAutoVoucherEnabled) return;
-    const prefixes = company?.voucherPrefixes?.note || [getVoucherPrefix(company.voucherPrefixes as Record<string, string[]> | undefined)];
-    const VOUCHER_PREFIX = selectedPrefix || prefixes[0];
     try {
-      const q = query(collection(firestore, `companies/${companyId}/vouchers`), where("type", "==", "note"));
-      const querySnapshot = await getDocs(q);
-      const voucherNumbers = querySnapshot.docs.map(doc => doc.data().voucherNumber as string);
-      let maxNum = 0;
-      voucherNumbers.forEach(numStr => {
-        if (!numStr || (!numStr.startsWith(normalizePrefix(VOUCHER_PREFIX)) && !numStr.startsWith(VOUCHER_PREFIX))) return;
-        const num = parseVoucherNumberPart(numStr, VOUCHER_PREFIX);
-        if (!isNaN(num) && num > maxNum) maxNum = num;
+      const nextNo = await getNextVoucherNumberForCompany({
+        companyId,
+        companyDoc: company as Record<string, unknown>,
+        voucherLike: { type: "note" },
+        selectedPrefix,
       });
-      form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, maxNum + 1));
-      // Re-run validation so "Voucher number is required" clears and Save enables after auto number is set
+      form.setValue("voucherNumber", nextNo);
       form.trigger();
-    } catch (error) { console.error(error); }
+    } catch (error) {
+      console.error(error);
+    }
   }, [companyId, company, form, isAutoVoucherEnabled]);
 
   useEffect(() => { if (!voucher?.id) fetchVoucherNumber(); }, [voucher?.id, fetchVoucherNumber]);
@@ -1047,6 +1044,7 @@ export function CreateNoteForm({
                                 toast,
                               })
                             }
+                            voucherAttachmentReuse={{ currentFiles: files, setFiles, maxFiles: fileAttachmentLimits.maxFileCount }}
                             className={cn(
                               "w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
                               allowAttachments && fileAttachmentLimits.maxFileCount > 0

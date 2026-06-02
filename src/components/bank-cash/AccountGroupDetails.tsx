@@ -36,6 +36,7 @@ import {
   searchParamsStringAfterClosingModal,
   searchParamsStringForModalClose,
 } from "@/lib/modalUrlSync";
+import { useMobileLedgerModalUrlGuard } from "@/hooks/useMobileLedgerModalUrlGuard";
 import { startOfDay, endOfDay, format } from "date-fns";
 import AdCalendar from "../ui/ad-calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -779,19 +780,15 @@ export function AccountGroupDetails({
   }, [closeModalInUrl]);
   useUrlModalBack(urlModalOpen, closeUrlModal);
 
-  useEffect(() => {
-    if (!isMobile) return;
-    if (modalParam === "1") openingModalRef.current = false;
-    if (modalParam !== "1" && anyMobilePopupOpen && !openingModalRef.current) {
-      setMobileFooterDialogOpen(null);
-      setIsCalendarOpen(false);
-      setIsVoucherDialogOpen(false);
-      setSelectedVoucher(null);
-      setIsNoteOpen(false);
-      setNoteEntityId(null);
-      // `closeModalInUrl()` yahan mat â€” AccountDetails jaisa: stale `searchParams` se `?selected=` / `?view=` drop avoid.
-    }
-  }, [isMobile, modalParam, anyMobilePopupOpen]);
+  useMobileLedgerModalUrlGuard({
+    isMobile,
+    modalParam,
+    anyPopupOpen: anyMobilePopupOpen,
+    openingModalRef,
+    pathname,
+    searchParams,
+    router,
+  });
 
   const handleShowNarrationChange = (checked: boolean) => {
     setShowNarration(checked);

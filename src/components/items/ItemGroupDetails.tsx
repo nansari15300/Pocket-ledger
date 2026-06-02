@@ -56,6 +56,7 @@ import {
   searchParamsStringAfterClosingModal,
   searchParamsStringForModalClose,
 } from "@/lib/modalUrlSync";
+import { useMobileLedgerModalUrlGuard } from "@/hooks/useMobileLedgerModalUrlGuard";
 import { startOfDay, endOfDay, format } from "date-fns";
 import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
 import AdCalendar from "../ui/ad-calendar";
@@ -361,18 +362,15 @@ export function ItemGroupDetails({
   }, [closeModalInUrl]);
   useUrlModalBack(urlModalOpen, closeUrlModal);
 
-  useEffect(() => {
-    if (!isMobile) return;
-    if (modalParam === "1") openingModalRef.current = false;
-    if (modalParam !== "1" && anyMobilePopupOpen && !openingModalRef.current) {
-      setMobileFooterDialogOpen(null);
-      setIsCalendarOpen(false);
-      setIsVoucherDialogOpen(false);
-      setSelectedVoucher(null);
-      setIsNoteOpen(false);
-      setNoteEntityId(null);
-    }
-  }, [isMobile, modalParam, anyMobilePopupOpen]);
+  useMobileLedgerModalUrlGuard({
+    isMobile,
+    modalParam,
+    anyPopupOpen: anyMobilePopupOpen,
+    openingModalRef,
+    pathname,
+    searchParams,
+    router,
+  });
 
   const handleEditVoucher = (voucher: any) => {
     setSelectedVoucher(voucher);

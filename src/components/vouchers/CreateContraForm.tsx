@@ -57,6 +57,7 @@ import {
   updateVoucherSpendWiseLinks,
 } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
+import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 /** Copy chip → From vs To source account alag — sirf types (runtime circular avoid). */
 import type { CopyMissingMasterOpts, CopyMasterDraftRequestPayload } from "@/components/vouchers/AddVoucherDialog";
@@ -636,20 +637,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const base = getContraBasePrefix(company.voucherPrefixes as Record<string, string[]> | undefined);
 
     try {
-      const q = query(collection(firestore, `companies/${companyId}/vouchers`), where("type", "==", "contra"));
-      const querySnapshot = await getDocs(q);
-      let maxNum = 0;
-      querySnapshot.docs.forEach(doc => {
-        const d = doc.data();
-        const outStr = d.voucherNumberOut ?? d.voucherNumber;
-        const inStr = d.voucherNumberIn ?? d.voucherNumber;
-        for (const numStr of [outStr, inStr].filter(Boolean)) {
-          const num = parseVoucherNumberPart(numStr, VOUCHER_PREFIX) || parseVoucherNumberPart(numStr, base + " Out") || parseVoucherNumberPart(numStr, base + " In");
-          if (!isNaN(num) && num > maxNum) maxNum = num;
-        }
+      const nextNo = await getNextVoucherNumberForCompany({
+        companyId,
+        companyDoc: company as Record<string, unknown>,
+        voucherLike: { type: "contra" },
+        selectedPrefix,
       });
-
-      const nextNum = maxNum + 1;
+      const parsed =
+        parseVoucherNumberPart(nextNo, VOUCHER_PREFIX) ||
+        parseVoucherNumberPart(nextNo, normalizePrefix(VOUCHER_PREFIX));
+      const nextNum = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
       form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextNum));
       form.setValue("voucherNumberOut", formatVoucherNumber(`${base} Out`, nextNum));
       form.setValue("voucherNumberIn", formatVoucherNumber(`${base} In`, nextNum));
@@ -1856,6 +1853,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   toast,
                                 })
                               }
+                              voucherAttachmentReuse={{ currentFiles: files, setFiles, maxFiles: fileAttachmentLimits.maxFileCount }}
                               className={cn(
                                 "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
                                 allowAttachments && fileAttachmentLimits.maxFileCount > 0

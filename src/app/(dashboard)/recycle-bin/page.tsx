@@ -48,11 +48,21 @@ import {
     localCompanyRowIsDeleted,
     upsertLocalCompany,
 } from "@/lib/localCompanyStore";
-import { permanentDeleteLocalCompanyWithDriveCleanup } from "@/lib/localCloudSync/driveCompanyFolderLifecycle";
+import {
+  permanentDeleteDriveFolderHint,
+  permanentDeleteLocalCompanyWithDriveCleanup,
+} from "@/lib/localCloudSync/driveCompanyFolderLifecycle";
 import { coerceDeletedAtToDate } from "@/lib/coerceDeletedAt";
 import { finalizeCompanyPermanentDeleteOnServer } from "@/lib/recycleBinCompanyFirestoreFinalize";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
-import { deleteCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
+import { BROWSER_DB_COLLECTION_BUMP, deleteCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
+import {
+    companyUsesSqliteRecycleBinSource,
+    listDeletedSubdocsFromSqlite,
+    permanentDeleteCompanySubdocFromRecycleBin,
+    restoreCompanySubdocFromRecycleBin,
+    deleteFirebaseStorageFilesForDoc,
+} from "@/lib/recycleBinEntityLifecycle";
 import { LOCAL_AUTH_CHANGED_EVENT } from "@/lib/localApiClient";
 import { ownerFinalizeRecycleBinCompanyOnServer } from "@/lib/ownerRecycleBinApiClient";
 import type { User } from "firebase/auth";
@@ -429,73 +439,138 @@ function RecycleBinContent() {
         };
     }, [deletedItems, user?.uid]);
 
-        // Deleted items from subcollections (parties, vouchers, etc.): only when a company is selected
+        // Local + Drive / SQLite companies: Firestore listener ke saath SQLite deleted rows bhi (bin empty fix).
+        useEffect(() => {
+            if (!companyId || !user?.uid) return;
+            let cancelled = false;
+
+            const mergeSqliteDeletedIntoState = async () => {
+                if (!(await companyUsesSqliteRecycleBinSource(companyId))) return;
+                const sqliteItems = await listDeletedSubdocsFromSqlite(companyId, COLLECTIONS_TO_CHECK);
+                if (cancelled) return;
+                setDeletedItems((prev) => {
+                    const byKey = new Map<string, DeletedItem>();
+                    for (const it of prev) {
+                        if (it.collectionPath === "companies" || it.isRootCollection) continue;
+                        byKey.set(`${it.collectionPath}:${it.id}`, it);
+                    }
+                    for (const it of sqliteItems) {
+                        byKey.set(`${it.collectionPath}:${it.id}`, it);
+                    }
+                    const mergedSub = [...byKey.values()];
+                    const companiesOnly = prev.filter(
+                        (p) => p.collectionPath === "companies" || p.isRootCollection === true
+                    );
+                    return [...companiesOnly, ...mergedSub];
+                });
+            };
+
+            void mergeSqliteDeletedIntoState().finally(() => {
+                if (!cancelled) setLoading(false);
+            });
+            const onBump = (ev: Event) => {
+                const d = (ev as CustomEvent<{ companyId?: string; collectionName?: string }>).detail;
+                if (d?.companyId && d.companyId !== companyId) return;
+                void mergeSqliteDeletedIntoState();
+            };
+            window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
+            return () => {
+                cancelled = true;
+                window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
+            };
+        }, [companyId, user?.uid]);
+
+        // EXE/local+Drive: SQLite bin source — Firestore `onSnapshot` empty list se SQLite rows flash hata deta tha (~29ms).
         useEffect(() => {
             if (!companyId || !user?.uid) return;
 
+            let cancelled = false;
+            let subcollectionUnsubs: Array<() => void> = [];
             let initialLoadComplete = false;
-            const subcollectionUnsubs = COLLECTIONS_TO_CHECK.map(coll => {
-                const q = query(
-                collection(firestore, `companies/${companyId}/${coll.path}`),
-                where("isDeleted", "==", true)
-            );
-            return onSnapshot(q, (snapshot) => {
-                if (!initialLoadComplete) {
-                    setLoading(false);
-                    initialLoadComplete = true;
+
+            void (async () => {
+                if (await companyUsesSqliteRecycleBinSource(companyId)) {
+                    if (!cancelled) setLoading(false);
+                    return;
                 }
+                if (cancelled) return;
 
-                const newItems = snapshot.docs
-                    .filter(docSnap => !docSnap.data().movedToAdminRecycleAt)
-                    .map(docSnap => {
-                    const data = docSnap.data();
-                    const item: DeletedItem = {
-                        id: docSnap.id,
-                        name: data[coll.nameField] || data.title || `Voucher ${data.voucherNumber}` || 'Unnamed',
-                        type: coll.type,
-                        deletedAt: coerceDeletedAtToDate(data.deletedAt) ?? undefined,
-                        collectionPath: coll.path,
-                        convertedToType: data.convertedToType,
-                        convertedToVoucherNumber: data.convertedToVoucherNumber,
-                    };
+                subcollectionUnsubs = COLLECTIONS_TO_CHECK.map((coll) => {
+                    const q = query(
+                        collection(firestore, `companies/${companyId}/${coll.path}`),
+                        where("isDeleted", "==", true)
+                    );
+                    return onSnapshot(
+                        q,
+                        (snapshot) => {
+                            if (!initialLoadComplete) {
+                                setLoading(false);
+                                initialLoadComplete = true;
+                            }
 
-                    // For vouchers, extract additional fields
-                    if (coll.path === 'vouchers') {
-                        item.voucherNumber = data.voucherNumber;
-                        // Handle Firestore Timestamp for date
-                        item.date = data.date?.toDate ? data.date.toDate() : (data.date instanceof Date ? data.date : data.date ? new Date(data.date) : null);
-                        item.accountId = data.accountId;
-                        item.fromAccountId = data.fromAccountId;
-                        item.toAccountId = data.toAccountId;
-                        item.userId = data.userId;
-                        item.deletedBy = data.deletedBy || data.userId; // Use deletedBy if available, fallback to userId
-                        
-                        // Get account name from journalAccountNames
-                        const accountIdToUse = item.accountId || item.fromAccountId || item.toAccountId;
-                        if (accountIdToUse && journalAccountNames[accountIdToUse]) {
-                            item.accountName = journalAccountNames[accountIdToUse];
+                            const newItems = snapshot.docs
+                                .filter((docSnap) => !docSnap.data().movedToAdminRecycleAt)
+                                .map((docSnap) => {
+                                    const data = docSnap.data();
+                                    const item: DeletedItem = {
+                                        id: docSnap.id,
+                                        name:
+                                            data[coll.nameField] ||
+                                            data.title ||
+                                            `Voucher ${data.voucherNumber}` ||
+                                            "Unnamed",
+                                        type: coll.type,
+                                        deletedAt: coerceDeletedAtToDate(data.deletedAt) ?? undefined,
+                                        collectionPath: coll.path,
+                                        convertedToType: data.convertedToType,
+                                        convertedToVoucherNumber: data.convertedToVoucherNumber,
+                                    };
+
+                                    if (coll.path === "vouchers") {
+                                        item.voucherNumber = data.voucherNumber;
+                                        item.date = data.date?.toDate
+                                            ? data.date.toDate()
+                                            : data.date instanceof Date
+                                              ? data.date
+                                              : data.date
+                                                ? new Date(data.date)
+                                                : null;
+                                        item.accountId = data.accountId;
+                                        item.fromAccountId = data.fromAccountId;
+                                        item.toAccountId = data.toAccountId;
+                                        item.userId = data.userId;
+                                        item.deletedBy = data.deletedBy || data.userId;
+
+                                        const accountIdToUse =
+                                            item.accountId || item.fromAccountId || item.toAccountId;
+                                        if (accountIdToUse && journalAccountNames[accountIdToUse]) {
+                                            item.accountName = journalAccountNames[accountIdToUse];
+                                        }
+                                    }
+
+                                    return item;
+                                });
+
+                            setDeletedItems((prev) => {
+                                const otherItems = prev.filter((item) => item.collectionPath !== coll.path);
+                                return [...otherItems, ...newItems];
+                            });
+                        },
+                        (error) => {
+                            console.error(`Error fetching from ${coll.path}:`, error);
+                            if (!initialLoadComplete) {
+                                setLoading(false);
+                                initialLoadComplete = true;
+                            }
                         }
-                    }
-
-                    return item;
+                    );
                 });
-                  
+            })();
 
-                setDeletedItems(prev => {
-                    const otherItems = prev.filter(item => item.collectionPath !== coll.path);
-                    return [...otherItems, ...newItems];
-                });
-
-            }, (error) => {
-                console.error(`Error fetching from ${coll.path}:`, error);
-                if (!initialLoadComplete) {
-                   setLoading(false);
-                   initialLoadComplete = true;
-                }
-            });
-            });
-
-            return () => subcollectionUnsubs.forEach((unsub) => unsub());
+            return () => {
+                cancelled = true;
+                subcollectionUnsubs.forEach((unsub) => unsub());
+            };
         }, [companyId, user?.uid, journalAccountNames]);
 
     // Fetch user names for deleted items
@@ -676,10 +751,8 @@ function RecycleBinContent() {
             return;
         }
         try {
-            await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, viewVoucherBinItem.id), {
-                isDeleted: false,
-                deletedAt: null,
-            });
+            // SQLite + Drive: restore local row + cloud_sync; Firestore optional.
+            await restoreCompanySubdocFromRecycleBin(companyId, "vouchers", viewVoucherBinItem.id);
             removeDeletedItemFromState(viewVoucherBinItem);
             await removeRecycleBinAlerts(companyId, viewVoucherBinItem.id);
             setViewVoucherDoc((prev) => (prev ? { ...prev, isDeleted: false, deletedAt: null } : prev));
@@ -790,14 +863,10 @@ function RecycleBinContent() {
                     isDeleted: false,
                     deletedAt: null,
                 });
+            } else if (companyId) {
+                await restoreCompanySubdocFromRecycleBin(companyId, resolvedItem.collectionPath, resolvedItem.id);
             } else {
-                const docRef = isCompany
-                    ? doc(firestore, "companies", resolvedItem.id)
-                    : doc(firestore, `companies/${companyId}/${resolvedItem.collectionPath}`, resolvedItem.id);
-                await updateDoc(docRef, {
-                    isDeleted: false,
-                    deletedAt: null,
-                });
+                throw new Error("Select a company to restore this item.");
             }
             removeDeletedItemFromState(resolvedItem);
             if (isCompany) {
@@ -805,7 +874,12 @@ function RecycleBinContent() {
             } else if (companyId) {
                 await removeRecycleBinAlerts(companyId, resolvedItem.id);
             }
-            if (isCompany) reloadLocalCompanyRegistry();
+            if (isCompany) {
+              reloadLocalCompanyRegistry();
+              void import("@/lib/localCloudSync/companyConfig").then(({ syncCompanyRegistryStateToDriveManifest }) =>
+                syncCompanyRegistryStateToDriveManifest(resolvedItem.id)
+              );
+            }
             toast({ title: "Restored!", description: `"${resolvedItem.name}" has been restored.` });
         } catch (error) {
             console.error('Restore failed:', error);
@@ -813,43 +887,6 @@ function RecycleBinContent() {
         }
         setItemToConfirm(null);
         setIsProcessing(false);
-    };
-
-    // Resolve storage path: full URL (Firebase) or plain path like companies/xxx/yyy
-    const getStoragePath = (filePath: string): string | null => {
-        if (!filePath || typeof filePath !== "string") return null;
-        const trimmed = filePath.trim();
-        if (!trimmed) return null;
-        try {
-            if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-                const url = new URL(trimmed);
-                const encoded = url.pathname.split("/o/")[1];
-                if (encoded) return decodeURIComponent(encoded.split("?")[0]);
-            }
-            // Already a storage path
-            if (trimmed.startsWith("companies/")) return trimmed;
-            return trimmed;
-        } catch {
-            return null;
-        }
-    };
-
-    const deleteStorageFilesForDoc = async (data: Record<string, unknown>): Promise<void> => {
-        const { ref, deleteObject } = await import("firebase/storage");
-        const { storage } = await import("@/lib/firebase");
-        const paths: string[] = [];
-        if (Array.isArray(data.filePaths)) paths.push(...(data.filePaths as string[]));
-        if (data.storagePath && typeof data.storagePath === "string") paths.push(data.storagePath);
-        if (data.path && typeof data.path === "string") paths.push(data.path);
-        for (const filePath of paths) {
-            const storagePath = getStoragePath(filePath);
-            if (!storagePath) continue;
-            try {
-                await deleteObject(ref(storage, storagePath));
-            } catch {
-                // File may already be missing
-            }
-        }
     };
 
     const handlePermanentDelete = async (item: DeletedItem) => {
@@ -889,7 +926,7 @@ function RecycleBinContent() {
                     } catch {
                         /* optional cloud row / rules — SQLite hataana zaroori */
                     }
-                    await permanentDeleteLocalCompanyWithDriveCleanup(resolvedItem.id, {
+                    const driveDel = await permanentDeleteLocalCompanyWithDriveCleanup(resolvedItem.id, {
                         firebaseUid: user?.uid ?? null,
                     });
                     removeDeletedItemFromState(resolvedItem);
@@ -897,8 +934,8 @@ function RecycleBinContent() {
                     toast({
                         title: quickDelete ? "Success" : "Deleted permanently",
                         description: quickDelete
-                            ? `"${resolvedItem.name}" deleted permanently.`
-                            : `"${resolvedItem.name}" has been removed from your recycle bin.`,
+                            ? `"${resolvedItem.name}" deleted permanently.${permanentDeleteDriveFolderHint(driveDel)}`
+                            : `"${resolvedItem.name}" has been removed from your recycle bin.${permanentDeleteDriveFolderHint(driveDel)}`,
                     });
                     return;
                 }
@@ -906,12 +943,15 @@ function RecycleBinContent() {
                     // Pehle Firestore (cloud row ab bhi `isDeleted` ke saath ho sakta hai) — warna refresh par mirror SQLite me wapas bhar deta hai.
                     const fin = await finalizeCompanyPermanentDeleteOnServer(resolvedItem.id, quickDelete, user?.uid || "");
                     if (fin.ok === false) throw new Error(fin.error);
-                    await permanentDeleteLocalCompanyWithDriveCleanup(resolvedItem.id, {
+                    const driveDelLocal = await permanentDeleteLocalCompanyWithDriveCleanup(resolvedItem.id, {
                         firebaseUid: user?.uid ?? null,
                     });
                     removeDeletedItemFromState(resolvedItem);
                     reloadLocalCompanyRegistry();
-                    toast({ title: "Deleted permanently", description: `"${resolvedItem.name}" has been removed from your recycle bin.` });
+                    toast({
+                        title: "Deleted permanently",
+                        description: `"${resolvedItem.name}" has been removed from your recycle bin.${permanentDeleteDriveFolderHint(driveDelLocal)}`,
+                    });
                     return;
                 }
                 if (!user) throw new Error("Please sign in to delete.");
@@ -926,26 +966,22 @@ function RecycleBinContent() {
                 return;
             }
 
-            const docPath = `companies/${companyId}/${resolvedItem.collectionPath}/${resolvedItem.id}`;
-            const docRef = doc(firestore, docPath);
-
-            if (quickDelete) {
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) {
-                    await deleteStorageFilesForDoc(docSnap.data() as Record<string, unknown>);
-                }
-                await deleteDoc(docRef);
-                // Browser SQLite extras-merge: Firestore-less local row ghost list me na फिरे permanent delete baad — mirror row भी हटाओ.
-                await deleteCompanyDocFromBrowserDb(companyId, resolvedItem.collectionPath, resolvedItem.id, {
-                    force: true,
-                    notify: true,
-                });
+            const sqliteFullPurge = await companyUsesSqliteRecycleBinSource(companyId);
+            if (quickDelete || sqliteFullPurge) {
+                // Local SQLite + Drive attachments + cloud_sync purge — online Firestore bhi cleanup.
+                await permanentDeleteCompanySubdocFromRecycleBin(
+                    companyId,
+                    resolvedItem.collectionPath,
+                    resolvedItem.id
+                );
                 if (companyId) {
                   await removeRecycleBinAlerts(companyId, resolvedItem.id);
                 }
                 removeDeletedItemFromState(resolvedItem);
                 toast({ title: "Success", description: `"${resolvedItem.name}" deleted permanently.` });
             } else {
+                const docPath = `companies/${companyId}/${resolvedItem.collectionPath}/${resolvedItem.id}`;
+                const docRef = doc(firestore, docPath);
                 await updateDoc(docRef, { movedToAdminRecycleAt: serverTimestamp() });
                 if (companyId) {
                   await removeRecycleBinAlerts(companyId, resolvedItem.id);
@@ -999,6 +1035,7 @@ function RecycleBinContent() {
         // Quick delete OFF = only remove from company admin list (movedToAdminRecycleAt); super admin bin keeps them.
         // Quick delete ON  = delete from server.
         const quickDelete = recycleBinConfig?.quickDelete ?? false;
+        const sqliteFullPurge = companyId ? await companyUsesSqliteRecycleBinSource(companyId) : false;
         const companyIds: string[] = [];
         const nonCompanyItems: DeletedItem[] = [];
         for (const item of resolvedBinItems) {
@@ -1039,7 +1076,7 @@ function RecycleBinContent() {
             // Local-only me SQLite+Drive cleanup pehle ho chuka — `companies/*` Firestore delete loop dobara mat chalao.
             const firestoreCompanyIds = isLocalOnlyMode() ? [] : companyIds;
 
-            if (quickDelete) {
+            if (quickDelete || sqliteFullPurge) {
                 if (!user) {
                     toast({ variant: "destructive", title: "Error", description: "Please sign in to empty the bin." });
                     setIsProcessing(false);
@@ -1063,17 +1100,9 @@ function RecycleBinContent() {
                     }
                 }
                 for (const item of nonCompanyItems) {
-                    const docPath = `companies/${companyId}/${item.collectionPath}/${item.id}`;
-                    const docRef = doc(firestore, docPath);
-                    const docSnap = await getDoc(docRef);
-                    if (docSnap.exists()) {
-                        await deleteStorageFilesForDoc(docSnap.data() as Record<string, unknown>);
-                    }
-                    await deleteDoc(docRef);
-                    await deleteCompanyDocFromBrowserDb(companyId, item.collectionPath, item.id, { force: true, notify: false });
-                    if (companyId) {
-                      await removeRecycleBinAlerts(companyId, item.id);
-                    }
+                    if (!companyId) continue;
+                    await permanentDeleteCompanySubdocFromRecycleBin(companyId, item.collectionPath, item.id);
+                    await removeRecycleBinAlerts(companyId, item.id);
                 }
                 for (const cid of companyIds) {
                   await removeRecycleBinAlerts(cid, cid);

@@ -52,7 +52,8 @@ import type { ExpenseAccount } from "../expenses/types";
 import { Checkbox } from "../ui/checkbox";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, updateVoucherSpendWiseLinks, syncBillWiseAllocationsToTargetVouchers, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
-import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
+import { normalizePrefix } from "@/lib/voucherNumberFormat";
+import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import {
@@ -1115,36 +1116,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   const fetchVoucherNumber = useCallback(async (selectedPrefix?: string) => {
     if (!companyId || !company || !isAutoVoucherEnabled) return;
-    const prefixes = company?.voucherPrefixes?.[voucherType] || [getVoucherPrefix(company.voucherPrefixes, voucherType)];
-    const VOUCHER_PREFIX = selectedPrefix || prefixes[0];
-    
     try {
-      const q = query(collection(firestore, `companies/${companyId}/vouchers`), where("type", "==", voucherType));
-      let voucherNumbers: string[] = [];
-      // APK/static offline: `getDocs` Firestore par hang — voucher numbers SQLite mirror se.
-      if (preferLocalLedgerReads()) {
-        const rows = await listCompanyDocsFromBrowserDb(companyId, "vouchers");
-        voucherNumbers = rows
-          .filter((r: { type?: string }) => String(r?.type ?? "") === String(voucherType))
-          .map((r: { voucherNumber?: string }) => String(r?.voucherNumber ?? ""))
-          .filter(Boolean);
-      } else {
-        const querySnapshot = await getDocs(q);
-        voucherNumbers = querySnapshot.docs.map((d) => d.data().voucherNumber as string);
-      }
-      
-      let maxNum = 0;
-      voucherNumbers.forEach(numStr => {
-        if (numStr && (numStr.startsWith(normalizePrefix(VOUCHER_PREFIX)) || numStr.startsWith(VOUCHER_PREFIX))) {
-          const num = parseVoucherNumberPart(numStr, VOUCHER_PREFIX);
-          if (!isNaN(num) && num > maxNum) {
-            maxNum = num;
-          }
-        }
+      const nextNo = await getNextVoucherNumberForCompany({
+        companyId,
+        companyDoc: company as Record<string, unknown>,
+        voucherLike: { type: voucherType },
+        selectedPrefix,
       });
-      
-      const nextVoucherNumber = maxNum + 1;
-      form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextVoucherNumber));
+      form.setValue("voucherNumber", nextNo);
     } catch (error) {
       console.error("Error fetching voucher count: ", error);
     }
@@ -2656,6 +2635,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               toast,
                             })
                           }
+                          voucherAttachmentReuse={{ currentFiles: files, setFiles, maxFiles: fileAttachmentLimits.maxFileCount }}
                           className={cn(
                             "relative flex h-24 w-24 flex-col items-center justify-center rounded-lg border-2 border-dashed transition-colors",
                             allowAttachments && fileAttachmentLimits.maxFileCount > 0

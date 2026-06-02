@@ -309,6 +309,8 @@ export async function driveGetManifest(
   const raw = await readManifestRaw(drive, ref);
   if (!raw) return { latestOp: 0 };
   const dateMode = String(raw.cloudSyncDriveDateFolderMode ?? "").trim().toLowerCase();
+  const registryDeleted = raw.companyRegistryIsDeleted === true;
+  const registryDeletedAt = Number(raw.companyRegistryDeletedAt);
   return {
     latestOp: Number(raw.latestOp) || 0,
     updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : undefined,
@@ -327,6 +329,11 @@ export async function driveGetManifest(
     cloudSyncDriveDateFolderMode:
       dateMode === "bs" || dateMode === "ad" || dateMode === "both"
         ? (dateMode as CloudSyncManifest["cloudSyncDriveDateFolderMode"])
+        : undefined,
+    companyRegistryIsDeleted: registryDeleted ? true : raw.companyRegistryIsDeleted === false ? false : undefined,
+    companyRegistryDeletedAt:
+      registryDeleted && Number.isFinite(registryDeletedAt) && registryDeletedAt > 0
+        ? registryDeletedAt
         : undefined,
   };
 }
@@ -930,7 +937,7 @@ function isDriveNotFoundError(e: unknown): boolean {
   return msg.includes("not found") || msg.includes("file not found");
 }
 
-/** Owner recycle-bin permanent delete — `Pocket Ledger/{Company}/` poora folder Drive se hatao. */
+/** Owner recycle-bin permanent delete — `Pocket Ledger/{Company}/` (+ legacy) poora folder Drive se hatao. */
 export async function driveDeleteCompanyFolder(
   uid: string,
   companyId: string,
@@ -941,10 +948,46 @@ export async function driveDeleteCompanyFolder(
   const tokens = await loadDriveTokens(uid);
   const auth = oauthClient(tokens);
   const drive = google.drive({ version: "v3", auth });
-  const folderId = await resolveCompanyRootFolderId(drive, ref, "find");
-  if (!folderId) return false;
-  await deleteDriveFolderRecursive(drive, folderId);
-  return true;
+  const deletedIds = new Set<string>();
+
+  const tryDeleteFolder = async (folderId: string | null | undefined) => {
+    const id = String(folderId || "").trim();
+    if (!id || deletedIds.has(id)) return;
+    try {
+      await deleteDriveFolderRecursive(drive, id);
+      deletedIds.add(id);
+    } catch (e) {
+      if (!isDriveNotFoundError(e)) throw e;
+    }
+  };
+
+  await tryDeleteFolder(await resolveCompanyRootFolderId(drive, ref, "find"));
+  await tryDeleteFolder(await findLegacyCompanyFolder(drive, companyId));
+
+  // Folder id / rename miss: Pocket Ledger root par suffix match karke bhi hatao.
+  if (deletedIds.size === 0) {
+    const rootId = await findChildFolder(drive, "root", POCKET_LEDGER_DRIVE_ROOT);
+    const suffix = pocketLedgerDriveCompanyIdPart(companyId);
+    if (rootId && suffix) {
+      let pageToken: string | undefined;
+      do {
+        const res = await drive.files.list({
+          q: `'${rootId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+          fields: "nextPageToken, files(id,name)",
+          pageSize: 200,
+          pageToken,
+        });
+        for (const f of res.data.files ?? []) {
+          const name = String(f.name || "");
+          if (!name.endsWith(`__${suffix}`)) continue;
+          await tryDeleteFolder(f.id);
+        }
+        pageToken = res.data.nextPageToken ?? undefined;
+      } while (pageToken);
+    }
+  }
+
+  return deletedIds.size > 0;
 }
 
 /** Shared user / sync — folder ab accessible hai ya owner ne hata diya. */

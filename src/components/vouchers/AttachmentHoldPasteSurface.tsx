@@ -17,12 +17,20 @@ import {
   refreshAttachmentHoldSessionBackup,
 } from "@/lib/attachmentHoldClipboard";
 import { toast as sonnerToast } from "sonner";
+import { CompanyAttachmentReuseButton } from "@/components/vouchers/CompanyAttachmentReuseDialog";
+import { voucherAttachmentReuseEnabled } from "@/lib/firebaseBillingOptimization";
 
 function sanitizeDownloadFileName(raw: string): string {
   const base = String(raw || "attachment").trim() || "attachment";
   const noPath = base.includes("/") ? base.split("/").pop() || base : base;
   return noPath.replace(/[^\w.\- ()\u0900-\u097F]+/g, "_").slice(0, 180) || "attachment";
 }
+
+type VoucherAttachmentReuseConfig = {
+  currentFiles: Array<File | string>;
+  setFiles: React.Dispatch<React.SetStateAction<Array<File | string>>>;
+  maxFiles: number;
+};
 
 type Props = {
   /** Khali slot + role allow ho tab hi */
@@ -33,6 +41,8 @@ type Props = {
   onPastedFiles: (files: File[]) => void | Promise<void>;
   className?: string;
   children: React.ReactNode;
+  /** Existing company file URL reuse (voucher forms) */
+  voucherAttachmentReuse?: VoucherAttachmentReuseConfig;
 };
 
 /**
@@ -44,6 +54,7 @@ export function AttachmentHoldPasteSurface({
   onPastedFiles,
   className,
   children,
+  voucherAttachmentReuse,
 }: Props) {
   const tapMode = useTapInteractionMode();
   const [mobilePasteRevealed, setMobilePasteRevealed] = useState(false);
@@ -86,7 +97,24 @@ export function AttachmentHoldPasteSurface({
       : undefined,
   });
 
-  return (
+  const reuseTile =
+    voucherAttachmentReuse &&
+    voucherAttachmentReuseEnabled() &&
+    enabled &&
+    voucherAttachmentReuse.currentFiles.length < voucherAttachmentReuse.maxFiles ? (
+      <CompanyAttachmentReuseButton
+        currentFiles={voucherAttachmentReuse.currentFiles}
+        maxFiles={voucherAttachmentReuse.maxFiles}
+        onAddUrls={(urls) => voucherAttachmentReuse.setFiles((prev) => [...prev, ...urls])}
+        disabled={!enabled}
+        className={cn(
+          "h-24 w-24 flex-col gap-1 border-2 border-dashed text-[10px] px-1 shrink-0",
+          className?.includes("w-24") ? "" : "h-24 w-24"
+        )}
+      />
+    ) : null;
+
+  const addTile = (
     <div
       className={cn("group relative flex h-full w-full min-h-0 flex-col", className)}
       onClickCapture={hold.onClickCapture}
@@ -152,5 +180,13 @@ export function AttachmentHoldPasteSurface({
         ) : null}
       </div>
     </div>
+  );
+
+  if (!reuseTile) return addTile;
+  return (
+    <>
+      {reuseTile}
+      {addTile}
+    </>
   );
 }

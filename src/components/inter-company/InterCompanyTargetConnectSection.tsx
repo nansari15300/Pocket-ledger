@@ -51,6 +51,10 @@ import {
   interCompanyInputClass,
   interCompanyReadOnlyCopyInputClass,
   interCompanyViewOnlyAllowCopyClass,
+  interCompanyVoucherRowAccountClass,
+  interCompanyVoucherRowBankClass,
+  interCompanyVoucherRowCompanyClass,
+  interCompanyVoucherSideRowsClass,
 } from "@/lib/interCompany/interCompanyVoucherChrome";
 import { cn } from "@/lib/utils";
 
@@ -511,9 +515,12 @@ export function InterCompanyTargetConnectSection({
 
   return (
     <div
-      className={cn("flex flex-col gap-3", fieldsDisabled && interCompanyViewOnlyAllowCopyClass)}
+      className={cn(
+        interCompanyVoucherSideRowsClass,
+        fieldsDisabled && interCompanyViewOnlyAllowCopyClass
+      )}
     >
-      <div className="space-y-2">
+      <div className={cn(interCompanyVoucherRowCompanyClass, "space-y-2")}>
         <InterCompanySectionTitle
           title="Target company"
           flowBadge={showPaymentInBadge ? "payment_in" : null}
@@ -692,42 +699,7 @@ export function InterCompanyTargetConnectSection({
         {formMessage}
       </div>
 
-      <InterCompanyAccountLookupSection
-        sectionTitle="Target account"
-        entities={entities}
-        entitiesLoading={!!targetCompanyId && entitiesLoading}
-        enableCrossCompanyLookup={lookupPartners.length > 0}
-        partners={lookupPartners}
-        activeCompanyId={targetCompanyId}
-        onResolveCompany={applyCompany}
-        autoEnsureInterCoAcNo
-        showAvatarsInPicker={showAvatarsInPicker}
-        partnerSearchBy={targetPartnerPrivacy?.searchBy}
-        voucherCreateLookup={!fieldsDisabled}
-        partnerViewPrivacy={targetPartnerPrivacy}
-        entityKind={payeeKind}
-        onEntityKindChange={onPayeeKindChange}
-        entityId={payeeId}
-        onEntityIdChange={onPayeeIdChange}
-        companyAcNo={companyAcForEntity}
-        companyMobile={companyMobDisplay}
-        companyPan={companyPanDisplay}
-        onTrackCompanyByAcNo={trackCompanyByAcNo}
-        onTrackCompanyByMobile={trackCompanyByMobile}
-        onTrackCompanyByPan={trackCompanyByPan}
-        disabled={fieldsDisabled}
-        allowLookupWithoutCompany={showReadOnlyAccounts}
-        seedEntityHit={seedEntityHit}
-        onSeedEntityHitHandled={() => setSeedEntityHit(null)}
-        companySearchTick={companySearchTick}
-        disabledHint={
-          entitiesLoading
-            ? "Loading target accounts…"
-            : "Saved voucher — accounts are read-only"
-        }
-      />
-
-      {onCompanyBankAccountIdChange ? (
+      <div className={interCompanyVoucherRowBankClass}>
         <InterCompanyAccountLookupSection
           sectionTitle="Company bank (Bank/Cash)"
           entities={bankEntities}
@@ -736,14 +708,14 @@ export function InterCompanyTargetConnectSection({
           entityKind="bank"
           onEntityKindChange={() => {}}
           entityId={companyBankAccountId}
-          onEntityIdChange={onCompanyBankAccountIdChange}
+          onEntityIdChange={onCompanyBankAccountIdChange ?? (() => {})}
           activeCompanyId={targetCompanyId}
           autoEnsureInterCoAcNo
           companyAcNo={companyAcForEntity}
           companyMobile={companyMobDisplay}
           companyPan={companyPanDisplay}
           voucherCreateLookup={!fieldsDisabled}
-          disabled={fieldsDisabled}
+          disabled={fieldsDisabled || !onCompanyBankAccountIdChange}
           allowLookupWithoutCompany={showReadOnlyAccounts}
           showDetails={false}
           disabledHint={
@@ -752,7 +724,44 @@ export function InterCompanyTargetConnectSection({
               : "Saved voucher — bank account is read-only"
           }
         />
-      ) : null}
+      </div>
+
+      <div className={interCompanyVoucherRowAccountClass}>
+        <InterCompanyAccountLookupSection
+          sectionTitle="Target account (optional)"
+          entities={entities}
+          entitiesLoading={!!targetCompanyId && entitiesLoading}
+          enableCrossCompanyLookup={lookupPartners.length > 0}
+          partners={lookupPartners}
+          activeCompanyId={targetCompanyId}
+          onResolveCompany={applyCompany}
+          autoEnsureInterCoAcNo
+          showAvatarsInPicker={showAvatarsInPicker}
+          partnerSearchBy={targetPartnerPrivacy?.searchBy}
+          voucherCreateLookup={!fieldsDisabled}
+          partnerViewPrivacy={targetPartnerPrivacy}
+          entityKind={payeeKind}
+          onEntityKindChange={onPayeeKindChange}
+          entityId={payeeId}
+          onEntityIdChange={onPayeeIdChange}
+          companyAcNo={companyAcForEntity}
+          companyMobile={companyMobDisplay}
+          companyPan={companyPanDisplay}
+          onTrackCompanyByAcNo={trackCompanyByAcNo}
+          onTrackCompanyByMobile={trackCompanyByMobile}
+          onTrackCompanyByPan={trackCompanyByPan}
+          disabled={fieldsDisabled}
+          allowLookupWithoutCompany={showReadOnlyAccounts}
+          seedEntityHit={seedEntityHit}
+          onSeedEntityHitHandled={() => setSeedEntityHit(null)}
+          companySearchTick={companySearchTick}
+          disabledHint={
+            entitiesLoading
+              ? "Loading target accounts…"
+              : "Saved voucher — accounts are read-only"
+          }
+        />
+      </div>
 
       <InterCompanyMultiPickDialog
         open={companyPickOpen}

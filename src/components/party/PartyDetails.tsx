@@ -56,6 +56,7 @@ import {
   searchParamsStringAfterClosingModal,
   searchParamsStringForModalClose,
 } from "@/lib/modalUrlSync";
+import { useMobileLedgerModalUrlGuard } from "@/hooks/useMobileLedgerModalUrlGuard";
 import AdCalendar from "@/components/ui/ad-calendar";
 import {
   Select,
@@ -86,6 +87,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { doc, getDoc, updateDoc, query, collection, getDocs, where } from "firebase/firestore";
+import { batchFetchUserDisplayNamesFromFirestore } from "@/lib/batchFetchUserDisplayNames";
 import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { HistoryDialog } from "@/components/vouchers/HistoryDialog";
@@ -390,20 +392,15 @@ export function PartyDetails({
   }, [closeModalInUrl]);
   useUrlModalBack(urlModalOpen, closeUrlModal);
 
-  useEffect(() => {
-    if (!isMobile) return;
-    if (modalParam === "1") openingModalRef.current = false;
-    if (modalParam !== "1" && anyMobilePopupOpen && !openingModalRef.current) {
-      setMobileFooterDialogOpen(null);
-      setIsCalendarOpen(false);
-      setIsVoucherDialogOpen(false);
-      setSelectedVoucher(null);
-      setIsNoteOpen(false);
-      setHistoryVoucher(null);
-      setLinkAdvancesVoucher(null);
-      setLinkPaymentVoucher(null);
-    }
-  }, [isMobile, modalParam, anyMobilePopupOpen]);
+  useMobileLedgerModalUrlGuard({
+    isMobile,
+    modalParam,
+    anyPopupOpen: anyMobilePopupOpen,
+    openingModalRef,
+    pathname,
+    searchParams,
+    router,
+  });
 
   const handleShowNarrationChange = (checked: boolean) => {
     setShowNarration(checked);
@@ -494,62 +491,15 @@ export function PartyDetails({
     });
     
     if (missingUids.length === 0) return;
-    
-    Promise.all(
-      missingUids.map(async (uid) => {
-        try {
-          // Try query by uid field first
-          const q = query(collection(firestore, "users"), where("uid", "==", uid));
-          const snap = await getDocs(q);
-          let data = snap.docs[0]?.data();
-          
-          if (!data) {
-            // Fallback: try doc ID as uid
-            const userDoc = await getDoc(doc(firestore, 'users', uid));
-            if (userDoc.exists()) {
-              data = userDoc.data();
-            } else {
-              // Fallback 2: search all users for doc ending with uid
-              const allUsersSnap = await getDocs(collection(firestore, "users"));
-              const matchingDoc = allUsersSnap.docs.find(d => {
-                const docData = d.data();
-                return docData.uid === uid || d.id.endsWith(uid);
-              });
-              if (matchingDoc) {
-                data = matchingDoc.data();
-              }
-            }
-          }
-          
-          const displayName = data?.displayName || data?.name || null;
-          const email = typeof data?.email === "string" ? data.email : "";
-          const emailPrefix = email.includes("@") ? email.split("@")[0] : "";
-          let resolvedName = displayName || emailPrefix || null;
-          if (resolvedName) {
-            const isUIDPattern = resolvedName.length > 15 && /^[a-zA-Z0-9_-]+$/.test(resolvedName) && !resolvedName.includes("@") && !resolvedName.includes(" ");
-            if (isUIDPattern && emailPrefix) {
-              resolvedName = emailPrefix;
-            }
-          }
-          if (resolvedName && resolvedName !== uid && resolvedName !== "Unknown" && resolvedName !== "N/A") {
-            return { uid, name: resolvedName };
-          }
-        } catch (e) {
-          console.error('[PartyDetails] Error fetching userName for', uid, e);
-        }
-        return { uid, name: null };
-      })
-    ).then(results => {
-      const newUserNames: Record<string, string> = {};
-      results.forEach(({ uid, name }) => {
-        if (name) {
-          newUserNames[uid] = name;
-        }
-      });
-      if (Object.keys(newUserNames).length > 0) {
-        setLocalFetchedUserNames(prev => ({ ...prev, ...newUserNames }));
-      }
+
+    let cancelled = false;
+    void batchFetchUserDisplayNamesFromFirestore(missingUids, () => cancelled).then((fetched) => {
+      if (cancelled || Object.keys(fetched).length === 0) return;
+      setLocalFetchedUserNames((prev) => ({ ...prev, ...fetched }));
     });
+    return () => {
+      cancelled = true;
+    };
   }, [processedTransactions, userNames, localFetchedUserNames, isLocalMode]);
 
   const handleEditVoucher = (voucher: any) => {

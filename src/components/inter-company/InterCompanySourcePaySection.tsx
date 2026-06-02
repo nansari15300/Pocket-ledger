@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Source column — Source company (auto: current) + Source account (naam | A/c | mobile).
+ * Source column — Source company (auto: current) + Company bank + Source account (optional).
  */
 import { InterCompanySectionTitle } from "@/components/inter-company/InterCompanySectionTitle";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,10 @@ import {
   interCompanyInputClass,
   interCompanyReadOnlyCopyInputClass,
   interCompanyViewOnlyAllowCopyClass,
+  interCompanyVoucherRowAccountClass,
+  interCompanyVoucherRowBankClass,
+  interCompanyVoucherRowCompanyClass,
+  interCompanyVoucherSideRowsClass,
 } from "@/lib/interCompany/interCompanyVoucherChrome";
 import { cn } from "@/lib/utils";
 import { useMemo } from "react";
@@ -75,9 +79,12 @@ export function InterCompanySourcePaySection({
 
   return (
     <div
-      className={cn("flex flex-col gap-3", fieldsDisabled && interCompanyViewOnlyAllowCopyClass)}
+      className={cn(
+        interCompanyVoucherSideRowsClass,
+        fieldsDisabled && interCompanyViewOnlyAllowCopyClass
+      )}
     >
-      <div className="space-y-2">
+      <div className={cn(interCompanyVoucherRowCompanyClass, "space-y-2")}>
         <InterCompanySectionTitle
           title="Source company"
           flowBadge={showPaymentOutBadge ? "payment_out" : null}
@@ -145,29 +152,7 @@ export function InterCompanySourcePaySection({
         </div>
       </div>
 
-      <InterCompanyAccountLookupSection
-        sectionTitle="Source account"
-        entities={entities}
-        entitiesLoading={entitiesLoading}
-        activeCompanyId={company?.id ?? ""}
-        autoEnsureInterCoAcNo
-        showClosingBalance
-        entityKind={payeeKind}
-        onEntityKindChange={onPayeeKindChange}
-        entityId={payeeId}
-        onEntityIdChange={onPayeeIdChange}
-        companyAcNo={companyAc}
-        companyMobile={companyMob}
-        disabled={fieldsDisabled}
-        allowLookupWithoutCompany={showReadOnlyAccounts}
-        disabledHint={
-          entitiesLoading
-            ? "Loading source accounts…"
-            : "Saved voucher — accounts are read-only"
-        }
-      />
-
-      {onCompanyBankAccountIdChange ? (
+      <div className={interCompanyVoucherRowBankClass}>
         <InterCompanyAccountLookupSection
           sectionTitle="Company bank (Bank/Cash)"
           entities={bankEntities}
@@ -178,10 +163,10 @@ export function InterCompanySourcePaySection({
           entityKind="bank"
           onEntityKindChange={() => {}}
           entityId={companyBankAccountId}
-          onEntityIdChange={onCompanyBankAccountIdChange}
+          onEntityIdChange={onCompanyBankAccountIdChange ?? (() => {})}
           companyAcNo={companyAc}
           companyMobile={companyMob}
-          disabled={fieldsDisabled}
+          disabled={fieldsDisabled || !onCompanyBankAccountIdChange}
           allowLookupWithoutCompany={showReadOnlyAccounts}
           showDetails={false}
           disabledHint={
@@ -190,7 +175,31 @@ export function InterCompanySourcePaySection({
               : "Saved voucher — bank account is read-only"
           }
         />
-      ) : null}
+      </div>
+
+      <div className={interCompanyVoucherRowAccountClass}>
+        <InterCompanyAccountLookupSection
+          sectionTitle="Source account (optional)"
+          entities={entities}
+          entitiesLoading={entitiesLoading}
+          activeCompanyId={company?.id ?? ""}
+          autoEnsureInterCoAcNo
+          showClosingBalance
+          entityKind={payeeKind}
+          onEntityKindChange={onPayeeKindChange}
+          entityId={payeeId}
+          onEntityIdChange={onPayeeIdChange}
+          companyAcNo={companyAc}
+          companyMobile={companyMob}
+          disabled={fieldsDisabled}
+          allowLookupWithoutCompany={showReadOnlyAccounts}
+          disabledHint={
+            entitiesLoading
+              ? "Loading source accounts…"
+              : "Saved voucher — accounts are read-only"
+          }
+        />
+      </div>
     </div>
   );
 }

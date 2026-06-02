@@ -6,6 +6,11 @@ import * as React from "react";
 export type VoucherAttachmentFallbackValue = {
   companyId: string;
   voucherId: string;
+  /** Target IC copy — source voucher se attachment resolve */
+  interCompanyPeer?: {
+    peerCompanyId: string;
+    peerVoucherId: string;
+  };
 };
 
 export const VoucherAttachmentFallbackContext = React.createContext<VoucherAttachmentFallbackValue | null>(null);

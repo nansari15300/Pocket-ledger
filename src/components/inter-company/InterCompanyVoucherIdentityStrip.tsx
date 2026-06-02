@@ -18,6 +18,8 @@ type Side = {
   companyCode?: string;
   companyMobile?: string;
   entity?: InterCompanyEntityDetail | null;
+  /** Party/staff account skip — bank-to-bank only */
+  bankToBank?: boolean;
 };
 
 type Props = {
@@ -51,8 +53,10 @@ function SideBlock({ side }: { side: Side }) {
           <span className="font-medium">{ent.label}</span>
           {accountAc ? <span className="ml-1 font-mono">· {accountAc}</span> : null}
         </p>
+      ) : side.bankToBank ? (
+        <p className="mt-1 text-[11px] text-muted-foreground">Bank-to-bank — no party account</p>
       ) : (
-        <p className="mt-1 text-[11px] text-muted-foreground">Account not selected</p>
+        <p className="mt-1 text-[11px] text-muted-foreground">Account not selected (optional)</p>
       )}
     </div>
   );

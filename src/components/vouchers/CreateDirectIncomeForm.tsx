@@ -50,7 +50,8 @@ import { Checkbox } from "../ui/checkbox";
 import { BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
-import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
+import { normalizePrefix } from "@/lib/voucherNumberFormat";
+import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import {
@@ -261,26 +262,14 @@ export function CreatePaymentInForm({
 
   const fetchVoucherNumber = useCallback(async (selectedPrefix?: string) => {
     if (!companyId || !company || !isAutoVoucherEnabled) return;
-    const prefixes = company?.voucherPrefixes?.[voucherType] || [getVoucherPrefix(company.voucherPrefixes, voucherType)];
-    const VOUCHER_PREFIX = selectedPrefix || prefixes[0];
-    
     try {
-      const q = query(collection(firestore, `companies/${companyId}/vouchers`), where("type", "==", voucherType));
-      const querySnapshot = await getDocs(q);
-      const voucherNumbers = querySnapshot.docs.map(doc => doc.data().voucherNumber as string);
-      
-      let maxNum = 0;
-      voucherNumbers.forEach(numStr => {
-        if (numStr && (numStr.startsWith(normalizePrefix(VOUCHER_PREFIX)) || numStr.startsWith(VOUCHER_PREFIX))) {
-          const num = parseVoucherNumberPart(numStr, VOUCHER_PREFIX);
-          if (!isNaN(num) && num > maxNum) {
-            maxNum = num;
-          }
-        }
+      const nextNo = await getNextVoucherNumberForCompany({
+        companyId,
+        companyDoc: company as Record<string, unknown>,
+        voucherLike: { type: voucherType },
+        selectedPrefix,
       });
-      
-      const nextVoucherNumber = maxNum + 1;
-      form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextVoucherNumber));
+      form.setValue("voucherNumber", nextNo);
     } catch (error) {
       console.error("Error fetching voucher count: ", error);
     }
@@ -960,6 +949,7 @@ export function CreatePaymentInForm({
                             toast,
                           })
                         }
+                        voucherAttachmentReuse={{ currentFiles: files, setFiles, maxFiles: fileAttachmentLimits.maxFileCount }}
                         className={cn(
                           "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
                           allowAttachments && fileAttachmentLimits.maxFileCount > 0

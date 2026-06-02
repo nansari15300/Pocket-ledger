@@ -61,6 +61,7 @@ import { assertCompanyAllowsLedgerMutations } from "@/lib/security/offlinePlanWr
 import { hydrateVoucherLocalAttachmentsForServer } from "@/lib/hydrateVoucherLocalAttachmentsForServer";
 import {
   recordContainsLocalPendingVoucherFileRef,
+  rewriteRemoteVoucherAttachmentsForOfflineCompany,
   voucherNewAttachmentsAlwaysStageAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
 import { parseAttachmentHoldClipboardText } from "@/lib/attachmentHoldClipboard";
@@ -947,10 +948,20 @@ export async function saveVoucher(
   normalizeVoucherAttachmentFieldsForPersistence(cleanVoucherData as Record<string, unknown>);
   const voucherPath = `companies/${companyId}/vouchers`;
   /** APK/static/EXE + offline: hamesha SQLite/outbox — Firestore/Storage await se "Saving…" (attachments) na atke. */
-  const sqliteFirst =
+  const sqliteFirstEarly =
     apkEmbeddedSqliteFirstWritesPreferred() ||
     isClientNavigatorOffline() ||
     (await apkCloudCompanyUsesSqliteFirstWrites(companyId));
+  // Local company + Copy To slip: Firebase HTTPS URL save se pehle `local:` pending me materialize.
+  if (sqliteFirstEarly) {
+    await rewriteRemoteVoucherAttachmentsForOfflineCompany(
+      companyId,
+      cleanVoucherData as Record<string, unknown>,
+      voucherId ?? null
+    );
+    normalizeVoucherAttachmentFieldsForPersistence(cleanVoucherData as Record<string, unknown>);
+  }
+  const sqliteFirst = sqliteFirstEarly;
 
   // Edit: form/outbox se `date` key missing ho to purani voucher date merge — static/APK offline me pehla `getDoc` hang/slow kar sakta tha (“Saving…” chipka)
   if (voucherId) {

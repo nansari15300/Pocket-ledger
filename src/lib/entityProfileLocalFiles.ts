@@ -6,7 +6,19 @@
  */
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { storage } from "@/lib/firebase";
+import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { generateLocalFileId, LOCAL_FILE_PREFIX, putPendingFile } from "@/lib/localPendingFiles";
+
+/** Local company (`storageOption: local`) — avatar/docs/items Firebase par nahi; `local:` + Drive/Dropbox sync. */
+export async function shouldStageEntityProfileFilesLocally(
+  companyId: string,
+  company?: { storageOption?: string } | null
+): Promise<boolean> {
+  if (company && isOfflineCompanyStorage(company)) return true;
+  const reg = await getLocalCompanyById(String(companyId || "").trim(), { includeDeleted: true });
+  return !!(reg && isOfflineCompanyStorage(reg as { storageOption?: string }));
+}
 
 function safeEntityFileName(name: string | undefined): string {
   if (!name?.trim()) return "file";
@@ -86,7 +98,7 @@ export async function stageEntityAvatarAndDocuments(params: {
   return { fileUrl, documentFileUrls };
 }
 
-/** Online: avatar + document files seedhe Firebase Storage, download URL Firestore me (local: sync par depend nahi). */
+/** Online Firebase company: Storage URL; local/Drive company par hamesha `stageEntityAvatarAndDocuments`. */
 export async function uploadEntityAvatarAndDocumentsRemote(params: {
   companyId: string;
   collectionSeg: EntityProfileCollection;
@@ -96,6 +108,9 @@ export async function uploadEntityAvatarAndDocumentsRemote(params: {
   documentFiles: File[];
   maxDocuments?: number;
 }): Promise<{ fileUrl: string | null; documentFileUrls: string[] }> {
+  if (await shouldStageEntityProfileFilesLocally(params.companyId)) {
+    return stageEntityAvatarAndDocuments(params);
+  }
   const { companyId, collectionSeg, avatarFile, documentFiles } = params;
   const maxDocuments = params.maxDocuments ?? DEFAULT_MAX_ENTITY_DOCS;
   const documentFileUrls: string[] = [];
@@ -166,7 +181,7 @@ export async function stageItemAvatarAndAttachments(params: {
   return { avatarUrl, newAttachmentUrls };
 }
 
-/** Item online: same paths as `stageItem*`, turant Storage URLs (dusre device). */
+/** Item online Firebase: Storage URLs; local/Drive company par `stageItemAvatarAndAttachments`. */
 export async function uploadItemAvatarAndAttachmentsRemote(params: {
   companyId: string;
   itemId: string;
@@ -174,6 +189,9 @@ export async function uploadItemAvatarAndAttachmentsRemote(params: {
   attachmentFiles: File[];
   maxAttachments: number;
 }): Promise<{ avatarUrl: string | null; newAttachmentUrls: string[] }> {
+  if (await shouldStageEntityProfileFilesLocally(params.companyId)) {
+    return stageItemAvatarAndAttachments(params);
+  }
   const { companyId, avatarFile, attachmentFiles, maxAttachments } = params;
   const prefix = `companies/${companyId}/item-files`;
   let avatarUrl: string | null = null;

@@ -33,6 +33,12 @@ export const interCompanyIcAvatarFallbackClass =
 export const interCompanyIcSectionDividerClass =
   "border-t border-sky-400/50 pt-3 dark:border-sky-400/40";
 
+/** Source/target panel — company → bank → account (create + edit); CSS order in globals */
+export const interCompanyVoucherSideRowsClass = "ic-voucher-side-rows flex flex-col gap-3";
+export const interCompanyVoucherRowCompanyClass = "ic-voucher-row-company min-w-0";
+export const interCompanyVoucherRowBankClass = "ic-voucher-row-bank min-w-0";
+export const interCompanyVoucherRowAccountClass = "ic-voucher-row-account min-w-0";
+
 /** Edit/view lock — edit band, par mouse se text select + copy ho sake (`disabled` + `select-none` mat lagao) */
 export const interCompanyViewOnlyAllowCopyClass = "select-text";
 

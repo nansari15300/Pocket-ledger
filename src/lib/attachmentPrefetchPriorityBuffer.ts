@@ -2,17 +2,13 @@
  * Visible-row attachment URLs ko full-company `prefetchHttpsAttachmentUrls` ke head par merge karne ke liye
  * lightweight buffer — `TransactionsTable` idle prewarm alag chalta hai, yahan sirf ordering hint.
  */
-import { looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
+import { isOfflineCacheableAttachmentRef } from "@/lib/attachmentRefBlobFetch";
 
 /** Zyada lambi list par memory / merge CPU tame — mirror prefetch apna maxUrls alag rakhta hai */
 const VISIBLE_PRIORITY_BUFFER_CAP = 450;
 
 function isEligibleForPrefetchQueue(raw: string): boolean {
-  const u = String(raw || "").trim();
-  if (!u) return false;
-  if (/^https?:\/\//i.test(u)) return true;
-  if (looksLikeFirebaseStorageObjectPath(u)) return true;
-  return false;
+  return isOfflineCacheableAttachmentRef(raw);
 }
 
 let latestVisibleAttachmentUrls: string[] = [];

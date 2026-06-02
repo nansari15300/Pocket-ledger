@@ -4,6 +4,8 @@
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { interCompanyAcNoForNewEntity } from "@/lib/interCompany/interCompanyAccountNo";
+import { restoreCompanySubdocFromRecycleBin } from "@/lib/recycleBinEntityLifecycle";
+import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { writeEntity } from "@/lib/writeGateway";
 import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
 
@@ -27,8 +29,15 @@ export async function ensureInterCompanyCounterpartyParty(args: {
   const peerName = String(args.peerCompanyName || "Company").trim() || "Company";
   const docId = counterpartyDocId(args.peerCompanyId);
   const partyRef = doc(firestore, `companies/${companyId}/parties`, docId);
+  const localRow = await getCompanyDocFromBrowserDb(companyId, "parties", docId);
   const existing = await getDoc(partyRef);
-  if (existing.exists()) {
+  const existingData = (localRow || (existing.exists() ? existing.data() : null)) as
+    | Record<string, unknown>
+    | null;
+  if (existingData) {
+    if (existingData.isDeleted === true) {
+      await restoreCompanySubdocFromRecycleBin(companyId, "parties", docId);
+    }
     return docId;
   }
 

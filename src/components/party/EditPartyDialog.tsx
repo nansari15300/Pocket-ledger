@@ -56,6 +56,13 @@ import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirro
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import { softDeleteCompanySubdocToRecycleBin } from "@/lib/recycleBinEntityLifecycle";
+import { countActiveInterCompanyVouchersForCounterpartyParty, purgeInterCompanyCounterpartyPartyIfUnused } from "@/lib/interCompany/cleanupInterCompanyCounterpartyParty";
+function isInterCompanyAutoParty(party: Party): boolean {
+  if (party.isInterCompanyCounterparty === true) return true;
+  if (String(party.id || "").startsWith("ic_peer_")) return true;
+  return String(party.name || "").startsWith("IC · Due ");
+}
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { parseOpeningBalanceDateToLocalNoon } from "@/lib/voucherDateNormalize";
 import {
@@ -308,18 +315,12 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
               documentFiles: needNewDocsUpload ? newDocFiles : [],
             });
 
+          // Local/Drive company: kabhi seedha Firebase Storage; `local:` + cloud sync (`runRemote` bhi guard karta hai).
           let st: { fileUrl: string | null; documentFileUrls: string[] };
-          if (!localSqlMirror) {
-            st = await runRemote();
-          } else if (typeof navigator !== "undefined" && navigator.onLine) {
-            try {
-              st = await runRemote();
-            } catch (e) {
-              console.warn("[EditParty] Remote file upload failed, using local staging", e);
-              st = await runStage();
-            }
-          } else {
+          if (localSqlMirror) {
             st = await runStage();
+          } else {
+            st = await runRemote();
           }
           if (st.fileUrl) fileUrl = st.fileUrl;
           documentFileUrls = [...keptDocUrls, ...st.documentFileUrls];
@@ -431,41 +432,45 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
       return;
     }
     if (hasTransactions) {
-      sonnerToast.error("Cannot Delete", { description: "This party has transactions and cannot be deleted." });
-      setIsDeleteDialogOpen(false);
-      return;
+      const isIcAutoParty = isInterCompanyAutoParty(party);
+      if (!isIcAutoParty) {
+        sonnerToast.error("Cannot Delete", { description: "This party has transactions and cannot be deleted." });
+        setIsDeleteDialogOpen(false);
+        return;
+      }
+      const activeIc = await countActiveInterCompanyVouchersForCounterpartyParty(companyId, party.id);
+      if (activeIc > 0) {
+        sonnerToast.error("Cannot Delete", {
+          description: "This Inter Company account is still linked to active vouchers.",
+        });
+        setIsDeleteDialogOpen(false);
+        return;
+      }
     }
     
     setIsLoading(true);
     try {
-      if (localSqlMirror) {
-        const fromDb = await getCompanyDocFromBrowserDb(companyId, "parties", party.id);
-        const base: Record<string, unknown> = fromDb ?? {
-          id: party.id,
+      if (isInterCompanyAutoParty(party)) {
+        const purged = await purgeInterCompanyCounterpartyPartyIfUnused({
           companyId,
-          ownerId: user?.uid ?? "local_guest_user",
-          balance: party.balance ?? 0,
-          debit: party.debit ?? 0,
-          credit: party.credit ?? 0,
-          name: party.name,
-          groupId: party.groupId ?? getUngroupedGroupId("party"),
-          isDeleted: false,
-        };
-        const payload: Record<string, unknown> = {
-          ...base,
-          id: party.id,
-          companyId,
-          isDeleted: true,
-          deletedAt: Timestamp.now(),
-        };
-        await upsertCompanyDocInBrowserDb(companyId, "parties", party.id, payload);
-        await enqueueCompanyDocOutbox(companyId, "parties", "update", party.id, payload);
-      } else {
-        await updateDoc(doc(firestore, `companies/${companyId}/parties`, party.id), {
-          isDeleted: true,
-          deletedAt: serverTimestamp(),
+          partyId: party.id,
         });
+        if (!purged) {
+          throw new Error("This Inter Company account is still linked to vouchers.");
+        }
+        toast({ title: "Party Removed", description: `"${party.name}" has been removed.` });
+        void fireRecycleBinMovedAlertForCompanyDoc(companyId, "parties", party.id, party.name, {
+          uid: user?.uid,
+          email: user?.email,
+          name: user?.displayName,
+        });
+        onPartyDeleted(party.id);
+        setIsOpen(false);
+        setIsDeleteDialogOpen(false);
+        return;
       }
+      const res = await softDeleteCompanySubdocToRecycleBin(companyId, "parties", party.id, user?.uid || "");
+      if (!res.ok) throw new Error("error" in res ? res.error : "delete failed");
         toast({ title: "Party Moved to Bin", description: `"${party.name}" has been moved to the recycle bin.`});
         void fireRecycleBinMovedAlertForCompanyDoc(companyId, "parties", party.id, party.name, {
           uid: user?.uid,

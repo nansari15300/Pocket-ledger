@@ -85,11 +85,15 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { generateEncryptServerBackupSaltBase64, setBackupEncryptionSessionFromLogin } from "@/lib/serverBackupEncryption";
 import { ensureCloudSyncDriveEncryptionSalt } from "@/lib/localCloudSync/driveEncryption";
-import { readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConfig";
+import {
+  readCloudSyncConfigFromCompany,
+  syncCompanyRegistryStateToDriveManifest,
+} from "@/lib/localCloudSync/companyConfig";
 import { backfillLocalDocsToCloudSyncOutbox } from "@/lib/localCloudSync/backfillOutbox";
 import { settingsViewHref } from "@/lib/appNavHref";
 import { runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
+import { generateLocalFileId, LOCAL_FILE_PREFIX, putPendingFile } from "@/lib/localPendingFiles";
 import { flushBrowserDbToIndexedDB } from "@/lib/localSqlite";
 import {
   localCompanyUsersToPublicList,
@@ -444,19 +448,7 @@ export function EditCompanyForm() {
       
       // Handle logo removal
       if (removeLogo && company.logoUrl) {
-        try {
-          const oldLogoRef = ref(storage, company.logoUrl);
-          await deleteObject(oldLogoRef);
-        } catch (error) {
-          console.error("Error deleting old logo:", error);
-        }
-        logoUrl = null;
-      }
-      
-      // Handle logo upload (only when plan allows avatar)
-      if (fileToUpload && user && canAddAvatar) {
-        // Delete old logo if exists
-        if (company.logoUrl && !removeLogo) {
+        if (!deviceLocalCo && /^https?:\/\//i.test(String(company.logoUrl))) {
           try {
             const oldLogoRef = ref(storage, company.logoUrl);
             await deleteObject(oldLogoRef);
@@ -464,11 +456,37 @@ export function EditCompanyForm() {
             console.error("Error deleting old logo:", error);
           }
         }
-        
-        // Upload new logo
-        const storageRef = ref(storage, `company-logos/${user.uid}/${Date.now()}_${fileToUpload.file.name}`);
-        const snapshot = await uploadBytes(storageRef, fileToUpload.file);
-        logoUrl = await getDownloadURL(snapshot.ref);
+        logoUrl = null;
+      }
+
+      // Handle logo upload (only when plan allows avatar)
+      if (fileToUpload && user && canAddAvatar) {
+        if (deviceLocalCo) {
+          // Local + Drive/Dropbox: `local:` pending — Firebase `company-logos/` path nahi.
+          const id = generateLocalFileId();
+          await putPendingFile({
+            id,
+            blob: fileToUpload.file,
+            contentType: fileToUpload.file.type || "image/jpeg",
+            docPath: `companies/${companyId}/parties/${companyId}`,
+            field: "logoUrl",
+            storagePathPrefix: `companies/${companyId}/company-files/logo`,
+            fileName: fileToUpload.file.name,
+          });
+          logoUrl = `${LOCAL_FILE_PREFIX}${id}`;
+        } else {
+          if (company.logoUrl && !removeLogo && /^https?:\/\//i.test(String(company.logoUrl))) {
+            try {
+              const oldLogoRef = ref(storage, company.logoUrl);
+              await deleteObject(oldLogoRef);
+            } catch (error) {
+              console.error("Error deleting old logo:", error);
+            }
+          }
+          const storageRef = ref(storage, `company-logos/${user.uid}/${Date.now()}_${fileToUpload.file.name}`);
+          const snapshot = await uploadBytes(storageRef, fileToUpload.file);
+          logoUrl = await getDownloadURL(snapshot.ref);
+        }
       }
       
       const currencyRow = getDefaultCurrencyForCountry(values.billingCurrencyCountry);
@@ -888,6 +906,8 @@ export function EditCompanyForm() {
       toast({ title: "Company Moved to Bin", description: `"${company?.name}" has been moved.` });
       reloadLocalCompanyRegistry();
       clearCompanyId();
+      // Local company delete sirf is device par tha — Drive manifest se doosre devices ko bhi bin status.
+      void syncCompanyRegistryStateToDriveManifest(companyId);
     } catch (error) {
       console.error("Error moving to bin:", error);
       toast({ variant: "destructive", title: "Error", description: isCompanyNotFoundError(error) ? COMPANY_NOT_SYNCED_MESSAGE : "Failed to move company to bin." });

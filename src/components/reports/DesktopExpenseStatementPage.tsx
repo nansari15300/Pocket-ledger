@@ -25,6 +25,7 @@ import {
   searchParamsStringAfterClosingModal,
   searchParamsStringForModalClose,
 } from "@/lib/modalUrlSync";
+import { useMobileLedgerModalUrlGuard } from "@/hooks/useMobileLedgerModalUrlGuard";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useCompany } from "@/hooks/useCompany";
 import { openPrintDirect, getPdfBlob, type Context } from "@/lib/printDirect";
@@ -146,15 +147,15 @@ export default function DesktopExpenseStatementPage() {
 
   const modalParam = searchParams.get("modal");
   const anyReportPopupOpen = isVoucherDialogOpen || isCalendarOpen;
-  useEffect(() => {
-    if (!isMobile) return;
-    if (modalParam === "1") openingModalRef.current = false;
-    if (modalParam !== "1" && anyReportPopupOpen && !openingModalRef.current) {
-      setIsVoucherDialogOpen(false);
-      setSelectedVoucher(null);
-      setIsCalendarOpen(false);
-    }
-  }, [isMobile, modalParam, anyReportPopupOpen]);
+  useMobileLedgerModalUrlGuard({
+    isMobile,
+    modalParam,
+    anyPopupOpen: anyReportPopupOpen,
+    openingModalRef,
+    pathname,
+    searchParams,
+    router,
+  });
 
   const handleReportBack = useCallback(() => {
     if (isVoucherDialogOpen) {

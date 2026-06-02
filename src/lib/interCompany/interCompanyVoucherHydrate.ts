@@ -2,6 +2,7 @@
  * Saved inter_company voucher se form entity kind/id nikaalo (edit reopen).
  */
 import type { InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
+import { interCompanyUsesConduitParty } from "@/lib/interCompany/interCompanyPostingLegs";
 
 const VALID_ENTITY_KINDS = new Set<InterCompanyEntityKind>([
   "party",
@@ -125,9 +126,18 @@ export function readInterCompanyEntityLabelSnapshot(
   return String(voucher?.[key] || "").trim();
 }
 
-/** Saved voucher par company bank — `companyBankAccountId` ya compound leg se */
+/** Saved voucher par company bank — role + denormalized fields + compound leg */
 export function readInterCompanyCompanyBankId(voucher: Record<string, unknown> | null | undefined): string {
   if (!voucher) return "";
+  const side = interCompanyVoucherViewerSide(voucher);
+  if (side === "source") {
+    const src = String(voucher.sourceCompanyBankAccountId || voucher.companyBankAccountId || "").trim();
+    if (src) return src;
+  }
+  if (side === "target") {
+    const tgt = String(voucher.targetCompanyBankAccountId || voucher.companyBankAccountId || "").trim();
+    if (tgt) return tgt;
+  }
   const direct = String(voucher.companyBankAccountId || "").trim();
   if (direct) return direct;
   const legs = voucher.interCompanyLegs;
@@ -169,16 +179,26 @@ export function readInterCompanyBankLabelSnapshot(
   return String(voucher?.[key] || "").trim();
 }
 
+/** Target copy par source company ne IC approve kar diya — target approve is se pehle block. */
+export function isInterCompanySourceApprovedForTarget(
+  voucher: Record<string, unknown> | null | undefined
+): boolean {
+  if (!voucher || String(voucher.type || "") !== "inter_company") return true;
+  if (interCompanyVoucherViewerSide(voucher) !== "target") return true;
+  return voucher.interCompanySourceApproved === true;
+}
+
 /**
- * Target: source company ne IC approve kar diya — bank + Recent/Daybook me dikhe.
- * Source copy / non-IC vouchers par hamesha true.
+ * Target side — IC copy tab dikhe jab source ne approve kar diya ho.
+ * Save-only (source unapproved): target par voucher / ledger / recent me mat dikhao.
  */
 export function isInterCompanyVisibleOnTargetBank(
   voucher: Record<string, unknown> | null | undefined
 ): boolean {
   if (!voucher || String(voucher.type || "") !== "inter_company") return true;
   if (interCompanyVoucherViewerSide(voucher) !== "target") return true;
-  return voucher.interCompanySourceApproved === true;
+  if (!readInterCompanyLink(voucher)?.peerVoucherId) return false;
+  return isInterCompanySourceApprovedForTarget(voucher);
 }
 
 /** @deprecated — use isInterCompanyVisibleOnTargetBank */
@@ -192,11 +212,11 @@ export function isInterCompanyVisibleOnTargetEntity(
 ): boolean {
   if (!voucher || String(voucher.type || "") !== "inter_company") return true;
   if (interCompanyVoucherViewerSide(voucher) !== "target") return true;
-  if (!isInterCompanyVisibleOnTargetBank(voucher)) return false;
+  if (!isInterCompanySourceApprovedForTarget(voucher)) return false;
   return voucher.isApproved === true;
 }
 
-/** Recent / Daybook — target par source-unapproved IC bilkul hide */
+/** Recent / Daybook — target IC sirf source approve ke baad */
 export function shouldShowInterCompanyInDaybookOrRecent(
   voucher: Record<string, unknown> | null | undefined
 ): boolean {
@@ -234,7 +254,9 @@ export function collectInterCompanyIdsForPendingApproval(
 
   if (kind === "party") {
     add(v.partyId);
-    add(v.interCompanyCounterpartyPartyId);
+    if (interCompanyUsesConduitParty(v)) {
+      add(v.interCompanyCounterpartyPartyId);
+    }
   } else if (kind === "staff") {
     add(v.staffId);
   } else if (kind === "tax") {

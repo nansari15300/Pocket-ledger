@@ -31,11 +31,6 @@ export function PartyGroupDetailsClient() {
       if (!data) {
         const userDoc = await getDoc(doc(firestore, 'users', userId));
         if (userDoc.exists()) data = userDoc.data();
-        else {
-          const allUsersSnap = await getDocs(collection(firestore, "users"));
-          const matchingDoc = allUsersSnap.docs.find(d => d.data().uid === userId || d.id.endsWith(userId));
-          if (matchingDoc) data = matchingDoc.data();
-        }
       }
       if (data) {
         const displayName = data.displayName || data.name || data.email || null;

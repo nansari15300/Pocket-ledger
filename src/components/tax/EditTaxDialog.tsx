@@ -264,17 +264,10 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
               documentFiles: needNewDocsUpload ? newDocFiles : [],
             });
           let st: { fileUrl: string | null; documentFileUrls: string[] };
-          if (!localSqlMirror) {
-            st = await runRemote();
-          } else if (typeof navigator !== "undefined" && navigator.onLine) {
-            try {
-              st = await runRemote();
-            } catch (e) {
-              console.warn("[EditTax] Remote file upload failed, using local staging", e);
-              st = await runStage();
-            }
-          } else {
+          if (localSqlMirror) {
             st = await runStage();
+          } else {
+            st = await runRemote();
           }
           if (st.fileUrl) fileUrl = st.fileUrl;
           documentFileUrls = [...keptDocUrls, ...st.documentFileUrls];

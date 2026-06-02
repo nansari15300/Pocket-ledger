@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
-import { ArrowLeftRight, ChevronLeft, ChevronRight, RotateCcw, Users } from "lucide-react";
+import { ArrowLeftRight, ChevronLeft, ChevronRight, RotateCcw, Trash2, Users } from "lucide-react";
 
-export type InterCompanyRibbonTab = "voucher" | "join" | "revert_requests";
+export type InterCompanyRibbonTab = "voucher" | "revert_requests" | "delete_requests" | "join";
 
 const ITEMS: {
   id: InterCompanyRibbonTab;
@@ -13,6 +13,7 @@ const ITEMS: {
 }[] = [
   { id: "voucher", title: "Voucher", icon: ArrowLeftRight },
   { id: "revert_requests", title: "Revert request", icon: RotateCcw },
+  { id: "delete_requests", title: "Delete request", icon: Trash2 },
   { id: "join", title: "Inter Com System", icon: Users },
 ];
 
@@ -24,12 +25,20 @@ type Props = {
   onChange: (tab: InterCompanyRibbonTab) => void;
   /** Target company — pending reverse inbox count */
   pendingRevertCount?: number;
+  /** Pending delete requests for this company */
+  pendingDeleteCount?: number;
   /** Inter Com System — pending join requests for this company */
   pendingSystemJoinCount?: number;
 };
 
 /** Left ribbon — Voucher / Revert / Inter Com System; collapse par sirf icon */
-export function InterCompanyRibbonNav({ active, onChange, pendingRevertCount = 0, pendingSystemJoinCount = 0 }: Props) {
+export function InterCompanyRibbonNav({
+  active,
+  onChange,
+  pendingRevertCount = 0,
+  pendingDeleteCount = 0,
+  pendingSystemJoinCount = 0,
+}: Props) {
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
@@ -86,6 +95,8 @@ export function InterCompanyRibbonNav({ active, onChange, pendingRevertCount = 0
         const badge =
           id === "revert_requests" && pendingRevertCount > 0
             ? pendingRevertCount
+            : id === "delete_requests" && pendingDeleteCount > 0
+              ? pendingDeleteCount
             : id === "join" && pendingSystemJoinCount > 0
               ? pendingSystemJoinCount
               : null;

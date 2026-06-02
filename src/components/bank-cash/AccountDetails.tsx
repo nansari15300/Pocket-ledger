@@ -57,6 +57,7 @@ import {
   searchParamsStringAfterClosingModal,
   searchParamsStringForModalClose,
 } from "@/lib/modalUrlSync";
+import { useMobileLedgerModalUrlGuard } from "@/hooks/useMobileLedgerModalUrlGuard";
 import AdCalendar from "@/components/ui/ad-calendar";
 import {
   Select,
@@ -323,20 +324,15 @@ export function AccountDetails({
   }, [closeModalInUrl]);
   useUrlModalBack(urlModalOpen, closeUrlModal);
 
-  useEffect(() => {
-    if (!isMobile) return;
-    if (modalParam === "1") openingModalRef.current = false;
-    if (modalParam !== "1" && anyMobilePopupOpen && !openingModalRef.current) {
-      setMobileFooterDialogOpen(null);
-      setIsCalendarOpen(false);
-      setIsVoucherDialogOpen(false);
-      setSelectedVoucher(null);
-      setIsNoteOpen(false);
-      setIsEditAccountDialogOpen(false);
-      // `closeModalInUrl()` yahan mat chalao — Party/Staff jaisa: `onOpenChange(false)` pehle hi URL sync karta hai.
-      // Doosri baar replace + stale `useSearchParams` se `?selected=` drop ho sakta tha (bank edit save ke baad "home" jump).
-    }
-  }, [isMobile, modalParam, anyMobilePopupOpen]);
+  useMobileLedgerModalUrlGuard({
+    isMobile,
+    modalParam,
+    anyPopupOpen: anyMobilePopupOpen,
+    openingModalRef,
+    pathname,
+    searchParams,
+    router,
+  });
 
   const handleShowNarrationChange = (checked: boolean) => {
     setShowNarration(checked);

@@ -112,6 +112,7 @@ import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirro
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import { softDeleteCompanySubdocToRecycleBin } from "@/lib/recycleBinEntityLifecycle";
 import {
   isProfileDocumentFile,
   stageItemAvatarAndAttachments,
@@ -653,33 +654,8 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
     
     setIsLoading(true);
     try {
-        if (localSqlMirror) {
-          const fromDb = await getCompanyDocFromBrowserDb(companyId, "items", item.id);
-          const base: Record<string, unknown> = fromDb ?? {
-            id: item.id,
-            companyId,
-            name: item.name,
-            ownerId: user?.uid ?? (item as any).ownerId,
-          };
-          const payload: Record<string, unknown> = {
-            ...base,
-            isDeleted: true,
-            deletedAt: new Date(),
-            id: item.id,
-            companyId,
-          };
-          await upsertCompanyDocInBrowserDb(companyId, "items", item.id, payload);
-          await enqueueCompanyDocOutbox(companyId, "items", "update", item.id, payload);
-          toast({ title: "Item Moved to Bin", description: `"${item.name}" has been moved to the recycle bin.` });
-          onItemDeleted();
-          setIsOpen(false);
-          setIsDeleteDialogOpen(false);
-          return;
-        }
-        await updateDoc(doc(firestore, `companies/${companyId}/items`, item.id), {
-            isDeleted: true,
-            deletedAt: serverTimestamp()
-        });
+        const res = await softDeleteCompanySubdocToRecycleBin(companyId, "items", item.id, user?.uid || "");
+        if (!res.ok) throw new Error("error" in res ? res.error : "delete failed");
         toast({ title: "Item Moved to Bin", description: `"${item.name}" has been moved to the recycle bin.`});
         onItemDeleted();
         setIsOpen(false);
