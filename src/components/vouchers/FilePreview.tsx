@@ -1216,8 +1216,8 @@ export function FilePreview({
     sonnerToast.success(ok ? "Copied" : "Saved for paste in this tab", {
       description: ok
         ? clipboardDisplayUrl
-          ? "Download link on clipboard; Paste on empty slot still uses attachment copy (session backup)."
-          : "Use Paste on empty slot or ~1s hold there to add a new copy."
+          ? "Paste on empty slot reuses the same file (no new upload)."
+          : "Paste reuses saved attachment when possible; unsaved file uploads as new copy."
         : "Clipboard blocked — try Paste on empty slot (uses last copy in this tab).",
     });
     setMobileCopyRevealed(false);

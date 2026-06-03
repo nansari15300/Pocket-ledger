@@ -202,7 +202,9 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     (contextCompanies || []).forEach((c) => {
       if (!isCompanyVisibleInSelector(c)) return;
       if (!isOfflineCompanyStorage(c)) return;
-      const driveSharedJoin = (c as CompanyData & { driveSharedJoin?: boolean }).driveSharedJoin === true;
+      const driveSharedJoin =
+        (c as CompanyData & { driveSharedJoin?: boolean }).driveSharedJoin === true ||
+        (c as CompanyData & { dropboxSharedJoin?: boolean }).dropboxSharedJoin === true;
       map.set(c.id, {
         ...c,
         storageOption: "local",

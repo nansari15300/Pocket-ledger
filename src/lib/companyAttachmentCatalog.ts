@@ -11,6 +11,93 @@ export type CompanyAttachmentCatalogEntry = {
   voucherCount: number;
 };
 
+/** Voucher/file search: ignore spaces, dashes, case — "rcpt 005" matches "RCPT - 005". */
+function compactAttachmentSearchText(text: string): string {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+/** Common typed prefixes → canonical compact prefix (pymn → pymt, etc.). */
+const ATTACHMENT_SEARCH_PREFIX_ALIASES: Record<string, string> = {
+  pymn: "pymt",
+  pymnt: "pymt",
+  pymt: "pymt",
+  rcpt: "rcpt",
+  pymtout: "pymt",
+};
+
+function attachmentSearchTokenVariants(token: string): string[] {
+  const t = compactAttachmentSearchText(token);
+  if (!t) return [];
+  const whole = ATTACHMENT_SEARCH_PREFIX_ALIASES[t];
+  if (whole) return whole === t ? [t] : [t, whole];
+
+  const alpha = t.match(/^[a-z]+/)?.[0] ?? "";
+  if (alpha.length >= 3) {
+    const canon =
+      ATTACHMENT_SEARCH_PREFIX_ALIASES[alpha.slice(0, 4)] ?? ATTACHMENT_SEARCH_PREFIX_ALIASES[alpha.slice(0, 3)];
+    if (canon && canon !== alpha) {
+      return [t, canon + t.slice(alpha.length)];
+    }
+  }
+  return [t];
+}
+
+function attachmentSearchTokens(query: string): string[] {
+  return query
+    .trim()
+    .split(/\s+/)
+    .map((part) => compactAttachmentSearchText(part))
+    .filter(Boolean);
+}
+
+function compactQuerySearchVariants(compact: string): string[] {
+  if (!compact) return [];
+  const variants = new Set<string>([compact]);
+  const m = compact.match(/^([a-z]{3,8})(\d.*)$/);
+  if (m) {
+    const [, prefix, rest] = m;
+    const canon =
+      ATTACHMENT_SEARCH_PREFIX_ALIASES[prefix] ??
+      ATTACHMENT_SEARCH_PREFIX_ALIASES[prefix.slice(0, 4)] ??
+      ATTACHMENT_SEARCH_PREFIX_ALIASES[prefix.slice(0, 3)];
+    if (canon) variants.add(canon + rest);
+  }
+  return [...variants];
+}
+
+function haystackMatchesTokens(haystack: string, tokens: string[]): boolean {
+  if (!tokens.length) return true;
+  return tokens.every((token) => {
+    const variants = attachmentSearchTokenVariants(token);
+    return variants.some((v) => haystack.includes(v));
+  });
+}
+
+/** Flexible match on file label and voucher numbers (type + no, spaces/dashes optional). */
+export function matchesCompanyAttachmentCatalogSearch(
+  entry: Pick<CompanyAttachmentCatalogEntry, "label" | "voucherNumbers">,
+  query: string
+): boolean {
+  const q = query.trim();
+  if (!q) return true;
+
+  const tokens = attachmentSearchTokens(q);
+  const compactQuery = compactAttachmentSearchText(q);
+  const haystacks = [
+    compactAttachmentSearchText(entry.label),
+    ...entry.voucherNumbers.map(compactAttachmentSearchText),
+  ];
+
+  const queryVariants = compactQuerySearchVariants(compactQuery);
+
+  return haystacks.some((h) => {
+    if (queryVariants.some((qv) => qv && h.includes(qv))) return true;
+    return haystackMatchesTokens(h, tokens);
+  });
+}
+
 function attachmentLabelFromUrl(url: string): string {
   const trimmed = url.trim();
   if (!trimmed) return "Attachment";
@@ -35,13 +122,16 @@ function attachmentLabelFromUrl(url: string): string {
   return trimmed.length > 48 ? `${trimmed.slice(0, 45)}…` : trimmed;
 }
 
+/** Max distinct attachment URLs in reuse picker (full company scan in memory). */
+export const COMPANY_ATTACHMENT_CATALOG_MAX = 5000;
+
 /** Distinct attachment refs already on company vouchers — in-memory scan (no extra Firestore read). */
 export function buildCompanyAttachmentCatalogFromVouchers(
   vouchers: ReadonlyArray<{ fileUrls?: unknown; voucherNumber?: unknown; type?: unknown }>,
   options?: { excludeUrls?: ReadonlySet<string>; limit?: number }
 ): CompanyAttachmentCatalogEntry[] {
   const exclude = options?.excludeUrls ?? new Set<string>();
-  const limit = Math.max(1, options?.limit ?? 200);
+  const limit = Math.max(1, options?.limit ?? COMPANY_ATTACHMENT_CATALOG_MAX);
   const byUrl = new Map<string, { numbers: Set<string> }>();
 
   for (const v of vouchers) {

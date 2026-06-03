@@ -89,6 +89,13 @@ import {
   readCloudSyncConfigFromCompany,
   syncCompanyRegistryStateToDriveManifest,
 } from "@/lib/localCloudSync/companyConfig";
+import {
+  CloudSyncProviderPickers,
+  cloudSyncFieldsFromChoices,
+  type CloudSyncProviderChoice,
+} from "@/components/company/CloudSyncProviderPickers";
+import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
+import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { backfillLocalDocsToCloudSyncOutbox } from "@/lib/localCloudSync/backfillOutbox";
 import { settingsViewHref } from "@/lib/appNavHref";
 import { runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
@@ -151,6 +158,7 @@ export function EditCompanyForm() {
     triggerSync,
     reloadLocalCompanyRegistry,
     localCompanyRegistryEpoch,
+    allCompanies,
   } = useCompany();
   const { toast } = useToast();
   const { dateSystem, formatDate, formatDateBS } = useDate();
@@ -176,6 +184,9 @@ export function EditCompanyForm() {
   const [encryptCompanyEnabled, setEncryptCompanyEnabled] = useState(false);
   /** Local company: Drive/Dropbox delta ops encrypt — company password ya login key. */
   const [encryptDriveEnabled, setEncryptDriveEnabled] = useState(false);
+  const [cloudSyncDataProvider, setCloudSyncDataProvider] = useState<CloudSyncProviderChoice>("none");
+  const [cloudSyncFilesProvider, setCloudSyncFilesProvider] = useState<CloudSyncProviderChoice>("none");
+  const livePlans = useLivePlans();
   const [addCompanyUserEnabled, setAddCompanyUserEnabled] = useState(false);
   const [showCompanyUserPassword, setShowCompanyUserPassword] = useState(false);
   const [queuedCompanyUsers, setQueuedCompanyUsers] = useState<LocalCompanyUserDraft[]>([]);
@@ -305,10 +316,10 @@ export function EditCompanyForm() {
             companyUserPassword: "",
         });
         setEncryptCompanyEnabled(company.encryptServerBackup === true);
-        setEncryptDriveEnabled(
-          readCloudSyncConfigFromCompany(company as Record<string, unknown>).cloudSyncEncryptDriveData ||
-            readCloudSyncConfigFromCompany(company as Record<string, unknown>).cloudSyncEncryptDriveFiles
-        );
+        const cloudCfg = readCloudSyncConfigFromCompany(company as Record<string, unknown>);
+        setEncryptDriveEnabled(cloudCfg.cloudSyncEncryptDriveData || cloudCfg.cloudSyncEncryptDriveFiles);
+        setCloudSyncDataProvider(cloudCfg.cloudSyncDataProvider ?? cloudCfg.cloudSyncProvider ?? "none");
+        setCloudSyncFilesProvider(cloudCfg.cloudSyncFilesProvider ?? cloudCfg.cloudSyncProvider ?? "none");
         // Saved password ho to toggle ON; nahi to user edit se naya password add kar sake.
         setPasswordEnabled(!!(company.password && String(company.password).trim()));
         currencyPickedManuallyRef.current = false;
@@ -604,11 +615,13 @@ export function EditCompanyForm() {
           : String((existingLocal as { cloudSyncDriveEncryptionSalt?: string }).cloudSyncDriveEncryptionSalt ?? "").trim() ||
             null;
         // `as any`: merge shape LocalCompanyDoc se match karti hai (name/ownerId existing row se aate hain).
+        const cloudSyncPatch = cloudSyncFieldsFromChoices(cloudSyncDataProvider, cloudSyncFilesProvider);
         await upsertLocalCompany({
           ...(existingLocal as any),
           ...localUpdatePayload,
           id: companyId,
           localCompanyUsers: nextUsers,
+          ...cloudSyncPatch,
           cloudSyncEncryptDrive: encryptDriveEnabled,
           cloudSyncEncryptDriveData: encryptDriveEnabled,
           cloudSyncEncryptDriveFiles: encryptDriveEnabled,
@@ -1273,6 +1286,15 @@ export function EditCompanyForm() {
 
             {deviceLocalCoForUi && (
             <div className="space-y-4 rounded-md border border-black bg-muted/25 p-3 dark:border-black dark:bg-muted/15">
+                <CloudSyncProviderPickers
+                  planId={resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId)}
+                  livePlan={getPlanFromPlans(livePlans, resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId))}
+                  dataProvider={cloudSyncDataProvider}
+                  filesProvider={cloudSyncFilesProvider}
+                  onDataProviderChange={setCloudSyncDataProvider}
+                  onFilesProviderChange={setCloudSyncFilesProvider}
+                  disabled={isLoading}
+                />
                 {/* Local company: Drive/Dropbox sync encrypt — web / EXE / APK sab builds par dikhe. */}
                 <FormItem>
                   <div className="flex items-center justify-between rounded-md border border-black p-3">

@@ -66,6 +66,10 @@ export type CloudSyncDriveShareUser = {
 export type CloudSyncCompanyConfig = {
   cloudSyncEnabled: boolean;
   cloudSyncProvider: CloudSyncProviderId | null;
+  /** Voucher JSON / ops / manifest — alag provider (fallback: `cloudSyncProvider`). */
+  cloudSyncDataProvider: CloudSyncProviderId | null;
+  /** Attachments / file bytes — alag provider (fallback: `cloudSyncProvider`). */
+  cloudSyncFilesProvider: CloudSyncProviderId | null;
   cloudSyncLastSyncAt: number | null;
   cloudSyncStatus: CloudSyncRunStatus;
   cloudSyncLastError: string | null;
@@ -94,13 +98,17 @@ export type CloudSyncCompanyRef = {
   companyName?: string;
   /** Joined user: owner ke share kiye hue company folder ka Drive id (sirf woh folder, Pocket Ledger root nahi). */
   driveSharedFolderId?: string;
+  /** Joined / pinned Dropbox company folder path (`/Pocket Ledger/Name__suffix`). */
+  dropboxCompanyPath?: string;
 };
 
 /** Drive se join kiya hua local company — selector me "Shared Companies Local" + owner email. */
 export type DriveSharedJoinMeta = {
   driveSharedJoin?: boolean;
+  dropboxSharedJoin?: boolean;
   sharedByEmail?: string | null;
   cloudSyncDriveFolderId?: string | null;
+  cloudSyncDropboxFolderPath?: string | null;
 };
 
 /** Join dialog — Pocket Ledger company folder row (shared-with-me ya My Drive owned). */
@@ -113,4 +121,16 @@ export type DriveSharedCompanyListItem = {
   sharedByName?: string;
   /** true = user ke My Drive → Pocket Ledger ke andar khud ka synced folder */
   isOwnedOnDrive?: boolean;
+};
+
+/** Join dialog — Pocket Ledger company folder on Dropbox (owned or shared). */
+export type DropboxSharedCompanyListItem = {
+  dropboxFolderPath: string;
+  folderName: string;
+  companyId: string;
+  companyName: string;
+  sharedByEmail: string;
+  sharedByName?: string;
+  /** true = user ke Dropbox → Pocket Ledger ke andar khud ka synced folder */
+  isOwnedOnDropbox?: boolean;
 };

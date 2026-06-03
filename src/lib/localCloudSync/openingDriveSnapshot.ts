@@ -5,6 +5,8 @@ import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore
 import { shouldUseLocalCloudSync } from "@/lib/localCloudSync/companyConfig";
 import { encryptCloudSyncJsonForDrive } from "@/lib/localCloudSync/driveEncryption";
 import { postDriveJsonViaClient } from "@/lib/localCloudSync/driveApiClient";
+import { postDropboxJsonViaClient } from "@/lib/localCloudSync/dropboxApiClient";
+import { readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConfig";
 import { logLocalCloudSync } from "@/lib/localCloudSync/logger";
 import {
   buildPocketLedgerDriveRelativePath,
@@ -16,6 +18,7 @@ import {
 import { parseLocalCompanyUserRows, mergeOpeningUsersSnapshotIntoLocalCompanyUsers } from "@/lib/localCompanyUsers";
 import { buildOpeningAvatarDriveRemotePath } from "@/lib/localCloudSync/driveAttachmentPath";
 import { uploadAttachmentBytesToDrive } from "@/lib/localCloudSync/driveCloudSyncClient";
+import { uploadAttachmentBytesToDropbox } from "@/lib/localCloudSync/dropboxCloudSyncClient";
 import { isLocalFileRef, getBlobFromLocalFileRef } from "@/lib/localPendingFiles";
 import {
   decryptCloudSyncJsonFromDrive,
@@ -57,6 +60,17 @@ export async function uploadOpeningSnapshotToDrive(companyId: string): Promise<n
 
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
   if (!reg) return 0;
+  const cloudProvider = readCloudSyncConfigFromCompany(reg).cloudSyncProvider;
+  const postCloudJson =
+    cloudProvider === "dropbox"
+      ? postDropboxJsonViaClient
+      : postDriveJsonViaClient;
+  const uploadAttachmentBytes =
+    cloudProvider === "dropbox" ? uploadAttachmentBytesToDropbox : uploadAttachmentBytesToDrive;
+  const uploadJsonPath =
+    cloudProvider === "dropbox"
+      ? "/api/local-cloud-sync/dropbox/upload-json"
+      : "/api/local-cloud-sync/drive/upload-json";
   // Joined device owner ka snapshot overwrite na kare — sirf download side.
   if ((reg as { driveSharedJoin?: unknown }).driveSharedJoin === true) return 0;
 
@@ -119,7 +133,7 @@ export async function uploadOpeningSnapshotToDrive(companyId: string): Promise<n
           entityId: cid,
           originalFileName: "logo",
         });
-        const driveRef = await uploadAttachmentBytesToDrive({
+        const driveRef = await uploadAttachmentBytes({
           companyId: cid,
           companyName: ref.companyName,
           remotePath,
@@ -148,11 +162,10 @@ export async function uploadOpeningSnapshotToDrive(companyId: string): Promise<n
     const plainJson = JSON.stringify(f.body);
     const bodyPayload = await encryptCloudSyncJsonForDrive(cid, plainJson, reg as Record<string, unknown>);
     const body = typeof bodyPayload === "string" ? bodyPayload : JSON.stringify(bodyPayload);
-    await postDriveJsonViaClient("/api/local-cloud-sync/drive/upload-json", {
+    await postCloudJson(uploadJsonPath, {
       companyId: cid,
       companyName: ref.companyName,
-      // Opening JSON follows same owner/shared folder target as data ops.
-      driveSharedFolderId: ref.driveSharedFolderId,
+      ...(cloudProvider === "google_drive" ? { driveSharedFolderId: ref.driveSharedFolderId } : {}),
       relativePath: f.relativePath,
       body,
       contentType: "application/json",
@@ -183,17 +196,22 @@ export async function downloadAndMergeOpeningUsersFromDrive(
   const cid = String(companyId || "").trim();
   if (!cid) return false;
 
+  const regForDl = await getLocalCompanyById(cid, { includeDeleted: true });
+  const dlProvider = readCloudSyncConfigFromCompany(regForDl).cloudSyncProvider;
+  const postDlJson = dlProvider === "dropbox" ? postDropboxJsonViaClient : postDriveJsonViaClient;
+  const downloadPath =
+    dlProvider === "dropbox"
+      ? "/api/local-cloud-sync/dropbox/download-file"
+      : "/api/local-cloud-sync/drive/download-file";
+
   let dl: { base64: string | null; contentType?: string | null };
   try {
-    dl = await postDriveJsonViaClient<{ base64: string | null; contentType?: string | null }>(
-      "/api/local-cloud-sync/drive/download-file",
-      {
-        companyId: cid,
-        companyName: ref.companyName,
-        driveSharedFolderId: ref.driveSharedFolderId,
-        branchRelativePath: OPENING_USERS_BRANCH_PATH,
-      }
-    );
+    dl = await postDlJson<{ base64: string | null; contentType?: string | null }>(downloadPath, {
+      companyId: cid,
+      companyName: ref.companyName,
+      ...(dlProvider === "google_drive" ? { driveSharedFolderId: ref.driveSharedFolderId } : {}),
+      branchRelativePath: OPENING_USERS_BRANCH_PATH,
+    });
   } catch {
     return false;
   }

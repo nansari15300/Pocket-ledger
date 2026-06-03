@@ -15,10 +15,13 @@ import {
   fetchBlobForAttachmentHoldPaste,
   blobToFile,
   refreshAttachmentHoldSessionBackup,
+  persistableAttachmentRefFromHoldPayload,
 } from "@/lib/attachmentHoldClipboard";
 import { toast as sonnerToast } from "sonner";
 import { CompanyAttachmentReuseButton } from "@/components/vouchers/CompanyAttachmentReuseDialog";
 import { voucherAttachmentReuseEnabled } from "@/lib/firebaseBillingOptimization";
+import { linkCloudAttachmentRefs } from "@/lib/companyAttachmentRegistry";
+import { useCompany } from "@/hooks/useCompany";
 
 function sanitizeDownloadFileName(raw: string): string {
   const base = String(raw || "attachment").trim() || "attachment";
@@ -37,7 +40,7 @@ type Props = {
   enabled: boolean;
   /** Normal tap — file picker */
   onShortActivate: () => void;
-  /** Hold ke baad naya File (server pe save par upload) */
+  /** Hold paste fallback: unsaved File only (upload on save). */
   onPastedFiles: (files: File[]) => void | Promise<void>;
   className?: string;
   children: React.ReactNode;
@@ -56,6 +59,7 @@ export function AttachmentHoldPasteSurface({
   children,
   voucherAttachmentReuse,
 }: Props) {
+  const { companyId } = useCompany();
   const tapMode = useTapInteractionMode();
   const [mobilePasteRevealed, setMobilePasteRevealed] = useState(false);
 
@@ -73,6 +77,34 @@ export function AttachmentHoldPasteSurface({
       sonnerToast.error("Clipboard is not a Pocket Ledger attachment");
       return;
     }
+
+    const reuseRef = persistableAttachmentRefFromHoldPayload(payload);
+    const canReuseUrl =
+      voucherAttachmentReuseEnabled() &&
+      voucherAttachmentReuse &&
+      reuseRef &&
+      !voucherAttachmentReuse.currentFiles.some(
+        (f) => typeof f === "string" && f.trim() === reuseRef
+      );
+
+    if (canReuseUrl) {
+      try {
+        if (companyId) await linkCloudAttachmentRefs(companyId, [reuseRef]);
+        voucherAttachmentReuse.setFiles((prev) => [...prev, reuseRef]);
+        refreshAttachmentHoldSessionBackup(payload);
+        sonnerToast.success("Pasted — same file reused", {
+          description: "No new upload on save. Shared link stays on other vouchers too.",
+        });
+        setMobilePasteRevealed(false);
+        return;
+      } catch (e) {
+        sonnerToast.error("Could not link attachment", {
+          description: e instanceof Error ? e.message : String(e),
+        });
+        return;
+      }
+    }
+
     const got = await fetchBlobForAttachmentHoldPaste(payload);
     if (!got || got.blob.size === 0) {
       sonnerToast.error("Could not read attachment (offline or link expired)");
@@ -82,10 +114,12 @@ export function AttachmentHoldPasteSurface({
     await onPastedFiles([file]);
     refreshAttachmentHoldSessionBackup(payload);
     sonnerToast.success("Pasted as new file", {
-      description: "Save to upload a separate copy — source delete won’t remove this.",
+      description: reuseRef
+        ? "Already on this voucher — or copy was unsaved (no stored link)."
+        : "Unsaved copy — save uploads a separate file.",
     });
     setMobilePasteRevealed(false);
-  }, [onPastedFiles]);
+  }, [companyId, onPastedFiles, voucherAttachmentReuse]);
 
   const hold = useAttachmentHoldPointer({
     disabled: !enabled,

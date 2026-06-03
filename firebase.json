@@ -3,7 +3,10 @@
     "rules": "src/firestore.rules",
     "indexes": "src/firestore.indexes.json"
   },
-  "storage": {
-    "rules": "src/storage.rules"
-  }
+  "storage": [
+    {
+      "bucket": "studio-5452513410-a3f5b.firebasestorage.app",
+      "rules": "src/storage.rules"
+    }
+  ]
 }

@@ -89,6 +89,15 @@ export async function linkFirebaseAttachmentRefs(companyId: string, urls: string
   await Promise.all(uniq.map((url) => registerFirebaseAttachmentRef(companyId, url, 1)));
 }
 
+/** Voucher reuse — Firebase HTTPS refs + `drive:` cloud paths (Drive/Dropbox reuse without re-upload). */
+export async function linkCloudAttachmentRefs(companyId: string, urls: string[]): Promise<void> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return;
+  const https = urls.map((u) => u.trim()).filter(isRegistryEligibleHttpsUrl);
+  if (https.length > 0) await linkFirebaseAttachmentRefs(cid, https);
+  // `drive:` refs — local/Dropbox/Drive: no Firestore registry; same URL reuse on form only.
+}
+
 /** Voucher permanent delete — decrement; delete Storage bytes only when unreferenced. */
 export async function unlinkFirebaseAttachmentRefsForDoc(
   companyId: string,

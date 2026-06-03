@@ -1,6 +1,6 @@
 /**
  * 2s hold copy/paste: clipboard me compact marker + optional same-tab blob sid.
- * Paste par naya File banake form me add — save par dubara upload (shared URL risky nahi).
+ * Paste (voucher forms): saved `src` ref ho to wahi URL reuse; sirf unsaved File / sid-only → naya File upload.
  */
 import { storage } from "@/lib/firebase";
 import { ref, getBlob } from "firebase/storage";
@@ -247,6 +247,15 @@ export async function fetchBlobForAttachmentHoldPaste(
 export function blobToFile(blob: Blob, fileName: string, contentType: string): File {
   const type = contentType || blob.type || "application/octet-stream";
   return new File([blob], fileName, { type });
+}
+
+/** Paste / reuse: voucher `fileUrls` me save ho sakne wala ref (`https`, `local:`, `drive:`, …). */
+export function persistableAttachmentRefFromHoldPayload(
+  payload: AttachmentHoldPayloadV1
+): string | null {
+  const src = normalizeAttachmentUrlForDevicePreview(String(payload.src || "").trim());
+  if (!src || src.startsWith("blob:")) return null;
+  return src;
 }
 
 /** FilePreview / avatar se hold-copy payload banana */

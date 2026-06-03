@@ -806,7 +806,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     const isSharedWithCurrentUser =
       !!currentEmail &&
       sharedEmails.some((e) => String(e || "").toLowerCase().trim() === currentEmail);
-    const isDriveSharedJoin = (raw as { driveSharedJoin?: unknown }).driveSharedJoin === true;
+    const isDriveSharedJoin =
+      (raw as { driveSharedJoin?: unknown }).driveSharedJoin === true ||
+      (raw as { dropboxSharedJoin?: unknown }).dropboxSharedJoin === true;
     return {
       ...raw,
       planId,
@@ -943,7 +945,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             if (!id || cloudMirrorAllowedIds.has(id)) continue;
             const isOwner = isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user.email ?? null });
             const isPureLocalRow = String((row as { storageOption?: string }).storageOption || "").toLowerCase() === "local";
-            const isDriveSharedJoin = (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;
+            const isDriveSharedJoin =
+              (row as { driveSharedJoin?: unknown }).driveSharedJoin === true ||
+              (row as { dropboxSharedJoin?: unknown }).dropboxSharedJoin === true;
             if (isOwner && isPureLocalRow) continue;
             // Drive se join ki local company — Firestore id list me nahi hoti, purge mat karo.
             if (isDriveSharedJoin) continue;
@@ -1441,7 +1445,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       const existing = companyMap.get(c.id);
       if (!existing) {
         const row = c as unknown as import("@/lib/localCompanyStore").LocalCompanyDoc;
-        const isDriveSharedJoin = (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;
+        const isDriveSharedJoin =
+          (row as { driveSharedJoin?: unknown }).driveSharedJoin === true ||
+          (row as { dropboxSharedJoin?: unknown }).dropboxSharedJoin === true;
         const isPureLocalRow =
           String((row as { storageOption?: string }).storageOption || "local").toLowerCase() === "local";
         // Auth abhi load ho raha ho to SQLite purge mat karo — refresh par galat ghost delete.

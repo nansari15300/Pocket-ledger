@@ -17,6 +17,10 @@ environmentVariables:
     availability: ["RUNTIME"]
   - variable: GOOGLE_CLIENT_SECRET
     availability: ["RUNTIME"]
+  - variable: DROPBOX_APP_KEY
+    availability: ["RUNTIME"]
+  - variable: DROPBOX_APP_SECRET
+    availability: ["RUNTIME"]
   - variable: FIREBASE_PROJECT_ID
     availability: ["RUNTIME"]
   - variable: FIREBASE_CLIENT_EMAIL

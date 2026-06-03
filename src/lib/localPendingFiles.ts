@@ -24,7 +24,7 @@ import {
 import {
   isGoogleDriveCloudSyncCompany,
   uploadPendingAttachmentPayloadToDrive,
-  downloadDriveAttachmentBlob,
+  downloadCloudAttachmentBlob,
 } from "@/lib/localCloudSync/driveCloudSyncClient";
 import { isDriveFileRef, remotePathFromDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 import type { CloudSyncProviderId } from "@/lib/localCloudSync/types";
@@ -194,8 +194,24 @@ export async function resolvePendingAttachmentCloudSyncProvider(
     const provider = String((r as Record<string, unknown>).cloudSyncProvider ?? "").trim().toLowerCase();
     const enabled = (r as Record<string, unknown>).cloudSyncEnabled === true;
     if (!enabled) continue;
-    if (provider === "google_drive" || provider === "drive") return "google_drive";
-    if (provider === "dropbox") return "dropbox";
+    const dataP = String((r as Record<string, unknown>).cloudSyncDataProvider ?? "").trim().toLowerCase();
+    const filesP = String((r as Record<string, unknown>).cloudSyncFilesProvider ?? "").trim().toLowerCase();
+    const legacyP = String((r as Record<string, unknown>).cloudSyncProvider ?? "").trim().toLowerCase();
+    const pickFiles =
+      filesP === "dropbox"
+        ? "dropbox"
+        : filesP === "google_drive" || filesP === "drive"
+          ? "google_drive"
+          : legacyP === "dropbox"
+            ? "dropbox"
+            : legacyP === "google_drive" || legacyP === "drive"
+              ? "google_drive"
+              : dataP === "dropbox"
+                ? "dropbox"
+                : dataP === "google_drive" || dataP === "drive"
+                  ? "google_drive"
+                  : null;
+    if (pickFiles) return pickFiles;
   }
   return null;
 }
@@ -487,7 +503,7 @@ export async function getBlobFromLocalFileRef(
     const remotePath = remotePathFromDriveFileRef(url);
     if (!remotePath) return null;
     try {
-      return await downloadDriveAttachmentBlob(remotePath);
+      return await downloadCloudAttachmentBlob(remotePath);
     } catch {
       return null;
     }
@@ -527,7 +543,7 @@ export async function uploadPendingLocalFileRef(
   const docMatch = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(String(item.docPath || "").trim());
   const targetCompanyId = resolvePendingPayloadCompanyId(item);
   const provider = targetCompanyId ? await resolvePendingAttachmentCloudSyncProvider(targetCompanyId) : null;
-  if (targetCompanyId && provider === "google_drive") {
+  if (targetCompanyId && (provider === "google_drive" || provider === "dropbox")) {
     const collection = docMatch?.[2] || "vouchers";
     const docId = docMatch?.[3] || item.id;
     const reg = await getLocalCompanyById(targetCompanyId, { includeDeleted: true });
@@ -545,10 +561,6 @@ export async function uploadPendingLocalFileRef(
     await patchPendingFileTargetField(item.docPath, item.field, item.id, driveRef);
     await removePendingFile(item.id);
     return driveRef;
-  }
-  if (provider === "dropbox") {
-    // Dropbox selected hai to Firebase fallback galat hoga; pending row retry ke liye rakho.
-    throw new Error("Dropbox attachment sync is not connected yet. File was not uploaded to Firebase Storage.");
   }
 
   const reg = targetCompanyId ? await getLocalCompanyById(targetCompanyId, { includeDeleted: true }) : null;
@@ -745,28 +757,20 @@ export async function syncOnePendingFile(
     const targetCompanyId = resolvePendingPayloadCompanyId(item);
     const provider = targetCompanyId ? await resolvePendingAttachmentCloudSyncProvider(targetCompanyId) : null;
     // Local company + cloud sync — Firebase Storage ki jagah selected provider route.
-    if (targetCompanyId && provider === "google_drive") {
+    if (targetCompanyId && (provider === "google_drive" || provider === "dropbox")) {
       const uploaded = await uploadPendingLocalFileRef(
         `${LOCAL_FILE_PREFIX}${item.id}`,
         item.storagePathPrefix,
         item
       );
-      // Drive upload ke baad bhi `local:` reh gaya = bytes/path issue; voucher sync pause sahi rahe.
       if (isLocalFileRef(uploaded)) {
+        const label = provider === "dropbox" ? "Dropbox" : "Google Drive";
         return {
           success: false,
-          error:
-            "Pending attachment was not uploaded to Google Drive. Re-attach the file and try sync again.",
+          error: `Pending attachment was not uploaded to ${label}. Re-attach the file and try sync again.`,
         };
       }
       return { success: true };
-    }
-    if (provider === "dropbox") {
-      // Dropbox implementation ready nahi hai; Firebase URL bana dena selected-provider contract todta hai.
-      return {
-        success: false,
-        error: "Dropbox attachment sync is not connected yet. File was not uploaded to Firebase Storage.",
-      };
     }
 
     const reg = targetCompanyId ? await getLocalCompanyById(targetCompanyId, { includeDeleted: true }) : null;

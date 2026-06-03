@@ -93,9 +93,14 @@ export function readCloudSyncConfigFromCompany(
   company: LocalCompanyDoc | Record<string, unknown> | null | undefined
 ): CloudSyncCompanyConfig {
   const c = (company ?? {}) as Record<string, unknown>;
+  const legacyProvider = parseProvider(c.cloudSyncProvider);
+  const dataProvider = parseProvider(c.cloudSyncDataProvider) ?? legacyProvider;
+  const filesProvider = parseProvider(c.cloudSyncFilesProvider) ?? legacyProvider;
   return {
     cloudSyncEnabled: c.cloudSyncEnabled === true,
-    cloudSyncProvider: parseProvider(c.cloudSyncProvider),
+    cloudSyncProvider: legacyProvider ?? dataProvider ?? filesProvider,
+    cloudSyncDataProvider: dataProvider,
+    cloudSyncFilesProvider: filesProvider,
     cloudSyncLastSyncAt:
       typeof c.cloudSyncLastSyncAt === "number" && Number.isFinite(c.cloudSyncLastSyncAt)
         ? c.cloudSyncLastSyncAt
@@ -147,7 +152,23 @@ export async function shouldUseLocalCloudSync(companyId: string): Promise<boolea
   const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
   if (!reg) return false;
   const cfg = readCloudSyncConfigFromCompany(reg);
-  return cfg.cloudSyncEnabled && !!cfg.cloudSyncProvider;
+  return cfg.cloudSyncEnabled && !!(cfg.cloudSyncDataProvider || cfg.cloudSyncFilesProvider || cfg.cloudSyncProvider);
+}
+
+/** Ops/manifest transport — data provider pehle, warna legacy single provider. */
+export function cloudSyncDataProviderId(
+  company: LocalCompanyDoc | Record<string, unknown> | null | undefined
+): CloudSyncProviderId | null {
+  const cfg = readCloudSyncConfigFromCompany(company);
+  return cfg.cloudSyncDataProvider ?? cfg.cloudSyncProvider;
+}
+
+/** Attachment upload/download transport. */
+export function cloudSyncFilesProviderId(
+  company: LocalCompanyDoc | Record<string, unknown> | null | undefined
+): CloudSyncProviderId | null {
+  const cfg = readCloudSyncConfigFromCompany(company);
+  return cfg.cloudSyncFilesProvider ?? cfg.cloudSyncProvider;
 }
 
 export async function patchLocalCompanyCloudSyncFields(
@@ -155,6 +176,8 @@ export async function patchLocalCompanyCloudSyncFields(
   patch: Partial<{
     cloudSyncEnabled: boolean;
     cloudSyncProvider: CloudSyncProviderId | null;
+    cloudSyncDataProvider: CloudSyncProviderId | null;
+    cloudSyncFilesProvider: CloudSyncProviderId | null;
     cloudSyncLastSyncAt: number | null;
     cloudSyncStatus: CloudSyncRunStatus;
     cloudSyncLastError: string | null;
@@ -324,12 +347,10 @@ export async function pushCompanyRegistryManifestToDrive(companyId: string): Pro
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
   if (!reg) return false;
 
-  const { getSyncProviderForCompany } = await import("@/lib/localCloudSync/providers");
-  const cfg = readCloudSyncConfigFromCompany(reg);
-  const providerId = cfg.cloudSyncProvider;
-  if (!providerId) return false;
+  const { getDataSyncProviderForCompany } = await import("@/lib/localCloudSync/providers");
+  const provider = getDataSyncProviderForCompany(reg);
+  if (!provider) return false;
 
-  const provider = getSyncProviderForCompany(providerId);
   const syncRef = {
     companyId: cid,
     companyName: typeof reg.name === "string" ? reg.name : undefined,
@@ -367,14 +388,12 @@ export async function pullCompanyRegistryManifestFromDrive(companyId: string): P
   if (!cid) return;
   if (!(await shouldUseLocalCloudSync(cid))) return;
 
-  const { getSyncProviderForCompany } = await import("@/lib/localCloudSync/providers");
+  const { getDataSyncProviderForCompany } = await import("@/lib/localCloudSync/providers");
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
   if (!reg) return;
-  const cfg = readCloudSyncConfigFromCompany(reg);
-  const providerId = cfg.cloudSyncProvider;
-  if (!providerId) return;
+  const provider = getDataSyncProviderForCompany(reg);
+  if (!provider) return;
 
-  const provider = getSyncProviderForCompany(providerId);
   const syncRef = {
     companyId: cid,
     companyName: typeof reg.name === "string" ? reg.name : undefined,

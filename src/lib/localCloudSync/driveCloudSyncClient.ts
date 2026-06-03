@@ -469,6 +469,19 @@ export async function uploadPendingAttachmentPayloadToDrive(input: {
     remotePath,
   });
   const sha256Hex = await computeSha256HexFromBlob(input.blob);
+  const regForProvider = await getLocalCompanyById(input.companyId, { includeDeleted: true });
+  const provider = readCloudSyncConfigFromCompany(regForProvider).cloudSyncProvider;
+  if (provider === "dropbox") {
+    const { uploadAttachmentBytesToDropbox } = await import("@/lib/localCloudSync/dropboxCloudSyncClient");
+    return uploadAttachmentBytesToDropbox({
+      companyId: input.companyId,
+      companyName: input.companyName,
+      remotePath,
+      bytes: input.blob,
+      contentType: input.contentType,
+      sha256Hex,
+    });
+  }
   return uploadAttachmentBytesToDrive({
     companyId: input.companyId,
     companyName: input.companyName,
@@ -477,4 +490,22 @@ export async function uploadPendingAttachmentPayloadToDrive(input: {
     contentType: input.contentType,
     sha256Hex,
   });
+}
+
+/** Provider-aware download — `drive:` refs work for both Google Drive and Dropbox companies. */
+export async function downloadCloudAttachmentBlob(
+  remotePath: string,
+  companyId?: string
+): Promise<Blob | null> {
+  const logicalPath = remotePathFromDriveFileRef(remotePath) ?? remotePath;
+  const cid = companyId || (await resolveCompanyIdForDrivePath(logicalPath));
+  if (cid) {
+    const reg = await getLocalCompanyById(cid, { includeDeleted: true });
+    const provider = readCloudSyncConfigFromCompany(reg).cloudSyncProvider;
+    if (provider === "dropbox") {
+      const { downloadDropboxAttachmentBlob } = await import("@/lib/localCloudSync/dropboxCloudSyncClient");
+      return downloadDropboxAttachmentBlob(remotePath, cid);
+    }
+  }
+  return downloadDriveAttachmentBlob(remotePath, companyId);
 }

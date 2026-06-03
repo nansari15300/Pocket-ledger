@@ -100,7 +100,13 @@ export type EntitlementKey =
   /** Per owner per calendar month — attachment wala restore count; 0 = unlimited. */
   | "maxAttachmentRestorePerMonth"
   /** Local company → cloud upload: max attachment payload (MB); 0 = unlimited. */
-  | "maxLocalToOnlineAttachmentMB";
+  | "maxLocalToOnlineAttachmentMB"
+  /** Online Firestore companies (`storageOption: firebase`) — off = create/edit me local/online choice hide. */
+  | "allowFirebaseOnlineCompanies"
+  /** Local company cloud sync — voucher JSON / ops to Google Drive. */
+  | "allowGoogleDriveCloudSync"
+  /** Local company cloud sync — voucher JSON / ops to Dropbox. */
+  | "allowDropboxCloudSync";
 
 export type Entitlements = Record<EntitlementKey, number | boolean>;
 
@@ -168,6 +174,9 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxAttachmentRestorePerMonth: 0,
       maxLocalToOnlineAttachmentMB: 0,
       savedAccountSwitchEnabled: false,
+      allowFirebaseOnlineCompanies: false,
+      allowGoogleDriveCloudSync: true,
+      allowDropboxCloudSync: true,
     },
     features: [
       "Unlimited local (offline) companies",
@@ -220,6 +229,9 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxAttachmentRestorePerMonth: 2,
       maxLocalToOnlineAttachmentMB: 500,
       savedAccountSwitchEnabled: true,
+      allowFirebaseOnlineCompanies: true,
+      allowGoogleDriveCloudSync: true,
+      allowDropboxCloudSync: true,
     },
     features: [
       "1 online company + unlimited offline",
@@ -274,6 +286,9 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxAttachmentRestorePerMonth: 5,
       maxLocalToOnlineAttachmentMB: 2000,
       savedAccountSwitchEnabled: true,
+      allowFirebaseOnlineCompanies: true,
+      allowGoogleDriveCloudSync: true,
+      allowDropboxCloudSync: true,
     },
     features: [
       "3 online companies + unlimited offline",
@@ -327,6 +342,9 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxAttachmentRestorePerMonth: 10,
       maxLocalToOnlineAttachmentMB: 5000,
       savedAccountSwitchEnabled: true,
+      allowFirebaseOnlineCompanies: true,
+      allowGoogleDriveCloudSync: true,
+      allowDropboxCloudSync: true,
     },
     features: [
       "10 online companies + unlimited offline",

@@ -21,7 +21,7 @@ export function CapacitorDriveOAuthReturnHandler() {
 
         const closeIfAppOrigin = (rawUrl: string) => {
           const u = String(rawUrl || "");
-          if (u.includes("localhost") || u.includes("drive_connected")) {
+          if (u.includes("localhost") || u.includes("drive_connected") || u.includes("dropbox_connected")) {
             void Browser.close();
           }
         };
@@ -47,11 +47,15 @@ export function CapacitorDriveOAuthReturnHandler() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const sp = new URLSearchParams(window.location.search);
-    if (sp.get("success") !== "drive_connected") return;
+    const success = sp.get("success");
+    if (success !== "drive_connected" && success !== "dropbox_connected") return;
 
     toast({
-      title: "Google Drive connected",
-      description: "You can now sync local companies to Drive.",
+      title: success === "dropbox_connected" ? "Dropbox connected" : "Google Drive connected",
+      description:
+        success === "dropbox_connected"
+          ? "Dropbox account linked. Company sync will use your App folder."
+          : "You can now sync local companies to Drive.",
     });
 
     sp.delete("success");

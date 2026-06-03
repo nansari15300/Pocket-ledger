@@ -30,6 +30,12 @@ import {
   openGoogleDriveOAuthUrl,
   resolveDriveOAuthReturnPath,
 } from "@/lib/driveAuthClient";
+import {
+  disconnectDropbox,
+  getDropboxAuthUrl,
+  openDropboxOAuthUrl,
+  resolveDropboxOAuthReturnPath,
+} from "@/lib/dropboxAuthClient";
 import { getLocalCloudSyncStatus, runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
 import { backfillLocalDocsToCloudSyncOutbox } from "@/lib/localCloudSync/backfillOutbox";
 import { ensureCloudSyncDriveEncryptionSalt } from "@/lib/localCloudSync/driveEncryption";
@@ -577,6 +583,49 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
     }
   };
 
+  const connectDropbox = async () => {
+    setBusy(true);
+    try {
+      const firebaseUser = await getFirebaseAuthUserForApi();
+      const { url } = await getDropboxAuthUrl({
+        returnPath: resolveDropboxOAuthReturnPath(settingsViewHref("local_cloud_sync")),
+        uid: firebaseUser.uid,
+        email: firebaseUser.email ?? undefined,
+        formData: { companyId },
+      });
+      await openDropboxOAuthUrl(url);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast({
+        variant: "destructive",
+        title: isLocalSyntheticAuthUid(user?.uid) ? "Sign-in required" : "Dropbox connect failed",
+        description:
+          msg === FIREBASE_SIGN_IN_REQUIRED_FOR_DRIVE_MSG || isLocalSyntheticAuthUid(user?.uid)
+            ? LOCAL_UNLOCK_ONLY_DRIVE_MSG
+            : msg,
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disconnectDropboxAccount = async () => {
+    setBusy(true);
+    try {
+      await disconnectDropbox();
+      toast({ title: "Disconnected", description: "Dropbox unlinked." });
+      await refreshStatus();
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        title: "Disconnect failed",
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const forceSync = async () => {
     setBusy(true);
     try {
@@ -1043,7 +1092,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
           <div className="relative -mx-2 shrink-0 border-t border-black/10 bg-inherit px-2 pt-2 pb-[max(0.25rem,env(safe-area-inset-bottom))] sm:-mx-4 sm:px-4">
             {renderSettingsListFloatButton()}
             <div className="grid grid-cols-3 gap-2">
-              {provider === "google_drive" ? (
+              {provider === "google_drive" || provider === "dropbox" ? (
                 <>
                   <Button
                     type="button"
@@ -1051,7 +1100,9 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
                     size="sm"
                     className="col-start-1 row-start-1 h-10 w-full min-w-0 rounded-lg px-1.5 text-[11px] leading-tight sm:h-9 sm:px-4 sm:text-sm"
                     disabled={busy}
-                    onClick={() => void connectDrive()}
+                    onClick={() =>
+                      void (provider === "dropbox" ? connectDropbox() : connectDrive())
+                    }
                   >
                     Connect
                   </Button>
@@ -1061,7 +1112,9 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
                     size="sm"
                     className="col-start-2 row-start-1 h-10 w-full min-w-0 rounded-lg px-1.5 text-[11px] leading-tight sm:h-9 sm:px-4 sm:text-sm"
                     disabled={busy}
-                    onClick={() => void disconnectDrive()}
+                    onClick={() =>
+                      void (provider === "dropbox" ? disconnectDropboxAccount() : disconnectDrive())
+                    }
                   >
                     Disconnect
                   </Button>

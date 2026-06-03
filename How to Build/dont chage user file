@@ -72,4 +72,14 @@ Android APK Native/static
 
 
 Out Folder Run            npx serve out -l 4173
+
+
+rull deploy
+
+firebase deploy --only firestore:rules
+firebase deploy --only storage
+
+Ya dono ek saath:
+firebase deploy --only firestore:rules,storage
+
 ----------------------------------------------------------------------------------------------------

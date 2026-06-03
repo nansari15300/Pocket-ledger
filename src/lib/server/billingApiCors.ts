@@ -45,7 +45,9 @@ export function isPocketLedgerBillingApiCorsPath(pathname: string): boolean {
   if (pathname.startsWith("/api/payments/")) return true;
   // Local company Google Drive — static/APK localhost se hosted origin par fetch karta hai.
   if (pathname.startsWith("/api/auth/google/drive-")) return true;
+  if (pathname.startsWith("/api/auth/dropbox/")) return true;
   if (pathname.startsWith("/api/local-cloud-sync/drive/")) return true;
+  if (pathname.startsWith("/api/local-cloud-sync/dropbox/")) return true;
   return (
     pathname === "/api/company/sync-plan" ||
     pathname === "/api/company/downgrade-plan" ||

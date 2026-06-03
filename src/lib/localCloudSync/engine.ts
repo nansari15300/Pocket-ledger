@@ -35,7 +35,8 @@ import {
   isDriveAuthRequiredError,
   waitForFirebaseAuthReady,
 } from "@/lib/firebaseAuthForApi";
-import { getSyncProviderForCompany } from "@/lib/localCloudSync/providers";
+import { getDataSyncProviderForCompany } from "@/lib/localCloudSync/providers";
+import { cloudSyncDataProviderId } from "@/lib/localCloudSync/companyConfig";
 import { backfillLocalDocsToCloudSyncOutbox } from "@/lib/localCloudSync/backfillOutbox";
 import {
   CLOUD_SYNC_ENCRYPTION_KEY_REQUIRED_MSG,
@@ -120,8 +121,8 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
   if (!reg) return { ok: false, error: "company not found", uploaded: 0, downloaded: 0 };
 
   const cfg = readCloudSyncConfigFromCompany(reg);
-  const providerId = cfg.cloudSyncProvider as CloudSyncProviderId;
-  if (!providerId) return { ok: false, error: "no provider", uploaded: 0, downloaded: 0 };
+  const providerId = cloudSyncDataProviderId(reg);
+  if (!providerId) return { ok: false, error: "no data sync provider", uploaded: 0, downloaded: 0 };
 
   // Drive folder user ne delete kar diya ho to sync usko recreate/reupload na kare; local copy bhi hatao.
   const firebaseUser = await getFirebaseAuthUserForApi();
@@ -138,7 +139,8 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
   let downloaded = 0;
 
   try {
-    const provider = getSyncProviderForCompany(providerId);
+    const provider = getDataSyncProviderForCompany(reg);
+    if (!provider) return { ok: false, error: "no data sync provider", uploaded: 0, downloaded: 0 };
     const cursor = await getCloudSyncCursor(cid);
     // Drive folder: `Pocket Ledger/{CompanyName__id}/` — registry se readable name bhejo
     const syncRef: CloudSyncCompanyRef = {
@@ -148,6 +150,10 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
       driveSharedFolderId:
         typeof reg.cloudSyncDriveFolderId === "string" && reg.cloudSyncDriveFolderId.trim()
           ? reg.cloudSyncDriveFolderId.trim()
+          : undefined,
+      dropboxCompanyPath:
+        typeof reg.cloudSyncDropboxFolderPath === "string" && reg.cloudSyncDropboxFolderPath.trim()
+          ? reg.cloudSyncDropboxFolderPath.trim()
           : undefined,
     };
 
@@ -369,7 +375,7 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     });
 
     const sharedUsers = readCloudSyncDriveShareUsers(regForShare as Record<string, unknown>);
-    if (sharedUsers.length > 0) {
+    if (providerId === "google_drive" && sharedUsers.length > 0) {
       await assertCompanyCanStillWriteDrive(cid);
       await maybeShareDriveCompanyFolder({
         companyId: cid,

@@ -2,6 +2,7 @@
 
 import type { Entitlements, Plan, PlanId } from "@/config/plans";
 import { getPlan, numericEntitlement } from "@/config/plans";
+import { planAllowsFirebaseOnline } from "@/lib/planSyncEntitlements";
 
 /**
  * Kitni cloud-linked (storage ≠ local) companies allow hain — upload/create ke liye.
@@ -80,6 +81,7 @@ export function maxOnlineCompaniesForPlan(
 ): number {
   const id = ((planId && String(planId)) as PlanId) || "basic";
   const plan = livePlan ?? getPlan(id);
+  if (!planAllowsFirebaseOnline(id, plan)) return 0;
   return maxOnlineSlotsFromEntitlements(plan.entitlements);
 }
 

@@ -55,6 +55,9 @@ const entitlementLabels: Partial<Record<EntitlementKey, string>> = {
     shareForReconciliationEnabled: "Share for Reconciling (cross-user ledger match)",
     savedAccountSwitchEnabled: "Saved account switch (APK/EXE quick login)",
     attachmentBackupRestoreEnabled: "Attachment backup & restore (embed files in .plbp)",
+    allowFirebaseOnlineCompanies: "Online company (Firebase / Firestore sync)",
+    allowGoogleDriveCloudSync: "Local company — Google Drive sync",
+    allowDropboxCloudSync: "Local company — Dropbox sync",
 };
 
 export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
@@ -249,7 +252,19 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
       // Multi-device switch off = dono 1; on = online/local alag caps (billing chart rows).
       { online: "maxDevices", local: "maxDevicesLocal", label: "Max devices" },
     ];
-    const entitlementBooleanFields: EntitlementKey[] = ["hasPrioritySupport", "hasAuditLogs", "hasRoleBasedAccess", "allowCompanyAdminRecycleBin", "canAddAvatar", "shareForReconciliationEnabled", "savedAccountSwitchEnabled", "attachmentBackupRestoreEnabled"];
+    const entitlementBooleanFields: EntitlementKey[] = [
+        "hasPrioritySupport",
+        "hasAuditLogs",
+        "hasRoleBasedAccess",
+        "allowCompanyAdminRecycleBin",
+        "canAddAvatar",
+        "shareForReconciliationEnabled",
+        "savedAccountSwitchEnabled",
+        "attachmentBackupRestoreEnabled",
+        "allowFirebaseOnlineCompanies",
+        "allowGoogleDriveCloudSync",
+        "allowDropboxCloudSync",
+    ];
 
     const offerDate = editablePlan.limitedTimeOfferDate ? 
         (editablePlan.limitedTimeOfferDate.toDate ? editablePlan.limitedTimeOfferDate.toDate() : new Date(editablePlan.limitedTimeOfferDate))
