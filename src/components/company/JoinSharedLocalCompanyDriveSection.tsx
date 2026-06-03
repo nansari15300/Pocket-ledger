@@ -282,7 +282,6 @@ export function JoinSharedLocalCompanyDriveSection({
       <CardContent className="flex min-h-0 flex-1 flex-col space-y-3 px-4 pb-4 pt-0">
       <div className="flex flex-wrap items-center gap-2">
         <CloudProviderConnectButton
-          provider="google_drive"
           connected={driveConnected}
           disabled={accountStatusLoading}
           onClick={() => void connectDrive()}

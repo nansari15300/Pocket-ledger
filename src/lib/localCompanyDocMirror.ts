@@ -61,6 +61,16 @@ async function shouldPersistCompanyDocToBrowserDb(
   }
 }
 
+/** Read gate — upsert jahan allowed hai wahi par SQLite se padho (local + Drive web mode). */
+async function canReadCompanyDocsFromBrowserDb(
+  companyId: string,
+  options?: { forBackupMerge?: boolean }
+): Promise<boolean> {
+  if (options?.forBackupMerge) return true;
+  if (shouldMirrorToBrowserDb()) return true;
+  return shouldPersistCompanyDocToBrowserDb(companyId);
+}
+
 /** SQLite write ke baad cloud_sync_outbox — retry path me bhi call karo. */
 async function enqueueCloudSyncDeltaAfterMirrorWrite(input: {
   companyId: string;
@@ -158,7 +168,8 @@ export async function getCompanyDocFromBrowserDb(
   /** Recycle bin view: deleted rows bhi SQLite mirror se padh sakte hain. */
   opts?: { includeDeleted?: boolean }
 ): Promise<Record<string, unknown> | null> {
-  if (!shouldMirrorToBrowserDb() || typeof window === "undefined" || !companyId || !collectionName || !docId) return null;
+  if (typeof window === "undefined" || !companyId || !collectionName || !docId) return null;
+  if (!(await canReadCompanyDocsFromBrowserDb(companyId))) return null;
   try {
     const db = await getBrowserDb();
     if (!db) return null;
@@ -205,7 +216,8 @@ export async function listCompanyDocsFromBrowserDb(
   /** Backup merge / recycle-bin duplicate flows: include soft-deleted rows. */
   options?: { forBackupMerge?: boolean; includeSoftDeleted?: boolean }
 ): Promise<any[]> {
-  if ((!options?.forBackupMerge && !shouldMirrorToBrowserDb()) || typeof window === "undefined" || !companyId || !collectionName) return [];
+  if (typeof window === "undefined" || !companyId || !collectionName) return [];
+  if (!(await canReadCompanyDocsFromBrowserDb(companyId, options))) return [];
   try {
     const db = await getBrowserDb();
     if (!db) return [];
@@ -234,7 +246,8 @@ export async function listVoucherSummaryProjectionFromBrowserDb(
   companyId: string,
   options?: { forBackupMerge?: boolean; limit?: number }
 ): Promise<VoucherProjectionRow[]> {
-  if ((!options?.forBackupMerge && !shouldMirrorToBrowserDb()) || typeof window === "undefined" || !companyId) return [];
+  if (typeof window === "undefined" || !companyId) return [];
+  if (!(await canReadCompanyDocsFromBrowserDb(companyId, options))) return [];
   try {
     const db = await getBrowserDb();
     if (!db) return [];
@@ -378,7 +391,7 @@ export type UpsertCompanyBrowserOptions = {
   force?: boolean;
   /** Firestore mirror/restore: skip paid-expiry read-only gate (server snapshot or import = trusted read). */
   skipPlanMutationGate?: boolean;
-  /** Remote Drive/Dropbox apply — dubara cloud_sync_outbox mat banao */
+  /** Remote Google Drive apply — dubara cloud_sync_outbox mat banao */
   skipCloudSyncEnqueue?: boolean;
 };
 
@@ -454,7 +467,7 @@ export async function upsertCompanyDocInBrowserDb(
          updatedAt = excluded.updatedAt`
     ).run(companyId, collectionName, docId, json, now);
     await upsertVoucherProjection(companyId, collectionName, docId, data);
-    // Local-company Drive/Dropbox delta queue (Firestore `sync_outbox` se alag)
+    // Local-company Google Drive delta queue (Firestore `sync_outbox` se alag)
     await enqueueCloudSyncDeltaAfterMirrorWrite({
       companyId,
       collectionName,

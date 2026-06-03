@@ -26,13 +26,10 @@ function toastForOAuthReturn(
     });
     return;
   }
-  if (payload.success === "dropbox_connected" || payload.success === "drive_connected") {
+  if (payload.success === "drive_connected") {
     toast({
-      title: payload.success === "dropbox_connected" ? "Dropbox connected" : "Google Drive connected",
-      description:
-        payload.success === "dropbox_connected"
-          ? "Dropbox account linked. Refresh list karke companies dekho."
-          : "You can now sync local companies to Drive.",
+      title: "Google Drive connected",
+      description: "You can now sync local companies to Drive.",
     });
   }
 }
@@ -50,16 +47,12 @@ export function CloudOAuthReturnHandler() {
       const error = sp.get("error");
       if (
         success === "drive_connected" ||
-        success === "dropbox_connected" ||
         error === "oauth_exchange_failed" ||
         error === "oauth_failed" ||
         error === "oauth_failed_no_code"
       ) {
         stashCloudOAuthReturn({
-          success:
-            success === "drive_connected" || success === "dropbox_connected"
-              ? success
-              : undefined,
+          success: success === "drive_connected" ? success : undefined,
           error: error || undefined,
         });
         sp.delete("success");

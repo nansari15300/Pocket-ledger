@@ -31,7 +31,7 @@ export async function hydrateVoucherLocalAttachmentsForServer(
     typeof typeRaw === "string" && typeRaw.trim() !== "" ? typeRaw.trim() : "voucher";
   const localCloudProvider = await resolvePendingAttachmentCloudSyncProvider(cid);
   if (localCloudProvider) {
-    // Local Drive/Dropbox company: bytes ka owner cloud-sync cycle hai; yahan Firebase Storage URL mat banao.
+    // Local Google Drive company: bytes ka owner cloud-sync cycle hai; yahan Firebase Storage URL mat banao.
     return docFields;
   }
 

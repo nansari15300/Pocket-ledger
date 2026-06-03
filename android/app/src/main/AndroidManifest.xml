@@ -26,7 +26,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="localhost" />
             </intent-filter>
-            <!-- Dropbox/Drive hosted bridge → pocket-ledger.com/oauth-return/... (Custom Tab se app wapas). -->
+            <!-- Google Drive OAuth hosted bridge → pocket-ledger.com/oauth-return/... (Custom Tab se app wapas). -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

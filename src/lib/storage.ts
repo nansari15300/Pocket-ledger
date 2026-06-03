@@ -108,7 +108,7 @@ export const uploadFile = async (
       return {
         success: false,
         error:
-          "Local company files use device storage and Google Drive/Dropbox sync — not Firebase Storage.",
+          "Local company files use device storage and Google Drive sync — not Firebase Storage.",
       };
     }
 

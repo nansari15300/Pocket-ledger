@@ -7,7 +7,6 @@ import { cloudSyncSharePanelCard } from "@/lib/companyProfileChrome";
 import { CloudSyncHelpPopover } from "@/components/company/CloudSyncHelpPopover";
 import { JoinPanelMyCompaniesToggle } from "@/components/company/JoinPanelMyCompaniesToggle";
 import { JoinSharedLocalCompanyDriveSection } from "@/components/company/JoinSharedLocalCompanyDriveSection";
-import { JoinSharedLocalCompanyDropboxSection } from "@/components/company/JoinSharedLocalCompanyDropboxSection";
 import type { UseCloudProviderAccountStatusResult } from "@/hooks/useCloudProviderAccountStatus";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
@@ -21,7 +20,7 @@ type Props = {
   cloudAccounts?: UseCloudProviderAccountStatusResult;
 };
 
-/** Join shared local company — Google Drive + Dropbox alag sections. */
+/** Join shared local company — Google Drive. */
 export function JoinSharedLocalCompanyPanel({
   active = true,
   onJoined,
@@ -34,12 +33,9 @@ export function JoinSharedLocalCompanyPanel({
   const [nativeShell, setNativeShell] = useState(false);
   const compactProviderCards = isMobile || nativeShell;
 
-  /** Mobile/APK: cards band — neeche company sync settings zyada screen le. */
   const [providerCardsOpen, setProviderCardsOpen] = useState(false);
   const [ownedDriveListOpen, setOwnedDriveListOpen] = useState(false);
-  const [ownedDropboxListOpen, setOwnedDropboxListOpen] = useState(false);
   const [ownedDriveCount, setOwnedDriveCount] = useState(0);
-  const [ownedDropboxCount, setOwnedDropboxCount] = useState(0);
 
   useEffect(() => {
     setNativeShell(isCapacitorNativeApp());
@@ -86,8 +82,8 @@ export function JoinSharedLocalCompanyPanel({
               label="Join shared local company"
               description={
                 <p>
-                  Restore or join a local company from cloud backup. Use Google Drive or Dropbox separately — connect
-                  the provider you use, then Refresh list and Connect on each company row.
+                  Restore or join a local company from Google Drive backup. Connect Drive, then Refresh list and
+                  Connect on each company row.
                 </p>
               }
             />
@@ -98,17 +94,10 @@ export function JoinSharedLocalCompanyPanel({
                 onToggle={() => setOwnedDriveListOpen((o) => !o)}
               />
             ) : null}
-            {providerCardsOpen && ownedDropboxCount > 0 ? (
-              <JoinPanelMyCompaniesToggle
-                label="Dropbox"
-                open={ownedDropboxListOpen}
-                onToggle={() => setOwnedDropboxListOpen((o) => !o)}
-              />
-            ) : null}
             <button
               type="button"
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md active:bg-white/70"
-              aria-label={providerCardsOpen ? "Hide Drive and Dropbox" : "Show Drive and Dropbox"}
+              aria-label={providerCardsOpen ? "Hide Google Drive" : "Show Google Drive"}
               onClick={() => setProviderCardsOpen((open) => !open)}
             >
               <ChevronDown
@@ -128,8 +117,8 @@ export function JoinSharedLocalCompanyPanel({
                 label="Join shared local company"
                 description={
                   <p>
-                    Restore or join a local company from cloud backup. Use Google Drive or Dropbox separately — connect
-                    the provider you use, then Refresh list and Connect on each company row.
+                    Restore or join a local company from Google Drive backup. Connect Drive, then Refresh list and
+                    Connect on each company row.
                   </p>
                 }
               />
@@ -139,10 +128,7 @@ export function JoinSharedLocalCompanyPanel({
       ) : null}
 
       {showProviderCards ? (
-        <div
-          id="join-shared-provider-cards"
-          className="flex flex-col gap-4 md:grid md:grid-cols-2 md:items-stretch md:gap-4"
-        >
+        <div id="join-shared-provider-cards" className="min-w-0">
           <JoinSharedLocalCompanyDriveSection
             active={active && showProviderCards}
             onJoined={onJoined}
@@ -156,25 +142,9 @@ export function JoinSharedLocalCompanyPanel({
             onOwnedListOpenChange={setOwnedDriveListOpen}
             onOwnedInviteCountChange={setOwnedDriveCount}
           />
-          <JoinSharedLocalCompanyDropboxSection
-            active={active && showProviderCards}
-            onJoined={onJoined}
-            returnPath={returnPath}
-            embedded
-            className="min-w-0"
-            dropboxConnected={cloudAccounts?.dropbox}
-            accountStatusLoading={cloudAccounts?.loading}
-            refreshCloudAccounts={cloudAccounts?.refresh}
-            mobileMyCompaniesInPanelHeader={compactProviderCards}
-            ownedListOpen={ownedDropboxListOpen}
-            onOwnedListOpenChange={setOwnedDropboxListOpen}
-            onOwnedInviteCountChange={setOwnedDropboxCount}
-          />
         </div>
       ) : compactProviderCards ? (
-        <p className="px-1 text-xs text-muted-foreground">
-          Google Drive / Dropbox connect — upar tap karo.
-        </p>
+        <p className="px-1 text-xs text-muted-foreground">Google Drive connect — upar tap karo.</p>
       ) : null}
     </div>
   );

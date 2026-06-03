@@ -170,7 +170,7 @@ function SettingsPageContent() {
     );
     const availableNavItems = useMemo(() => {
         const allowed = settingsNavItems.filter((item) => {
-            // Cloud sync (Drive + Dropbox) — web / EXE / APK; permission ke bina bhi hamesha nav me.
+            // Cloud sync (Google Drive) — web / EXE / APK; permission ke bina bhi hamesha nav me.
             if (item.id === "local_cloud_sync") return true;
             if (item.id === "app_lock") return shellLockEligible;
             return can(item.permission);

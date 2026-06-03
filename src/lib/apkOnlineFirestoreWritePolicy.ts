@@ -70,7 +70,7 @@ export async function apkCloudCompanyUsesSqliteFirstWrites(companyId: string): P
 /** Master/item forms: mirror `EditItemDialog` / party — `company` sync available */
 export function apkEntityWriteUsesLocalSqliteMirror(company: { storageOption?: string } | null | undefined): boolean {
   if (apkEmbeddedSqliteFirstWritesPreferred()) return true;
-  // `storageOption: local` + Drive/Dropbox — web/APK/EXE sab par `local:` staging; Firebase Storage direct upload nahi.
+  // `storageOption: local` + Google Drive — web/APK/EXE sab par `local:` staging; Firebase Storage direct upload nahi.
   if (company && isOfflineCompanyStorage(company)) return true;
   if (!isLocalOnlyMode()) return false;
   if (!company || !isCapacitorNativeApp()) return true;

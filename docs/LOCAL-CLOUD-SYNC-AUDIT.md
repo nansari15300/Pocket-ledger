@@ -13,14 +13,13 @@
 | Google Drive OAuth tokens | **Partial** | `user_tokens/{uid}/google/drive` — backup UI only |
 | `SyncSettings` UI | **Unwired** | `src/components/settings/SyncSettings.tsx` |
 | Incremental sync client | **Stub** | `src/lib/incrementalSyncClient.ts` — external Node server (not in repo) |
-| Dropbox | **No** | — |
 | Delta op files on Drive | **No** | — |
 | `lastSyncedOp` / manifest | **No** | — |
 
 ### Design rule
 
 - **Firestore companies** → existing `sync_outbox` + Firestore only.
-- **Pure local companies** (`storageOption: local`, no `authoritativeCompanyId`) → optional **Drive/Dropbox** via new `cloud_sync_outbox` (never full SQLite upload).
+- **Pure local companies** (`storageOption: local`, no `authoritativeCompanyId`) → optional **Google Drive** via new `cloud_sync_outbox` (never full SQLite upload).
 
 ## New modules
 
@@ -57,7 +56,6 @@
 
 ## Remaining work
 
-- Dropbox OAuth + transport (provider stub throws).
 - Attachment upload dedupe by `sha256Hex` (API stub).
 - Wire `CreateCompanyForm` optional cloud sync on create.
 - Deprecate or merge unwired `SyncSettings` / `incrementalSyncClient`.

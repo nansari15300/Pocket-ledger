@@ -182,7 +182,7 @@ export function EditCompanyForm() {
   const [removeLogo, setRemoveLogo] = useState(false);
   /** Firebase company: Firestore mirror AES — login username+password session. */
   const [encryptCompanyEnabled, setEncryptCompanyEnabled] = useState(false);
-  /** Local company: Drive/Dropbox delta ops encrypt — company password ya login key. */
+  /** Local company: Google Drive delta ops encrypt — company password ya login key. */
   const [encryptDriveEnabled, setEncryptDriveEnabled] = useState(false);
   const [cloudSyncDataProvider, setCloudSyncDataProvider] = useState<CloudSyncProviderChoice>("none");
   const [cloudSyncFilesProvider, setCloudSyncFilesProvider] = useState<CloudSyncProviderChoice>("none");
@@ -473,7 +473,7 @@ export function EditCompanyForm() {
       // Handle logo upload (only when plan allows avatar)
       if (fileToUpload && user && canAddAvatar) {
         if (deviceLocalCo) {
-          // Local + Drive/Dropbox: `local:` pending — Firebase `company-logos/` path nahi.
+          // Local + Google Drive: `local:` pending — Firebase `company-logos/` path nahi.
           const id = generateLocalFileId();
           await putPendingFile({
             id,
@@ -608,7 +608,7 @@ export function EditCompanyForm() {
         if (!encryptCompanyEnabled) {
           delete localUpdatePayload.encryptServerBackupSalt;
         }
-        // Local company: Drive/Dropbox sync encryption (Firebase server-backup alag field hai).
+        // Local company: Google Drive sync encryption (Firebase server-backup alag field hai).
         const driveEncSalt = encryptDriveEnabled
           ? ensureCloudSyncDriveEncryptionSalt(
               String((existingLocal as { cloudSyncDriveEncryptionSalt?: string }).cloudSyncDriveEncryptionSalt ?? "")
@@ -861,7 +861,7 @@ export function EditCompanyForm() {
           variant: "destructive",
           title: "Credentials required",
           description:
-            "When Drive/Dropbox encryption is on, set company login username and password (or keep your existing company password).",
+            "When Drive encryption is on, set company login username and password (or keep your existing company password).",
         });
         return;
       }
@@ -1296,13 +1296,13 @@ export function EditCompanyForm() {
                   onFilesProviderChange={setCloudSyncFilesProvider}
                   disabled={isLoading}
                 />
-                {/* Local company: Drive/Dropbox sync encrypt — web / EXE / APK sab builds par dikhe. */}
+                {/* Local company: Google Drive sync encrypt — web / EXE / APK sab builds par dikhe. */}
                 <FormItem>
                   <div className="flex items-center justify-between rounded-md border border-black p-3">
                     <div>
-                      <FormLabel>Encrypt Drive / Dropbox sync</FormLabel>
+                      <FormLabel>Encrypt Google Drive sync</FormLabel>
                       <FormDescription>
-                        When enabled, data synced to Google Drive or Dropbox is encrypted before upload (same folder
+                        When enabled, data synced to Google Drive is encrypted before upload (same folder
                         paths). Unlock uses the company password above, or the username and password you use to open
                         this company. Configure provider and sync in{" "}
                         <Link href={settingsViewHref("local_cloud_sync")} className="underline font-medium hover:no-underline">

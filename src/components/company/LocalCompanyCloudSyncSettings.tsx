@@ -30,13 +30,6 @@ import {
   openGoogleDriveOAuthUrl,
   resolveDriveOAuthReturnPath,
 } from "@/lib/driveAuthClient";
-import {
-  disconnectDropbox,
-  formatDropboxConnectError,
-  getDropboxAuthUrl,
-  openDropboxOAuthUrl,
-  resolveDropboxOAuthReturnPath,
-} from "@/lib/dropboxAuthClient";
 import { getLocalCloudSyncStatus, runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
 import { backfillLocalDocsToCloudSyncOutbox } from "@/lib/localCloudSync/backfillOutbox";
 import { ensureCloudSyncDriveEncryptionSalt } from "@/lib/localCloudSync/driveEncryption";
@@ -259,7 +252,7 @@ export function LocalCompanyCloudSyncSettings({
 
   const cfg = readCloudSyncConfigFromCompany(company);
   const toProviderChoice = (p: CloudSyncProviderChoice | null | undefined): CloudSyncProviderChoice =>
-    p === "google_drive" || p === "dropbox" ? p : "none";
+    p === "google_drive" ? p : "none";
   const [enabled, setEnabled] = useState(cfg.cloudSyncEnabled);
   const [dataProvider, setDataProvider] = useState<CloudSyncProviderChoice>(() =>
     toProviderChoice(cfg.cloudSyncDataProvider ?? cfg.cloudSyncProvider ?? "none")
@@ -268,9 +261,7 @@ export function LocalCompanyCloudSyncSettings({
     toProviderChoice(cfg.cloudSyncFilesProvider ?? cfg.cloudSyncProvider ?? "none")
   );
   const usesDrive = dataProvider === "google_drive" || filesProvider === "google_drive";
-  const usesDropbox = dataProvider === "dropbox" || filesProvider === "dropbox";
   const googleDriveConnected = cloudAccounts?.googleDrive === true;
-  const dropboxConnected = cloudAccounts?.dropbox === true;
   const refreshCloudAccounts = cloudAccounts?.refresh;
   const accountPlanId = useMemo(
     () => resolveEffectiveAccountPlanId(allCompanies, user?.uid, (company as { planId?: string }).planId),
@@ -637,55 +628,6 @@ export function LocalCompanyCloudSyncSettings({
     }
   };
 
-  const connectDropbox = async () => {
-    setBusy(true);
-    try {
-      const firebaseUser = await getFirebaseAuthUserForApi();
-      const { url, redirectUri } = await getDropboxAuthUrl({
-        returnPath: resolveDropboxOAuthReturnPath(settingsViewHref("local_cloud_sync")),
-        uid: firebaseUser.uid,
-        email: firebaseUser.email ?? undefined,
-        formData: { companyId },
-      });
-      toast({
-        title: "Opening Dropbox sign-in",
-        description: `Dropbox console me ye Redirect URI hona chahiye: ${redirectUri}`,
-      });
-      await openDropboxOAuthUrl(url);
-    } catch (e) {
-      const raw = e instanceof Error ? e.message : String(e);
-      const msg = formatDropboxConnectError(raw);
-      toast({
-        variant: "destructive",
-        title: isLocalSyntheticAuthUid(user?.uid) ? "Sign-in required" : "Dropbox connect failed",
-        description:
-          raw === FIREBASE_SIGN_IN_REQUIRED_FOR_DRIVE_MSG || isLocalSyntheticAuthUid(user?.uid)
-            ? LOCAL_UNLOCK_ONLY_DRIVE_MSG
-            : msg,
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const disconnectDropboxAccount = async () => {
-    setBusy(true);
-    try {
-      await disconnectDropbox();
-      toast({ title: "Disconnected", description: "Dropbox unlinked." });
-      await refreshStatus();
-      void refreshCloudAccounts?.();
-    } catch (e) {
-      toast({
-        variant: "destructive",
-        title: "Disconnect failed",
-        description: e instanceof Error ? e.message : String(e),
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const forceSync = async () => {
     setBusy(true);
     try {
@@ -852,7 +794,7 @@ export function LocalCompanyCloudSyncSettings({
 
               <div className={cloudSyncEncryptCard}>
                 <div className="flex items-center gap-1.5">
-                  <p className="text-xs font-medium text-foreground">Encrypt on Google Drive / Dropbox (AES)</p>
+                  <p className="text-xs font-medium text-foreground">Encrypt on Google Drive (AES)</p>
                   <CloudSyncHelpPopover
                     label="Encryption"
                     description={
@@ -1159,7 +1101,7 @@ export function LocalCompanyCloudSyncSettings({
             {renderSettingsListFloatButton()}
             <div className="grid grid-cols-3 gap-2">
               {/* Row 1 — account actions; Share top-right */}
-              <div className="min-w-0">
+              <div className="min-w-0 col-span-2">
                 {usesDrive ? (
                   <Button
                     type="button"
@@ -1172,22 +1114,6 @@ export function LocalCompanyCloudSyncSettings({
                     }
                   >
                     {googleDriveConnected ? "Disconnect Drive" : "Connect Drive"}
-                  </Button>
-                ) : null}
-              </div>
-              <div className="min-w-0">
-                {usesDropbox ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-10 w-full min-w-0 rounded-lg px-2 text-xs sm:text-sm"
-                    disabled={busy || cloudAccounts?.loading}
-                    onClick={() =>
-                      void (dropboxConnected ? disconnectDropboxAccount() : connectDropbox())
-                    }
-                  >
-                    {dropboxConnected ? "Disconnect Dropbox" : "Connect Dropbox"}
                   </Button>
                 ) : null}
               </div>
@@ -1266,7 +1192,7 @@ export function LocalCompanyCloudSyncSettings({
         <DialogHeader>
           <DialogTitle>Encryption password required</DialogTitle>
           <DialogDescription>
-            Admin ne Drive/Dropbox encryption ON kiya hai. Is device par sync unlock karne ke liye company password enter karo.
+            Admin ne Drive encryption ON kiya hai. Is device par sync unlock karne ke liye company password enter karo.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2">

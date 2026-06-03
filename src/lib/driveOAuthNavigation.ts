@@ -49,7 +49,7 @@ function resolveOAuthBridgeOrigin(): string {
 }
 
 /**
- * Drive/Dropbox OAuth callback ke baad user kahan wapas aaye.
+ * Google Drive OAuth callback ke baad user kahan wapas aaye.
  * `explicitHref` — settingsViewHref("local_cloud_sync") jaisa; khali ho to current page.
  */
 export function resolveDriveOAuthReturnPath(explicitHref?: string): string {
@@ -112,7 +112,7 @@ function startOAuthPopupPoll(popup: Window): void {
   }, 400);
 }
 
-/** Google Drive / Dropbox OAuth — APK: Custom Tab; EXE/static: popup; dev browser: same-tab. */
+/** Google Drive OAuth — APK: Custom Tab; EXE/static: popup; dev browser: same-tab. */
 export async function openGoogleDriveOAuthUrl(url: string): Promise<void> {
   const u = String(url || "").trim();
   if (!u) throw new Error("Missing OAuth URL");

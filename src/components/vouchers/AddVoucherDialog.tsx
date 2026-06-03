@@ -2383,6 +2383,15 @@ export function AddVoucherDialog(props: any) {
           await new Promise<void>((resolve) => setTimeout(resolve, 180));
         }
         if (!sourceDoc) {
+          const ev = effectiveVoucher as Record<string, any> | null;
+          if (ev && String(ev.id || "").trim() === voucherIdToCopy) {
+            const updatedMs = toEpochMs((ev as any).updatedAt);
+            const isFreshEnough =
+              minSavedAtMs == null || updatedMs == null || updatedMs >= (minSavedAtMs - 1200);
+            if (isFreshEnough) sourceDoc = ev;
+          }
+        }
+        if (!sourceDoc) {
           toast.error("Saved voucher is not ready for copy yet. Please try once again.");
           return null;
         }
@@ -2450,6 +2459,7 @@ export function AddVoucherDialog(props: any) {
       };
       const importedCopy = await importVoucherAttachmentsAsFilesForLocalCloudCopy({
         targetCompanyId: destinationCompanyId,
+        sourceCompanyId,
         voucher: copyPayloadBase,
       });
       const copyPayload = importedCopy.voucher;

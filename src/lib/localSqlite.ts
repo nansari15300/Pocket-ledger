@@ -248,7 +248,7 @@ function migrateBrowserSqliteSchema(db: SqlJsDatabase): void {
     setUserVersion(2);
     v = 2;
   }
-  // Local-company Drive/Dropbox delta sync — `sync_outbox` (Firestore) se alag queue
+  // Local-company Google Drive delta sync — `sync_outbox` (Firestore) se alag queue
   if (v < 3) {
     db.run(`
       CREATE TABLE IF NOT EXISTS cloud_sync_outbox (

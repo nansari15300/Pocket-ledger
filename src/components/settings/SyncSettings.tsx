@@ -10,10 +10,9 @@ import { CloudOff, Cloud, RefreshCw, Loader2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { runIncrementalSync, setLastSyncAt as setSyncStorageLastSyncAt } from "@/lib/incrementalSyncClient";
 
-const SYNC_TO_OPTIONS: { value: "firestore" | "drive" | "dropbox"; label: string }[] = [
+const SYNC_TO_OPTIONS: { value: "firestore" | "drive"; label: string }[] = [
   { value: "firestore", label: "Firestore" },
   { value: "drive", label: "Google Drive" },
-  { value: "dropbox", label: "Dropbox" },
 ];
 
 export function SyncSettings() {
@@ -47,7 +46,7 @@ export function SyncSettings() {
           Online sync
         </CardTitle>
         <CardDescription>
-          Local data ko cloud pe sync karna (plan me multi-device sync hona chahiye). Sync to choose karein: Firestore, Drive, ya Dropbox.
+          Local data ko cloud pe sync karna (plan me multi-device sync hona chahiye). Sync to choose karein: Firestore ya Google Drive.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -85,7 +84,7 @@ export function SyncSettings() {
             <select
               id="sync-to"
               value={syncTo}
-              onChange={(e) => setSyncTo(e.target.value as "firestore" | "drive" | "dropbox")}
+              onChange={(e) => setSyncTo(e.target.value as "firestore" | "drive")}
               className="flex h-9 w-full max-w-xs rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
             >
               {SYNC_TO_OPTIONS.map((o) => (
@@ -95,7 +94,7 @@ export function SyncSettings() {
               ))}
             </select>
             <p className="text-xs text-muted-foreground">
-              Data kahan upload hoga (Drive/Dropbox integration baad me connect karenge).
+              Data kahan upload hoga (Google Drive integration connect karenge).
             </p>
           </div>
         )}

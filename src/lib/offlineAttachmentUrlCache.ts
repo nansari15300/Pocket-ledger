@@ -583,6 +583,8 @@ async function putCachedBlob(urlStr: string, blob: Blob): Promise<void> {
 export type RemoteAttachmentBlobPreferCacheOptions = {
   /** `drive:` par gallery me parallel `local:` ho to pehle wahi bytes use karo. */
   galleryUrls?: readonly string[];
+  /** Google Drive download resolve ke liye company registry. */
+  companyId?: string;
 };
 
 export async function getRemoteAttachmentBlobPreferOfflineCache(
@@ -662,6 +664,7 @@ export async function getRemoteAttachmentBlobPreferOfflineCache(
     fresh = await fetchAttachmentRefBlob(urlStr, {
       signal,
       galleryUrls: preferCacheOptions?.galleryUrls,
+      companyId: preferCacheOptions?.companyId,
     });
   } else {
     fetchResult = await blobFromHybridFetch(fetchTarget, signal, UI_ATTACHMENT_CACHE_MISS_TIMEOUT_MS);

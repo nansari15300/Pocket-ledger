@@ -13,17 +13,14 @@ export type UseCloudProviderAccountStatusResult = CloudProviderAccountStatus & {
 
 export function useCloudProviderAccountStatus(): UseCloudProviderAccountStatusResult {
   const [googleDrive, setGoogleDrive] = useState(false);
-  const [dropbox, setDropbox] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
       const status = await fetchCloudProviderAccountStatus();
       setGoogleDrive(status.googleDrive);
-      setDropbox(status.dropbox);
     } catch {
       setGoogleDrive(false);
-      setDropbox(false);
     } finally {
       setLoading(false);
     }
@@ -53,7 +50,6 @@ export function useCloudProviderAccountStatus(): UseCloudProviderAccountStatusRe
     const oauthError = sp.get("error");
     if (
       success === "drive_connected" ||
-      success === "dropbox_connected" ||
       oauthError === "oauth_exchange_failed" ||
       oauthError === "oauth_failed" ||
       oauthError === "oauth_failed_no_code"
@@ -67,5 +63,5 @@ export function useCloudProviderAccountStatus(): UseCloudProviderAccountStatusRe
     };
   }, [refresh, refreshAfterOAuth]);
 
-  return { googleDrive, dropbox, loading, refresh };
+  return { googleDrive, loading, refresh };
 }

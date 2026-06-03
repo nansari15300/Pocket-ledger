@@ -6,7 +6,6 @@ import { hostedApiFetch, parseHostedApiResponseJson } from "@/lib/hostedApiFetch
 
 export type CloudProviderAccountStatus = {
   googleDrive: boolean;
-  dropbox: boolean;
 };
 
 export async function fetchCloudProviderAccountStatus(): Promise<CloudProviderAccountStatus> {
@@ -21,6 +20,5 @@ export async function fetchCloudProviderAccountStatus(): Promise<CloudProviderAc
   }
   return {
     googleDrive: json.googleDrive === true,
-    dropbox: json.dropbox === true,
   };
 }

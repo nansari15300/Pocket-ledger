@@ -151,10 +151,6 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
         typeof reg.cloudSyncDriveFolderId === "string" && reg.cloudSyncDriveFolderId.trim()
           ? reg.cloudSyncDriveFolderId.trim()
           : undefined,
-      dropboxCompanyPath:
-        typeof reg.cloudSyncDropboxFolderPath === "string" && reg.cloudSyncDropboxFolderPath.trim()
-          ? reg.cloudSyncDropboxFolderPath.trim()
-          : undefined,
     };
 
     // Admin ke Drive manifest ko upload se pehle local registry me lao; stale false flags plain upload/untick na kar dein.

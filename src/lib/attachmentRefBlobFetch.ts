@@ -27,6 +27,8 @@ export function isOfflineCacheableAttachmentRef(raw: string): boolean {
 export type FetchAttachmentRefBlobOptions = {
   galleryUrls?: readonly string[];
   signal?: AbortSignal;
+  /** Cloud `drive:` resolve — Google Drive folder path. */
+  companyId?: string;
 };
 
 /** Preview/hover callers — gallery me parallel `local:` match ke liye. */
@@ -35,8 +37,12 @@ export type AttachmentPreviewBlobLoadOptions = {
 };
 
 /**
- * Preview / prefetch / open: pending `local:` pehle, phir `drive:` (gallery/local filename match),
- * phir Firebase HTTPS / Storage path.
+ * Attachment bytes resolve order (local-first, cloud last):
+ * 1. `local:` — IndexedDB pending / Capacitor DataDirectory
+ * 2. `drive:` — gallery me paired `local:`, pending list filename match
+ * 3. Offline warm cache (IndexedDB / native) — pehle open/preload ki hui copy
+ * 4. Cloud — Google Drive (`downloadCloudAttachmentBlob`)
+ * 5. `https://` Firebase — offline cache, phir SDK/fetch
  */
 export async function fetchAttachmentRefBlob(
   rawUrl: string,
@@ -46,7 +52,10 @@ export async function fetchAttachmentRefBlob(
   if (!u) return null;
 
   if (isLocalFileRef(u)) {
-    const blob = await getBlobFromLocalFileRef(u, { context: "fetchAttachmentRefBlob" });
+    const blob = await getBlobFromLocalFileRef(u, {
+      context: "fetchAttachmentRefBlob",
+      companyId: options?.companyId,
+    });
     if (blob && blob.size > 0) return blob;
   }
 
@@ -61,7 +70,10 @@ export async function fetchAttachmentRefBlob(
       if (idx >= 0) {
         const peer = offlineCacheKeyForAttachmentRef(String(gallery[idx] || ""));
         if (isLocalFileRef(peer)) {
-          const localBlob = await getBlobFromLocalFileRef(peer, { context: "fetchAttachmentRefBlob" });
+          const localBlob = await getBlobFromLocalFileRef(peer, {
+            context: "fetchAttachmentRefBlob",
+            companyId: options?.companyId,
+          });
           if (localBlob && localBlob.size > 0) return localBlob;
         }
       }
@@ -77,6 +89,7 @@ export async function fetchAttachmentRefBlob(
           if (!fn || fn !== fileTail) continue;
           const localBlob = await getBlobFromLocalFileRef(`${LOCAL_FILE_PREFIX}${row.id}`, {
             context: "fetchAttachmentRefBlob",
+            companyId: options?.companyId,
           });
           if (localBlob && localBlob.size > 0) return localBlob;
         }
@@ -84,7 +97,17 @@ export async function fetchAttachmentRefBlob(
         /* pending optional */
       }
     }
-    const driveBlob = await getBlobFromLocalFileRef(u, { context: "fetchAttachmentRefBlobDrive" });
+    try {
+      const { getOfflineCachedAttachmentBlob } = await import("@/lib/offlineAttachmentUrlCache");
+      const cached = await getOfflineCachedAttachmentBlob(rawUrl);
+      if (cached && cached.size > 0) return cached;
+    } catch {
+      /* offline cache optional */
+    }
+    const driveBlob = await getBlobFromLocalFileRef(u, {
+      context: "fetchAttachmentRefBlobDrive",
+      companyId: options?.companyId,
+    });
     if (driveBlob && driveBlob.size > 0) return driveBlob;
   }
 

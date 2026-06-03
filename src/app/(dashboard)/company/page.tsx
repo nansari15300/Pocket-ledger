@@ -31,8 +31,7 @@ function mergeDeviceLocalCompaniesIntoMap(
     if (!isCompanyVisibleInCompanyPage(c)) continue;
     if (!isOfflineCompanyStorage(c)) continue;
     const driveSharedJoin =
-      (c as Company & { driveSharedJoin?: boolean }).driveSharedJoin === true ||
-      (c as Company & { dropboxSharedJoin?: boolean }).dropboxSharedJoin === true;
+      (c as Company & { driveSharedJoin?: boolean }).driveSharedJoin === true;
     companyMap.set(c.id, {
       ...c,
       storageOption: "local",

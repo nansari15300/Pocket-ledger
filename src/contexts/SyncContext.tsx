@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from "react";
 
-export type SyncToOption = "firestore" | "drive" | "dropbox";
+export type SyncToOption = "firestore" | "drive";
 
 const STORAGE_SYNC_ON = "onlineSyncOn";
 const STORAGE_SYNC_TO = "syncTo";
@@ -28,7 +28,7 @@ function readStored(): { onlineSyncOn: boolean; syncTo: SyncToOption; lastSyncAt
   const ts = localStorage.getItem(STORAGE_LAST_SYNC_AT);
   return {
     onlineSyncOn: on === "true",
-    syncTo: to === "drive" || to === "dropbox" ? to : "firestore",
+    syncTo: to === "drive" ? to : "firestore",
     lastSyncAt: ts ? parseInt(ts, 10) : null,
   };
 }

@@ -56,7 +56,6 @@ export function shareUsersToEmailList(users: CloudSyncDriveShareUser[]): string[
 function parseProvider(raw: unknown): CloudSyncProviderId | null {
   const s = String(raw ?? "").toLowerCase().trim();
   if (s === "google_drive" || s === "drive") return "google_drive";
-  if (s === "dropbox") return "dropbox";
   return null;
 }
 
@@ -140,7 +139,7 @@ export function readCloudSyncConfigFromCompany(
   };
 }
 
-/** Sirf pure local companies — Firestore-backed rows kabhi Drive/Dropbox sync na karein. */
+/** Sirf pure local companies — Firestore-backed rows kabhi Google Drive sync na karein. */
 export async function isPureLocalCompany(companyId: string): Promise<boolean> {
   const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
   if (!reg) return false;

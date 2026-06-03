@@ -18,7 +18,6 @@ export default function OAuthReturnPage() {
 
     if (
       success === "drive_connected" ||
-      success === "dropbox_connected" ||
       error === "oauth_exchange_failed" ||
       error === "oauth_failed" ||
       error === "oauth_failed_no_code" ||
@@ -26,10 +25,7 @@ export default function OAuthReturnPage() {
       error
     ) {
       stashCloudOAuthReturn({
-        success:
-          success === "drive_connected" || success === "dropbox_connected"
-            ? success
-            : undefined,
+        success: success === "drive_connected" ? success : undefined,
         error: error || undefined,
       });
       window.dispatchEvent(new Event("cloud-provider-oauth-return"));

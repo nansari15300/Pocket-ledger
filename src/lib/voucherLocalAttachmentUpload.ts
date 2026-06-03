@@ -75,14 +75,20 @@ export function fileNameFromInterCompanyAttachmentRef(
   return fileNameFromAttachmentRef(ref, fallbackIndex, contentType);
 }
 
-export async function blobFromAttachmentRefForCopy(ref: string): Promise<Blob | null> {
+export async function blobFromAttachmentRefForCopy(
+  ref: string,
+  options?: { companyId?: string; galleryUrls?: readonly string[] }
+): Promise<Blob | null> {
   if (isLocalFileRef(ref) || isDriveFileRef(ref)) {
-    // Local/Drive refs already use app-aware readers; copy target should still get its own fresh File.
-    return await getBlobFromLocalFileRef(ref);
+    const { getRemoteAttachmentBlobPreferOfflineCache } = await import("@/lib/offlineAttachmentUrlCache");
+    return getRemoteAttachmentBlobPreferOfflineCache(ref, undefined, {
+      galleryUrls: options?.galleryUrls,
+      companyId: options?.companyId,
+    });
   }
   if (/^https?:\/\//i.test(ref)) {
-    // Firebase URL ko SDK/cache/fetch chain se Blob banao; raw URL target company me carry mat karo.
-    return await getRemoteAttachmentBlobPreferOfflineCache(ref);
+    const { getRemoteAttachmentBlobPreferOfflineCache } = await import("@/lib/offlineAttachmentUrlCache");
+    return getRemoteAttachmentBlobPreferOfflineCache(ref);
   }
   return null;
 }
@@ -90,6 +96,8 @@ export async function blobFromAttachmentRefForCopy(ref: string): Promise<Blob | 
 /** Copy To: local (`storageOption: local`) target par Firebase/HTTPS refs ko File me — save par `local:` stage hoga. */
 export async function importVoucherAttachmentsAsFilesForLocalCloudCopy<T extends Record<string, unknown>>(params: {
   targetCompanyId: string;
+  /** Source voucher company — `drive:` download Google Drive resolve ke liye. */
+  sourceCompanyId?: string;
   voucher: T;
 }): Promise<{ voucher: T; importedCount: number }> {
   const targetReg = await getLocalCompanyById(params.targetCompanyId);
@@ -100,7 +108,9 @@ export async function importVoucherAttachmentsAsFilesForLocalCloudCopy<T extends
   if (typeof File === "undefined") return { voucher: params.voucher, importedCount: 0 };
 
   const source = params.voucher;
+  const sourceCompanyId = String(params.sourceCompanyId || "").trim() || undefined;
   const rawUrls = Array.isArray(source.fileUrls) ? source.fileUrls : [];
+  const galleryUrls = rawUrls.filter((u): u is string => typeof u === "string");
   const unassigned = source.unassignedFile && typeof source.unassignedFile === "object"
     ? (source.unassignedFile as Record<string, unknown>)
     : null;
@@ -119,7 +129,10 @@ export async function importVoucherAttachmentsAsFilesForLocalCloudCopy<T extends
     if (!ref) continue;
     if (seenRefs.has(ref)) continue;
     seenRefs.add(ref);
-    const blob = await blobFromAttachmentRefForCopy(ref);
+    const blob = await blobFromAttachmentRefForCopy(ref, {
+      companyId: sourceCompanyId,
+      galleryUrls,
+    });
     if (!blob || blob.size <= 0) {
       throw new Error("Could not download copied voucher attachment. Open the file once or reconnect internet, then try Copy To again.");
     }
@@ -203,7 +216,7 @@ export async function rewriteRemoteVoucherAttachmentsForOfflineCompany(
 
   const newFiles: File[] = [];
   for (const ref of downloadRefs) {
-    const blob = await blobFromAttachmentRefForCopy(ref);
+    const blob = await blobFromAttachmentRefForCopy(ref, { companyId });
     if (!blob || blob.size <= 0) {
       throw new Error(
         "Could not download voucher attachment for local save. Open the file once while online, then save again."
@@ -298,7 +311,7 @@ export async function appendLocalOnlyVoucherFilesToUrls(params: {
  * Legacy env `NEXT_PUBLIC_VOUCHER_ATTACHMENT_FIRESTORE_IMMEDIATE_UPLOAD=1` par sirf offline / sqlite-first par stage (purana UX).
  */
 export async function shouldStageNewVoucherFilesAsLocalPending(companyId: string): Promise<boolean> {
-  // Local company me Drive/Dropbox selected ho to form se Firebase Storage direct upload kabhi mat karo.
+  // Local company me Google Drive selected ho to form se Firebase Storage direct upload kabhi mat karo.
   if (await resolvePendingAttachmentCloudSyncProvider(companyId)) return true;
   if (voucherNewAttachmentsAlwaysStageAsLocalPending()) return true;
   if (isClientNavigatorOffline()) return true;

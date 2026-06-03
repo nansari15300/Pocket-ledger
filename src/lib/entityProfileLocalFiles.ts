@@ -10,7 +10,7 @@ import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { generateLocalFileId, LOCAL_FILE_PREFIX, putPendingFile } from "@/lib/localPendingFiles";
 
-/** Local company (`storageOption: local`) — avatar/docs/items Firebase par nahi; `local:` + Drive/Dropbox sync. */
+/** Local company (`storageOption: local`) — avatar/docs/items Firebase par nahi; `local:` + Google Drive sync. */
 export async function shouldStageEntityProfileFilesLocally(
   companyId: string,
   company?: { storageOption?: string } | null

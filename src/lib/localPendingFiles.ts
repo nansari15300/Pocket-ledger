@@ -198,19 +198,13 @@ export async function resolvePendingAttachmentCloudSyncProvider(
     const filesP = String((r as Record<string, unknown>).cloudSyncFilesProvider ?? "").trim().toLowerCase();
     const legacyP = String((r as Record<string, unknown>).cloudSyncProvider ?? "").trim().toLowerCase();
     const pickFiles =
-      filesP === "dropbox"
-        ? "dropbox"
-        : filesP === "google_drive" || filesP === "drive"
+      filesP === "google_drive" || filesP === "drive"
+        ? "google_drive"
+        : legacyP === "google_drive" || legacyP === "drive"
           ? "google_drive"
-          : legacyP === "dropbox"
-            ? "dropbox"
-            : legacyP === "google_drive" || legacyP === "drive"
-              ? "google_drive"
-              : dataP === "dropbox"
-                ? "dropbox"
-                : dataP === "google_drive" || dataP === "drive"
-                  ? "google_drive"
-                  : null;
+          : dataP === "google_drive" || dataP === "drive"
+            ? "google_drive"
+            : null;
     if (pickFiles) return pickFiles;
   }
   return null;
@@ -417,6 +411,8 @@ type LocalFileReadOptions = {
   allowNativeRead?: boolean;
   /** Error diagnostics: kis context se read attempt aaya. */
   context?: string;
+  /** `drive:` cloud download — company registry se Drive resolve. */
+  companyId?: string;
 };
 
 /** Hot path helper: local:uuid open/preview ke liye full list read avoid. */
@@ -503,7 +499,7 @@ export async function getBlobFromLocalFileRef(
     const remotePath = remotePathFromDriveFileRef(url);
     if (!remotePath) return null;
     try {
-      return await downloadCloudAttachmentBlob(remotePath);
+      return await downloadCloudAttachmentBlob(remotePath, options?.companyId);
     } catch {
       return null;
     }
@@ -543,7 +539,7 @@ export async function uploadPendingLocalFileRef(
   const docMatch = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(String(item.docPath || "").trim());
   const targetCompanyId = resolvePendingPayloadCompanyId(item);
   const provider = targetCompanyId ? await resolvePendingAttachmentCloudSyncProvider(targetCompanyId) : null;
-  if (targetCompanyId && (provider === "google_drive" || provider === "dropbox")) {
+  if (targetCompanyId && provider === "google_drive") {
     const collection = docMatch?.[2] || "vouchers";
     const docId = docMatch?.[3] || item.id;
     const reg = await getLocalCompanyById(targetCompanyId, { includeDeleted: true });
@@ -566,7 +562,7 @@ export async function uploadPendingLocalFileRef(
   const reg = targetCompanyId ? await getLocalCompanyById(targetCompanyId, { includeDeleted: true }) : null;
   if (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) {
     throw new Error(
-      "Local company files must sync via Google Drive or Dropbox. Enable cloud sync — not Firebase Storage."
+      "Local company files must sync via Google Drive. Enable cloud sync — not Firebase Storage."
     );
   }
 
@@ -757,14 +753,14 @@ export async function syncOnePendingFile(
     const targetCompanyId = resolvePendingPayloadCompanyId(item);
     const provider = targetCompanyId ? await resolvePendingAttachmentCloudSyncProvider(targetCompanyId) : null;
     // Local company + cloud sync — Firebase Storage ki jagah selected provider route.
-    if (targetCompanyId && (provider === "google_drive" || provider === "dropbox")) {
+    if (targetCompanyId && provider === "google_drive") {
       const uploaded = await uploadPendingLocalFileRef(
         `${LOCAL_FILE_PREFIX}${item.id}`,
         item.storagePathPrefix,
         item
       );
       if (isLocalFileRef(uploaded)) {
-        const label = provider === "dropbox" ? "Dropbox" : "Google Drive";
+        const label = "Google Drive";
         return {
           success: false,
           error: `Pending attachment was not uploaded to ${label}. Re-attach the file and try sync again.`,
@@ -778,7 +774,7 @@ export async function syncOnePendingFile(
       return {
         success: false,
         error:
-          "Local company: enable Google Drive or Dropbox sync to upload files. Firebase Storage is not used.",
+          "Local company: enable Google Drive sync to upload files. Firebase Storage is not used.",
       };
     }
 

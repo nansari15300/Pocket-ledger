@@ -26,19 +26,11 @@ export function planAllowsGoogleDriveSync(
   return entitlementBool(plan.entitlements, "allowGoogleDriveCloudSync");
 }
 
-export function planAllowsDropboxSync(
-  planId: PlanId | string | null | undefined,
-  livePlan?: Plan | null
-): boolean {
-  const plan = livePlan ?? getPlan((planId as PlanId) || "basic");
-  return entitlementBool(plan.entitlements, "allowDropboxCloudSync");
-}
-
 export function planAllowsAnyCloudFileSync(
   planId: PlanId | string | null | undefined,
   livePlan?: Plan | null
 ): boolean {
-  return planAllowsGoogleDriveSync(planId, livePlan) || planAllowsDropboxSync(planId, livePlan);
+  return planAllowsGoogleDriveSync(planId, livePlan);
 }
 
 /** Online Firestore company slots — plan Firebase off ho to 0. */

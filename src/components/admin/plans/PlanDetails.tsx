@@ -57,7 +57,6 @@ const entitlementLabels: Partial<Record<EntitlementKey, string>> = {
     attachmentBackupRestoreEnabled: "Attachment backup & restore (embed files in .plbp)",
     allowFirebaseOnlineCompanies: "Online company (Firebase / Firestore sync)",
     allowGoogleDriveCloudSync: "Local company — cloud sync (Google Drive)",
-    allowDropboxCloudSync: "Local company — Dropbox sync",
 };
 
 export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
@@ -263,7 +262,6 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
         "attachmentBackupRestoreEnabled",
         "allowFirebaseOnlineCompanies",
         "allowGoogleDriveCloudSync",
-        "allowDropboxCloudSync",
     ];
 
     const offerDate = editablePlan.limitedTimeOfferDate ? 

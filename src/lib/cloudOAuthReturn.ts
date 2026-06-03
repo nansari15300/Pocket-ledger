@@ -9,7 +9,7 @@ export const CLOUD_OAUTH_SUCCESS_LOCAL_KEY = "pl_cloud_oauth_pending_success";
 export const CLOUD_OAUTH_ERROR_LOCAL_KEY = "pl_cloud_oauth_pending_error";
 
 export type CloudOAuthReturnPayload = {
-  success?: "drive_connected" | "dropbox_connected";
+  success?: "drive_connected";
   error?: string;
 };
 
@@ -32,11 +32,7 @@ export function parseCloudOAuthReturnUrl(rawUrl: string): (CloudOAuthReturnPaylo
     const isBridge = pathNorm === "/oauth-return";
     const success = u.searchParams.get("success");
     const error = u.searchParams.get("error");
-    if (
-      success !== "drive_connected" &&
-      success !== "dropbox_connected" &&
-      !error
-    ) {
+    if (success !== "drive_connected" && !error) {
       return null;
     }
     const target = u.searchParams.get("target")?.trim();
@@ -46,10 +42,7 @@ export function parseCloudOAuthReturnUrl(rawUrl: string): (CloudOAuthReturnPaylo
         : `${u.pathname}${u.search}${u.hash}`;
     return {
       path,
-      success:
-        success === "drive_connected" || success === "dropbox_connected"
-          ? success
-          : undefined,
+      success: success === "drive_connected" ? success : undefined,
       error: error || undefined,
     };
   } catch {
@@ -89,7 +82,7 @@ export function consumeStashedCloudOAuthReturn(): CloudOAuthReturnPayload | null
     sessionStorage.removeItem(CLOUD_OAUTH_ERROR_SESSION_KEY);
     localStorage.removeItem(CLOUD_OAUTH_SUCCESS_LOCAL_KEY);
     localStorage.removeItem(CLOUD_OAUTH_ERROR_LOCAL_KEY);
-    if (success === "drive_connected" || success === "dropbox_connected") {
+    if (success === "drive_connected") {
       return { success };
     }
     if (error) return { error };

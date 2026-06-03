@@ -807,8 +807,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       !!currentEmail &&
       sharedEmails.some((e) => String(e || "").toLowerCase().trim() === currentEmail);
     const isDriveSharedJoin =
-      (raw as { driveSharedJoin?: unknown }).driveSharedJoin === true ||
-      (raw as { dropboxSharedJoin?: unknown }).dropboxSharedJoin === true;
+      (raw as { driveSharedJoin?: unknown }).driveSharedJoin === true;
     return {
       ...raw,
       planId,
@@ -946,8 +945,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             const isOwner = isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user.email ?? null });
             const isPureLocalRow = String((row as { storageOption?: string }).storageOption || "").toLowerCase() === "local";
             const isDriveSharedJoin =
-              (row as { driveSharedJoin?: unknown }).driveSharedJoin === true ||
-              (row as { dropboxSharedJoin?: unknown }).dropboxSharedJoin === true;
+              (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;
             if (isOwner && isPureLocalRow) continue;
             // Drive se join ki local company — Firestore id list me nahi hoti, purge mat karo.
             if (isDriveSharedJoin) continue;
@@ -1446,8 +1444,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       if (!existing) {
         const row = c as unknown as import("@/lib/localCompanyStore").LocalCompanyDoc;
         const isDriveSharedJoin =
-          (row as { driveSharedJoin?: unknown }).driveSharedJoin === true ||
-          (row as { dropboxSharedJoin?: unknown }).dropboxSharedJoin === true;
+          (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;
         const isPureLocalRow =
           String((row as { storageOption?: string }).storageOption || "local").toLowerCase() === "local";
         // Auth abhi load ho raha ho to SQLite purge mat karo — refresh par galat ghost delete.

@@ -62,7 +62,7 @@ export function UploadCompanyToCloudCard() {
 
   const isLocal =
     !!company && String(company.storageOption || "local").toLowerCase() === "local";
-  // Local + Drive/Dropbox cloud sync: Firestore upload alag path — duplicate/conflict na ho
+  // Local + Google Drive cloud sync: Firestore upload alag path — duplicate/conflict na ho
   const localCloudSyncOn =
     isLocal && readCloudSyncConfigFromCompany(company).cloudSyncEnabled;
 

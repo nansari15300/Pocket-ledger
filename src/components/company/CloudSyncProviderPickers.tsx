@@ -3,10 +3,7 @@
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { CloudSyncProviderId } from "@/lib/localCloudSync/types";
-import {
-  planAllowsDropboxSync,
-  planAllowsGoogleDriveSync,
-} from "@/lib/planSyncEntitlements";
+import { planAllowsGoogleDriveSync } from "@/lib/planSyncEntitlements";
 import type { PlanId } from "@/config/plans";
 import type { Plan } from "@/config/plans";
 
@@ -14,7 +11,6 @@ export type CloudSyncProviderChoice = CloudSyncProviderId | "none";
 
 export function cloudSyncProviderChoiceLabel(p: CloudSyncProviderChoice): string {
   if (p === "google_drive") return "Google Drive";
-  if (p === "dropbox") return "Dropbox";
   return "None";
 }
 
@@ -38,9 +34,7 @@ type Props = {
   onDataProviderChange: (v: CloudSyncProviderChoice) => void;
   onFilesProviderChange: (v: CloudSyncProviderChoice) => void;
   disabled?: boolean;
-  /** Settings page: outer title box hide (card already labeled). */
   showHeader?: boolean;
-  /** Nested inside another tinted card — skip duplicate border. */
   embedded?: boolean;
 };
 
@@ -56,17 +50,13 @@ export function CloudSyncProviderPickers({
   embedded = false,
 }: Props) {
   const allowDrive = planAllowsGoogleDriveSync(planId, livePlan);
-  const allowDropbox = planAllowsDropboxSync(planId, livePlan);
-  const showSection = allowDrive || allowDropbox;
+  if (!allowDrive) return null;
 
-  if (!showSection) return null;
-
-  const providerOptions = (current: CloudSyncProviderChoice) => {
+  const providerOptions = () => {
     const items: { value: CloudSyncProviderChoice; label: string }[] = [
       { value: "none", label: "None (this device only)" },
+      { value: "google_drive", label: "Google Drive" },
     ];
-    if (allowDrive) items.push({ value: "google_drive", label: "Google Drive" });
-    if (allowDropbox) items.push({ value: "dropbox", label: "Dropbox" });
     return items;
   };
 
@@ -83,8 +73,7 @@ export function CloudSyncProviderPickers({
         <div>
           <p className="text-xs font-medium text-foreground">Optional cloud backup (local company)</p>
           <p className="text-xs text-muted-foreground">
-            Voucher data (JSON) and attachment files can use different providers — e.g. data on Drive, files on
-            Dropbox.
+            Voucher data (JSON) and attachment files sync to Google Drive.
           </p>
         </div>
       ) : null}
@@ -105,7 +94,7 @@ export function CloudSyncProviderPickers({
               <SelectValue placeholder="Choose" />
             </SelectTrigger>
             <SelectContent>
-              {providerOptions(dataProvider).map((o) => (
+              {providerOptions().map((o) => (
                 <SelectItem key={`data-${o.value}`} value={o.value}>
                   {o.label}
                 </SelectItem>
@@ -124,7 +113,7 @@ export function CloudSyncProviderPickers({
               <SelectValue placeholder="Choose" />
             </SelectTrigger>
             <SelectContent>
-              {providerOptions(filesProvider).map((o) => (
+              {providerOptions().map((o) => (
                 <SelectItem key={`files-${o.value}`} value={o.value}>
                   {o.label}
                 </SelectItem>
@@ -138,22 +127,19 @@ export function CloudSyncProviderPickers({
 }
 
 export function cloudSyncFieldsFromChoices(
-  data: CloudSyncProviderChoice,
-  files: CloudSyncProviderChoice
+  dataProvider: CloudSyncProviderChoice,
+  filesProvider: CloudSyncProviderChoice
 ): {
-  cloudSyncEnabled: boolean;
   cloudSyncDataProvider: CloudSyncProviderId | null;
   cloudSyncFilesProvider: CloudSyncProviderId | null;
   cloudSyncProvider: CloudSyncProviderId | null;
 } {
-  const dataP = data === "none" ? null : data;
-  const filesP = files === "none" ? null : files;
-  const enabled = !!(dataP || filesP);
-  const legacy = dataP && filesP && dataP === filesP ? dataP : dataP ?? filesP;
+  const data = dataProvider === "none" ? null : dataProvider;
+  const files = filesProvider === "none" ? null : filesProvider;
+  const legacy = data && files && data === files ? data : data ?? files ?? null;
   return {
-    cloudSyncEnabled: enabled,
-    cloudSyncDataProvider: dataP,
-    cloudSyncFilesProvider: filesP,
+    cloudSyncDataProvider: data,
+    cloudSyncFilesProvider: files,
     cloudSyncProvider: legacy,
   };
 }
