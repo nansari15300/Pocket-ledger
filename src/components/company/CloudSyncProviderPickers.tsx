@@ -12,6 +12,24 @@ import type { Plan } from "@/config/plans";
 
 export type CloudSyncProviderChoice = CloudSyncProviderId | "none";
 
+export function cloudSyncProviderChoiceLabel(p: CloudSyncProviderChoice): string {
+  if (p === "google_drive") return "Google Drive";
+  if (p === "dropbox") return "Dropbox";
+  return "None";
+}
+
+/** Short line for settings card — split vs single provider. */
+export function formatCloudSyncTargetsSummary(
+  dataProvider: CloudSyncProviderChoice,
+  filesProvider: CloudSyncProviderChoice
+): string {
+  const d = cloudSyncProviderChoiceLabel(dataProvider);
+  const f = cloudSyncProviderChoiceLabel(filesProvider);
+  if (dataProvider === "none" && filesProvider === "none") return "No cloud backup";
+  if (dataProvider === filesProvider) return `Data & files: ${d}`;
+  return `Data: ${d} · Files: ${f}`;
+}
+
 type Props = {
   planId: PlanId | string | null | undefined;
   livePlan?: Plan | null;
@@ -20,6 +38,10 @@ type Props = {
   onDataProviderChange: (v: CloudSyncProviderChoice) => void;
   onFilesProviderChange: (v: CloudSyncProviderChoice) => void;
   disabled?: boolean;
+  /** Settings page: outer title box hide (card already labeled). */
+  showHeader?: boolean;
+  /** Nested inside another tinted card — skip duplicate border. */
+  embedded?: boolean;
 };
 
 export function CloudSyncProviderPickers({
@@ -30,6 +52,8 @@ export function CloudSyncProviderPickers({
   onDataProviderChange,
   onFilesProviderChange,
   disabled,
+  showHeader = true,
+  embedded = false,
 }: Props) {
   const allowDrive = planAllowsGoogleDriveSync(planId, livePlan);
   const allowDropbox = planAllowsDropboxSync(planId, livePlan);
@@ -46,14 +70,29 @@ export function CloudSyncProviderPickers({
     return items;
   };
 
+  const split =
+    dataProvider !== "none" && filesProvider !== "none" && dataProvider !== filesProvider;
+
   return (
-    <div className="space-y-3 rounded-md border border-black/10 bg-muted/25 p-3">
-      <div>
-        <p className="text-xs font-medium text-foreground">Optional cloud backup (local company)</p>
-        <p className="text-xs text-muted-foreground">
-          Voucher data (JSON) and attachment files can use different providers — e.g. data on Drive, files on Dropbox.
+    <div
+      className={
+        embedded ? "space-y-2" : "space-y-3 rounded-md border border-black/10 bg-muted/25 p-3"
+      }
+    >
+      {showHeader ? (
+        <div>
+          <p className="text-xs font-medium text-foreground">Optional cloud backup (local company)</p>
+          <p className="text-xs text-muted-foreground">
+            Voucher data (JSON) and attachment files can use different providers — e.g. data on Drive, files on
+            Dropbox.
+          </p>
+        </div>
+      ) : null}
+      {split ? (
+        <p className="text-xs font-medium text-foreground rounded-md border border-black/15 bg-background/60 px-2 py-1.5">
+          Split sync — {formatCloudSyncTargetsSummary(dataProvider, filesProvider)}
         </p>
-      </div>
+      ) : null}
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label className="text-xs">Voucher data sync</Label>

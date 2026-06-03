@@ -36,7 +36,11 @@ export async function isDropboxCloudSyncCompany(companyId: string): Promise<bool
   if (!(await shouldUseLocalCloudSync(companyId))) return false;
   const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
   const cfg = readCloudSyncConfigFromCompany(reg);
-  return cfg.cloudSyncProvider === "dropbox";
+  return (
+    cfg.cloudSyncDataProvider === "dropbox" ||
+    cfg.cloudSyncFilesProvider === "dropbox" ||
+    cfg.cloudSyncProvider === "dropbox"
+  );
 }
 
 /** Attachment bytes upload — returns `drive:` ref (same path prefix as Drive layout on Dropbox). */

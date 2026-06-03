@@ -15,10 +15,25 @@ export type DriveAuthClientState = {
   formData?: unknown;
 };
 
-/** Static/APK: Google OAuth redirect_uri hosted site par — localhost:4173 par callback route nahi hota. */
+function isLoopbackBrowserOrigin(origin: string): boolean {
+  try {
+    const h = new URL(origin).hostname.toLowerCase();
+    return h === "localhost" || h === "127.0.0.1" || h === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+/** Static/APK: Google OAuth redirect_uri hosted site par — dev loopback par tab origin (STATIC_BUILD=1 bhi). */
 function staticDriveOAuthRedirectOrigin(): string | undefined {
   if (typeof window === "undefined") return undefined;
   if (!isStaticAppBuild() && !isCapacitorNativeApp()) return undefined;
+  if (
+    process.env.NODE_ENV === "development" &&
+    isLoopbackBrowserOrigin(window.location.origin)
+  ) {
+    return undefined;
+  }
   return getBillingApiBaseOrigin() || POCKET_LEDGER_HOSTED_API_ORIGIN;
 }
 

@@ -31,12 +31,20 @@ async function resolveOwnerUidByEmail(email: string): Promise<string | null> {
   }
 }
 
-export async function listDropboxSharedLocalCompanyInvites(): Promise<DropboxSharedCompanyInvite[]> {
-  const res = await postDropboxJsonViaClient<{ companies?: DropboxSharedCompanyInvite[] }>(
-    "/api/local-cloud-sync/dropbox/list-shared-companies",
-    {}
-  );
-  return res.companies ?? [];
+export type DropboxSharedCompanyListResult = {
+  companies: DropboxSharedCompanyInvite[];
+  dropboxConnected: boolean;
+};
+
+export async function listDropboxSharedLocalCompanyInvites(): Promise<DropboxSharedCompanyListResult> {
+  const res = await postDropboxJsonViaClient<{
+    companies?: DropboxSharedCompanyInvite[];
+    dropboxConnected?: boolean;
+  }>("/api/local-cloud-sync/dropbox/list-shared-companies", {});
+  return {
+    companies: res.companies ?? [],
+    dropboxConnected: res.dropboxConnected === true,
+  };
 }
 
 export function isDropboxSharedInviteAlreadyJoined(

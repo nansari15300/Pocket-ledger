@@ -40,6 +40,7 @@ export const config = {
     "/api/auth/google/drive-disconnect",
     "/api/auth/dropbox/dropbox-auth-url",
     "/api/auth/dropbox/dropbox-disconnect",
+    "/api/auth/cloud-account-status",
     "/api/local-cloud-sync/drive/:path*",
     "/api/local-cloud-sync/dropbox/:path*",
   ],

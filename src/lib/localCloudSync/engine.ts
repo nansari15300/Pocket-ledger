@@ -260,7 +260,7 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     let maxRemoteSeq = cursor.lastSyncedOp;
     let addedVouchers = 0;
     let addedFiles = 0;
-    // Drive se download apply — summary card "Downloaded from Drive" row.
+    // Remote cloud download apply — summary card "Downloaded from cloud" row.
     let downloadedVouchers = 0;
     let downloadedFiles = 0;
 

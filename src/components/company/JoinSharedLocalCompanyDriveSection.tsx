@@ -51,6 +51,12 @@ type Props = {
   returnPath?: string;
   /** dialog ke andar — title/description dialog header se aata hai */
   embedded?: boolean;
+  driveConnected?: boolean;
+  accountStatusLoading?: boolean;
+  mobileMyCompaniesInPanelHeader?: boolean;
+  ownedListOpen?: boolean;
+  onOwnedListOpenChange?: (open: boolean) => void;
+  onOwnedInviteCountChange?: (count: number) => void;
 };
 
 /** Google Drive — shared local companies join list. */
@@ -60,6 +66,12 @@ export function JoinSharedLocalCompanyDriveSection({
   className,
   returnPath,
   embedded = false,
+  driveConnected = false,
+  accountStatusLoading = false,
+  mobileMyCompaniesInPanelHeader = false,
+  ownedListOpen: ownedListOpenProp,
+  onOwnedListOpenChange,
+  onOwnedInviteCountChange,
 }: Props) {
   const { user } = useAuth();
   const { reloadLocalCompanyRegistry, localCompanyRegistryEpoch } = useCompany();
@@ -69,7 +81,9 @@ export function JoinSharedLocalCompanyDriveSection({
   const [invites, setInvites] = useState<DriveSharedCompanyInvite[]>([]);
   const [error, setError] = useState<string | null>(null);
   /** "My companies on Drive" card — default band; Refresh list ke arrow se kholo */
-  const [ownedDriveListOpen, setOwnedDriveListOpen] = useState(false);
+  const [ownedDriveListOpenLocal, setOwnedDriveListOpenLocal] = useState(false);
+  const ownedDriveListOpen = ownedListOpenProp ?? ownedDriveListOpenLocal;
+  const setOwnedDriveListOpen = onOwnedListOpenChange ?? setOwnedDriveListOpenLocal;
   const [localRegistryRows, setLocalRegistryRows] = useState<LocalCompanyDoc[]>([]);
   /** Connect tap — encrypt ho to password popup */
   const [connectDialog, setConnectDialog] = useState<{
@@ -115,6 +129,10 @@ export function JoinSharedLocalCompanyDriveSection({
   }, [active, refreshLocalJoinState, invites, localCompanyRegistryEpoch, joiningId]);
 
   const ownedInvites = useMemo(() => invites.filter((inv) => inv.isOwnedOnDrive), [invites]);
+
+  useEffect(() => {
+    onOwnedInviteCountChange?.(ownedInvites.length);
+  }, [ownedInvites.length, onOwnedInviteCountChange]);
 
   const groupedBySharer = useMemo(() => {
     const map = new Map<string, DriveSharedCompanyInvite[]>();
@@ -263,11 +281,16 @@ export function JoinSharedLocalCompanyDriveSection({
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col space-y-3 px-4 pb-4 pt-0">
       <div className="flex flex-wrap items-center gap-2">
-        <CloudProviderConnectButton provider="google_drive" onClick={() => void connectDrive()} />
+        <CloudProviderConnectButton
+          provider="google_drive"
+          connected={driveConnected}
+          disabled={accountStatusLoading}
+          onClick={() => void connectDrive()}
+        />
         <Button type="button" variant="ghost" size="sm" disabled={loading} onClick={() => void loadInvites()}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Refresh list"}
         </Button>
-        {ownedInvites.length > 0 ? (
+        {ownedInvites.length > 0 && !mobileMyCompaniesInPanelHeader ? (
           <Button
             type="button"
             variant="outline"
@@ -276,7 +299,7 @@ export function JoinSharedLocalCompanyDriveSection({
             aria-expanded={ownedDriveListOpen}
             aria-label={ownedDriveListOpen ? "Hide my companies on Drive" : "Show my companies on Drive"}
             title={ownedDriveListOpen ? "Hide my companies on Drive" : "Show my companies on Drive"}
-            onClick={() => setOwnedDriveListOpen((open) => !open)}
+            onClick={() => setOwnedDriveListOpen(!ownedDriveListOpen)}
           >
             <span className="text-xs font-medium">My companies</span>
             {ownedDriveListOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}

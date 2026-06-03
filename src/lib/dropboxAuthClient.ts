@@ -25,29 +25,46 @@ function isLoopbackBrowserOrigin(origin: string): boolean {
   }
 }
 
-/** Client estimate — dev loopback uses `NEXT_PUBLIC_APP_URL` (same as server OAuth resolver). */
-export function dropboxOAuthRedirectUriForBrowser(): string {
-  const envAppUrl = String(
-    typeof process !== "undefined" ? process.env.NEXT_PUBLIC_APP_URL || "" : ""
-  )
-    .trim()
-    .replace(/\/+$/, "");
+const DROPBOX_CALLBACK_PATH = "/api/auth/callback/dropbox";
 
-  if (typeof window !== "undefined") {
-    const clientOrigin = window.location.origin.replace(/\/+$/, "");
-    if (isLoopbackBrowserOrigin(clientOrigin)) {
-      const dev =
-        typeof process !== "undefined" && process.env.NODE_ENV === "development";
-      const appUrl = dev ? clientOrigin : envAppUrl || clientOrigin;
-      return `${appUrl}/api/auth/callback/dropbox`;
-    }
-    if (isPocketLedgerAppOrigin(clientOrigin)) {
-      return `${clientOrigin}/api/auth/callback/dropbox`;
-    }
+function hostedDropboxOAuthRedirectUri(): string {
+  const hosted =
+    (typeof window !== "undefined" ? getBillingApiBaseOrigin() : "") ||
+    POCKET_LEDGER_HOSTED_API_ORIGIN;
+  return `${hosted.replace(/\/+$/, "")}${DROPBOX_CALLBACK_PATH}`;
+}
+
+/** Client redirect URI — loopback dev tab pehle (STATIC_BUILD=1 + localhost par bhi). */
+export function dropboxOAuthRedirectUriForBrowser(): string {
+  if (typeof window === "undefined") {
+    return hostedDropboxOAuthRedirectUri();
   }
 
-  const fallback = envAppUrl || POCKET_LEDGER_HOSTED_API_ORIGIN;
-  return `${fallback}/api/auth/callback/dropbox`;
+  const clientOrigin = window.location.origin.replace(/\/+$/, "");
+
+  // Capacitor WebView — callback hosted site par.
+  if (isCapacitorNativeApp()) {
+    return hostedDropboxOAuthRedirectUri();
+  }
+
+  // Dev loopback — browser jis host se khula (localhost ≠ 127.0.0.1); Dropbox console me wahi exact URI.
+  if (isLoopbackBrowserOrigin(clientOrigin)) {
+    return `${clientOrigin}${DROPBOX_CALLBACK_PATH}`;
+  }
+
+  // Static export / preview (non-loopback) — hosted API + callback.
+  if (isStaticAppBuild()) {
+    return hostedDropboxOAuthRedirectUri();
+  }
+
+  if (isPocketLedgerAppOrigin(clientOrigin)) {
+    return `${clientOrigin}${DROPBOX_CALLBACK_PATH}`;
+  }
+
+  const envAppUrl = String(process.env.NEXT_PUBLIC_APP_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+  return `${(envAppUrl || POCKET_LEDGER_HOSTED_API_ORIGIN).replace(/\/+$/, "")}${DROPBOX_CALLBACK_PATH}`;
 }
 
 /** Last redirect URI from `getDropboxAuthUrl` — matches what Dropbox OAuth actually uses. */
@@ -57,18 +74,42 @@ export function getLastDropboxOAuthRedirectUri(): string | null {
   return lastDropboxOAuthRedirectUri;
 }
 
+/** Dev — Dropbox console me dono loopback URIs add karne ke liye. */
+export function dropboxLoopbackRedirectUrisForDev(port = "3000"): string[] {
+  const path = DROPBOX_CALLBACK_PATH;
+  return [`http://localhost:${port}${path}`, `http://127.0.0.1:${port}${path}`];
+}
+
 export function formatDropboxConnectError(message: string): string {
   const msg = String(message || "").trim();
   if (!/invalid.?redirect|redirect_uri/i.test(msg)) {
     return msg || "Dropbox connect failed";
   }
   const uri = getLastDropboxOAuthRedirectUri() || dropboxOAuthRedirectUriForBrowser();
-  return `Dropbox redirect URI not registered. In Dropbox Developer Console → Redirect URIs, add exactly: ${uri}`;
+  let hint = "";
+  if (typeof window !== "undefined" && isCapacitorNativeApp()) {
+    hint = " (APK uses the hosted site callback, not localhost.)";
+  } else if (typeof window !== "undefined" && isLoopbackBrowserOrigin(window.location.origin)) {
+    try {
+      const port = new URL(uri).port || "3000";
+      const both = dropboxLoopbackRedirectUrisForDev(port).filter((u) => u !== uri);
+      hint = both.length ? ` Also add: ${both.join(" and ")} if you switch host.` : "";
+    } catch {
+      hint = "";
+    }
+  }
+  return `Dropbox redirect URI not registered. In Dropbox Developer Console → Redirect URIs, add exactly: ${uri}${hint}`;
 }
 
 function staticDropboxOAuthRedirectOrigin(): string | undefined {
   if (typeof window === "undefined") return undefined;
   if (!isStaticAppBuild() && !isCapacitorNativeApp()) return undefined;
+  if (
+    process.env.NODE_ENV === "development" &&
+    isLoopbackBrowserOrigin(window.location.origin)
+  ) {
+    return undefined;
+  }
   return getBillingApiBaseOrigin() || POCKET_LEDGER_HOSTED_API_ORIGIN;
 }
 
@@ -97,6 +138,9 @@ export async function getDropboxAuthUrl(
   const redirectUri =
     String(json.redirectUri || "").trim() || dropboxOAuthRedirectUriForBrowser();
   lastDropboxOAuthRedirectUri = redirectUri;
+  if (typeof process !== "undefined" && process.env.NODE_ENV === "development") {
+    console.info("[Dropbox OAuth] redirect_uri (Dropbox console me exact add karo):", redirectUri);
+  }
   return { url: json.url, redirectUri };
 }
 

@@ -31,7 +31,7 @@ function isLoopbackBillingOrigin(origin: string): boolean {
 }
 
 /** Windows: `localhost` kabhi IPv6 `[::1]` par static export pakad leta hai — dev API `127.0.0.1` par chale. */
-function normalizeDevLoopbackBillingOrigin(origin: string): string {
+export function normalizeDevLoopbackBillingOrigin(origin: string): string {
   const normalized = normalizeBillingOrigin(origin);
   if (typeof process !== "undefined" && process.env.NODE_ENV !== "development") {
     return normalized;

@@ -52,6 +52,13 @@ type Props = {
   returnPath?: string;
   /** dialog ke andar — title/description dialog header se aata hai */
   embedded?: boolean;
+  dropboxConnected?: boolean;
+  accountStatusLoading?: boolean;
+  refreshCloudAccounts?: () => Promise<void>;
+  mobileMyCompaniesInPanelHeader?: boolean;
+  ownedListOpen?: boolean;
+  onOwnedListOpenChange?: (open: boolean) => void;
+  onOwnedInviteCountChange?: (count: number) => void;
 };
 
 /** Dropbox — shared local companies join list. */
@@ -61,6 +68,13 @@ export function JoinSharedLocalCompanyDropboxSection({
   className,
   returnPath,
   embedded = false,
+  dropboxConnected = false,
+  accountStatusLoading = false,
+  refreshCloudAccounts,
+  mobileMyCompaniesInPanelHeader = false,
+  ownedListOpen: ownedListOpenProp,
+  onOwnedListOpenChange,
+  onOwnedInviteCountChange,
 }: Props) {
   const { user } = useAuth();
   const { reloadLocalCompanyRegistry, localCompanyRegistryEpoch } = useCompany();
@@ -68,9 +82,12 @@ export function JoinSharedLocalCompanyDropboxSection({
   const [loading, setLoading] = useState(false);
   const [joiningId, setJoiningId] = useState<string | null>(null);
   const [invites, setInvites] = useState<DropboxSharedCompanyInvite[]>([]);
+  const [dropboxLinkedFromApi, setDropboxLinkedFromApi] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** "My companies on Drive" card — default band; Refresh list ke arrow se kholo */
-  const [ownedDropboxListOpen, setOwnedDropboxListOpen] = useState(false);
+  const [ownedDropboxListOpenLocal, setOwnedDropboxListOpenLocal] = useState(false);
+  const ownedDropboxListOpen = ownedListOpenProp ?? ownedDropboxListOpenLocal;
+  const setOwnedDropboxListOpen = onOwnedListOpenChange ?? setOwnedDropboxListOpenLocal;
   const [localRegistryRows, setLocalRegistryRows] = useState<LocalCompanyDoc[]>([]);
   /** Connect tap — encrypt ho to password popup */
   const [connectDialog, setConnectDialog] = useState<{
@@ -89,8 +106,10 @@ export function JoinSharedLocalCompanyDropboxSection({
     setLoading(true);
     setError(null);
     try {
-      const rows = await listDropboxSharedLocalCompanyInvites();
-      setInvites(rows);
+      const { companies, dropboxConnected: linked } = await listDropboxSharedLocalCompanyInvites();
+      setInvites(companies);
+      setDropboxLinkedFromApi(linked);
+      if (linked) void refreshCloudAccounts?.();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       const soft =
@@ -118,6 +137,10 @@ export function JoinSharedLocalCompanyDropboxSection({
 
   const ownedInvites = useMemo(() => invites.filter((inv) => inv.isOwnedOnDropbox), [invites]);
 
+  useEffect(() => {
+    onOwnedInviteCountChange?.(ownedInvites.length);
+  }, [ownedInvites.length, onOwnedInviteCountChange]);
+
   const groupedBySharer = useMemo(() => {
     const map = new Map<string, DropboxSharedCompanyInvite[]>();
     for (const inv of invites) {
@@ -136,10 +159,14 @@ export function JoinSharedLocalCompanyDropboxSection({
     setError(null);
     try {
       const firebaseUser = await getFirebaseAuthUserForApi();
-      const { url } = await getDropboxAuthUrl({
+      const { url, redirectUri } = await getDropboxAuthUrl({
         returnPath: resolveDropboxOAuthReturnPath(returnPath),
         uid: firebaseUser.uid,
         email: firebaseUser.email ?? undefined,
+      });
+      toast({
+        title: "Opening Dropbox sign-in",
+        description: `Dropbox app → Redirect URIs: ${redirectUri}`,
       });
       await openDropboxOAuthUrl(url);
     } catch (e) {
@@ -266,11 +293,16 @@ export function JoinSharedLocalCompanyDropboxSection({
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col space-y-3 px-4 pb-4 pt-0">
       <div className="flex flex-wrap items-center gap-2">
-        <CloudProviderConnectButton provider="dropbox" onClick={() => void connectDropbox()} />
+        <CloudProviderConnectButton
+          provider="dropbox"
+          connected={dropboxConnected || dropboxLinkedFromApi}
+          disabled={accountStatusLoading}
+          onClick={() => void connectDropbox()}
+        />
         <Button type="button" variant="ghost" size="sm" disabled={loading} onClick={() => void loadInvites()}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Refresh list"}
         </Button>
-        {ownedInvites.length > 0 ? (
+        {ownedInvites.length > 0 && !mobileMyCompaniesInPanelHeader ? (
           <Button
             type="button"
             variant="outline"
@@ -279,7 +311,7 @@ export function JoinSharedLocalCompanyDropboxSection({
             aria-expanded={ownedDropboxListOpen}
             aria-label={ownedDropboxListOpen ? "Hide my companies on Dropbox" : "Show my companies on Dropbox"}
             title={ownedDropboxListOpen ? "Hide my companies on Dropbox" : "Show my companies on Dropbox"}
-            onClick={() => setOwnedDropboxListOpen((open) => !open)}
+            onClick={() => setOwnedDropboxListOpen(!ownedDropboxListOpen)}
           >
             <span className="text-xs font-medium">My companies</span>
             {ownedDropboxListOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}

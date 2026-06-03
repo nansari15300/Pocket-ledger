@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Cloud } from "lucide-react";
 import { JoinSharedLocalCompanyPanel } from "@/components/company/JoinSharedLocalCompanyPanel";
+import { useCloudProviderAccountStatus } from "@/hooks/useCloudProviderAccountStatus";
 
 type Props = {
   open: boolean;
@@ -18,6 +19,8 @@ type Props = {
 
 /** User B — Drive par shared local companies list + Join (dialog wrapper). */
 export function JoinSharedLocalCompanyDialog({ open, onOpenChange, onJoined }: Props) {
+  const cloudAccounts = useCloudProviderAccountStatus();
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
@@ -35,6 +38,7 @@ export function JoinSharedLocalCompanyDialog({ open, onOpenChange, onJoined }: P
           active={open}
           embedded
           className="p-0"
+          cloudAccounts={cloudAccounts}
           onJoined={() => {
             onJoined?.();
             onOpenChange(false);

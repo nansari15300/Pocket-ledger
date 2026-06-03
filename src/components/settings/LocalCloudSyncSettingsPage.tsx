@@ -7,6 +7,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { LocalCompanyCloudSyncSettings } from "@/components/company/LocalCompanyCloudSyncSettings";
 import { JoinSharedLocalCompanyPanel } from "@/components/company/JoinSharedLocalCompanyPanel";
+import { useCloudProviderAccountStatus } from "@/hooks/useCloudProviderAccountStatus";
 import { companyProfileChromeRoot, settingsDetailCardShell } from "@/lib/companyProfileChrome";
 import { settingsViewHref } from "@/lib/appNavHref";
 import { cn } from "@/lib/utils";
@@ -45,6 +46,8 @@ export function LocalCloudSyncSettingsPage({ onBack, onOpenSettingsList }: Props
     company && company.id && !isOfflineCompanyStorage(company as { storageOption?: string })
   );
 
+  const cloudAccounts = useCloudProviderAccountStatus();
+
   return (
     <div
       className="flex h-full min-h-0 w-full max-w-full flex-col gap-[2px] px-[2px]"
@@ -54,6 +57,7 @@ export function LocalCloudSyncSettingsPage({ onBack, onOpenSettingsList }: Props
         className="w-full shrink-0"
         returnPath={settingsViewHref("local_cloud_sync")}
         onJoined={handleJoined}
+        cloudAccounts={cloudAccounts}
       />
 
       {activeLocalCompany?.id ? (
@@ -63,6 +67,7 @@ export function LocalCloudSyncSettingsPage({ onBack, onOpenSettingsList }: Props
           company={activeLocalCompany}
           onBack={onBack}
           onOpenSettingsList={onOpenSettingsList}
+          cloudAccounts={cloudAccounts}
         />
       ) : isOnlineCompanySelected ? (
         <Card className={cn(settingsDetailCardShell, "w-full shrink-0")}>

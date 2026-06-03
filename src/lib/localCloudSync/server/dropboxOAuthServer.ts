@@ -8,7 +8,7 @@ import {
   type DriveOAuthState,
 } from "@/lib/localCloudSync/server/driveOAuthServer";
 
-const DROPBOX_CALLBACK_PATH = "/api/auth/callback/dropbox";
+export const DROPBOX_CALLBACK_PATH = "/api/auth/callback/dropbox";
 
 /** Client bheje exact callback URL — server origin isi se derive kare (redirect_uri mismatch avoid). */
 export function resolveDropboxAppOriginFromClientRedirectUri(redirectUri: string): string | null {
@@ -18,7 +18,11 @@ export function resolveDropboxAppOriginFromClientRedirectUri(redirectUri: string
     if (path !== DROPBOX_CALLBACK_PATH) return null;
     const origin = u.origin.replace(/\/+$/, "");
     const host = new URL(origin).hostname.toLowerCase();
-    if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return origin;
+    // APK/Capacitor `https://localhost` — redirect sirf dev browser; production me hosted callback.
+    if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") {
+      if (process.env.NODE_ENV === "development") return origin;
+      return null;
+    }
     if (isPocketLedgerAppOrigin(origin) || isAllowedEmbeddedBillingClientOrigin(origin)) {
       return origin;
     }
@@ -58,9 +62,28 @@ export function dropboxOAuthRedirectUriFromAppOrigin(appOrigin?: string): string
   return `${appUrl}${DROPBOX_CALLBACK_PATH}`;
 }
 
-export function buildDropboxAuthUrl(state: DropboxOAuthState, appOrigin?: string): string {
+/** Client/server — path exact `/api/auth/callback/dropbox`, trailing slash strip. */
+export function normalizeDropboxOAuthRedirectUri(redirectUri: string): string {
+  const u = new URL(String(redirectUri || "").trim());
+  const path = u.pathname.replace(/\/+$/, "") || "/";
+  if (path !== DROPBOX_CALLBACK_PATH) {
+    throw new Error(`Invalid Dropbox redirect URI path (expected ${DROPBOX_CALLBACK_PATH})`);
+  }
+  return `${u.origin.replace(/\/+$/, "")}${DROPBOX_CALLBACK_PATH}`;
+}
+
+function resolveDropboxRedirectUriForOAuth(redirectUriOrOrigin?: string): string {
+  const raw = String(redirectUriOrOrigin || "").trim();
+  if (!raw) throw new Error("Missing Dropbox redirect URI");
+  if (raw.includes(DROPBOX_CALLBACK_PATH)) {
+    return normalizeDropboxOAuthRedirectUri(raw);
+  }
+  return dropboxOAuthRedirectUriFromAppOrigin(raw);
+}
+
+export function buildDropboxAuthUrl(state: DropboxOAuthState, redirectUriOrOrigin?: string): string {
   const appKey = dropboxAppKey();
-  const redirectUri = dropboxOAuthRedirectUriFromAppOrigin(appOrigin);
+  const redirectUri = resolveDropboxRedirectUriForOAuth(redirectUriOrOrigin);
   const encodedState = Buffer.from(JSON.stringify(state)).toString("base64");
   const params = new URLSearchParams({
     client_id: appKey,
@@ -75,7 +98,7 @@ export function buildDropboxAuthUrl(state: DropboxOAuthState, appOrigin?: string
 
 export async function exchangeDropboxAuthCode(
   code: string,
-  appOrigin: string
+  redirectUriOrOrigin: string
 ): Promise<{
   accessToken: string;
   refreshToken: string | null;
@@ -83,7 +106,7 @@ export async function exchangeDropboxAuthCode(
   accountId: string | null;
   connectedEmail: string | null;
 }> {
-  const redirectUri = dropboxOAuthRedirectUriFromAppOrigin(appOrigin);
+  const redirectUri = resolveDropboxRedirectUriForOAuth(redirectUriOrOrigin);
   const body = new URLSearchParams({
     code,
     grant_type: "authorization_code",

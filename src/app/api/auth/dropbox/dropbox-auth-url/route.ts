@@ -4,7 +4,9 @@ import { NextRequest } from "next/server";
 import { verifyBearerUid } from "@/lib/localCloudSync/server/apiAuth";
 import {
   buildDropboxAuthUrl,
+  DROPBOX_CALLBACK_PATH,
   dropboxOAuthRedirectUriFromAppOrigin,
+  normalizeDropboxOAuthRedirectUri,
   resolveDropboxAppOriginFromClientRedirectUri,
   resolveDropboxOAuthAppOrigin,
   type DropboxOAuthState,
@@ -41,12 +43,22 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const fromClientRedirect = resolveDropboxAppOriginFromClientRedirectUri(
-      String(body.oauthRedirectUri || "")
-    );
-    const appOrigin =
-      fromClientRedirect ||
-      resolveDropboxOAuthAppOrigin(req, body.clientOrigin, body.oauthRedirectOrigin);
+    const clientRedirect = String(body.oauthRedirectUri || "").trim();
+    let redirectUri = clientRedirect;
+    if (redirectUri) {
+      const origin = resolveDropboxAppOriginFromClientRedirectUri(redirectUri);
+      if (!origin) {
+        return driveHostedApiJson(req, { error: "Invalid oauthRedirectUri for Dropbox" }, 400);
+      }
+      redirectUri = normalizeDropboxOAuthRedirectUri(redirectUri);
+    } else {
+      const appOrigin =
+        resolveDropboxAppOriginFromClientRedirectUri(
+          `${String(body.clientOrigin || "").trim().replace(/\/+$/, "")}${DROPBOX_CALLBACK_PATH}`
+        ) ||
+        resolveDropboxOAuthAppOrigin(req, body.clientOrigin, body.oauthRedirectOrigin);
+      redirectUri = dropboxOAuthRedirectUriFromAppOrigin(appOrigin);
+    }
     const url = buildDropboxAuthUrl(
       {
         returnPath,
@@ -54,11 +66,11 @@ export async function POST(req: NextRequest) {
         email: body.email,
         formData: body.formData,
       },
-      appOrigin
+      redirectUri
     );
     return driveHostedApiJson(req, {
       url,
-      redirectUri: dropboxOAuthRedirectUriFromAppOrigin(appOrigin),
+      redirectUri,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

@@ -27,11 +27,27 @@ function isEmbeddedLoopbackClientOrigin(origin: string): boolean {
   return false;
 }
 
-/** Static client explicit hosted redirect — Google Console me yahi URI register hona chahiye. */
+function isLoopbackAppUrl(url: string): boolean {
+  try {
+    const raw = String(url || "").trim();
+    if (!raw) return false;
+    const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const h = new URL(withScheme).hostname.toLowerCase();
+    return h === "localhost" || h === "127.0.0.1" || h === "[::1]";
+  } catch {
+    return /localhost|127\.0\.0\.1/i.test(url);
+  }
+}
+
+/** Static/APK OAuth callback — production me baked localhost env ignore; hamesha hosted site. */
 function resolveHostedDriveOAuthOrigin(): string {
-  return String(process.env.NEXT_PUBLIC_APP_URL || "https://pocket-ledger.com")
+  const fromEnv = String(process.env.NEXT_PUBLIC_APP_URL || "")
     .trim()
     .replace(/\/+$/, "");
+  if (fromEnv && !(process.env.NODE_ENV !== "development" && isLoopbackAppUrl(fromEnv))) {
+    return fromEnv;
+  }
+  return "https://pocket-ledger.com";
 }
 
 /** OAuth redirect/callback — browser Origin (127.0.0.1 vs localhost) Google Console se match hona chahiye. */
@@ -40,6 +56,16 @@ export function resolveDriveOAuthAppOrigin(
   clientOrigin?: string,
   oauthRedirectOrigin?: string
 ): string {
+  const fromClient = String(clientOrigin || req.headers.get("origin") || "").trim();
+  // Dev browser loopback pehle — `.env.local` me STATIC_BUILD=1 ho to bhi oauthRedirectOrigin hosted na ho.
+  if (fromClient && isEmbeddedLoopbackClientOrigin(fromClient)) {
+    if (process.env.NODE_ENV === "development") {
+      return fromClient.replace(/\/+$/, "");
+    }
+    const hosted = resolveHostedDriveOAuthOrigin();
+    if (hosted) return hosted;
+  }
+
   // Static/APK body se bheja hosted origin — loopback clientOrigin par mat chalao (redirect_uri_mismatch).
   const explicitHosted = String(oauthRedirectOrigin || "").trim().replace(/\/+$/, "");
   if (explicitHosted) {
@@ -47,16 +73,6 @@ export function resolveDriveOAuthAppOrigin(
     if (explicitHosted === allowedHosted || isPocketLedgerAppOrigin(explicitHosted)) {
       return explicitHosted;
     }
-  }
-
-  const fromClient = String(clientOrigin || req.headers.get("origin") || "").trim();
-  // Static/APK loopback: callback hosted site par. `next dev` loopback: tab origin (localhost ≠ 127.0.0.1).
-  if (fromClient && isEmbeddedLoopbackClientOrigin(fromClient)) {
-    if (process.env.NODE_ENV === "development") {
-      return fromClient.replace(/\/+$/, "");
-    }
-    const hosted = resolveHostedDriveOAuthOrigin();
-    if (hosted) return hosted;
   }
   if (fromClient && isAllowedEmbeddedBillingClientOrigin(fromClient)) {
     return fromClient.replace(/\/+$/, "");
@@ -103,6 +119,16 @@ export function buildGoogleDriveAuthUrl(state: DriveOAuthState, appOrigin?: stri
     scope: scopes,
     state: encodedState,
   });
+}
+
+export async function hasGoogleDriveTokensForUser(uid: string): Promise<boolean> {
+  const { getAdminDb, isFirebaseAdminConfigured } = await import("@/lib/firebaseAdmin");
+  if (!isFirebaseAdminConfigured()) return false;
+  const id = String(uid || "").trim();
+  if (!id) return false;
+  const db = getAdminDb();
+  const snap = await db.collection("user_tokens").doc(id).collection("google").doc("drive").get();
+  return snap.exists && Boolean(snap.data()?.accessToken);
 }
 
 /** OAuth token shard hatao — client Firestore delete rules se block hota hai. */

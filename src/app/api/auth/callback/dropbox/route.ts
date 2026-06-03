@@ -2,10 +2,22 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import {
+  DROPBOX_CALLBACK_PATH,
   exchangeDropboxAuthCode,
-  resolveDropboxOAuthAppOrigin,
   saveDropboxTokensForUser,
 } from "@/lib/localCloudSync/server/dropboxOAuthServer";
+
+function redirectBaseForReturnPath(returnPath: string, callbackOrigin: string): string {
+  const rp = String(returnPath || "").trim();
+  if (/^https?:\/\//i.test(rp)) {
+    try {
+      return new URL(rp).origin.replace(/\/+$/, "");
+    } catch {
+      /* fall through */
+    }
+  }
+  return callbackOrigin.replace(/\/+$/, "");
+}
 
 type OAuthState = {
   returnPath?: string;
@@ -29,45 +41,47 @@ export async function GET(req: NextRequest) {
   const stateB64 = url.searchParams.get("state");
   const oauthError = url.searchParams.get("error_description") || url.searchParams.get("error");
 
-  const appUrl = resolveDropboxOAuthAppOrigin(req);
+  const callbackOrigin = req.nextUrl.origin.replace(/\/+$/, "");
+  const oauthRedirectUri = `${callbackOrigin}${DROPBOX_CALLBACK_PATH}`;
   const decoded = decodeState(stateB64);
   const returnPath = decoded?.returnPath || "/company";
+  const returnBase = redirectBaseForReturnPath(returnPath, callbackOrigin);
 
   if (oauthError) {
-    const u = new URL(returnPath, appUrl);
+    const u = new URL(returnPath, returnBase);
     u.searchParams.set("error", "oauth_failed");
     if (stateB64) u.searchParams.set("state", stateB64);
     return NextResponse.redirect(u);
   }
 
   if (!code) {
-    const u = new URL(returnPath, appUrl);
+    const u = new URL(returnPath, returnBase);
     u.searchParams.set("error", "oauth_failed_no_code");
     if (stateB64) u.searchParams.set("state", stateB64);
     return NextResponse.redirect(u);
   }
 
   if (!decoded?.uid) {
-    const u = new URL(returnPath, appUrl);
+    const u = new URL(returnPath, returnBase);
     u.searchParams.set("error", "missing_uid_in_state");
     if (stateB64) u.searchParams.set("state", stateB64);
     return NextResponse.redirect(u);
   }
 
   try {
-    const tokens = await exchangeDropboxAuthCode(code, appUrl);
+    const tokens = await exchangeDropboxAuthCode(code, oauthRedirectUri);
     await saveDropboxTokensForUser(decoded.uid, {
       ...tokens,
       connectedEmail: tokens.connectedEmail || decoded.email || null,
     });
 
-    const successUrl = new URL(returnPath, appUrl);
+    const successUrl = new URL(returnPath, returnBase);
     successUrl.searchParams.set("success", "dropbox_connected");
     if (stateB64) successUrl.searchParams.set("state", stateB64);
     return NextResponse.redirect(successUrl);
   } catch (error) {
     console.error("[Dropbox OAuth] exchange failed:", error);
-    const u = new URL(returnPath, appUrl);
+    const u = new URL(returnPath, returnBase);
     u.searchParams.set("error", "oauth_exchange_failed");
     if (stateB64) u.searchParams.set("state", stateB64);
     return NextResponse.redirect(u);

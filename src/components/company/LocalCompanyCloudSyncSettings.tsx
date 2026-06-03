@@ -41,7 +41,15 @@ import { getLocalCloudSyncStatus, runLocalCloudSyncCycle } from "@/lib/localClou
 import { backfillLocalDocsToCloudSyncOutbox } from "@/lib/localCloudSync/backfillOutbox";
 import { ensureCloudSyncDriveEncryptionSalt } from "@/lib/localCloudSync/driveEncryption";
 import { patchLocalCompanyCloudSyncFields, readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConfig";
-import type { CloudSyncIntervalSec, CloudSyncProviderId } from "@/lib/localCloudSync/types";
+import {
+  CloudSyncProviderPickers,
+  cloudSyncFieldsFromChoices,
+  formatCloudSyncTargetsSummary,
+  type CloudSyncProviderChoice,
+} from "@/components/company/CloudSyncProviderPickers";
+import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
+import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
+import type { CloudSyncIntervalSec } from "@/lib/localCloudSync/types";
 import { CLOUD_SYNC_INTERVAL_SEC_OPTIONS } from "@/lib/localCloudSync/types";
 import {
   type DriveAttachmentDateFolderMode,
@@ -82,6 +90,7 @@ import {
   listDeviceSyncSummaryHistory,
   summarizeDeviceSyncHistory,
 } from "@/lib/localCloudSync/deviceSyncSummaryHistory";
+import type { UseCloudProviderAccountStatusResult } from "@/hooks/useCloudProviderAccountStatus";
 
 type Props = {
   companyId: string;
@@ -92,6 +101,7 @@ type Props = {
   onBack?: () => void;
   /** Mobile settings list sheet — Force sync ke upar sidebar toggle */
   onOpenSettingsList?: () => void;
+  cloudAccounts?: UseCloudProviderAccountStatusResult;
 };
 
 function dateFolderModeLabel(mode: DriveAttachmentDateFolderMode): string {
@@ -175,11 +185,19 @@ function renderCloudSyncStatusError(
 }
 
 /** Sirf device-local companies — Firestore companies par ye card hide. */
-export function LocalCompanyCloudSyncSettings({ companyId, company, className, onBack, onOpenSettingsList }: Props) {
+export function LocalCompanyCloudSyncSettings({
+  companyId,
+  company,
+  className,
+  onBack,
+  onOpenSettingsList,
+  cloudAccounts,
+}: Props) {
   const { user } = useAuth();
   const { dateSystem } = useDate();
   const { reloadLocalCompanyRegistry, allCompanies, setCompanyId } = useCompany();
   const { role } = usePermissions();
+  const livePlans = useLivePlans();
   const { toast } = useToast();
   const router = useRouter();
   const pathname = usePathname();
@@ -240,8 +258,28 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
   const summaryToAdDate = useMemo(() => parseIsoDateToAd(summaryToDate), [summaryToDate]);
 
   const cfg = readCloudSyncConfigFromCompany(company);
+  const toProviderChoice = (p: CloudSyncProviderChoice | null | undefined): CloudSyncProviderChoice =>
+    p === "google_drive" || p === "dropbox" ? p : "none";
   const [enabled, setEnabled] = useState(cfg.cloudSyncEnabled);
-  const [provider, setProvider] = useState<CloudSyncProviderId>(cfg.cloudSyncProvider ?? "google_drive");
+  const [dataProvider, setDataProvider] = useState<CloudSyncProviderChoice>(() =>
+    toProviderChoice(cfg.cloudSyncDataProvider ?? cfg.cloudSyncProvider ?? "none")
+  );
+  const [filesProvider, setFilesProvider] = useState<CloudSyncProviderChoice>(() =>
+    toProviderChoice(cfg.cloudSyncFilesProvider ?? cfg.cloudSyncProvider ?? "none")
+  );
+  const usesDrive = dataProvider === "google_drive" || filesProvider === "google_drive";
+  const usesDropbox = dataProvider === "dropbox" || filesProvider === "dropbox";
+  const googleDriveConnected = cloudAccounts?.googleDrive === true;
+  const dropboxConnected = cloudAccounts?.dropbox === true;
+  const refreshCloudAccounts = cloudAccounts?.refresh;
+  const accountPlanId = useMemo(
+    () => resolveEffectiveAccountPlanId(allCompanies, user?.uid, (company as { planId?: string }).planId),
+    [allCompanies, user?.uid, company]
+  );
+  const accountPlanLive = useMemo(
+    () => getPlanFromPlans(livePlans, accountPlanId),
+    [livePlans, accountPlanId]
+  );
   const [encryptDriveData, setEncryptDriveData] = useState(cfg.cloudSyncEncryptDriveData);
   const [encryptDriveFiles, setEncryptDriveFiles] = useState(cfg.cloudSyncEncryptDriveFiles);
   // Drive encryption policy admin-owned hai; shared/non-admin devices sirf synced state dekhte hain.
@@ -269,7 +307,8 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
   useEffect(() => {
     const next = readCloudSyncConfigFromCompany(company);
     setEnabled(next.cloudSyncEnabled);
-    if (next.cloudSyncProvider) setProvider(next.cloudSyncProvider);
+    setDataProvider(toProviderChoice(next.cloudSyncDataProvider ?? next.cloudSyncProvider ?? "none"));
+    setFilesProvider(toProviderChoice(next.cloudSyncFilesProvider ?? next.cloudSyncProvider ?? "none"));
     setEncryptDriveData(next.cloudSyncEncryptDriveData);
     setEncryptDriveFiles(next.cloudSyncEncryptDriveFiles);
     setSyncIntervalSec(next.cloudSyncIntervalSec);
@@ -388,11 +427,18 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
     reloadLocalCompanyRegistry();
   };
 
+  const persistProviderChoices = async (data: CloudSyncProviderChoice, files: CloudSyncProviderChoice) => {
+    await saveConfig({
+      ...cloudSyncFieldsFromChoices(data, files),
+      cloudSyncEnabled: enabled,
+    });
+  };
+
   const onToggleEnabled = async (checked: boolean) => {
     setEnabled(checked);
     await saveConfig({
       cloudSyncEnabled: checked,
-      cloudSyncProvider: provider,
+      ...cloudSyncFieldsFromChoices(dataProvider, filesProvider),
     });
     if (checked) {
       const n = await backfillLocalDocsToCloudSyncOutbox(companyId);
@@ -400,9 +446,14 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
     }
   };
 
-  const onProviderChange = async (p: CloudSyncProviderId) => {
-    setProvider(p);
-    await saveConfig({ cloudSyncProvider: p, cloudSyncEnabled: enabled });
+  const onDataProviderChange = async (v: CloudSyncProviderChoice) => {
+    setDataProvider(v);
+    await persistProviderChoices(v, filesProvider);
+  };
+
+  const onFilesProviderChange = async (v: CloudSyncProviderChoice) => {
+    setFilesProvider(v);
+    await persistProviderChoices(dataProvider, v);
   };
 
   const onSyncIntervalChange = async (sec: CloudSyncIntervalSec) => {
@@ -518,7 +569,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
           : String(reg?.cloudSyncDriveEncryptionSalt ?? "").trim() || null;
       await saveConfig({
         cloudSyncEnabled: enabled,
-        cloudSyncProvider: provider,
+        ...cloudSyncFieldsFromChoices(dataProvider, filesProvider),
         cloudSyncEncryptDriveData: dataToSave,
         cloudSyncEncryptDriveFiles: filesToSave,
         cloudSyncEncryptDrive: dataToSave || filesToSave,
@@ -564,6 +615,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
       });
     } finally {
       setBusy(false);
+      void refreshCloudAccounts?.();
     }
   };
 
@@ -573,6 +625,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
       await disconnectGoogleDrive();
       toast({ title: "Disconnected", description: "Google Drive unlinked." });
       await refreshStatus();
+      void refreshCloudAccounts?.();
     } catch (e) {
       toast({
         variant: "destructive",
@@ -588,11 +641,15 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
     setBusy(true);
     try {
       const firebaseUser = await getFirebaseAuthUserForApi();
-      const { url } = await getDropboxAuthUrl({
+      const { url, redirectUri } = await getDropboxAuthUrl({
         returnPath: resolveDropboxOAuthReturnPath(settingsViewHref("local_cloud_sync")),
         uid: firebaseUser.uid,
         email: firebaseUser.email ?? undefined,
         formData: { companyId },
+      });
+      toast({
+        title: "Opening Dropbox sign-in",
+        description: `Dropbox console me ye Redirect URI hona chahiye: ${redirectUri}`,
       });
       await openDropboxOAuthUrl(url);
     } catch (e) {
@@ -617,6 +674,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
       await disconnectDropbox();
       toast({ title: "Disconnected", description: "Dropbox unlinked." });
       await refreshStatus();
+      void refreshCloudAccounts?.();
     } catch (e) {
       toast({
         variant: "destructive",
@@ -763,27 +821,33 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
             {/* Left 35% — sync, encrypt, folder options */}
             <div className="flex w-full min-w-0 flex-col space-y-4 order-2 lg:order-1 h-full min-h-0">
               <div className={cn("space-y-2", cloudSyncProviderCard)}>
-                <Label>Provider</Label>
-                <div className="flex flex-wrap gap-4 text-sm">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="cloudSyncProvider"
-                      checked={provider === "google_drive"}
-                      onChange={() => void onProviderChange("google_drive")}
-                    />
-                    Google Drive
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="cloudSyncProvider"
-                      checked={provider === "dropbox"}
-                      onChange={() => void onProviderChange("dropbox")}
-                    />
-                    Dropbox
-                  </label>
+                <div className="space-y-0.5">
+                  <Label>Sync targets</Label>
+                  <p className="text-[11px] text-muted-foreground">
+                    {formatCloudSyncTargetsSummary(dataProvider, filesProvider)}
+                    {dataProvider !== filesProvider && dataProvider !== "none" && filesProvider !== "none"
+                      ? " — connect each account below if both are used."
+                      : null}
+                  </p>
                 </div>
+                <CloudSyncProviderPickers
+                  planId={accountPlanId}
+                  livePlan={accountPlanLive}
+                  dataProvider={dataProvider}
+                  filesProvider={filesProvider}
+                  onDataProviderChange={(v) => void onDataProviderChange(v)}
+                  onFilesProviderChange={(v) => void onFilesProviderChange(v)}
+                  disabled={busy}
+                  showHeader={false}
+                  embedded
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Same choices as{" "}
+                  <Link href="/settings?view=company" className="underline font-medium hover:no-underline">
+                    Company Profile
+                  </Link>
+                  .
+                </p>
               </div>
 
               <div className={cloudSyncEncryptCard}>
@@ -985,7 +1049,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
                   <strong>{deviceSummary.uploadedVouchers}</strong> vouchers
                 </p>
                 <p className="text-sm">
-                  Downloaded from Drive: <strong>{deviceSummary.downloadedFiles}</strong> files ·{" "}
+                  Downloaded from cloud: <strong>{deviceSummary.downloadedFiles}</strong> files ·{" "}
                   <strong>{deviceSummary.downloadedVouchers}</strong> vouchers
                 </p>
               </div>
@@ -1027,7 +1091,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
                           <strong>Connect:</strong> link Google Drive on this device.
                         </p>
                         <p>
-                          <strong>Force sync:</strong> upload edits + download from Drive (master/voucher changes included).
+                          <strong>Force sync:</strong> upload edits + download from cloud (master/voucher changes included).
                         </p>
                         <p>
                           <strong>Re-download:</strong> reset cursor and pull all ops again (help only — use Force sync if unsure).
@@ -1067,7 +1131,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
             </div>
 
             {/* Right 65% — PC par always visible, mobile par footer Share toggle se open/close. */}
-            {provider === "google_drive" ? (
+            {usesDrive ? (
               <div
                 className={cn(
                   "w-full min-w-0 order-1 lg:order-2 h-full min-h-0 flex-col space-y-2",
@@ -1094,77 +1158,84 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
           <div className="relative -mx-2 shrink-0 border-t border-black/10 bg-inherit px-2 pt-2 pb-[max(0.25rem,env(safe-area-inset-bottom))] sm:-mx-4 sm:px-4">
             {renderSettingsListFloatButton()}
             <div className="grid grid-cols-3 gap-2">
-              {provider === "google_drive" || provider === "dropbox" ? (
-                <>
+              {/* Row 1 — account actions; Share top-right */}
+              <div className="min-w-0">
+                {usesDrive ? (
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="col-start-1 row-start-1 h-10 w-full min-w-0 rounded-lg px-1.5 text-[11px] leading-tight sm:h-9 sm:px-4 sm:text-sm"
-                    disabled={busy}
+                    className="h-10 w-full min-w-0 rounded-lg px-2 text-xs sm:text-sm"
+                    disabled={busy || cloudAccounts?.loading}
                     onClick={() =>
-                      void (provider === "dropbox" ? connectDropbox() : connectDrive())
+                      void (googleDriveConnected ? disconnectDrive() : connectDrive())
                     }
                   >
-                    Connect
+                    {googleDriveConnected ? "Disconnect Drive" : "Connect Drive"}
                   </Button>
+                ) : null}
+              </div>
+              <div className="min-w-0">
+                {usesDropbox ? (
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="col-start-2 row-start-1 h-10 w-full min-w-0 rounded-lg px-1.5 text-[11px] leading-tight sm:h-9 sm:px-4 sm:text-sm"
-                    disabled={busy}
+                    className="h-10 w-full min-w-0 rounded-lg px-2 text-xs sm:text-sm"
+                    disabled={busy || cloudAccounts?.loading}
                     onClick={() =>
-                      void (provider === "dropbox" ? disconnectDropboxAccount() : disconnectDrive())
+                      void (dropboxConnected ? disconnectDropboxAccount() : connectDropbox())
                     }
                   >
-                    Disconnect
+                    {dropboxConnected ? "Disconnect Dropbox" : "Connect Dropbox"}
                   </Button>
-                </>
-              ) : null}
+                ) : null}
+              </div>
               <Button
                 type="button"
+                variant={sharePanelOpen ? "secondary" : "outline"}
                 size="sm"
-                className="col-start-3 row-start-1 h-10 w-full min-w-0 rounded-lg px-1.5 text-[11px] leading-tight sm:h-9 sm:px-4 sm:text-sm"
-                disabled={busy}
-                onClick={() => void forceSync()}
+                className="h-10 w-full min-w-0 rounded-lg px-2 text-xs sm:text-sm"
+                disabled={busy || !usesDrive}
+                aria-expanded={sharePanelOpen}
+                title={sharePanelOpen ? "Hide share on Drive" : "Show share on Drive"}
+                onClick={() => setSharePanelOpen((open) => !open)}
               >
-                {busy ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : "Force sync"}
+                <Share2 className="mr-1 h-4 w-4 shrink-0" />
+                Share
               </Button>
+
+              {/* Row 2 — navigation; Force sync bottom-right */}
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="col-start-1 row-start-2 h-10 w-full min-w-0 rounded-lg px-1.5 text-[11px] leading-tight sm:h-9 sm:px-4 sm:text-sm"
+                className="h-10 w-full min-w-0 rounded-lg px-2 text-xs sm:text-sm"
                 disabled={busy}
                 onClick={handleFooterBack}
               >
-                <ChevronLeft className="mr-0.5 h-4 w-4 shrink-0" />
+                <ChevronLeft className="mr-1 h-4 w-4 shrink-0" />
                 Back
               </Button>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="col-start-2 row-start-2 h-10 w-full min-w-0 rounded-lg px-1.5 text-[11px] leading-tight sm:h-9 sm:px-4 sm:text-sm"
+                className="h-10 w-full min-w-0 rounded-lg px-2 text-xs sm:text-sm"
                 disabled={busy}
                 onClick={() => void saveAllCloudSyncSettings()}
               >
-                <Save className="mr-0.5 h-4 w-4 shrink-0" />
+                <Save className="mr-1 h-4 w-4 shrink-0" />
                 Save
               </Button>
               <Button
                 type="button"
-                variant={sharePanelOpen ? "secondary" : "outline"}
                 size="sm"
-                className="col-start-3 row-start-2 h-10 w-full min-w-0 rounded-lg px-1.5 text-[11px] leading-tight sm:h-9 sm:px-4 sm:text-sm"
-                disabled={busy || provider !== "google_drive"}
-                aria-expanded={sharePanelOpen}
-                title={sharePanelOpen ? "Hide share on Drive" : "Show share on Drive"}
-                onClick={() => setSharePanelOpen((open) => !open)}
+                className="h-10 w-full min-w-0 rounded-lg px-2 text-xs sm:text-sm"
+                disabled={busy}
+                onClick={() => void forceSync()}
               >
-                <Share2 className="mr-0.5 h-4 w-4 shrink-0" />
-                Share
+                {busy ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : "Force sync"}
               </Button>
             </div>
           </div>

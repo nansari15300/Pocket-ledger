@@ -470,8 +470,9 @@ export async function uploadPendingAttachmentPayloadToDrive(input: {
   });
   const sha256Hex = await computeSha256HexFromBlob(input.blob);
   const regForProvider = await getLocalCompanyById(input.companyId, { includeDeleted: true });
-  const provider = readCloudSyncConfigFromCompany(regForProvider).cloudSyncProvider;
-  if (provider === "dropbox") {
+  const { cloudSyncFilesProviderId } = await import("@/lib/localCloudSync/companyConfig");
+  const filesProvider = cloudSyncFilesProviderId(regForProvider);
+  if (filesProvider === "dropbox") {
     const { uploadAttachmentBytesToDropbox } = await import("@/lib/localCloudSync/dropboxCloudSyncClient");
     return uploadAttachmentBytesToDropbox({
       companyId: input.companyId,
@@ -501,8 +502,8 @@ export async function downloadCloudAttachmentBlob(
   const cid = companyId || (await resolveCompanyIdForDrivePath(logicalPath));
   if (cid) {
     const reg = await getLocalCompanyById(cid, { includeDeleted: true });
-    const provider = readCloudSyncConfigFromCompany(reg).cloudSyncProvider;
-    if (provider === "dropbox") {
+    const { cloudSyncFilesProviderId } = await import("@/lib/localCloudSync/companyConfig");
+    if (cloudSyncFilesProviderId(reg) === "dropbox") {
       const { downloadDropboxAttachmentBlob } = await import("@/lib/localCloudSync/dropboxCloudSyncClient");
       return downloadDropboxAttachmentBlob(remotePath, cid);
     }
