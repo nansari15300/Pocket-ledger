@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { isPocketLedgerAppHostname } from "@/lib/pocketLedgerAppHosts";
 
 /**
  * Static EXE / APK / Next dev: browser `fetch` → `https://pocket-ledger.com/api/...` cross-origin.
@@ -17,8 +18,8 @@ export function isAllowedEmbeddedBillingClientOrigin(origin: string): boolean {
   const host = u.hostname.toLowerCase();
   // Electron embedded static server + `next dev` + Capacitor `androidScheme: https`, hostname localhost
   if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return true;
-  // Same prod host (self) + preview deploys
-  if (host === "pocket-ledger.com" || host.endsWith(".pocket-ledger.com")) return true;
+  // Same prod host (self) — pocket-ledger.com and pocketledger.com (+ subdomains)
+  if (isPocketLedgerAppHostname(host)) return true;
   // Capacitor / Ionic WebView (legacy scheme)
   if (u.protocol === "capacitor:" || u.protocol === "ionic:") return true;
   // LAN / emulator (optional dev device)

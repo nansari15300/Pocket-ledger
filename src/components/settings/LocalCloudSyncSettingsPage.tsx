@@ -18,7 +18,7 @@ type Props = {
   onOpenSettingsList?: () => void;
 };
 
-/** Settings → Google Drive sync — company create/select optional; pehle Connect + join/restore. */
+/** Settings → Cloud sync (Drive + Dropbox) — company create/select optional; pehle Connect + join/restore. */
 export function LocalCloudSyncSettingsPage({ onBack, onOpenSettingsList }: Props) {
   const { company, allCompanies, setCompanyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
 
@@ -72,8 +72,8 @@ export function LocalCloudSyncSettingsPage({ onBack, onOpenSettingsList }: Props
               Selected: {company?.name ?? "Company"}
             </CardTitle>
             <CardDescription>
-              Ye online (Firestore) company hai — upar se Drive connect karke pehle se Drive par maujood local company
-              restore/join karo.
+              Ye online (Firestore) company hai — upar se Google Drive ya Dropbox connect karke pehle se cloud par maujood
+              local company restore/join karo.
             </CardDescription>
           </CardHeader>
         </Card>

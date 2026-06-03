@@ -72,7 +72,7 @@ function settingsNavRowClass(isActive: boolean, isDanger?: boolean) {
 
 const settingsNavItems = [
     // Sab builds — pehle dikhe; company create ki zaroorat nahi (Connect Drive + join/restore).
-    { id: "local_cloud_sync", title: "Google Drive sync", icon: Cloud, permission: "configure_company_settings" as const, href: null },
+    { id: "local_cloud_sync", title: "Cloud sync", icon: Cloud, permission: "configure_company_settings" as const, href: null },
     { id: "company", title: "Company Profile", icon: Building, permission: "configure_company_settings" as const, href: null },
     { id: "sharing", title: "Manage Sharing", icon: Share2, permission: "manage_users_roles" as const, href: null },
     // Device sync settings (synced devices management).
@@ -170,7 +170,7 @@ function SettingsPageContent() {
     );
     const availableNavItems = useMemo(() => {
         const allowed = settingsNavItems.filter((item) => {
-            // Google Drive sync — web / EXE / APK; permission ke bina bhi hamesha nav me.
+            // Cloud sync (Drive + Dropbox) — web / EXE / APK; permission ke bina bhi hamesha nav me.
             if (item.id === "local_cloud_sync") return true;
             if (item.id === "app_lock") return shellLockEligible;
             return can(item.permission);
@@ -573,7 +573,7 @@ function SettingsPageContent() {
                       Go to Company
                     </Button>
                     <Button onClick={() => router.push(settingsViewHref("local_cloud_sync"))}>
-                      Google Drive sync
+                      Cloud sync
                     </Button>
                   </div>
                 </>

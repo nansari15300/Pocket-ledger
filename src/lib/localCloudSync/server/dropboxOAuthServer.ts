@@ -1,7 +1,32 @@
 import "server-only";
 
 import type { NextRequest } from "next/server";
-import { resolveDriveOAuthAppOrigin, type DriveOAuthState } from "@/lib/localCloudSync/server/driveOAuthServer";
+import { isPocketLedgerAppOrigin } from "@/lib/pocketLedgerAppHosts";
+import { isAllowedEmbeddedBillingClientOrigin } from "@/lib/server/billingApiCors";
+import {
+  resolveDriveOAuthAppOrigin,
+  type DriveOAuthState,
+} from "@/lib/localCloudSync/server/driveOAuthServer";
+
+const DROPBOX_CALLBACK_PATH = "/api/auth/callback/dropbox";
+
+/** Client bheje exact callback URL — server origin isi se derive kare (redirect_uri mismatch avoid). */
+export function resolveDropboxAppOriginFromClientRedirectUri(redirectUri: string): string | null {
+  try {
+    const u = new URL(String(redirectUri || "").trim());
+    const path = u.pathname.replace(/\/+$/, "") || "/";
+    if (path !== DROPBOX_CALLBACK_PATH) return null;
+    const origin = u.origin.replace(/\/+$/, "");
+    const host = new URL(origin).hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return origin;
+    if (isPocketLedgerAppOrigin(origin) || isAllowedEmbeddedBillingClientOrigin(origin)) {
+      return origin;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 export type DropboxOAuthState = DriveOAuthState;
 
@@ -25,14 +50,17 @@ function dropboxAppSecret(): string {
   return secret;
 }
 
-export function buildDropboxAuthUrl(state: DropboxOAuthState, appOrigin?: string): string {
-  const appKey = dropboxAppKey();
+export function dropboxOAuthRedirectUriFromAppOrigin(appOrigin?: string): string {
   const appUrl = String(appOrigin || process.env.NEXT_PUBLIC_APP_URL || "")
     .trim()
     .replace(/\/+$/, "");
   if (!appUrl) throw new Error("Missing NEXT_PUBLIC_APP_URL");
+  return `${appUrl}${DROPBOX_CALLBACK_PATH}`;
+}
 
-  const redirectUri = `${appUrl}/api/auth/callback/dropbox`;
+export function buildDropboxAuthUrl(state: DropboxOAuthState, appOrigin?: string): string {
+  const appKey = dropboxAppKey();
+  const redirectUri = dropboxOAuthRedirectUriFromAppOrigin(appOrigin);
   const encodedState = Buffer.from(JSON.stringify(state)).toString("base64");
   const params = new URLSearchParams({
     client_id: appKey,
@@ -55,7 +83,7 @@ export async function exchangeDropboxAuthCode(
   accountId: string | null;
   connectedEmail: string | null;
 }> {
-  const redirectUri = `${appOrigin.replace(/\/+$/, "")}/api/auth/callback/dropbox`;
+  const redirectUri = dropboxOAuthRedirectUriFromAppOrigin(appOrigin);
   const body = new URLSearchParams({
     code,
     grant_type: "authorization_code",

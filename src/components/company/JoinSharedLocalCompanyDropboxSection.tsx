@@ -14,8 +14,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2, Cloud, Lock, ChevronDown, ChevronUp } from "lucide-react";
+import { CloudProviderConnectButton } from "@/components/company/CloudProviderConnectButton";
 import { useToast } from "@/hooks/use-toast";
 import {
+  formatDropboxConnectError,
   getDropboxAuthUrl,
   openDropboxOAuthUrl,
   resolveDropboxOAuthReturnPath,
@@ -91,7 +93,12 @@ export function JoinSharedLocalCompanyDropboxSection({
       setInvites(rows);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
+      const soft =
+        /^bad request$/i.test(msg) ||
+        /not linked yet/i.test(msg) ||
+        /not connected/i.test(msg) ||
+        /session expired/i.test(msg);
+      setError(soft ? null : msg);
       setInvites([]);
     } finally {
       setLoading(false);
@@ -126,6 +133,7 @@ export function JoinSharedLocalCompanyDropboxSection({
   const hasAnyInvites = ownedInvites.length > 0 || groupedBySharer.length > 0;
 
   const connectDropbox = async () => {
+    setError(null);
     try {
       const firebaseUser = await getFirebaseAuthUserForApi();
       const { url } = await getDropboxAuthUrl({
@@ -135,7 +143,8 @@ export function JoinSharedLocalCompanyDropboxSection({
       });
       await openDropboxOAuthUrl(url);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = formatDropboxConnectError(e instanceof Error ? e.message : String(e));
+      setError(msg);
       toast({
         variant: "destructive",
         title: isLocalSyntheticAuthUid(user?.uid) ? "Sign-in required" : "Dropbox connect failed",
@@ -249,7 +258,7 @@ export function JoinSharedLocalCompanyDropboxSection({
             description={
               <p>
                 Your companies under Dropbox → Pocket Ledger, plus folders others shared with you. If empty, Connect
-                Dropbox then Refresh list.
+                then Refresh list.
               </p>
             }
           />
@@ -257,9 +266,7 @@ export function JoinSharedLocalCompanyDropboxSection({
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col space-y-3 px-4 pb-4 pt-0">
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="outline" size="sm" className="rounded-full px-4" onClick={() => void connectDropbox()}>
-          Connect Dropbox
-        </Button>
+        <CloudProviderConnectButton provider="dropbox" onClick={() => void connectDropbox()} />
         <Button type="button" variant="ghost" size="sm" disabled={loading} onClick={() => void loadInvites()}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Refresh list"}
         </Button>
@@ -283,7 +290,7 @@ export function JoinSharedLocalCompanyDropboxSection({
       {error ? (
         <p className="text-sm text-destructive rounded-md border border-destructive/30 bg-destructive/5 p-3">
           {error.includes("not connected") || error.includes("Sign in")
-            ? `${error} — use Connect Dropbox first.`
+            ? `${error} — tap Connect first.`
             : error}
         </p>
       ) : null}
@@ -295,7 +302,7 @@ export function JoinSharedLocalCompanyDropboxSection({
       ) : !hasAnyInvites ? (
         <p className="text-sm text-muted-foreground py-2">
           No Pocket Ledger company folders found on Dropbox. Sync a local company first (Enable cloud sync → Force sync),
-          or ask the owner to share their folder with you. Then Connect Dropbox and Refresh list.
+          or ask the owner to share their folder with you. Then Connect and Refresh list.
         </p>
       ) : (
         <div className="space-y-4">

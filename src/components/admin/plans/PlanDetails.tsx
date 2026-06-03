@@ -56,7 +56,7 @@ const entitlementLabels: Partial<Record<EntitlementKey, string>> = {
     savedAccountSwitchEnabled: "Saved account switch (APK/EXE quick login)",
     attachmentBackupRestoreEnabled: "Attachment backup & restore (embed files in .plbp)",
     allowFirebaseOnlineCompanies: "Online company (Firebase / Firestore sync)",
-    allowGoogleDriveCloudSync: "Local company — Google Drive sync",
+    allowGoogleDriveCloudSync: "Local company — cloud sync (Google Drive)",
     allowDropboxCloudSync: "Local company — Dropbox sync",
 };
 

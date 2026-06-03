@@ -117,7 +117,7 @@ const allMenuItems: MenuItem[] = [
 const bottomMenuItems: MenuItem[] = [
     { id: 'messages', href: "/messages", label: "Messages", icon: Mail },
     // Sab builds — sidebar se seedha Drive connect / join (Settings ke andar bhi same page).
-    { id: 'drive-sync', href: settingsViewHref("local_cloud_sync"), label: "Google Drive sync", icon: Cloud },
+    { id: 'drive-sync', href: settingsViewHref("local_cloud_sync"), label: "Cloud sync", icon: Cloud },
     { id: 'billing', href: "/billing", label: "Billing & Plans", icon: CreditCard, permission: "configure_company_settings" },
     { id: 'distributor-signup', href: "/distributor-signup", label: "Be a Distributor", icon: UserPlus },
     { id: 'backup', href: "/backup", label: "Backup & Restore", icon: Database, permissionAny: ["export_data", "import_data"] },

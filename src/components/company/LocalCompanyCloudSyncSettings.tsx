@@ -32,6 +32,7 @@ import {
 } from "@/lib/driveAuthClient";
 import {
   disconnectDropbox,
+  formatDropboxConnectError,
   getDropboxAuthUrl,
   openDropboxOAuthUrl,
   resolveDropboxOAuthReturnPath,
@@ -595,12 +596,13 @@ export function LocalCompanyCloudSyncSettings({ companyId, company, className, o
       });
       await openDropboxOAuthUrl(url);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const raw = e instanceof Error ? e.message : String(e);
+      const msg = formatDropboxConnectError(raw);
       toast({
         variant: "destructive",
         title: isLocalSyntheticAuthUid(user?.uid) ? "Sign-in required" : "Dropbox connect failed",
         description:
-          msg === FIREBASE_SIGN_IN_REQUIRED_FOR_DRIVE_MSG || isLocalSyntheticAuthUid(user?.uid)
+          raw === FIREBASE_SIGN_IN_REQUIRED_FOR_DRIVE_MSG || isLocalSyntheticAuthUid(user?.uid)
             ? LOCAL_UNLOCK_ONLY_DRIVE_MSG
             : msg,
       });

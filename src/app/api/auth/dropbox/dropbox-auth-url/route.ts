@@ -4,6 +4,8 @@ import { NextRequest } from "next/server";
 import { verifyBearerUid } from "@/lib/localCloudSync/server/apiAuth";
 import {
   buildDropboxAuthUrl,
+  dropboxOAuthRedirectUriFromAppOrigin,
+  resolveDropboxAppOriginFromClientRedirectUri,
   resolveDropboxOAuthAppOrigin,
   type DropboxOAuthState,
 } from "@/lib/localCloudSync/server/dropboxOAuthServer";
@@ -23,6 +25,8 @@ export async function POST(req: NextRequest) {
     clientOrigin?: string;
     firebaseProjectId?: string;
     oauthRedirectOrigin?: string;
+    /** Browser tab callback — must match Dropbox app Redirect URIs exactly. */
+    oauthRedirectUri?: string;
   };
   const returnPath = String(body.returnPath || "/company").trim();
   const uid = String(body.uid || auth.uid).trim();
@@ -37,7 +41,12 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const appOrigin = resolveDropboxOAuthAppOrigin(req, body.clientOrigin, body.oauthRedirectOrigin);
+    const fromClientRedirect = resolveDropboxAppOriginFromClientRedirectUri(
+      String(body.oauthRedirectUri || "")
+    );
+    const appOrigin =
+      fromClientRedirect ||
+      resolveDropboxOAuthAppOrigin(req, body.clientOrigin, body.oauthRedirectOrigin);
     const url = buildDropboxAuthUrl(
       {
         returnPath,
@@ -47,7 +56,10 @@ export async function POST(req: NextRequest) {
       },
       appOrigin
     );
-    return driveHostedApiJson(req, { url });
+    return driveHostedApiJson(req, {
+      url,
+      redirectUri: dropboxOAuthRedirectUriFromAppOrigin(appOrigin),
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return driveHostedApiJson(req, { error: msg }, 500);

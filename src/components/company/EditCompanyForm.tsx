@@ -546,7 +546,8 @@ export function EditCompanyForm() {
         updateData.sharedWith = updatedSharedUsers;
       }
       
-      if (localOnly) {
+      // Device-local companies live in SQLite; web is not always `isLocalOnlyMode()` but must not `updateDoc` Firestore.
+      if (localOnly || deviceLocalCo) {
         const existingLocal = await getLocalCompanyById(companyId, { includeDeleted: true });
         if (!existingLocal) throw new Error("Local company not found");
         // Company users SQLite row me `localCompanyUsers` — Node local API ki zarurat nahi (baad me sync optional).
@@ -1305,7 +1306,7 @@ export function EditCompanyForm() {
                         paths). Unlock uses the company password above, or the username and password you use to open
                         this company. Configure provider and sync in{" "}
                         <Link href={settingsViewHref("local_cloud_sync")} className="underline font-medium hover:no-underline">
-                          Google Drive sync
+                          Cloud sync
                         </Link>
                         . Log in again after enabling if sync does not run.
                       </FormDescription>

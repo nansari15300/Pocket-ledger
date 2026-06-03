@@ -2,6 +2,7 @@ import "server-only";
 
 import type { NextRequest } from "next/server";
 import { google } from "googleapis";
+import { isPocketLedgerAppOrigin } from "@/lib/pocketLedgerAppHosts";
 import { isAllowedEmbeddedBillingClientOrigin } from "@/lib/server/billingApiCors";
 
 export type DriveOAuthState = {
@@ -43,18 +44,17 @@ export function resolveDriveOAuthAppOrigin(
   const explicitHosted = String(oauthRedirectOrigin || "").trim().replace(/\/+$/, "");
   if (explicitHosted) {
     const allowedHosted = resolveHostedDriveOAuthOrigin();
-    if (
-      explicitHosted === allowedHosted ||
-      explicitHosted.endsWith(".pocket-ledger.com") ||
-      explicitHosted === "https://pocket-ledger.com"
-    ) {
+    if (explicitHosted === allowedHosted || isPocketLedgerAppOrigin(explicitHosted)) {
       return explicitHosted;
     }
   }
 
   const fromClient = String(clientOrigin || req.headers.get("origin") || "").trim();
-  // Static shell localhost par API routes nahi — redirect_uri hamesha pocket-ledger.com (server secrets + Google Console).
+  // Static/APK loopback: callback hosted site par. `next dev` loopback: tab origin (localhost ≠ 127.0.0.1).
   if (fromClient && isEmbeddedLoopbackClientOrigin(fromClient)) {
+    if (process.env.NODE_ENV === "development") {
+      return fromClient.replace(/\/+$/, "");
+    }
     const hosted = resolveHostedDriveOAuthOrigin();
     if (hosted) return hosted;
   }

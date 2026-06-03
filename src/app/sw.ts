@@ -44,7 +44,13 @@ function isFirebaseOrGoogleCloudSdkHost(hostname: string): boolean {
 // Static/APK: hosted billing/Drive/plan-sync API — cross-origin NetworkFirst se mat chipkao.
 function isHostedPocketLedgerApiRequest(url: URL): boolean {
   const h = url.hostname.toLowerCase();
-  return (h === "pocket-ledger.com" || h === "www.pocket-ledger.com") && url.pathname.startsWith("/api/");
+  return (
+    (h === "pocket-ledger.com" ||
+      h.endsWith(".pocket-ledger.com") ||
+      h === "pocketledger.com" ||
+      h.endsWith(".pocketledger.com")) &&
+    url.pathname.startsWith("/api/")
+  );
 }
 
 /** In URLs par koi Serwist route match na ho — browser native fetch/stream chalao. */

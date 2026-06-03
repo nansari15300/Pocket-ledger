@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2, Cloud, Lock, ChevronDown, ChevronUp } from "lucide-react";
+import { CloudProviderConnectButton } from "@/components/company/CloudProviderConnectButton";
 import { useToast } from "@/hooks/use-toast";
 import {
   getGoogleDriveAuthUrl,
@@ -91,7 +92,11 @@ export function JoinSharedLocalCompanyDriveSection({
       setInvites(rows);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
+      const soft =
+        /^bad request$/i.test(msg) ||
+        /not connected/i.test(msg) ||
+        /session expired/i.test(msg);
+      setError(soft ? null : msg);
       setInvites([]);
     } finally {
       setLoading(false);
@@ -126,6 +131,7 @@ export function JoinSharedLocalCompanyDriveSection({
   const hasAnyInvites = ownedInvites.length > 0 || groupedBySharer.length > 0;
 
   const connectDrive = async () => {
+    setError(null);
     try {
       const firebaseUser = await getFirebaseAuthUserForApi();
       const { url } = await getGoogleDriveAuthUrl({
@@ -249,7 +255,7 @@ export function JoinSharedLocalCompanyDriveSection({
             description={
               <p>
                 Your companies under My Drive → Pocket Ledger, plus folders others shared with your Gmail. Use the same
-                Gmail as Firebase login. If empty, Connect Google Drive then Refresh list.
+                Gmail as Firebase login. If empty, Connect then Refresh list.
               </p>
             }
           />
@@ -257,9 +263,7 @@ export function JoinSharedLocalCompanyDriveSection({
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col space-y-3 px-4 pb-4 pt-0">
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="outline" size="sm" className="rounded-full px-4" onClick={() => void connectDrive()}>
-          Connect Google Drive
-        </Button>
+        <CloudProviderConnectButton provider="google_drive" onClick={() => void connectDrive()} />
         <Button type="button" variant="ghost" size="sm" disabled={loading} onClick={() => void loadInvites()}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Refresh list"}
         </Button>
@@ -283,7 +287,7 @@ export function JoinSharedLocalCompanyDriveSection({
       {error ? (
         <p className="text-sm text-destructive rounded-md border border-destructive/30 bg-destructive/5 p-3">
           {error.includes("not connected") || error.includes("Sign in")
-            ? `${error} — use Connect Google Drive first.`
+            ? `${error} — tap Connect first.`
             : error}
         </p>
       ) : null}
@@ -295,7 +299,7 @@ export function JoinSharedLocalCompanyDriveSection({
       ) : !hasAnyInvites ? (
         <p className="text-sm text-muted-foreground py-2">
           No Pocket Ledger company folders found on Drive. Sync a local company first (Enable cloud sync → Force sync),
-          or ask the owner to share their folder with your Gmail. Then Connect Google Drive and Refresh list.
+          or ask the owner to share their folder with your Gmail. Then Connect and Refresh list.
         </p>
       ) : (
         <div className="space-y-4">
