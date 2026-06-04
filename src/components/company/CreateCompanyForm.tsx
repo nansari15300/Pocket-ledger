@@ -8,9 +8,6 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-
-
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -35,7 +32,9 @@ import { getDefaultCurrencyForCountry } from "@/lib/worldCurrencies";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
-import { storage, firestore } from "@/lib/firebase";
+import { firestore } from "@/lib/firebase";
+import { uploadCompanyLogo } from "@/lib/storage";
+import { generateLocalFileId, LOCAL_FILE_PREFIX, putPendingFile } from "@/lib/localPendingFiles";
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Calendar } from "@/components/ui/calendar";
@@ -399,14 +398,21 @@ export function CreateCompanyForm({
       );
       let logoUrl: string | null = null;
 
-      // Local SQLite company bhi Edit jaisa logo Firebase Storage pe — dono paths (createAsLocalOnly / online) me upload
       if (fileToUpload && canAddAvatar && user?.uid) {
-        try {
-          const storageRef = ref(storage, `company-logos/${user.uid}/${Date.now()}_${fileToUpload.file.name}`);
-          const snapshot = await uploadBytes(storageRef, fileToUpload.file);
-          logoUrl = await getDownloadURL(snapshot.ref);
-        } catch (uploadErr) {
-          console.warn("Logo upload failed, saving company without logo:", uploadErr);
+        if (createAsLocalOnly) {
+          const id = generateLocalFileId();
+          await putPendingFile({
+            id,
+            blob: fileToUpload.file,
+            contentType: fileToUpload.file.type || "image/jpeg",
+            docPath: `companies/${companyId}/parties/${companyId}`,
+            field: "logoUrl",
+            storagePathPrefix: `companies/${companyId}/company-files/logo`,
+            fileName: fileToUpload.file.name,
+          });
+          logoUrl = `${LOCAL_FILE_PREFIX}${id}`;
+        } else {
+          logoUrl = await uploadCompanyLogo(companyId, values.companyName, fileToUpload.file);
         }
       }
 
@@ -583,13 +589,22 @@ export function CreateCompanyForm({
       }
     } catch (error) {
       console.error("Error creating company:", error);
+      const code = (error as { code?: string })?.code;
+      const errMsg = error instanceof Error ? error.message : "";
+      let description = "Failed to save company. Please try again.";
+      if (createAsLocalOnly && errMsg) {
+        description = `Failed to save company: ${errMsg}`;
+      } else if (errMsg === "local_company_storage") {
+        description =
+          "This company uses device storage and Google Drive sync — not Firebase Storage. Enable cloud sync in company settings, or save without a logo.";
+      } else if (code === "storage/unauthorized" || code === "storage/unauthenticated") {
+        description =
+          "Logo upload failed: cloud storage permission denied. Sign in again, or deploy the latest Firebase storage rules.";
+      }
       toast({
         variant: "destructive",
         title: "Error",
-        description:
-          createAsLocalOnly && error instanceof Error && error.message
-            ? `Failed to save company: ${error.message}`
-            : "Failed to save company. Please try again.",
+        description,
       });
     } finally {
       setIsLoading(false);

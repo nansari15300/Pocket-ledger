@@ -27,13 +27,15 @@ export const VOUCHER_NARRATION_TEXTAREA_CLASS =
 
 /** Mobile 3-col attach: square `h-24 w-24` — Payment In ke Add / preview jaisa (pehle `w-full` = lamba rectangle). */
 export const VOUCHER_MOBILE_ATTACH_TILE_SLOT = "relative h-24 w-24 shrink-0";
-export const VOUCHER_MOBILE_ATTACH_PREVIEW_CLASS = "h-24 w-24 shrink-0";
+export const VOUCHER_MOBILE_ATTACH_PREVIEW_CLASS =
+  "h-24 w-24 max-h-24 max-w-24 shrink-0 overflow-hidden";
 export const VOUCHER_MOBILE_ATTACH_ADD_SURFACE_CLASS =
   "h-full w-full border-2 border-dashed rounded-md flex flex-col items-center justify-center transition-colors";
 
 /** Desktop flex-wrap: square preview — `w-full` hata (full row stretch); Payment In = `h-24 w-24` */
 export const VOUCHER_DESKTOP_ATTACH_TILE_SLOT = "relative h-24 w-24 shrink-0";
-export const VOUCHER_DESKTOP_ATTACH_PREVIEW_CLASS = "h-24 w-24 shrink-0";
+export const VOUCHER_DESKTOP_ATTACH_PREVIEW_CLASS =
+  "h-24 w-24 max-h-24 max-w-24 shrink-0 overflow-hidden";
 export const VOUCHER_DESKTOP_ATTACH_ADD_SURFACE_CLASS =
   "h-full w-full border-2 border-dashed rounded-lg flex flex-col items-center justify-center transition-colors";
 

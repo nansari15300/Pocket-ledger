@@ -23,10 +23,12 @@
     },
     "files": [
       "main.js",
+      "localAppServer.js",
+      "localAppServerAccessTokens.js",
       "tab-strip.html",
       "tab-strip.js",
       "tab-strip-preload.js",
-    "app-content-preload.js",
+      "app-content-preload.js",
       {
         "from": "../out",
         "to": "out",

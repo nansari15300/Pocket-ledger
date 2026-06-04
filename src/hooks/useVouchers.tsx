@@ -15,6 +15,7 @@ import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import type { Tax, TaxGroup } from "@/components/tax/types";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import type { Item, ItemGroup } from "@/components/items/types";
+import { setMastersPrintSnapshot } from "@/lib/printMastersSnapshot";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
@@ -35,7 +36,7 @@ import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { decryptFirestoreCompanyDocIfNeeded } from "@/lib/serverBackupEncryption";
 import { stripLocalMirrorMetaForUiRow } from "@/lib/localMirrorServerMeta";
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
-import { getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts, getAllocatedByVoucherIdFromPurchase, getAllocatedByVoucherIdFromSale, getAllocatedByVoucherIdFromJournal, getOutgoingAllocatedToOpposite, getPaymentStatus as getPaymentStatusResult } from "@/lib/payment-allocation-utils";
+import { getBillWiseAllocatedToTarget, getPaymentStatus as getPaymentStatusResult, isSaleOrPurchaseBillVoucherType } from "@/lib/payment-allocation-utils";
 import { shouldSuppressTransientCompanyClear } from "@/lib/apkLedgerRouteShield";
 import { resolveInterCompanyLegsForVoucher } from "@/lib/interCompany/interCompanyPostingLegs";
 import {
@@ -1576,23 +1577,12 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   );
 
   const { overdueTransactions, hasOverdueTransactions } = useMemo(() => {
-    const allocatedBySale = getAllocatedByVoucherId(vouchersForDisplay);
-    const allocatedByPurchase = getAllocatedByVoucherIdFromPaymentOuts(vouchersForDisplay);
-    const allocatedToSaleFromPurchase = getAllocatedByVoucherIdFromPurchase(vouchersForDisplay);
-    const allocatedToPurchaseFromSale = getAllocatedByVoucherIdFromSale(vouchersForDisplay);
-    const allocatedFromJournal = getAllocatedByVoucherIdFromJournal(vouchersForDisplay);
     const partyNameById = new Map(processedParties.map((p) => [p.id, p.name]));
     const list: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; overdueImportant?: boolean; userId?: string; userName?: string; narration?: string; createdAt?: any; lastEditedAt?: any; updatedAt?: any }> = [];
     for (const v of vouchersForDisplay) {
-      if ((v.type !== "sale" && v.type !== "purchase") || !v.partyId) continue;
+      if (!isSaleOrPurchaseBillVoucherType(v.type) || !v.partyId) continue;
       const total = Number(v.total ?? v.amount ?? ((v.subTotal ?? 0) - (v.discount ?? 0) + (v.tax ?? 0))) || 0;
-      const fromPayments = v.type === "sale"
-        ? (allocatedBySale.get(v.id) ?? 0) + (allocatedToSaleFromPurchase.get(v.id) ?? 0)
-        : (allocatedByPurchase.get(v.id) ?? 0) + (allocatedToPurchaseFromSale.get(v.id) ?? 0);
-      const fromJournal = allocatedFromJournal.get(v.id) ?? 0;
-      const fromOB = Number(v.openingBalanceAllocated) || 0;
-      const outgoingToOpposite = getOutgoingAllocatedToOpposite(v);
-      const allocated = fromPayments + fromJournal + fromOB + outgoingToOpposite;
+      const allocated = getBillWiseAllocatedToTarget(v, String(v.id), vouchersForDisplay);
       const result = getPaymentStatusResult(total, allocated, v.dueDate);
       if (!result.isOverdue) continue;
       const partyName = partyNameById.get(v.partyId) ?? v.partyId;
@@ -1870,6 +1860,52 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       setDisplayValue(value);
     }
   }, [loading, value, companyId]);
+
+  // Latest master balances for print-masters PDF (openPrintDirect reads snapshot).
+  useEffect(() => {
+    if (loading) {
+      setMastersPrintSnapshot(null);
+      return;
+    }
+    const toEntries = (
+      list: Array<{ name?: string; accountName?: string; balance: number; isDeleted?: boolean }>
+    ) =>
+      list
+        .filter((x) => !x.isDeleted)
+        .map((x) => ({
+          name: String(x.name || x.accountName || "").trim() || "—",
+          balance: Number(x.balance) || 0,
+        }));
+
+    setMastersPrintSnapshot({
+      party: toEntries(processedParties),
+      partyGroup: toEntries(processedGroups),
+      bankCash: toEntries(processedAccounts),
+      bankCashGroup: toEntries(processedAccountGroups),
+      staff: toEntries(processedStaff),
+      staffGroup: toEntries(processedStaffGroups),
+      tax: toEntries(processedTaxes),
+      taxGroup: toEntries(processedTaxGroups),
+      item: toEntries(processedItems),
+      itemGroup: toEntries(processedItemGroups),
+      expense: toEntries(processedExpenseAccounts),
+      expenseGroup: toEntries(processedExpenseGroups),
+    });
+  }, [
+    loading,
+    processedParties,
+    processedGroups,
+    processedAccounts,
+    processedAccountGroups,
+    processedStaff,
+    processedStaffGroups,
+    processedTaxes,
+    processedTaxGroups,
+    processedItems,
+    processedItemGroups,
+    processedExpenseAccounts,
+    processedExpenseGroups,
+  ]);
 
   return (
     <VoucherContext.Provider value={displayValue}>

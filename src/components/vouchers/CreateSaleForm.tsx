@@ -3523,8 +3523,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             />
                           ))}
                           {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                            /* FormControl = Slot → ek hi DOM child; tile slot = square h-24 w-24 (Payment In jaisa) */
-                            <div className={VOUCHER_MOBILE_ATTACH_TILE_SLOT}>
+                            <div className="col-span-3 flex flex-wrap items-start gap-2">
                               <AttachmentHoldPasteSurface
                                 enabled={
                                   !editingDisabled &&
@@ -3810,7 +3809,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         )}
                         <RestrictedFileUploader>
                           {/* When linked: add/remove disabled; existing files stay clickable to open */}
-                          <div className="flex flex-wrap gap-4">
+                          <div className="flex flex-wrap items-start gap-4">
                             {files.map((file, index) => (
                               <FilePreview 
                                 key={index} 
@@ -3824,7 +3823,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               />
                             ))}
                             {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                              <div className={VOUCHER_DESKTOP_ATTACH_TILE_SLOT}>
+                              <>
                                 <AttachmentHoldPasteSurface
                                   enabled={
                                     !editingDisabled &&
@@ -3878,7 +3877,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                                   />
                                 </FormControl>
-                              </div>
+                              </>
                             )}
                           </div>
                         </RestrictedFileUploader>

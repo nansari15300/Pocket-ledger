@@ -6,7 +6,12 @@ import { isEmbeddedDeviceLockShell } from "@/lib/embeddedDeviceLock";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Fingerprint, Share2, Loader2, Hash, Eye, Palette, FileDigit, Zap, Building, ShieldAlert, Bell, Smartphone, ChevronLeft, PanelRight, CalendarRange, LockKeyhole, Cloud } from "lucide-react";
+import { Fingerprint, Share2, Loader2, Hash, Eye, Palette, FileDigit, Zap, Building, ShieldAlert, Bell, Smartphone, ChevronLeft, PanelRight, CalendarRange, LockKeyhole, Cloud, Server } from "lucide-react";
+import {
+    isLocalAppServerSettingsNavVisible,
+    isLocalhostDevPreview,
+} from "@/lib/localAppServerDevPreview";
+import { LocalAppServerSettings } from "@/components/settings/LocalAppServerSettings";
 import { ManageShare } from "@/components/company/ManageShare";
 import usePermissions from "@/hooks/usePermissions";
 import { useCompany } from "@/hooks/useCompany";
@@ -73,6 +78,7 @@ function settingsNavRowClass(isActive: boolean, isDanger?: boolean) {
 const settingsNavItems = [
     // Sab builds — pehle dikhe; company create ki zaroorat nahi (Connect Drive + join/restore).
     { id: "local_cloud_sync", title: "Cloud sync", icon: Cloud, permission: "configure_company_settings" as const, href: null },
+    { id: "local_app_server", title: "Server", icon: Server, permission: "configure_company_settings" as const, href: null },
     { id: "company", title: "Company Profile", icon: Building, permission: "configure_company_settings" as const, href: null },
     { id: "sharing", title: "Manage Sharing", icon: Share2, permission: "manage_users_roles" as const, href: null },
     // Device sync settings (synced devices management).
@@ -161,8 +167,13 @@ function SettingsPageContent() {
     const canConfigureCompany = can("configure_company_settings");
     /** EXE/APK par App Lock nav dikhao — `window` SSR par missing ho sakta hai; layout effect se client par sync. */
     const [shellLockEligible, setShellLockEligible] = useState(false);
+    const devServerNav = process.env.NODE_ENV === "development";
+    const [shellServerNavEligible, setShellServerNavEligible] = useState(
+        () => devServerNav || (typeof window !== "undefined" ? isLocalAppServerSettingsNavVisible() : false)
+    );
     useLayoutEffect(() => {
         setShellLockEligible(isEmbeddedDeviceLockShell());
+        setShellServerNavEligible(isLocalAppServerSettingsNavVisible());
     }, []);
     /** Owner ne company settings band kiya ho — shared user ko theme/animation phir bhi (local-only). */
     const sharedLocalAppearanceOnly = Boolean(
@@ -173,6 +184,7 @@ function SettingsPageContent() {
             // Cloud sync (Google Drive) — web / EXE / APK; permission ke bina bhi hamesha nav me.
             if (item.id === "local_cloud_sync") return true;
             if (item.id === "app_lock") return shellLockEligible;
+            if (item.id === "local_app_server") return devServerNav || shellServerNavEligible;
             return can(item.permission);
         });
         // Safety: permissions hydrate race par bhi Drive sync nav na gayab ho.
@@ -180,13 +192,24 @@ function SettingsPageContent() {
             const driveItem = settingsNavItems.find((i) => i.id === "local_cloud_sync");
             if (driveItem) allowed.unshift(driveItem);
         }
+        if (
+            (devServerNav || shellServerNavEligible) &&
+            !allowed.some((i) => i.id === "local_app_server")
+        ) {
+            const serverItem = settingsNavItems.find((i) => i.id === "local_app_server");
+            if (serverItem) {
+                const cloudIdx = allowed.findIndex((i) => i.id === "local_cloud_sync");
+                if (cloudIdx >= 0) allowed.splice(cloudIdx + 1, 0, serverItem);
+                else allowed.unshift(serverItem);
+            }
+        }
         if (!sharedLocalAppearanceOnly) return allowed;
         const extra = settingsNavItems.filter(
             (item) =>
                 (item.id === "theme" || item.id === "animation") && !allowed.some((a) => a.id === item.id)
         );
         return [...allowed, ...extra];
-    }, [can, sharedLocalAppearanceOnly, shellLockEligible]);
+    }, [can, sharedLocalAppearanceOnly, shellLockEligible, shellServerNavEligible, devServerNav]);
     /** Nav render — kabhi permissions list khali ho to bhi Drive sync dikhe. */
     const navItemsForUi = useMemo(() => {
         if (availableNavItems.length > 0) return availableNavItems;
@@ -291,10 +314,12 @@ function SettingsPageContent() {
         const fromWindow =
             typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("view") : null;
         const rawView = fromReact ?? fromWindow;
-        const viewOk =
-            rawView != null && rawView !== "" && navItemsForUi.some((item) => item.id === rawView)
-                ? rawView
-                : null;
+        const viewAllowed =
+            rawView != null &&
+            rawView !== "" &&
+            (navItemsForUi.some((item) => item.id === rawView) ||
+                (isLocalhostDevPreview() && rawView === "local_app_server"));
+        const viewOk = viewAllowed ? rawView : null;
 
         if (viewOk) {
             setActiveView(viewOk);
@@ -349,6 +374,7 @@ function SettingsPageContent() {
         /** Layout init abhi nahi hua / wait */
         if (!activeView) return;
         if (navItemsForUi.some((i) => i.id === activeView)) return;
+        if (isLocalhostDevPreview() && activeView === "local_app_server") return;
         const next = navItemsForUi[0].id;
         setActiveView(next);
         if (!mobileSettingsUx) {
@@ -508,6 +534,8 @@ function SettingsPageContent() {
                 );
             case "app_lock":
                 return <AppLockSettings />;
+            case "local_app_server":
+                return <LocalAppServerSettings onBack={backToSettingsListOnly} />;
             case "voucher":
                 return can('configure_company_settings') ? <VoucherSettings /> : null;
             case "theme":

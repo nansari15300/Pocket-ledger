@@ -18,8 +18,10 @@ import {
   useSidebar
 } from '../ui/sidebar'
 import { cn } from '@/lib/utils'
+import { isAdminPanelDevPreview } from '@/lib/localAppServerDevPreview'
 
 export default function AdminShell({ children }: { children: React.ReactNode }) {
+  const devPreview = isAdminPanelDevPreview();
   const pathname = usePathname()
   const { isOpen, isMobile, setIsOpen } = useSidebar()
 
@@ -64,7 +66,13 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
 
   // Admin borders/tables: `AdminRouteChrome` → `html.pl-admin-route` (globals.css), yahan extra class zaroori nahi.
   return (
-    <div className="flex h-screen bg-background">
+    <div className="flex h-screen flex-col bg-background">
+      {devPreview ? (
+        <div className="shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-sm text-amber-950">
+          Localhost dev preview — Admin APIs still need SuperAdmin + Firebase. Production rules unchanged.
+        </div>
+      ) : null}
+      <div className="flex min-h-0 flex-1">
       <Sidebar className="border-r">
         <SidebarHeader>
           <div className={cn("font-bold text-lg flex items-center gap-2", isOpen ? 'px-2' : 'justify-center')}>
@@ -92,6 +100,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
       <div className="flex flex-1 flex-col overflow-hidden">
         <AdminHeader />
         <main className="flex-1 min-h-0 overflow-y-auto">{children}</main>
+      </div>
       </div>
     </div>
   )

@@ -19,8 +19,7 @@ import {
   collection,
   where,
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
-import { storage } from "@/lib/firebase";
+import { uploadCompanyLogo, tryDeleteStorageFileByUrl } from "@/lib/storage";
 import { compressFile } from "@/lib/compression";
 import { FilePreview } from "../vouchers/FilePreview";
 import { CompanyInterCompanyCodeField } from "@/components/inter-company/CompanyInterCompanyCodeField";
@@ -460,12 +459,7 @@ export function EditCompanyForm() {
       // Handle logo removal
       if (removeLogo && company.logoUrl) {
         if (!deviceLocalCo && /^https?:\/\//i.test(String(company.logoUrl))) {
-          try {
-            const oldLogoRef = ref(storage, company.logoUrl);
-            await deleteObject(oldLogoRef);
-          } catch (error) {
-            console.error("Error deleting old logo:", error);
-          }
+          await tryDeleteStorageFileByUrl(String(company.logoUrl));
         }
         logoUrl = null;
       }
@@ -473,7 +467,7 @@ export function EditCompanyForm() {
       // Handle logo upload (only when plan allows avatar)
       if (fileToUpload && user && canAddAvatar) {
         if (deviceLocalCo) {
-          // Local + Google Drive: `local:` pending — Firebase `company-logos/` path nahi.
+          // Local + Google Drive: `local:` pending — Firebase Storage nahi.
           const id = generateLocalFileId();
           await putPendingFile({
             id,
@@ -487,16 +481,9 @@ export function EditCompanyForm() {
           logoUrl = `${LOCAL_FILE_PREFIX}${id}`;
         } else {
           if (company.logoUrl && !removeLogo && /^https?:\/\//i.test(String(company.logoUrl))) {
-            try {
-              const oldLogoRef = ref(storage, company.logoUrl);
-              await deleteObject(oldLogoRef);
-            } catch (error) {
-              console.error("Error deleting old logo:", error);
-            }
+            await tryDeleteStorageFileByUrl(String(company.logoUrl));
           }
-          const storageRef = ref(storage, `company-logos/${user.uid}/${Date.now()}_${fileToUpload.file.name}`);
-          const snapshot = await uploadBytes(storageRef, fileToUpload.file);
-          logoUrl = await getDownloadURL(snapshot.ref);
+          logoUrl = await uploadCompanyLogo(companyId, values.name || company.name, fileToUpload.file);
         }
       }
       
@@ -746,16 +733,21 @@ export function EditCompanyForm() {
     } catch (error) {
       console.error("Error updating company:", error);
       const code = (error as { code?: string })?.code;
+      const errMsg = error instanceof Error ? error.message : "";
       const msg =
         error instanceof Error && error.message === "company_not_on_server"
           ? "This company is not on the server yet. Connect and sync, then try again."
           : error instanceof Error && error.message === "password_required_new_invite"
             ? "Set a password for a new invite."
-            : isCompanyNotFoundError(error)
-              ? COMPANY_NOT_SYNCED_MESSAGE
-              : code === "permission-denied"
-                ? "Firestore permission denied — deploy firestore.rules, or ask the company owner to save."
-                : "Failed to update company details. Please try again.";
+            : errMsg === "local_company_storage"
+              ? "This company uses device storage and Google Drive sync — not Firebase Storage. Enable cloud sync in company settings, or save without changing the logo."
+              : code === "storage/unauthorized" || code === "storage/unauthenticated"
+                ? "Logo upload failed: cloud storage permission denied. Sign in again, or deploy the latest Firebase storage rules."
+                : isCompanyNotFoundError(error)
+                  ? COMPANY_NOT_SYNCED_MESSAGE
+                  : code === "permission-denied"
+                    ? "Firestore permission denied — deploy firestore.rules, or ask the company owner to save."
+                    : "Failed to update company details. Please try again.";
       toast({
         variant: "destructive",
         title: "Error",

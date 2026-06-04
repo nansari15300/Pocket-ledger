@@ -19,7 +19,8 @@ import {
   getAllocatedByVoucherIdFromPurchase,
   getAllocatedByVoucherIdFromSale,
   getAllocatedByVoucherIdFromJournal,
-  getOutgoingAllocatedToOpposite,
+  getBillWiseAllocatedToTarget,
+  isSaleOrPurchaseBillVoucherType,
   getPaymentStatus as getPaymentStatusResult,
   getPaymentInRemaining,
   getPaymentOutRemaining,
@@ -1348,47 +1349,27 @@ export function useTransactions(
                 let paymentStatus: string | undefined;
                 let isOverdue = false;
                 let outstanding: number | undefined;
-                if (isBillWiseContext && (t.type === 'sale' || t.type === 'purchase')) {
-                    // Use voucher's invoice total (same as Net Balance base in form: Total - linked). Include openingBalanceAllocated.
-                    // Incoming: from payment_in/payment_out, from purchase/sale, from journal. Outgoing: voucher's own allocations to opposite type.
+                if (isBillWiseContext && isSaleOrPurchaseBillVoucherType(t.type)) {
                     const total = Number(t.total ?? t.amount ?? ((t.subTotal ?? 0) - (t.discount ?? 0) + (t.tax ?? 0))) || 0;
-                    const fromPayments = t.type === 'sale'
-                        ? (allocatedBySale.get(t.id) ?? 0) + (allocatedToSaleFromPurchase.get(t.id) ?? 0)
-                        : (allocatedByPurchase.get(t.id) ?? 0) + (allocatedToPurchaseFromSale.get(t.id) ?? 0);
-                    const fromJournal = allocatedFromJournal.get(t.id) ?? 0;
-                    const fromOB = Number((t as any).openingBalanceAllocated) || 0;
-                    const outgoingToOpposite = getOutgoingAllocatedToOpposite(t);
-                    const allocated = fromPayments + fromJournal + fromOB + outgoingToOpposite;
+                    const allocated = getBillWiseAllocatedToTarget(t, String(t.id), vouchers);
                     const result = getPaymentStatusResult(total, allocated, t.dueDate);
                     paymentStatus = result.isOverdue ? 'overdue' : result.status;
                     isOverdue = result.isOverdue;
                     outstanding = result.outstanding;
                 }
                 // Tax ledger: Sale / Purchase – show Paid/Unpaid/Partial/Overdue (same as party bill-wise)
-                if (isTaxContext && (t.type === 'sale' || t.type === 'purchase')) {
+                if (isTaxContext && isSaleOrPurchaseBillVoucherType(t.type)) {
                     const total = Number(t.total ?? t.amount ?? ((t.subTotal ?? 0) - (t.discount ?? 0) + (t.tax ?? 0))) || 0;
-                    const fromPayments = t.type === 'sale'
-                        ? (allocatedBySale.get(t.id) ?? 0) + (allocatedToSaleFromPurchase.get(t.id) ?? 0)
-                        : (allocatedByPurchase.get(t.id) ?? 0) + (allocatedToPurchaseFromSale.get(t.id) ?? 0);
-                    const fromJournal = allocatedFromJournal.get(t.id) ?? 0;
-                    const fromOB = Number((t as any).openingBalanceAllocated) || 0;
-                    const outgoingToOpposite = getOutgoingAllocatedToOpposite(t);
-                    const allocated = fromPayments + fromJournal + fromOB + outgoingToOpposite;
+                    const allocated = getBillWiseAllocatedToTarget(t, String(t.id), vouchers);
                     const result = getPaymentStatusResult(total, allocated, t.dueDate);
                     paymentStatus = result.isOverdue ? 'overdue' : result.status;
                     isOverdue = result.isOverdue;
                     outstanding = result.outstanding;
                 }
                 // Income & Expense ledger: Sale / Purchase – show Paid/Unpaid/Partial/Overdue (same as tax)
-                if (isExpenseContext && (t.type === 'sale' || t.type === 'purchase')) {
+                if (isExpenseContext && isSaleOrPurchaseBillVoucherType(t.type)) {
                     const total = Number(t.total ?? t.amount ?? ((t.subTotal ?? 0) - (t.discount ?? 0) + (t.tax ?? 0))) || 0;
-                    const fromPayments = t.type === 'sale'
-                        ? (allocatedBySale.get(t.id) ?? 0) + (allocatedToSaleFromPurchase.get(t.id) ?? 0)
-                        : (allocatedByPurchase.get(t.id) ?? 0) + (allocatedToPurchaseFromSale.get(t.id) ?? 0);
-                    const fromJournal = allocatedFromJournal.get(t.id) ?? 0;
-                    const fromOB = Number((t as any).openingBalanceAllocated) || 0;
-                    const outgoingToOpposite = getOutgoingAllocatedToOpposite(t);
-                    const allocated = fromPayments + fromJournal + fromOB + outgoingToOpposite;
+                    const allocated = getBillWiseAllocatedToTarget(t, String(t.id), vouchers);
                     const result = getPaymentStatusResult(total, allocated, t.dueDate);
                     paymentStatus = result.isOverdue ? 'overdue' : result.status;
                     isOverdue = result.isOverdue;

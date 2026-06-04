@@ -202,6 +202,9 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
 
   let effectivePayload: PrintPayload = payload;
   let printDestination: "internal" | "external" = "internal";
+  let printMasterTypes: import("@/lib/printMastersTypes").MasterPrintKind[] | undefined;
+  let printIncludeZeroBalanceMasters = false;
+  let printMasterIncludeBalance = true;
   if (!payload.skipPrintOptionsDialog) {
     const { promptPrintOptions } = await import("@/components/print/PrintOptionsPrompt");
     const opts = await promptPrintOptions();
@@ -209,6 +212,9 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
       return;
     }
     printDestination = opts.printDestination === "external" ? "external" : "internal";
+    printMasterTypes = opts.printMasterTypes;
+    printIncludeZeroBalanceMasters = opts.printIncludeZeroBalanceMasters === true;
+    printMasterIncludeBalance = opts.printMasterIncludeBalance !== false;
     effectivePayload = {
       ...payload,
       printIncludeLogo: opts.printIncludeLogo,
@@ -257,7 +263,28 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
     }
   }
 
-  const docDefinition = buildDocDefinition(processedPayload);
+  // Print masters tick = skip current screen report; PDF is masters list only (4 columns per page).
+  const mastersOnly = (printMasterTypes?.length ?? 0) > 0;
+  let docDefinition: TDocumentDefinitions;
+  if (mastersOnly) {
+    const { buildMastersOnlyDocDefinition, getStoredDateSystemForMastersPrint } = await import(
+      "@/lib/printMastersPdf"
+    );
+    // Masters print: always use app date setting (localStorage), not ledger payload dateSystem.
+    const dateSystem = getStoredDateSystemForMastersPrint();
+    docDefinition = buildMastersOnlyDocDefinition({
+      company: processedPayload.company,
+      printIncludeLogo: processedPayload.printIncludeLogo,
+      printIncludeCompanyDetails: processedPayload.printIncludeCompanyDetails,
+      printColorMode: processedPayload.printColorMode,
+      masterTypes: printMasterTypes!,
+      includeZeroBalance: printIncludeZeroBalanceMasters,
+      printMasterIncludeBalance,
+      dateSystem,
+    });
+  } else {
+    docDefinition = buildDocDefinition(processedPayload);
+  }
   const pdfDoc = pdfMake.createPdf(docDefinition);
 
   try {
@@ -266,7 +293,7 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
 
     // External — system PDF app / browser tab (APK: FileOpener / Chrome)
     if (printDestination === "external") {
-      const safeTitle = String(effectivePayload.title || "pocket-ledger")
+      const safeTitle = String(mastersOnly ? "masters-list" : effectivePayload.title || "pocket-ledger")
         .replace(/[^a-zA-Z0-9._-]+/g, "_")
         .slice(0, 80);
       const { openPdfBlobInExternalViewer } = await import("@/lib/openPdfExternal");

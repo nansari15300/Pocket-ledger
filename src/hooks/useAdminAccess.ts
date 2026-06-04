@@ -4,14 +4,21 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "./useAuth";
 import { canAccess, type Role } from "@/utils/rbac";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
+import { isAdminPanelDevPreview } from "@/lib/localAppServerDevPreview";
 
 export function useAdminAccess(allowed: Array<Role>) {
   const { customUser, loading: authLoading } = useAuth();
   const router = useRouter();
   const [isAccessGranted, setIsAccessGranted] = useState<boolean | null>(null);
+  const devPreview = isAdminPanelDevPreview();
 
   useEffect(() => {
     if (authLoading) return;
+
+    if (devPreview) {
+      setIsAccessGranted(true);
+      return;
+    }
 
     if (!customUser || !customUser.isActive) {
       router.replace("/not-authorized");
@@ -24,7 +31,7 @@ export function useAdminAccess(allowed: Array<Role>) {
     } else {
       setIsAccessGranted(true);
     }
-  }, [authLoading, customUser, router, allowed]);
+  }, [authLoading, customUser, router, allowed, devPreview]);
 
   if (authLoading || isAccessGranted === null) {
     return { user: null, loading: true };

@@ -122,9 +122,10 @@ export const SidebarTrigger = React.forwardRef<
   return (
     <Button
       ref={ref}
-      variant="ghost"
+      variant="outline"
       size="icon"
-      className={cn(className)}
+      className={cn("h-9 w-9 flex-shrink-0", className)}
+      data-theme-header="sidebar-toggle"
       onClick={handleClick}
       {...props}
     >

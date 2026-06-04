@@ -21,5 +21,10 @@ service firebase.storage {
     match /companies/{companyIdOrKey}/{folder}/{allPaths=**} {
       allow read, write: if isSignedIn();
     }
+
+    // Legacy company logo path (older app builds) — keep read/write for signed-in users.
+    match /company-logos/{userId}/{allPaths=**} {
+      allow read, write: if isSignedIn();
+    }
   }
 }

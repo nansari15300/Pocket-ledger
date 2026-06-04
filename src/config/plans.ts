@@ -104,7 +104,9 @@ export type EntitlementKey =
   /** Online Firestore companies (`storageOption: firebase`) — off = create/edit me local/online choice hide. */
   | "allowFirebaseOnlineCompanies"
   /** Local company cloud sync — voucher JSON / ops to Google Drive. */
-  | "allowGoogleDriveCloudSync";
+  | "allowGoogleDriveCloudSync"
+  /** EXE/Linux desktop: built-in local HTTP server (Settings → Server). */
+  | "allowLocalAppServer";
 
 export type Entitlements = Record<EntitlementKey, number | boolean>;
 
@@ -174,6 +176,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       savedAccountSwitchEnabled: false,
       allowFirebaseOnlineCompanies: false,
       allowGoogleDriveCloudSync: true,
+      allowLocalAppServer: false,
     },
     features: [
       "Unlimited local (offline) companies",
@@ -228,6 +231,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       savedAccountSwitchEnabled: true,
       allowFirebaseOnlineCompanies: true,
       allowGoogleDriveCloudSync: true,
+      allowLocalAppServer: true,
     },
     features: [
       "1 online company + unlimited offline",
@@ -284,6 +288,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       savedAccountSwitchEnabled: true,
       allowFirebaseOnlineCompanies: true,
       allowGoogleDriveCloudSync: true,
+      allowLocalAppServer: true,
     },
     features: [
       "3 online companies + unlimited offline",
@@ -339,6 +344,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       savedAccountSwitchEnabled: true,
       allowFirebaseOnlineCompanies: true,
       allowGoogleDriveCloudSync: true,
+      allowLocalAppServer: true,
     },
     features: [
       "10 online companies + unlimited offline",

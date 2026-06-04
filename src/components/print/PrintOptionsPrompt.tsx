@@ -19,6 +19,11 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { registerImperativeDialogBack } from "@/contexts/DialogBackHandlerContext";
 import type { PrintColorMode } from "@/lib/printColorPalette";
+import type { MasterPrintKind } from "@/lib/printMastersTypes";
+import {
+  PrintMastersOptionsPanel,
+  type PrintMastersSettings,
+} from "@/components/print/PrintMastersOptionsDialog";
 
 export type PrintOptionsResult = {
   printIncludeLogo: boolean;
@@ -28,10 +33,11 @@ export type PrintOptionsResult = {
   printIncludeUserColumn?: boolean;
   printIncludeFileColumn?: boolean;
   printIncludeNotes?: boolean;
-  /** Color = green/red amounts; bw = sab amounts black/gray (printer-friendly). */
   printColorMode?: PrintColorMode;
-  /** Internal = in-app preview; External = system PDF app / browser tab. */
   printDestination?: "internal" | "external";
+  printMasterTypes?: MasterPrintKind[];
+  printIncludeZeroBalanceMasters?: boolean;
+  printMasterIncludeBalance?: boolean;
 };
 
 export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
@@ -51,7 +57,7 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
 
     function PrintOptionsDialog() {
       const [open, setOpen] = React.useState(true);
-      // PC + mobile/APK sab par same checklist — column toggles niche false (optional PDF width).
+      const [view, setView] = React.useState<"report" | "masters">("report");
       const [printLogo, setPrintLogo] = React.useState(true);
       const [printCompany, setPrintCompany] = React.useState(true);
       const [printNarration, setPrintNarration] = React.useState(true);
@@ -61,14 +67,46 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
       const [printNotes, setPrintNotes] = React.useState(false);
       const [printColorMode, setPrintColorMode] = React.useState<PrintColorMode>("color");
 
+      const finishReportPrint = (destination: "internal" | "external") => {
+        finish({
+          printIncludeLogo: printLogo,
+          printIncludeCompanyDetails: printCompany,
+          printIncludeNarration: printNarration,
+          printIncludeTitle: printTitle,
+          printIncludeUserColumn: printUserColumn,
+          printIncludeFileColumn: printFileColumn,
+          printIncludeNotes: printNotes,
+          printColorMode,
+          printDestination: destination,
+        });
+      };
+
+      const finishMastersPrint = (
+        destination: "internal" | "external",
+        settings: PrintMastersSettings
+      ) => {
+        finish({
+          printIncludeLogo: settings.printIncludeLogo,
+          printIncludeCompanyDetails: settings.printIncludeCompanyDetails,
+          printColorMode: settings.printColorMode,
+          printDestination: destination,
+          printMasterTypes: settings.masterTypes,
+          printIncludeZeroBalanceMasters: settings.printIncludeZeroBalanceMasters,
+          printMasterIncludeBalance: settings.printMasterIncludeBalance,
+        });
+      };
+
       React.useEffect(() => {
         if (!open) return;
-        // Android device back: is print options dialog ko pehle close karo; peeche ka page route back consume na ho.
         return registerImperativeDialogBack(() => {
+          if (view === "masters") {
+            setView("report");
+            return;
+          }
           setOpen(false);
           finish(null);
         });
-      }, [open]);
+      }, [open, view]);
 
       return (
         <Dialog
@@ -79,209 +117,198 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
           }}
         >
           <DialogContent
-            // Choti screen par full-ish height scroll; desktop par `max-w-md` + overflow — options list lambi hai.
             className="w-[98vw] max-w-[98vw] h-[90vh] max-h-[90vh] rounded-2xl p-4 overflow-y-auto sm:h-auto sm:w-full sm:max-w-md"
-            aria-describedby="print-options-desc"
+            aria-describedby={view === "report" ? "print-options-desc" : undefined}
           >
-            <DialogHeader>
-              <DialogTitle>Print options</DialogTitle>
-              <DialogDescription id="print-options-desc">
-                Choose what appears in the PDF header. Cancel stops printing. Internal opens in-app
-                preview; External opens your device PDF app.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex flex-col gap-4 py-2">
-              <div className="flex items-start gap-3 space-y-0">
-                <Checkbox
-                  id="print-logo"
-                  checked={printLogo}
-                  onCheckedChange={(c) => setPrintLogo(c === true)}
-                  className="mt-0.5"
-                />
-                <div className="grid gap-1.5 leading-none">
-                  <Label htmlFor="print-logo" className="cursor-pointer font-medium">
-                    Print logo
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Off: removes logo or placeholder from PDF header.
-                  </p>
+            {view === "masters" ? (
+              <PrintMastersOptionsPanel
+                onBack={() => setView("report")}
+                onPrint={finishMastersPrint}
+              />
+            ) : (
+              <>
+              <DialogHeader>
+                <DialogTitle>Print options</DialogTitle>
+                <DialogDescription id="print-options-desc">
+                  Choose what appears in the PDF header. Cancel stops printing. Internal opens in-app
+                  preview; External opens your device PDF app. Use Print masters for a masters-only list.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex flex-col gap-4 py-2">
+                <div className="flex items-start gap-3 space-y-0">
+                  <Checkbox
+                    id="print-logo"
+                    checked={printLogo}
+                    onCheckedChange={(c) => setPrintLogo(c === true)}
+                    className="mt-0.5"
+                  />
+                  <div className="grid gap-1.5 leading-none">
+                    <Label htmlFor="print-logo" className="cursor-pointer font-medium">
+                      Print logo
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Off: removes logo or placeholder from PDF header.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3 space-y-0">
+                  <Checkbox
+                    id="print-company"
+                    checked={printCompany}
+                    onCheckedChange={(c) => setPrintCompany(c === true)}
+                    className="mt-0.5"
+                  />
+                  <div className="grid gap-1.5 leading-none">
+                    <Label htmlFor="print-company" className="cursor-pointer font-medium">
+                      Print company details
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Name, address, phone, PAN in header.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3 space-y-0">
+                  <Checkbox
+                    id="print-title"
+                    checked={printTitle}
+                    onCheckedChange={(c) => setPrintTitle(c === true)}
+                    className="mt-0.5"
+                  />
+                  <div className="grid gap-1.5 leading-none">
+                    <Label htmlFor="print-title" className="cursor-pointer font-medium">
+                      Print report title
+                    </Label>
+                    <p className="text-xs text-muted-foreground">Shows title and total vouchers line.</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3 space-y-0">
+                  <Checkbox
+                    id="print-narration"
+                    checked={printNarration}
+                    onCheckedChange={(c) => setPrintNarration(c === true)}
+                    className="mt-0.5"
+                  />
+                  <div className="grid gap-1.5 leading-none">
+                    <Label htmlFor="print-narration" className="cursor-pointer font-medium">
+                      Print narration
+                    </Label>
+                    <p className="text-xs text-muted-foreground">Shows narration/details rows below entries.</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3 space-y-0">
+                  <Checkbox
+                    id="print-user-column"
+                    checked={printUserColumn}
+                    onCheckedChange={(c) => setPrintUserColumn(c === true)}
+                    className="mt-0.5"
+                  />
+                  <div className="grid gap-1.5 leading-none">
+                    <Label htmlFor="print-user-column" className="cursor-pointer font-medium">
+                      Include User column
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Adds User column to the PDF table when checked. Off by default.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3 space-y-0">
+                  <Checkbox
+                    id="print-file-column"
+                    checked={printFileColumn}
+                    onCheckedChange={(c) => setPrintFileColumn(c === true)}
+                    className="mt-0.5"
+                  />
+                  <div className="grid gap-1.5 leading-none">
+                    <Label htmlFor="print-file-column" className="cursor-pointer font-medium">
+                      Include File column
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Adds File column to the PDF table when checked. Off by default.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3 space-y-0">
+                  <Checkbox
+                    id="print-note-vouchers"
+                    checked={printNotes}
+                    onCheckedChange={(c) => setPrintNotes(c === true)}
+                    className="mt-0.5"
+                  />
+                  <div className="grid gap-1.5 leading-none">
+                    <Label htmlFor="print-note-vouchers" className="cursor-pointer font-medium">
+                      Include Note vouchers
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Includes note-type vouchers in the printout when checked. Off by default.
+                    </p>
+                  </div>
+                </div>
+                <div className="space-y-2 rounded-lg border p-3">
+                  <p className="text-sm font-medium">Print color</p>
+                  <RadioGroup
+                    value={printColorMode}
+                    onValueChange={(v) => setPrintColorMode(v === "bw" ? "bw" : "color")}
+                    className="flex flex-col gap-3"
+                  >
+                    <div className="flex items-start gap-3">
+                      <RadioGroupItem value="color" id="print-color-mode-color" className="mt-0.5" />
+                      <div className="grid gap-1 leading-none">
+                        <Label htmlFor="print-color-mode-color" className="cursor-pointer font-medium">
+                          Color
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          Green debit, red credit, and colored bill-wise voucher links.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <RadioGroupItem value="bw" id="print-color-mode-bw" className="mt-0.5" />
+                      <div className="grid gap-1 leading-none">
+                        <Label htmlFor="print-color-mode-bw" className="cursor-pointer font-medium">
+                          Black &amp; white
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          All amounts print in black/gray — better for B&amp;W printers.
+                        </p>
+                      </div>
+                    </div>
+                  </RadioGroup>
                 </div>
               </div>
-              <div className="flex items-start gap-3 space-y-0">
-                <Checkbox
-                  id="print-company"
-                  checked={printCompany}
-                  onCheckedChange={(c) => setPrintCompany(c === true)}
-                  className="mt-0.5"
-                />
-                <div className="grid gap-1.5 leading-none">
-                  <Label htmlFor="print-company" className="cursor-pointer font-medium">
-                    Print company details
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Name, address, phone, PAN in header.
-                  </p>
-                </div>
-              </div>
-              {/* Report body + optional columns — pehle sirf narrow mobile ke liye tha; ab PC print bhi yehi choose karta hai */}
-              <div className="flex items-start gap-3 space-y-0">
-                <Checkbox
-                  id="print-title"
-                  checked={printTitle}
-                  onCheckedChange={(c) => setPrintTitle(c === true)}
-                  className="mt-0.5"
-                />
-                <div className="grid gap-1.5 leading-none">
-                  <Label htmlFor="print-title" className="cursor-pointer font-medium">
-                    Print report title
-                  </Label>
-                  <p className="text-xs text-muted-foreground">Shows title and total vouchers line.</p>
-                </div>
-              </div>
-              <div className="flex items-start gap-3 space-y-0">
-                <Checkbox
-                  id="print-narration"
-                  checked={printNarration}
-                  onCheckedChange={(c) => setPrintNarration(c === true)}
-                  className="mt-0.5"
-                />
-                <div className="grid gap-1.5 leading-none">
-                  <Label htmlFor="print-narration" className="cursor-pointer font-medium">
-                    Print narration
-                  </Label>
-                  <p className="text-xs text-muted-foreground">Shows narration/details rows below entries.</p>
-                </div>
-              </div>
-              <div className="flex items-start gap-3 space-y-0">
-                <Checkbox
-                  id="print-user-column"
-                  checked={printUserColumn}
-                  onCheckedChange={(c) => setPrintUserColumn(c === true)}
-                  className="mt-0.5"
-                />
-                <div className="grid gap-1.5 leading-none">
-                  <Label htmlFor="print-user-column" className="cursor-pointer font-medium">
-                    Include User column
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Adds User column to the PDF table when checked. Off by default.
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-start gap-3 space-y-0">
-                <Checkbox
-                  id="print-file-column"
-                  checked={printFileColumn}
-                  onCheckedChange={(c) => setPrintFileColumn(c === true)}
-                  className="mt-0.5"
-                />
-                <div className="grid gap-1.5 leading-none">
-                  <Label htmlFor="print-file-column" className="cursor-pointer font-medium">
-                    Include File column
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Adds File column to the PDF table when checked. Off by default.
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-start gap-3 space-y-0">
-                <Checkbox
-                  id="print-note-vouchers"
-                  checked={printNotes}
-                  onCheckedChange={(c) => setPrintNotes(c === true)}
-                  className="mt-0.5"
-                />
-                <div className="grid gap-1.5 leading-none">
-                  <Label htmlFor="print-note-vouchers" className="cursor-pointer font-medium">
-                    Include Note vouchers
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Includes note-type vouchers in the printout when checked. Off by default.
-                  </p>
-                </div>
-              </div>
-              {/* Print color: PDF me green/red vs black-only amounts */}
-              <div className="space-y-2 rounded-lg border p-3">
-                <p className="text-sm font-medium">Print color</p>
-                <RadioGroup
-                  value={printColorMode}
-                  onValueChange={(v) => setPrintColorMode(v === "bw" ? "bw" : "color")}
-                  className="flex flex-col gap-3"
+              <DialogFooter className="!flex-row flex-nowrap items-center justify-end gap-2 w-full overflow-x-auto sm:space-x-0 [&>*]:mt-0 [&>button]:shrink-0">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full border border-violet-600 px-4 sm:px-5 text-violet-700 hover:bg-violet-50"
+                  onClick={() => setView("masters")}
                 >
-                  <div className="flex items-start gap-3">
-                    <RadioGroupItem value="color" id="print-color-mode-color" className="mt-0.5" />
-                    <div className="grid gap-1 leading-none">
-                      <Label htmlFor="print-color-mode-color" className="cursor-pointer font-medium">
-                        Color
-                      </Label>
-                      <p className="text-xs text-muted-foreground">
-                        Green debit, red credit, and colored bill-wise voucher links.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3">
-                    <RadioGroupItem value="bw" id="print-color-mode-bw" className="mt-0.5" />
-                    <div className="grid gap-1 leading-none">
-                      <Label htmlFor="print-color-mode-bw" className="cursor-pointer font-medium">
-                        Black &amp; white
-                      </Label>
-                      <p className="text-xs text-muted-foreground">
-                        All amounts print in black/gray — better for B&amp;W printers.
-                      </p>
-                    </div>
-                  </div>
-                </RadioGroup>
-              </div>
-            </div>
-            <DialogFooter className="flex-row flex-wrap items-center justify-end gap-2 [&>*]:mt-0">
-              {/* Cancel + External (system app) + Internal (in-app preview) */}
-              <Button
-                type="button"
-                className="rounded-full border border-blue-600 bg-blue-600 px-5 text-white hover:bg-blue-700 hover:text-white"
-                onClick={() => finish(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="rounded-full border border-slate-500 px-5"
-                onClick={() =>
-                  finish({
-                    printIncludeLogo: printLogo,
-                    printIncludeCompanyDetails: printCompany,
-                    printIncludeNarration: printNarration,
-                    printIncludeTitle: printTitle,
-                    printIncludeUserColumn: printUserColumn,
-                    printIncludeFileColumn: printFileColumn,
-                    printIncludeNotes: printNotes,
-                    printColorMode,
-                    printDestination: "external",
-                  })
-                }
-              >
-                External
-              </Button>
-              <Button
-                type="button"
-                className="rounded-full border border-green-600 bg-green-600 px-5 text-white hover:bg-green-700 hover:text-white"
-                onClick={() =>
-                  finish({
-                    printIncludeLogo: printLogo,
-                    printIncludeCompanyDetails: printCompany,
-                    printIncludeNarration: printNarration,
-                    printIncludeTitle: printTitle,
-                    printIncludeUserColumn: printUserColumn,
-                    printIncludeFileColumn: printFileColumn,
-                    printIncludeNotes: printNotes,
-                    printColorMode,
-                    printDestination: "internal",
-                  })
-                }
-              >
-                Internal
-              </Button>
-            </DialogFooter>
+                  Print masters
+                </Button>
+                <Button
+                  type="button"
+                  className="rounded-full border border-blue-600 bg-blue-600 px-4 sm:px-5 text-white hover:bg-blue-700 hover:text-white"
+                  onClick={() => finish(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full border border-slate-500 px-4 sm:px-5"
+                  onClick={() => finishReportPrint("external")}
+                >
+                  External
+                </Button>
+                <Button
+                  type="button"
+                  className="rounded-full border border-green-600 bg-green-600 px-4 sm:px-5 text-white hover:bg-green-700 hover:text-white"
+                  onClick={() => finishReportPrint("internal")}
+                >
+                  Internal
+                </Button>
+              </DialogFooter>
+              </>
+            )}
           </DialogContent>
         </Dialog>
       );

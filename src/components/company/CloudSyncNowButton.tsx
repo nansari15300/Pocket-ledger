@@ -11,12 +11,12 @@ import { cn } from "@/lib/utils";
 
 type Props = {
   className?: string;
-  variant?: "ghost" | "outline" | "secondary";
+  variant?: "ghost" | "outline" | "secondary" | "chromePill";
   size?: "sm" | "default" | "icon";
 };
 
 /** Header / toolbar — manual Drive sync (local cloud-sync companies only). */
-export function CloudSyncNowButton({ className, variant = "ghost", size = "sm" }: Props) {
+export function CloudSyncNowButton({ className, variant = "outline", size = "sm" }: Props) {
   const { companyId } = useCompany();
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
@@ -65,7 +65,8 @@ export function CloudSyncNowButton({ className, variant = "ghost", size = "sm" }
       type="button"
       variant={variant}
       size={size}
-      className={cn("gap-1.5", className)}
+      className={cn("h-9 gap-1.5", size === "icon" && "w-9 px-0", className)}
+      data-theme-header="cloud-sync"
       disabled={busy}
       onClick={() => void syncNow()}
       title="Sync now with Google Drive"

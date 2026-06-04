@@ -216,11 +216,15 @@ export function AttachmentHoldPasteSurface({
     </div>
   );
 
-  if (!reuseTile) return addTile;
+  const addTileSlot = <div className="relative h-24 w-24 shrink-0">{addTile}</div>;
+
+  if (!reuseTile) return addTileSlot;
+
+  /** Reuse + Add alag tiles — ek `h-24` box ke andar stack na ho (Add File niche na jaye). */
   return (
-    <>
+    <div className="flex shrink-0 flex-row flex-wrap items-start gap-4">
       {reuseTile}
-      {addTile}
-    </>
+      {addTileSlot}
+    </div>
   );
 }

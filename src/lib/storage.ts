@@ -90,6 +90,48 @@ const generateCategoryPath = (
 }
 
 
+// --- COMPANY LOGO (Edit / Create company) ---
+
+/** Firebase Storage path allowed by `storage.rules` under `companies/{companyKey}/avatar/...`. */
+export function buildCompanyLogoStoragePath(
+  companyId: string,
+  companyName: string | undefined,
+  fileName: string,
+  uploadDate?: Date
+): string {
+  return generateCategoryPath(companyId, companyName, "avatar", fileName, uploadDate);
+}
+
+export async function uploadCompanyLogo(
+  companyId: string,
+  companyName: string | undefined,
+  file: File
+): Promise<string> {
+  if (!companyId) throw new Error("Company ID is missing");
+  if (await shouldStageEntityProfileFilesLocally(companyId)) {
+    throw new Error("local_company_storage");
+  }
+  const fullPath = buildCompanyLogoStoragePath(companyId, companyName, file.name);
+  const fileRef = ref(storage, fullPath);
+  const body =
+    typeof Buffer !== "undefined"
+      ? Buffer.from(await file.arrayBuffer())
+      : new Uint8Array(await file.arrayBuffer());
+  await uploadBytes(fileRef, body, { contentType: file.type || "image/jpeg" });
+  return getDownloadURL(fileRef);
+}
+
+export async function tryDeleteStorageFileByUrl(url: string): Promise<void> {
+  const { tryGetStoragePathFromFirebaseDownloadUrl } = await import("@/lib/firebaseStorageDownloadUrl");
+  const path = tryGetStoragePathFromFirebaseDownloadUrl(url);
+  if (!path) return;
+  try {
+    await deleteObject(ref(storage, path));
+  } catch {
+    // Already deleted or not ours
+  }
+}
+
 // --- CORE FUNCTIONS (UPDATED) ---
 
 export const uploadFile = async (

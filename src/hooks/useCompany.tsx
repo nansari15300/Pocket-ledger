@@ -47,6 +47,11 @@ import {
 import { getLocalFiscalSplitOrDefaults, LOCAL_FISCAL_SPLIT_CHANGED_EVENT } from "@/lib/localFiscalSplitStore";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
+import {
+  filterCompaniesForPlServerAccess,
+  getPlServerAllowedCompanyIds,
+  PL_SERVER_ACCESS_CONTEXT_EVENT,
+} from "@/lib/plServerAccessContext";
 import { clearSelectedCompanyId, readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { shouldSuppressTransientCompanyClear, shouldDeferMissingCompanyRedirectNative } from "@/lib/apkLedgerRouteShield";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
@@ -486,7 +491,17 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const [allCompanies, setAllCompanies] = useState<Company[]>([]);
   /** setCompanyId turant list se row dhundhne ke liye — render ke saath sync ref. */
   const allCompaniesLiveRef = useRef<Company[]>([]);
-  allCompaniesLiveRef.current = allCompanies;
+  const [serverAccessEpoch, setServerAccessEpoch] = useState(0);
+  useEffect(() => {
+    const onCtx = () => setServerAccessEpoch((n) => n + 1);
+    window.addEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, onCtx);
+    return () => window.removeEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, onCtx);
+  }, []);
+  const allCompaniesForUi = useMemo(() => {
+    const filtered = filterCompaniesForPlServerAccess(allCompanies);
+    allCompaniesLiveRef.current = filtered;
+    return filtered;
+  }, [allCompanies, serverAccessEpoch]);
   const [loading, setLoading] = useState(true);
   /** Online mode: company doc / sharing change par listener re-subscribe (light). */
   const [registryVersion, setRegistryVersion] = useState(0);
@@ -732,6 +747,14 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     setCompany(null);
     // Poori company list mat hatao — mirror/list reload par auto-select [0] flicker + rapid switch hota tha.
   }, []);
+
+  useEffect(() => {
+    const allowed = getPlServerAllowedCompanyIds();
+    if (!allowed?.length || !companyId) return;
+    if (!allowed.includes(companyId)) {
+      clearCompanyId();
+    }
+  }, [companyId, serverAccessEpoch, clearCompanyId]);
 
   const setCompanyId = useCallback((newCompanyId: string) => {
     // Debug: APK par save ke baad company switch race — hr set dikhao (flag ON par only).
@@ -2046,7 +2069,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         localCompanyRegistryEpoch: localRegistryEpoch,
         setCompanyId,
         clearCompanyId,
-        allCompanies,
+        allCompanies: allCompaniesForUi,
         planAuthoritativeSync,
         refreshAuthoritativePlan: () => refreshAuthoritativePlan(),
         effectiveNotificationSettings,

@@ -24,3 +24,16 @@ contextBridge.exposeInMainWorld("plElectronBackup", {
   listBackupFiles: (dirPath) => ipcRenderer.invoke("pl-list-backup-files", dirPath),
   readBackupFile: (args) => ipcRenderer.invoke("pl-read-backup-file", args),
 });
+
+/** EXE / Linux desktop: local static server — settings → Server */
+contextBridge.exposeInMainWorld("plElectronLocalServer", {
+  getStatus: () => ipcRenderer.invoke("pl-local-server-get-status"),
+  getConfig: () => ipcRenderer.invoke("pl-local-server-get-config"),
+  setConfig: (partial) => ipcRenderer.invoke("pl-local-server-set-config", partial),
+  start: () => ipcRenderer.invoke("pl-local-server-start"),
+  stop: () => ipcRenderer.invoke("pl-local-server-stop"),
+  restart: (partial) => ipcRenderer.invoke("pl-local-server-restart", partial),
+  listAccessTokens: () => ipcRenderer.invoke("pl-local-server-list-access-tokens"),
+  createAccessToken: (input) => ipcRenderer.invoke("pl-local-server-create-access-token", input),
+  revokeAccessToken: (id) => ipcRenderer.invoke("pl-local-server-revoke-access-token", id),
+});

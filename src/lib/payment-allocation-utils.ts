@@ -131,6 +131,71 @@ export function getOutgoingAllocatedToOpposite(voucher: any): number {
   return allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
 }
 
+function isBillWiseLinkSourceVoucherType(type: string): boolean {
+  return (
+    type === "sale" ||
+    type === "sale_service" ||
+    type === "purchase" ||
+    type === "purchase_service" ||
+    type === "journal"
+  );
+}
+
+/** Incoming allocations from sale/purchase/journal vouchers → target voucherId (Link dialog `allocatedByBillWiseVouchers`). */
+export function getAllocatedByBillWiseSourceVouchers(vouchers: any[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const v of vouchers) {
+    if (!isBillWiseLinkSourceVoucherType(String(v?.type ?? ""))) continue;
+    const allocations = (v.allocations as Allocation[] | undefined) || [];
+    for (const a of allocations) {
+      const key = String(a.voucherId ?? "");
+      if (!key) continue;
+      map.set(key, (map.get(key) ?? 0) + getAllocationTotal(a));
+    }
+  }
+  return map;
+}
+
+/**
+ * Bill-wise: kitna amount target (sale/purchase) par allocate ho chuka hai.
+ * Payment Out/In + target.allocations dono record ho sakte hain — sum se double-count na ho (Link dialog = max).
+ */
+export function getBillWiseAllocatedToTarget(
+  targetVoucher: any,
+  targetVoucherId: string,
+  vouchers: any[]
+): number {
+  const vid = String(targetVoucherId);
+  const allocatedByPaymentIn = getAllocatedByVoucherId(vouchers);
+  const allocatedByPaymentOut = getAllocatedByVoucherIdFromPaymentOuts(vouchers);
+  const allocatedByBillWiseSources = getAllocatedByBillWiseSourceVouchers(vouchers);
+
+  const sourceInbound =
+    (allocatedByPaymentIn.get(vid) ?? 0) +
+    (allocatedByPaymentOut.get(vid) ?? 0) +
+    (allocatedByBillWiseSources.get(vid) ?? 0);
+
+  const fromTarget = ((targetVoucher?.allocations as Allocation[] | undefined) || []).reduce(
+    (sum, a) => sum + getAllocationTotal(a),
+    0
+  );
+
+  const obInAllocations = ((targetVoucher?.allocations as Allocation[] | undefined) || [])
+    .filter((a) => String(a?.voucherId ?? "") === OPENING_BALANCE_VOUCHER_ID)
+    .reduce((s, a) => s + getAllocationTotal(a), 0);
+  const targetObAlloc = Math.max(
+    0,
+    (Number(targetVoucher?.openingBalanceAllocated) || 0) - obInAllocations
+  );
+
+  return Math.max(fromTarget, sourceInbound) + targetObAlloc;
+}
+
+export function isSaleOrPurchaseBillVoucherType(type: string | undefined): boolean {
+  const t = String(type ?? "");
+  return t === "sale" || t === "sale_service" || t === "purchase" || t === "purchase_service";
+}
+
 export type TaxNetAllocated = { tax: number; net: number };
 
 /**

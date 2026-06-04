@@ -26,6 +26,14 @@ export function planAllowsGoogleDriveSync(
   return entitlementBool(plan.entitlements, "allowGoogleDriveCloudSync");
 }
 
+export function planAllowsLocalAppServer(
+  planId: PlanId | string | null | undefined,
+  livePlan?: Plan | null
+): boolean {
+  const plan = livePlan ?? getPlan((planId as PlanId) || "basic");
+  return entitlementBool(plan.entitlements, "allowLocalAppServer");
+}
+
 export function planAllowsAnyCloudFileSync(
   planId: PlanId | string | null | undefined,
   livePlan?: Plan | null

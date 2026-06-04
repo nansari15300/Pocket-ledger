@@ -85,6 +85,7 @@ import { collectStaffIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesS
 import { collectInterCompanyIdsForPendingApproval } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { isAdminPanelNavVisible } from "@/lib/localAppServerDevPreview";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 
 
@@ -491,8 +492,8 @@ export function AppSidebar() {
     return getSuperAdminEmails().some((x) => (x || "").toLowerCase().trim() === e);
   }, [user?.email]);
   const isAdmin = customUser?.role === "SuperAdmin" || isSuperAdminByEmail;
-  /** Static EXE/APK: `/admin` bundle me hota hi nahi — role ya super-admin email ho tab bhi sidebar link mat dikhao */
-  const showAdminNavLink = isAdmin && !isStaticApp;
+  /** Static EXE/APK: `/admin` bundle me nahi; localhost `npm run dev` par test ke liye dikhao */
+  const showAdminNavLink = isAdminPanelNavVisible(isAdmin, isStaticApp);
   
   // Default to showing when not explicitly off (so ticked/default = show without needing save). Alerts only for company owner.
   const transactionAlerts = effectiveNotificationSettings?.transactionAlerts;

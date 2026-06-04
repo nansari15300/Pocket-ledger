@@ -69,7 +69,12 @@ const args = [
 
 const child = spawn(process.execPath, args, {
   stdio: "inherit",
-  env: { ...process.env, PORT: devPort },
+  env: {
+    ...process.env,
+    PORT: devPort,
+    /** Browser Settings → Server: dev API (`/api/dev-pl-local-server`) — client bundle me inline */
+    NEXT_PUBLIC_PL_DEV_LOCAL_SERVER: "1",
+  },
 });
 
 child.on("exit", (code, signal) => {

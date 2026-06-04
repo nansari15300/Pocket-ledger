@@ -3,15 +3,15 @@ const {
   BrowserWindow,
   BrowserView,
   Menu,
+  Tray,
   ipcMain,
   dialog,
   nativeImage,
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
-const http = require("http");
 const os = require("os");
-const handler = require("serve-handler");
+const localAppServer = require("./localAppServer");
 
 /** Windows taskbar / Start menu grouping — `electron.app.*` default ID par Electron atom icon dikhta hai; `package.json` build.appId se match hona chahiye. */
 const WINDOWS_APP_USER_MODEL_ID = "com.pocketledger.desktop";
@@ -34,8 +34,6 @@ if (!gotSingleInstanceLock) {
   });
 }
 
-let staticServer = null;
-let staticServerPort = null;
 const windowTabs = new Map();
 const PRINT_MODE_ACTUAL = "actual";
 const PRINT_MODE_FIT_WIDTH = "fit-width";
@@ -66,44 +64,6 @@ function getWindowIcon() {
 // Keep a single source of truth for dev/prod behavior.
 function isDevMode() {
   return !app.isPackaged;
-}
-
-/** EXE: `localhost:PORT` = browser origin — port badle to IndexedDB + Firebase Auth "logout". Purani successful port persist karo. */
-const PL_ELECTRON_STATIC_PORT_FILE = "pl-electron-static-port.json";
-
-function readPersistedPackagedStaticPort() {
-  if (!app.isPackaged) return null;
-  try {
-    const f = path.join(app.getPath("userData"), PL_ELECTRON_STATIC_PORT_FILE);
-    const n = Number(JSON.parse(fs.readFileSync(f, "utf8")).port);
-    if (Number.isFinite(n) && n > 0 && n < 65536) return n;
-  } catch (_) {}
-  return null;
-}
-
-function writePersistedPackagedStaticPort(port) {
-  if (!app.isPackaged) return;
-  try {
-    const f = path.join(app.getPath("userData"), PL_ELECTRON_STATIC_PORT_FILE);
-    fs.mkdirSync(path.dirname(f), { recursive: true });
-    fs.writeFileSync(f, JSON.stringify({ port }), "utf8");
-  } catch (_) {}
-}
-
-/** Pehle last-chalne-wala port, phir default 3000, phir kam-takraav fallbacks — `listen(0)` random kabhi mat (origin drift). */
-function packagedStaticPortCandidates(preferred) {
-  const persisted = readPersistedPackagedStaticPort();
-  const fallbacks = [37123, 38123, 39123, 40123, 41123];
-  const ordered = [...(persisted != null ? [persisted] : []), preferred, ...fallbacks];
-  const seen = new Set();
-  const out = [];
-  for (const n of ordered) {
-    if (typeof n === "number" && n > 0 && n < 65536 && !seen.has(n)) {
-      seen.add(n);
-      out.push(n);
-    }
-  }
-  return out;
 }
 
 function isAllowedFirebaseProxyTarget(targetUrl) {
@@ -141,128 +101,289 @@ function rewriteReconciliationDocumentUrl(requestUrl) {
   return null;
 }
 
-// Production Electron should serve static Next files over localhost instead of file://.
-function startStaticServer() {
-  if (staticServer && staticServerPort) {
-    return Promise.resolve(staticServerPort);
+localAppServer.setServerDeps({
+  staticPublicDir: path.join(__dirname, "out"),
+  isPackaged: app.isPackaged,
+  rewriteReconciliationDocumentUrl,
+  isAllowedFirebaseProxyTarget,
+});
+
+function userDataPath() {
+  return app.getPath("userData");
+}
+
+/** Packaged EXE UI — localhost static server; sharing off hone par bhi chalna chahiye. */
+async function ensureAppUiStaticServer() {
+  const cfg = localAppServer.loadConfig(userDataPath());
+  if (!localAppServer.shouldHostLocalServer(cfg)) {
+    throw new Error("PL_LOCAL_SERVER_ROLE_CLIENT_ONLY");
   }
-
-  // In packaged app, main.js is inside app.asar and exported site is bundled as out/**.
-  const staticPublicDir = path.join(__dirname, "out");
-
-  staticServer = http.createServer(async (request, response) => {
-    // Local proxy for Firebase file downloads: avoids renderer CORS issues on localhost desktop app.
-    try {
-      const requestUrl = new URL(request.url || "/", "http://localhost");
-      if (requestUrl.pathname === "/__firebase_blob_proxy") {
-        const target = requestUrl.searchParams.get("url") || "";
-        if (!isAllowedFirebaseProxyTarget(target)) {
-          response.statusCode = 400;
-          response.setHeader("content-type", "text/plain; charset=utf-8");
-          response.end("Invalid target URL");
-          return;
-        }
-        const upstream = await fetch(target, { method: "GET" });
-        if (!upstream.ok) {
-          response.statusCode = upstream.status;
-          response.setHeader("content-type", "text/plain; charset=utf-8");
-          response.end(`Upstream error: ${upstream.status}`);
-          return;
-        }
-        const contentType = upstream.headers.get("content-type") || "application/octet-stream";
-        response.statusCode = 200;
-        response.setHeader("content-type", contentType);
-        response.setHeader("cache-control", "private, max-age=60");
-        const buffer = Buffer.from(await upstream.arrayBuffer());
-        response.end(buffer);
-        return;
-      }
-    } catch {
-      // fall through to static handler for normal routes
+  try {
+    return await localAppServer.startStaticServer(userDataPath(), { forAppUi: true });
+  } catch (e) {
+    if (String(e?.message || e) === "PL_LOCAL_SERVER_ROLE_CLIENT_ONLY") {
+      throw e;
     }
-    // Reconciling deep link — galat HTML (root) load hone se login → dashboard redirect
-    try {
-      const requestUrl = new URL(request.url || "/", "http://localhost");
-      const rewritten = rewriteReconciliationDocumentUrl(requestUrl);
-      if (rewritten) {
-        request = Object.assign({}, request, { url: rewritten });
-      }
-    } catch {
-      /* fall through */
+    if (String(e?.message || e) === "PL_PACKAGED_STATIC_PORT_EXHAUSTED") {
+      dialog.showErrorBox(
+        "Pocket Ledger",
+        "Local server ports are all busy (tried configured port and fallbacks).\n\n" +
+          "Close other apps using those ports, then reopen.\n" +
+          "Your sign-in stays on the same port — changing ports looks like a logout."
+      );
     }
-    // Keep asset files untouched; only clean route URLs like /company -> /company/index.html.
-    return handler(request, response, {
-      public: staticPublicDir,
-      cleanUrls: true,
-      headers: [
-        {
-          source: "**/*.mjs",
-          headers: [
-            {
-              key: "Content-Type",
-              value: "text/javascript; charset=utf-8",
-            },
-          ],
-        },
-      ],
-    });
-  });
+    throw e;
+  }
+}
 
-  // Packaged: port stable rakho — random `listen(0)` = naya origin = auth "delete". Multi-try + `userData` persist.
-  const parsedPreferred = Number.parseInt(process.env.PL_ELECTRON_STATIC_PORT || "3000", 10);
-  const preferred =
-    Number.isFinite(parsedPreferred) && parsedPreferred > 0 && parsedPreferred < 65536
-      ? parsedPreferred
-      : 3000;
-
-  return new Promise((resolve, reject) => {
-    const finish = () => {
-      staticServer.removeAllListeners("error");
-      const addressInfo = staticServer.address();
-      if (!addressInfo || typeof addressInfo === "string") {
-        reject(new Error("Unable to resolve static server port."));
-        return;
-      }
-      staticServerPort = addressInfo.port;
-      writePersistedPackagedStaticPort(staticServerPort);
-      resolve(staticServerPort);
-    };
-
-    const candidates = packagedStaticPortCandidates(preferred);
-    let candidateIndex = 0;
-
-    const tryNextCandidate = () => {
-      if (candidateIndex >= candidates.length) {
-        dialog.showErrorBox(
-          "Pocket Ledger",
-          "Local server ports are all busy (tried 3000 and fallbacks).\n\n" +
-            "Close other apps using those ports, then reopen.\n" +
-            "Your sign-in stays on the same port — changing ports looks like a logout."
-        );
-        reject(new Error("PL_PACKAGED_STATIC_PORT_EXHAUSTED"));
-        return;
-      }
-      const port = candidates[candidateIndex++];
-      staticServer.removeAllListeners("error");
-      staticServer.once("error", (err) => {
-        if (err && err.code === "EADDRINUSE") {
-          tryNextCandidate();
-          return;
-        }
-        reject(err);
-      });
-      staticServer.listen(port, "localhost", finish);
-    };
-
-    tryNextCandidate();
-  });
+async function startStaticServer() {
+  const cfg = localAppServer.loadConfig(userDataPath());
+  if (!localAppServer.shouldHostLocalServer(cfg)) {
+    throw new Error("PL_LOCAL_SERVER_ROLE_CLIENT_ONLY");
+  }
+  if (!cfg.userWantsRunning) {
+    throw new Error("PL_LOCAL_SERVER_STOPPED");
+  }
+  try {
+    return await localAppServer.startStaticServer(userDataPath());
+  } catch (e) {
+    if (String(e?.message || e) === "PL_LOCAL_SERVER_ROLE_CLIENT_ONLY") {
+      throw e;
+    }
+    if (String(e?.message || e) === "PL_PACKAGED_STATIC_PORT_EXHAUSTED") {
+      dialog.showErrorBox(
+        "Pocket Ledger",
+        "Local server ports are all busy (tried configured port and fallbacks).\n\n" +
+          "Close other apps using those ports, then reopen.\n" +
+          "Your sign-in stays on the same port — changing ports looks like a logout."
+      );
+    }
+    throw e;
+  }
 }
 
 function stopStaticServer() {
-  if (!staticServer) return;
-  staticServer.close();
-  staticServer = null;
-  staticServerPort = null;
+  return localAppServer.stopStaticServer();
+}
+
+/** Packaged EXE: server background me chal raha ho to system tray se stop / open. */
+let serverTray = null;
+
+function getTrayIconImage() {
+  const icon = getWindowIcon();
+  if (icon && typeof icon === "object" && typeof icon.isEmpty === "function" && !icon.isEmpty()) {
+    return icon;
+  }
+  try {
+    const img = nativeImage.createFromPath(getIconPath());
+    if (!img.isEmpty()) return img;
+  } catch (_) {}
+  return null;
+}
+
+function destroyServerTray() {
+  if (serverTray) {
+    try {
+      serverTray.destroy();
+    } catch (_) {}
+    serverTray = null;
+  }
+}
+
+async function stopLocalServerAndPersist() {
+  localAppServer.saveConfig(userDataPath(), { userWantsRunning: false });
+  const cfg = localAppServer.loadConfig(userDataPath());
+  if (app.isPackaged && localAppServer.shouldHostLocalServer(cfg)) {
+    const expectedHost = localAppServer.listenHostForConfig(cfg);
+    const bound = localAppServer.getServerListenAddress();
+    if (!bound) {
+      await localAppServer.startStaticServer(userDataPath(), { forAppUi: true });
+    } else if (bound.host !== expectedHost) {
+      await localAppServer.restartStaticServer(userDataPath(), { forAppUi: true });
+    }
+    syncLocalServerTray();
+    return;
+  }
+  await stopStaticServer();
+  syncLocalServerTray();
+}
+
+async function startSharedLocalServer() {
+  localAppServer.saveConfig(userDataPath(), { userWantsRunning: true });
+  const cfg = localAppServer.loadConfig(userDataPath());
+  const expectedHost = localAppServer.listenHostForConfig(cfg);
+  const bound = localAppServer.getServerListenAddress();
+  if (!bound) {
+    return startStaticServer();
+  }
+  if (bound.host !== expectedHost) {
+    return localAppServer.restartStaticServer(userDataPath());
+  }
+  return bound.port;
+}
+
+function syncLocalServerTray() {
+  if (!app.isPackaged) {
+    destroyServerTray();
+    return;
+  }
+  const cfg = localAppServer.loadConfig(userDataPath());
+  if (!localAppServer.shouldHostLocalServer(cfg)) {
+    destroyServerTray();
+    return;
+  }
+  const st = localAppServer.getStatus(userDataPath());
+  if (!st.appUiServing && !cfg.userWantsRunning) {
+    destroyServerTray();
+    return;
+  }
+
+  const portLabel = st.port != null ? `port ${st.port}` : "running";
+  const statusLine = st.sharingActive
+    ? `Sharing on for others (${portLabel})`
+    : st.appUiServing
+      ? `This PC only — remote sharing off (${portLabel})`
+      : "Local server stopped";
+
+  const template = [
+    { label: statusLine, enabled: false },
+    { type: "separator" },
+    {
+      label: "Open Pocket Ledger",
+      click: async () => {
+        const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed());
+        if (wins.length > 0) {
+          const w = wins[0];
+          if (w.isMinimized()) w.restore();
+          w.show();
+          w.focus();
+          return;
+        }
+        await createWindow();
+      },
+    },
+  ];
+  if (st.sharingActive) {
+    template.push({
+      label: "Stop sharing (keep app open)",
+      click: () => {
+        void stopLocalServerAndPersist();
+      },
+    });
+  } else if (!st.sharingActive && cfg.userWantsRunning === false && st.appUiServing) {
+    template.push({
+      label: "Start sharing for others",
+      click: () => {
+        void startSharedLocalServer().then(() => syncLocalServerTray());
+      },
+    });
+  }
+  template.push(
+    { type: "separator" },
+    {
+      label: "Quit Pocket Ledger",
+      click: () => {
+        void (async () => {
+          await stopLocalServerAndPersist();
+          app.quit();
+        })();
+      },
+    }
+  );
+
+  const menu = Menu.buildFromTemplate(template);
+  const trayIcon = getTrayIconImage();
+  if (!trayIcon) return;
+
+  if (!serverTray) {
+    serverTray = new Tray(trayIcon);
+    serverTray.setToolTip("Pocket Ledger");
+    serverTray.on("double-click", async () => {
+      const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed());
+      if (wins.length > 0) {
+        const w = wins[0];
+        if (w.isMinimized()) w.restore();
+        w.show();
+        w.focus();
+        return;
+      }
+      await createWindow();
+    });
+  } else {
+    serverTray.setImage(trayIcon);
+  }
+  serverTray.setContextMenu(menu);
+  if (st.appUiServing && st.port != null) {
+    serverTray.setToolTip(
+      st.sharingActive
+        ? `Pocket Ledger — sharing on port ${st.port}`
+        : `Pocket Ledger — this PC only (port ${st.port})`
+    );
+  }
+}
+
+function notifyServerStillRunningInTray(st) {
+  if (!serverTray || !st?.running) return;
+  try {
+    if (typeof serverTray.displayBalloon === "function") {
+      serverTray.displayBalloon({
+        iconType: "info",
+        title: "Pocket Ledger server",
+        content: `Still running on port ${st.port}. Right-click the tray icon → Stop server.`,
+      });
+    }
+  } catch (_) {}
+}
+
+function isPlServerRequest(urlStr, port, remoteBase) {
+  try {
+    const u = new URL(urlStr);
+    const h = (u.hostname || "").toLowerCase();
+    const reqPort = String(u.port || (u.protocol === "https:" ? "443" : "80"));
+    if (port && reqPort === String(port)) {
+      if (h === "localhost" || h === "127.0.0.1" || h === "[::1]") return true;
+      if (/^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(h)) return true;
+    }
+    if (remoteBase) {
+      const remote = new URL(remoteBase);
+      if (u.origin === remote.origin) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function appendRemoteClientFlag(urlStr) {
+  try {
+    const u = new URL(urlStr);
+    u.searchParams.set("pl_remote_client", "1");
+    return u.toString();
+  } catch {
+    const sep = urlStr.includes("?") ? "&" : "?";
+    return `${urlStr}${sep}pl_remote_client=1`;
+  }
+}
+
+/** Pocket Ledger BrowserView — app marker + access token for local/remote server URLs. */
+function installPlServerRequestHeaders(session) {
+  if (!session?.webRequest) return;
+  const legacyToken = localAppServer.getOrCreateClientToken(userDataPath());
+  const cfg = localAppServer.loadConfig(userDataPath());
+  const remoteBase = localAppServer.normalizeRemoteServerUrl(cfg.remoteServerUrl);
+  const accessTok = String(cfg.clientAccessToken || "").trim();
+  session.webRequest.onBeforeSendHeaders({ urls: ["http://*/*", "https://*/*"] }, (details, callback) => {
+    const port = localAppServer.getStaticServerPort();
+    const headers = { ...details.requestHeaders };
+    if (isPlServerRequest(details.url || "", port, remoteBase)) {
+      headers[localAppServer.PL_ELECTRON_MARKER_HEADER] = localAppServer.PL_ELECTRON_MARKER_VALUE;
+      headers[localAppServer.PL_CLIENT_HEADER] = legacyToken;
+      if (accessTok) {
+        headers[localAppServer.PL_ACCESS_HEADER] = accessTok;
+      }
+    }
+    callback({ requestHeaders: headers });
+  });
 }
 
 function adjustZoom(targetContents, delta) {
@@ -529,7 +650,15 @@ function previousTab(win) {
 async function getAppEntryUrl() {
   // Dev Next (`npm run dev`) port 3000 — packaged EXE static server alag fallback ports par.
   if (isDevMode()) return "http://localhost:3000";
-  const port = await startStaticServer();
+  const cfg = localAppServer.loadConfig(userDataPath());
+  if (localAppServer.shouldUseRemoteEntry(cfg)) {
+    const remote = localAppServer.normalizeRemoteServerUrl(cfg.remoteServerUrl);
+    if (!remote) {
+      throw new Error("PL_REMOTE_SERVER_URL_MISSING");
+    }
+    return appendRemoteClientFlag(remote);
+  }
+  const port = await ensureAppUiStaticServer();
   // Packaged app route loading must be HTTP to avoid file:// local-resource blocking.
   return `http://localhost:${port}/`;
 }
@@ -543,6 +672,7 @@ async function openNewTab(win) {
       contextIsolation: true,
     },
   });
+  installPlServerRequestHeaders(view.webContents.session);
 
   // Normalize zoom shortcuts for different keyboard layouts in each tab webContents.
   view.webContents.on("before-input-event", (event, input) => {
@@ -578,7 +708,19 @@ async function openNewTab(win) {
   if (!state) return;
   state.tabs.push(view);
   switchToTab(win, state.tabs.length - 1);
-  await view.webContents.loadURL(entryUrl);
+  try {
+    await view.webContents.loadURL(entryUrl);
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if (msg.includes("PL_REMOTE_SERVER_URL_MISSING")) {
+      dialog.showErrorBox(
+        "Pocket Ledger",
+        "Client mode: enter Server address in Settings → Server, save, then restart the app."
+      );
+    } else {
+      throw e;
+    }
+  }
 }
 
 function printCurrentTab(win) {
@@ -832,6 +974,80 @@ async function createWindow() {
 
 if (gotSingleInstanceLock) {
   app.whenReady().then(async () => {
+  const bootCfg = localAppServer.loadConfig(userDataPath());
+  localAppServer.applyLoginItemSettings(app, bootCfg.autoStartOnBoot);
+
+  ipcMain.handle("pl-local-server-get-status", async () => {
+    return localAppServer.getStatus(userDataPath());
+  });
+
+  ipcMain.handle("pl-local-server-get-config", async () => {
+    return localAppServer.loadConfig(userDataPath());
+  });
+
+  ipcMain.handle("pl-local-server-set-config", async (_event, partial) => {
+    const next = localAppServer.saveConfig(userDataPath(), partial || {});
+    if (typeof partial?.autoStartOnBoot === "boolean") {
+      localAppServer.applyLoginItemSettings(app, next.autoStartOnBoot);
+    }
+    return next;
+  });
+
+  ipcMain.handle("pl-local-server-start", async () => {
+    const cfg = localAppServer.loadConfig(userDataPath());
+    if (!localAppServer.shouldHostLocalServer(cfg)) {
+      return { ok: false, error: "client-only", status: localAppServer.getStatus(userDataPath()) };
+    }
+    const port = await startSharedLocalServer();
+    syncLocalServerTray();
+    return { ok: true, port, status: localAppServer.getStatus(userDataPath()) };
+  });
+
+  ipcMain.handle("pl-local-server-stop", async () => {
+    await stopLocalServerAndPersist();
+    return { ok: true, status: localAppServer.getStatus(userDataPath()) };
+  });
+
+  ipcMain.handle("pl-local-server-restart", async (_event, partial) => {
+    if (partial && typeof partial === "object") {
+      localAppServer.saveConfig(userDataPath(), partial);
+    }
+    await stopStaticServer();
+    const cfg = localAppServer.loadConfig(userDataPath());
+    if (!localAppServer.shouldHostLocalServer(cfg)) {
+      syncLocalServerTray();
+      return { ok: true, port: null, status: localAppServer.getStatus(userDataPath()) };
+    }
+    let port;
+    if (app.isPackaged) {
+      if (cfg.userWantsRunning) {
+        port = await localAppServer.startStaticServer(userDataPath());
+      } else {
+        port = await localAppServer.startStaticServer(userDataPath(), { forAppUi: true });
+      }
+    } else if (cfg.userWantsRunning) {
+      port = await localAppServer.startStaticServer(userDataPath());
+    } else {
+      syncLocalServerTray();
+      return { ok: true, port: null, status: localAppServer.getStatus(userDataPath()) };
+    }
+    syncLocalServerTray();
+    return { ok: true, port, status: localAppServer.getStatus(userDataPath()) };
+  });
+
+  ipcMain.handle("pl-local-server-list-access-tokens", async () => {
+    return localAppServer.accessTokens.listAccessTokens(userDataPath());
+  });
+
+  ipcMain.handle("pl-local-server-create-access-token", async (_event, input) => {
+    return localAppServer.accessTokens.createAccessToken(userDataPath(), input || {});
+  });
+
+  ipcMain.handle("pl-local-server-revoke-access-token", async (_event, id) => {
+    const ok = localAppServer.accessTokens.revokeAccessToken(userDataPath(), String(id || ""));
+    return { ok };
+  });
+
   ipcMain.handle("window-chrome-action", async (event, action) => {
     const win =
       resolveWindowForTabStripIpc(event.sender) || BrowserWindow.fromWebContents(event.sender);
@@ -985,6 +1201,7 @@ if (gotSingleInstanceLock) {
 
   buildAppMenu();
   await createWindow();
+  syncLocalServerTray();
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow();
   });
@@ -993,10 +1210,19 @@ if (gotSingleInstanceLock) {
 
 // Ensure temporary local server is closed on every quit path.
 app.on("before-quit", () => {
+  destroyServerTray();
   stopStaticServer();
 });
 
 app.on("window-all-closed", () => {
+  const cfg = localAppServer.loadConfig(userDataPath());
+  const st = localAppServer.getStatus(userDataPath());
+  if (app.isPackaged && localAppServer.shouldHostLocalServer(cfg) && st.appUiServing) {
+    syncLocalServerTray();
+    if (st.sharingActive) notifyServerStillRunningInTray(st);
+    return;
+  }
+  destroyServerTray();
   stopStaticServer();
   if (process.platform !== "darwin") app.quit();
 });

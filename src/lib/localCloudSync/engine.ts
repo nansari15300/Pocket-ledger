@@ -96,6 +96,15 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
   uploaded: number;
   downloaded: number;
 }> {
+  const { isPlRemoteServerClientMode } = await import("@/lib/plRemoteServerClient");
+  if (isPlRemoteServerClientMode()) {
+    return {
+      ok: false,
+      error: "Remote client: Drive/Firestore sync runs on the server PC only.",
+      uploaded: 0,
+      downloaded: 0,
+    };
+  }
   const cid = String(companyId || "").trim();
   if (!cid) return { ok: false, error: "missing companyId", uploaded: 0, downloaded: 0 };
 
