@@ -82,4 +82,13 @@ firebase deploy --only storage
 Ya dono ek saath:
 firebase deploy --only firestore:rules,storage
 
+
+
+
+git add -A
+
+git commit -m "comment"
+
+git push origin main
+
 ----------------------------------------------------------------------------------------------------

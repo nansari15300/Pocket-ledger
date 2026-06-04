@@ -144,8 +144,8 @@ export const getTransactionAmounts = (
                 if (transaction.type === 'purchase') debit += taxableAmount;
             }
             else if (entity && transaction.partyId === entity.id) {
-                if (["sale", "payment_out", "direct_income"].includes(transaction.type)) debit += amount;
-                if (["purchase", "payment_in", "direct_expense"].includes(transaction.type)) credit += amount;
+                if (["sale", "sale_service", "payment_out", "direct_income"].includes(transaction.type)) debit += amount;
+                if (["purchase", "purchase_service", "payment_in", "direct_expense"].includes(transaction.type)) credit += amount;
             }
 
             /** Party contra: sundry creditor/debtor ledger jahan party id bank leg jaisi `from/toAccountId` se juda ho — account context jaisa Dr/Cr. */

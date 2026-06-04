@@ -51,6 +51,7 @@ import {
   batchFetchUserDisplayNamesFromFirestore,
   displayNameFromUserFirestoreDoc,
 } from "@/lib/batchFetchUserDisplayNames";
+import { buildPartyLedgerAggregateMap } from "@/lib/partyListLedgerBalance";
 
 /** Offline company: vouchers me `userId` aksar owner ka Firebase uid ya `local` — sirf `user.uid` match se shared user ko 0 rows. */
 function localCompanyRoleAllowsViewAll(role: string | undefined): boolean {
@@ -1298,7 +1299,8 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   // --- Optimization: Calculate Aggregates ONCE ---
   // This replaces the nested loops. We loop vouchers once and build Maps.
   const voucherAggregates = useMemo(() => {
-    const partyMap = new Map<string, { debit: number; credit: number }>();
+    const partyIdSet = new Set((parties || []).map((p) => p.id));
+    const partyMap = buildPartyLedgerAggregateMap(vouchersForDisplay, partyIdSet);
     const staffMap = new Map<string, { debit: number; credit: number }>();
     const accountMap = new Map<string, { debit: number; credit: number }>();
     const taxMap = new Map<string, { debit: number; credit: number }>();
@@ -1340,14 +1342,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
             }
         }
         
-        // --- Party Logic ---
-        if (v.partyId) {
-            if (["sale", "payment_out", "direct_income"].includes(v.type)) {
-                addVal(partyMap, v.partyId, 'debit', amount);
-            } else if (["purchase", "payment_in", "direct_expense"].includes(v.type)) {
-                addVal(partyMap, v.partyId, 'credit', amount);
-            }
-        }
+        // Party list balance: `buildPartyLedgerAggregateMap` (ledger-aligned) — loop ke baad merge nahi
 
         // --- Sale/Purchase accounts (respect selected account on voucher; keep legacy fallback ids) ---
         if (v.type === "sale") {
@@ -1389,10 +1384,10 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
             if (expenseAccId) addVal(expenseMap, expenseAccId, 'debit', amount);
         }
 
-        // Inter Company — compound legs (entity + IC counterparty + bank)
+        // Inter Company — bank + staff/tax/expense legs (party → `buildPartyLedgerAggregateMap`)
         if (v.type === "inter_company") {
             if (!isInterCompanyVisibleOnTargetBank(v as Record<string, unknown>)) {
-                // Target: source approve se pehle balance maps me mat jodo
+                // Target: source approve se pehle bank map me mat jodo
             } else {
             const icVoucher = v as Record<string, unknown>;
             const legs = resolveInterCompanyLegsForVoucher(icVoucher);
@@ -1406,11 +1401,9 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
             }
             if (legs.length > 0) {
                 legs.forEach((leg) => {
-                    if (leg.kind === "bank") return;
+                    if (leg.kind === "bank" || leg.kind === "party") return;
                     const context =
-                        leg.kind === "party"
-                            ? ("party" as const)
-                            : leg.kind === "staff"
+                        leg.kind === "staff"
                               ? ("staff" as const)
                               : leg.kind === "tax"
                                 ? ("tax" as const)
@@ -1423,9 +1416,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
                     );
                     if (!icEntity.touched) return;
                     const map =
-                        context === "party"
-                            ? partyMap
-                            : context === "staff"
+                        context === "staff"
                               ? staffMap
                               : context === "tax"
                                 ? taxMap
@@ -1433,10 +1424,6 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
                     if (icEntity.debit > 0) addVal(map, leg.accountId, "debit", icEntity.debit);
                     if (icEntity.credit > 0) addVal(map, leg.accountId, "credit", icEntity.credit);
                 });
-            } else if (v.partyId) {
-                const side = String((v as { interCompanyLink?: { role?: string } }).interCompanyLink?.role || "");
-                if (side === "source") addVal(partyMap, v.partyId, "debit", amount);
-                else if (side === "target" && v.isApproved === true) addVal(partyMap, v.partyId, "credit", amount);
             }
             }
         }
@@ -1513,7 +1500,6 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
                 const d = Number(entry.debit || 0);
                 const c = Number(entry.credit || 0);
                 if (entry.accountId) {
-                    addVal(partyMap, entry.accountId, 'debit', d); addVal(partyMap, entry.accountId, 'credit', c);
                     if (v.subType !== 'add_salary') { // Corrected: only apply to non-salary journals
                        addVal(staffMap, entry.accountId, 'debit', d); addVal(staffMap, entry.accountId, 'credit', c);
                     }
@@ -1526,7 +1512,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     });
 
     return { partyMap, staffMap, accountMap, taxMap, expenseMap, itemMap };
-  }, [vouchersForDisplay, items, staff]); // Added items dependency so itemMap rebuilds if items change
+  }, [vouchersForDisplay, items, staff, parties]); // parties: ledger-aligned partyMap
 
 
  const processedParties: ProcessedParty[] = useMemo(() => {
