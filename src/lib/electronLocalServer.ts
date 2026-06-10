@@ -77,6 +77,27 @@ export type PlElectronLocalServerApi = {
     uid: string | null;
     allowedCompanyIds: string[];
   }>;
+  updateAccessToken: (
+    id: string,
+    input: { label?: string; allowedCompanyIds?: string[] }
+  ) => Promise<{ ok: boolean; token?: LocalAppServerAccessTokenSummary }>;
+  getAccessTokenSecret: (id: string) => Promise<{
+    ok: boolean;
+    id?: string;
+    token?: string;
+    label?: string;
+    allowedCompanyIds?: string[];
+  }>;
+  rotateAccessToken: (
+    id: string,
+    input?: { label?: string; allowedCompanyIds?: string[] }
+  ) => Promise<{
+    ok: boolean;
+    id?: string;
+    token?: string;
+    label?: string;
+    allowedCompanyIds?: string[];
+  }>;
   revokeAccessToken: (id: string) => Promise<{ ok: boolean }>;
 };
 

@@ -58,10 +58,11 @@ import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb, upsertCompany
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { softDeleteCompanySubdocToRecycleBin } from "@/lib/recycleBinEntityLifecycle";
 import { countActiveInterCompanyVouchersForCounterpartyParty, purgeInterCompanyCounterpartyPartyIfUnused } from "@/lib/interCompany/cleanupInterCompanyCounterpartyParty";
+import { isInterCompanyCounterpartyPartyName } from "@/lib/interCompany/interCompanyCounterpartyPartyName";
 function isInterCompanyAutoParty(party: Party): boolean {
   if (party.isInterCompanyCounterparty === true) return true;
   if (String(party.id || "").startsWith("ic_peer_")) return true;
-  return String(party.name || "").startsWith("IC · Due ");
+  return isInterCompanyCounterpartyPartyName(party.name);
 }
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { parseOpeningBalanceDateToLocalNoon } from "@/lib/voucherDateNormalize";

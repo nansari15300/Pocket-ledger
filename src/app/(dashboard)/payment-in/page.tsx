@@ -183,7 +183,7 @@ export default function PaymentInPage() {
         setIsVoucherOpen(true);
     };
 
-    const enableLinkPaymentToTxns = company?.enableLinkPaymentToTxns !== false;
+    const enableLinkPaymentToTxns = company?.enableLinkPaymentToTxns === true;
     const isPartySelected = selectedPayee?.type === "Party" && selectedPayee?.id;
 
     const handleLinkDialogDone = (allocations: { voucherId: string; amount: number }[], receivedAmount: number) => {

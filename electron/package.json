@@ -23,6 +23,7 @@
     },
     "files": [
       "main.js",
+      "googleAuthExternal.js",
       "localAppServer.js",
       "localAppServerAccessTokens.js",
       "tab-strip.html",
@@ -46,7 +47,6 @@
     ],
     "win": {
       "target": "nsis",
-      "signAndEditExecutable": false,
       "icon": "build/icon.ico",
       "executableName": "Pocket Ledger"
     },
@@ -57,7 +57,7 @@
       "installerHeaderIcon": "build/icon.ico",
       "createDesktopShortcut": false,
       "createStartMenuShortcut": true,
-      "include": "installer.nsh"
+      "include": "build/installer.nsh"
     },
     "icon": "../public/app-icon.png"
   },

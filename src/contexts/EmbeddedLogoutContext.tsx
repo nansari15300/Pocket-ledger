@@ -29,6 +29,9 @@ import { auth, signOutWithFirestoreTeardown } from "@/lib/firebase";
 import { clearEmbeddedSessionUnlock } from "@/lib/embeddedDeviceLock";
 import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
 import { pruneRememberedLoginEmailIfDisabled } from "@/lib/loginRememberEmail";
+import { clearAllCloudCompanyPasswordUnlockSessionsForUser } from "@/lib/cloudCompanyPasswordUnlockRemember";
+import { clearAllOfflineUnlockSessionsForUser } from "@/lib/offlineCompanyUnlockRemember";
+import { clearAllRememberedSharedUnlockUsernamesForUser } from "@/lib/onlineSharedUnlockRememberUsername";
 import {
   detectSavedLoginAuthMethod,
   upsertSavedLoginAccount,
@@ -51,10 +54,17 @@ export function useEmbeddedLogout() {
   return useContext(EmbeddedLogoutContext);
 }
 
-async function performFirebaseLogout(router: { replace: (path: string) => void }) {
+async function performFirebaseLogout(
+  router: { replace: (path: string) => void },
+  firebaseUid?: string | null,
+  userEmail?: string | null
+) {
   const { clearNavigationMemory } = await import("@/lib/navigation-memory");
   clearNavigationMemory();
   clearEmbeddedSessionUnlock();
+  clearAllCloudCompanyPasswordUnlockSessionsForUser(firebaseUid ?? undefined, userEmail);
+  clearAllOfflineUnlockSessionsForUser(firebaseUid ?? undefined);
+  clearAllRememberedSharedUnlockUsernamesForUser(firebaseUid ?? undefined, userEmail);
   pruneRememberedLoginEmailIfDisabled();
   if (isLocalGuestEnabled()) {
     disableLocalGuest();
@@ -107,7 +117,7 @@ export function EmbeddedLogoutProvider({ children }: { children: ReactNode }) {
       pendingUserRef.current = null;
       setOpen(false);
       setPasswordForSave("");
-      await performFirebaseLogout(router);
+      await performFirebaseLogout(router, u?.uid, u?.email);
     } finally {
       setBusy(false);
     }
@@ -115,7 +125,7 @@ export function EmbeddedLogoutProvider({ children }: { children: ReactNode }) {
 
   const requestEmbeddedLogout = useCallback(() => {
     if (!user || !enabled) {
-      void performFirebaseLogout(router);
+      void performFirebaseLogout(router, user?.uid, user?.email);
       return;
     }
     pendingUserRef.current = user;

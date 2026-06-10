@@ -44,6 +44,7 @@ import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { doc, setDoc, serverTimestamp, Timestamp, collection, query, where, getDocs } from "firebase/firestore";
 import { initializeCompanyDataClient } from "@/lib/initializeCompanyDataClient";
 import { ensureSuperAdminInSharedEmails } from "@/lib/superAdminEmails";
+import { sharedWithEmailsLowerFromList } from "@/lib/sharedWithEmailsQuery";
 import { generateCompanyId } from "@/lib/generateCompanyId";
 import { generateUniqueInterCompanyAccountNo } from "@/lib/interCompany/interCompanyAccountNo";
 import { generateUniqueInterCompanyCompanyCode } from "@/lib/interCompany/interCompanyCompanyCode";
@@ -64,6 +65,7 @@ import {
   type CloudSyncProviderChoice,
 } from "@/components/company/CloudSyncProviderPickers";
 import { planAllowsFirebaseOnline } from "@/lib/planSyncEntitlements";
+import { useGate } from "@/contexts/GateContext";
 
 const MAX_FILE_SIZE_MB = 0.5;
 
@@ -129,6 +131,7 @@ export function CreateCompanyForm({
   const { user, customUser } = useAuth();
   // `company` = abhi selected company (plan hint); owned list se highest tier — pehle hamesha "basic" plan check tha
   const { setCompanyId, allCompanies, company } = useCompany();
+  const { activeGate, canCreateCompanyOnActiveGate, activeGateCreateHintText } = useGate();
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const livePlans = useLivePlans();
   const accountPlanId = useMemo(
@@ -487,6 +490,9 @@ export function CreateCompanyForm({
           createdAt: Date.now(),
           sharedWith: [],
           sharedWithEmails: [effectiveUserEmail].filter(Boolean),
+          sharedWithEmailsLower: sharedWithEmailsLowerFromList(
+            [effectiveUserEmail].filter(Boolean) as string[]
+          ),
           planId: "basic",
           planExpiry: expiryDate.toISOString(),
           isDeleted: false,
@@ -519,11 +525,17 @@ export function CreateCompanyForm({
           ownerEmail: effectiveUserEmail,
           createdAt: serverTimestamp(),
           sharedWith: [],
-          sharedWithEmails: ensureSuperAdminInSharedEmails(
-            effectiveUserEmail ? [effectiveUserEmail] : [],
-            customUser?.email,
-            customUser?.role === "SuperAdmin"
-          ),
+          ...(() => {
+            const sharedWithEmails = ensureSuperAdminInSharedEmails(
+              effectiveUserEmail ? [effectiveUserEmail] : [],
+              customUser?.email,
+              customUser?.role === "SuperAdmin"
+            );
+            return {
+              sharedWithEmails,
+              sharedWithEmailsLower: sharedWithEmailsLowerFromList(sharedWithEmails),
+            };
+          })(),
           planId: "basic",
           planExpiry: Timestamp.fromDate(expiryDate),
         });
@@ -550,11 +562,17 @@ export function CreateCompanyForm({
             ownerEmail: effectiveUserEmail,
             createdAt: Date.now(),
             sharedWith: [],
-            sharedWithEmails: ensureSuperAdminInSharedEmails(
-              effectiveUserEmail ? [effectiveUserEmail] : [],
-              customUser?.email,
-              customUser?.role === "SuperAdmin"
-            ),
+            ...(() => {
+              const sharedWithEmails = ensureSuperAdminInSharedEmails(
+                effectiveUserEmail ? [effectiveUserEmail] : [],
+                customUser?.email,
+                customUser?.role === "SuperAdmin"
+              );
+              return {
+                sharedWithEmails,
+                sharedWithEmailsLower: sharedWithEmailsLowerFromList(sharedWithEmails),
+              };
+            })(),
             planId: "basic",
             planExpiry: expiryDate.toISOString(),
             isDeleted: false,
@@ -614,6 +632,15 @@ export function CreateCompanyForm({
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6" autoComplete="off">
+        <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-950">
+          <strong>Active gate:</strong> {activeGate.label} — {activeGateCreateHintText}
+        </div>
+        {!canCreateCompanyOnActiveGate ? (
+          <p className="text-sm text-destructive">
+            Switch to <strong>This device</strong> or <strong>Online</strong> gate (sidebar → Gate) to create a
+            company here.
+          </p>
+        ) : null}
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-4">
           <FormField
             control={form.control}

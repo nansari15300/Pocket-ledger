@@ -45,7 +45,6 @@ import usePermissions, { type PermissionConfig, type UserRole, initialPermission
 import { cn } from "@/lib/utils";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
-import { readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConfig";
 import { LocalDriveShareManagePanel } from "@/components/company/LocalDriveShareManagePanel";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { updateCompanyDocRoot } from "@/lib/companyDocsClient";
@@ -714,9 +713,11 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
             emailsOnDoc.find((e) => normalizeEmail(String(e)) === normalizeEmail(userToRemove.email)) ??
             fullUserObject.email;
 
+          const emailLowerRemove = normalizeEmail(userToRemove.email);
           await updateDoc(companyRef, { 
               sharedWith: arrayRemove(fullUserObject),
-              sharedWithEmails: arrayRemove(emailForArrayRemove) 
+              sharedWithEmails: arrayRemove(emailForArrayRemove),
+              sharedWithEmailsLower: arrayRemove(emailLowerRemove),
             });
           setOptimisticRevokedEmails((prev) =>
             prev.some((e) => normalizeEmail(e) === normalizeEmail(userToRemove.email))
@@ -822,125 +823,9 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
 
   /** SQLite / device-only: email-based Firestore share yahan support nahi — Company login + Local users. */
   const isDeviceLocalCompany = isOfflineCompanyStorage(companyData);
-  const localCloudSyncCfg = companyData ? readCloudSyncConfigFromCompany(companyData as Record<string, unknown>) : null;
-  const localDriveSharingEnabled =
-    isDeviceLocalCompany &&
-    localCloudSyncCfg?.cloudSyncEnabled === true &&
-    localCloudSyncCfg?.cloudSyncProvider === "google_drive";
-
   return (
     <div className="space-y-8">
-        {isDeviceLocalCompany && !localDriveSharingEnabled ? (
-          <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
-            <CardHeader className={companyProfilePageBg}>
-              <CardTitle className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <span>Sharing</span>
-                <span className="text-muted-foreground font-normal tracking-tight" aria-hidden>
-                  ----&gt;
-                </span>
-                <span className="text-base sm:text-lg font-semibold">{companyData.name}</span>
-              </CardTitle>
-              <CardDescription>
-                Device-local company — language below. Firebase email share is for cloud-uploaded companies only.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 px-6 pb-6">
-              {/* Eng / Nep / Hindi: Company Profile jaisa tabs + green content */}
-              <Tabs defaultValue="eng" className="w-full">
-                <TabsList className={companyProfileTabsList3}>
-                  <TabsTrigger value="eng" className={companyProfileTabsTrigger}>
-                    English
-                  </TabsTrigger>
-                  <TabsTrigger value="nep" className={companyProfileTabsTrigger}>
-                    नेपाली
-                  </TabsTrigger>
-                  <TabsTrigger value="hi" className={companyProfileTabsTrigger}>
-                    हिन्दी
-                  </TabsTrigger>
-                </TabsList>
-                <TabsContent
-                  value="eng"
-                  className={`mt-3 p-4 text-sm space-y-2 outline-none ${companyProfileGreenZone}`}
-                >
-                  <p className="text-muted-foreground">
-                    This company lives only on this device. Firebase &quot;Add Person&quot; / email sharing works for companies
-                    that are uploaded to the cloud.
-                  </p>
-                  <p className="font-medium text-foreground">
-                    How to give access: open{" "}
-                    <Link href="/settings?view=company" className="underline font-semibold hover:no-underline">
-                      Company Profile
-                    </Link>{" "}
-                    and set <strong>Company login</strong> (username + Protect company password). Your team can use these when
-                    switching companies.
-                  </p>
-                  <p className="text-muted-foreground">
-                    For extra device-only users, use <strong>Settings</strong> → <strong>Local users</strong> for this company —
-                    that is not Firestore sharing.
-                  </p>
-                  <p className="text-muted-foreground">
-                    For online email sharing, upload or sync this company to Firebase / the cloud first; then add people here under{" "}
-                    <strong>Manage Sharing</strong>.
-                  </p>
-                </TabsContent>
-                <TabsContent
-                  value="nep"
-                  lang="ne"
-                  className={`mt-3 p-4 text-sm space-y-2 outline-none ${companyProfileGreenZone}`}
-                >
-                  {/* नेपाली देवनागरी — Roman placeholder हटाया */}
-                  <p className="text-muted-foreground">
-                    यो कम्पनी यस उपकरणमा मात्र स्थानीय छ। फायरबेसको &quot;Add Person&quot; / इमेल साझेदारी क्लाउडमा अपलोड गरिएका
-                    कम्पनीहरूका लागि मात्र हुन्छ।
-                  </p>
-                  <p className="font-medium text-foreground">
-                    पहुँच दिने तरिका:{" "}
-                    <Link href="/settings?view=company" className="underline font-semibold hover:no-underline">
-                      कम्पनी प्रोफाइल
-                    </Link>{" "}
-                    मा <strong>कम्पनी लगइन</strong> (प्रयोगकर्ता नाम + संरक्षित कम्पनी पासवर्ड) सेट गर्नुहोस्। कम्पनी बदल्दा यही
-                    प्रमाणपत्र प्रयोग गर्नुहोस्।
-                  </p>
-                  <p className="text-muted-foreground">
-                    थप उपकरण-मात्र प्रयोगकर्ताका लागि सेटिङहरू → यसै कम्पनीका <strong>स्थानीय प्रयोगकर्ता</strong> खण्ड प्रयोग
-                    गर्नुहोस् — यो फायरस्टोर साझेदारी होइन।
-                  </p>
-                  <p className="text-muted-foreground">
-                    अनलाइन इमेल साझेदारीका लागि पहिले यो कम्पनी फायरबेस / क्लाउडमा अपलोड वा सिङ्क गर्नुहोस्; पछि यहीं{" "}
-                    <strong>साझेदारी व्यवस्थापन</strong>बाट व्यक्ति थप्नुहोस्।
-                  </p>
-                </TabsContent>
-                <TabsContent
-                  value="hi"
-                  lang="hi"
-                  className={`mt-3 p-4 text-sm space-y-2 outline-none ${companyProfileGreenZone}`}
-                >
-                  {/* पूरी हिंदी देवनागरी; अंग्रेज़ी शब्द जहाँ UI से मेल खाते हों वही रखे */}
-                  <p className="text-muted-foreground">
-                    यह कंपनी केवल इस डिवाइस पर स्थानीय है। फायरबेस का &quot;Add Person&quot; / ईमेल साझाकरण केवल उन कंपनियों के लिए
-                    है जो क्लाउड पर अपलोड की गई हैं।
-                  </p>
-                  <p className="font-medium text-foreground">
-                    पहुँच देने का तरीका:{" "}
-                    <Link href="/settings?view=company" className="underline font-semibold hover:no-underline">
-                      कंपनी प्रोफ़ाइल
-                    </Link>{" "}
-                    में <strong>कंपनी लॉगिन</strong> (उपयोगकर्ता नाम + संरक्षित कंपनी पासवर्ड) सेट करें। टीम कंपनी बदलते समय इन्हीं
-                    प्रमाण-पत्रों का उपयोग कर सकती है।
-                  </p>
-                  <p className="text-muted-foreground">
-                    अतिरिक्त केवल-डिवाइस उपयोगकर्ताओं के लिए सेटिंग्स → इसी कंपनी का <strong>स्थानीय उपयोगकर्ता</strong> खंड उपयोग
-                    करें — यह फायरस्टोर साझाकरण नहीं है।
-                  </p>
-                  <p className="text-muted-foreground">
-                    ऑनलाइन ईमेल साझाकरण के लिए पहले इस कंपनी को फायरबेस / क्लाउड पर अपलोड या सिंक करें; फिर यहीं{" "}
-                    <strong>साझाकरण प्रबंधन</strong> से लोग जोड़ सकेंगे।
-                  </p>
-                </TabsContent>
-              </Tabs>
-            </CardContent>
-          </Card>
-        ) : isDeviceLocalCompany && localDriveSharingEnabled && companyData && companyId ? (
+        {isDeviceLocalCompany && companyData && companyId ? (
           <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
             <CardContent className="p-4">
               <LocalDriveShareManagePanel

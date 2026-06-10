@@ -40,8 +40,8 @@ export function SavedAccountsLoginPanel({ onBack }: Props) {
   );
 
   const navigateAfterAuth = useCallback(
-    (firebaseUid: string | undefined) => {
-      router.replace(resolvePostAuthCompanyRoute(firebaseUid));
+    (firebaseUid: string | undefined, userEmail?: string | null) => {
+      router.replace(resolvePostAuthCompanyRoute(firebaseUid, userEmail));
     },
     [router]
   );
@@ -60,12 +60,12 @@ export function SavedAccountsLoginPanel({ onBack }: Props) {
           return;
         }
         await signInWithEmailAndPassword(auth, record.email, password);
-        navigateAfterAuth(auth.currentUser?.uid);
+        navigateAfterAuth(auth.currentUser?.uid, auth.currentUser?.email);
         return;
       }
       const result = await signInWithGoogleForApp();
       if (result?.user) {
-        navigateAfterAuth(result.user.uid);
+        navigateAfterAuth(result.user.uid, result.user.email);
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Sign-in failed.";

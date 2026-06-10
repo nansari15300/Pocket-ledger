@@ -30,6 +30,7 @@ import {
 import {
   collectSystemJoinedTargetEntries,
 } from "@/lib/interCompany/interCompanyTargetPartnersFromSystems";
+import { isPureLocalInterCompanyCompanyFromShape } from "@/lib/interCompany/localInterCompanyPolicy";
 
 /** Public profile → partner row (Inter Co. A/c company doc par hai — yahan sirf code/PAN/phone) */
 function partnerRowFromPublicProfile(
@@ -79,6 +80,12 @@ export function useInterCompanyJoinedTargetPartners(
   const [profilesLoading, setProfilesLoading] = useState(false);
 
   const groupOwnerUid = useMemo(() => resolveInterCompanyGroupOwnerUid(userId), [userId]);
+
+  const sourceIsPureLocal = useMemo(() => {
+    if (!sourceCompanyId) return false;
+    const row = (allCompanies || []).find((c) => c?.id === sourceCompanyId);
+    return row ? isPureLocalInterCompanyCompanyFromShape(row) : false;
+  }, [allCompanies, sourceCompanyId]);
 
   const allSystems = useMemo(() => {
     const byId = new Map<string, InterCompanyGroupDoc>();
@@ -237,6 +244,10 @@ export function useInterCompanyJoinedTargetPartners(
 
     return targetPartnerIds
       .map((partnerId) => {
+        if (sourceIsPureLocal) {
+          const shape = (allCompanies || []).find((c) => c?.id === partnerId);
+          if (!shape || !isPureLocalInterCompanyCompanyFromShape(shape)) return null;
+        }
         const local = mergedAllRows.find((r) => r.id === partnerId);
         const systemNames = systemNamesByPartner.get(partnerId) || [];
         if (local) {
@@ -269,6 +280,8 @@ export function useInterCompanyJoinedTargetPartners(
     systemTargetEntries,
     acceptedLinksForSource,
     sourceCompanyId,
+    sourceIsPureLocal,
+    allCompanies,
   ]);
 
   const directory = useMemo(

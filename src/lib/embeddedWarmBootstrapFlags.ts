@@ -1,5 +1,56 @@
 "use client";
 
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+
+/**
+ * APK + EXE: background sync/outbox bina poori registry+listener rebuild — page shake / auto re-render kam.
+ */
+export function embeddedClientPrefersQuietBackgroundSync(): boolean {
+  return isElectronDesktopApp() || isCapacitorNativeApp();
+}
+
+/** APK/EXE ledger screens — background SQLite bump sirf in collections se merge (staff/items par page shake kam). */
+export function sqliteBumpCollectionNeededOnLedgerRoute(pathname: string, collection: string): boolean {
+  const route = String(pathname || "").toLowerCase();
+  const coll = String(collection || "").trim();
+  if (route.startsWith("/party")) {
+    return coll === "parties" || coll === "groups" || coll === "vouchers" || coll === "expense_accounts";
+  }
+  if (route.startsWith("/bank-cash")) {
+    return coll === "bank_accounts" || coll === "account_groups" || coll === "vouchers";
+  }
+  if (route.startsWith("/dashboard")) {
+    return (
+      coll === "vouchers" ||
+      coll === "parties" ||
+      coll === "groups" ||
+      coll === "staff" ||
+      coll === "staff_groups" ||
+      coll === "taxes" ||
+      coll === "tax_groups" ||
+      coll === "bank_accounts" ||
+      coll === "account_groups" ||
+      coll === "expense_accounts"
+    );
+  }
+  if (route.startsWith("/payment-in") || route.startsWith("/payment-out")) {
+    return coll === "vouchers" || coll === "parties" || coll === "bank_accounts" || coll === "staff" || coll === "taxes";
+  }
+  if (route.startsWith("/gallery")) {
+    return coll === "vouchers";
+  }
+  return true;
+}
+
+/** Party / bank detail — background merge thoda debounce (scroll shake kam). */
+export function embeddedSqliteBumpDebounceMs(pathname: string): number {
+  if (!embeddedClientPrefersQuietBackgroundSync()) return 1_500;
+  const route = String(pathname || "").toLowerCase();
+  if (route.startsWith("/party") || route.startsWith("/bank-cash")) return 2_500;
+  return 1_500;
+}
+
 /**
  * APK/static: `runOfflineFullWarmSync` ek baar poora ho chuka ho to startup par
  * `getIdToken` + idle plan-sync kam chalao — attachment IndexedDB prefetch / SQLite ko pehle saans.

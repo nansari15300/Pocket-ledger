@@ -4,6 +4,7 @@
 import { useEffect } from "react";
 import { AuthProvider } from "@/hooks/useAuth";
 import { CompanyProvider } from "@/hooks/useCompany";
+import { GateProvider } from "@/contexts/GateContext";
 import { DateProvider } from "@/hooks/useDate";
 import { VoucherProvider } from "@/hooks/useVouchers";
 import { BalanceModeProvider } from "@/contexts/BalanceModeContext";
@@ -29,6 +30,7 @@ import { EmbeddedOfflineFirestoreTransport } from "@/components/EmbeddedOfflineF
 import { FirstLoginWarmGateProvider } from "@/contexts/FirstLoginWarmGateContext";
 import { MobileDetailSummaryCollapseProvider } from "@/contexts/MobileDetailSummaryCollapseContext";
 import { EmbeddedAttachmentPrefetchProvider } from "@/contexts/EmbeddedAttachmentPrefetchContext";
+import { CrossCompanyAttachmentAccessBridge } from "@/components/CrossCompanyAttachmentAccessBridge";
 import { primeLocalFileRefMetaRuntimeCache } from "@/lib/localPendingFiles";
 import { isPerfDebugEnabled } from "@/lib/perfDebug";
 
@@ -72,7 +74,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <AuthProvider>
             <FirebaseErrorListener />
             <EmbeddedOfflineFirestoreTransport />
+            <GateProvider>
             <CompanyProvider>
+                <CrossCompanyAttachmentAccessBridge />
                 <EmbeddedLogoutProvider>
                 <EmbeddedAttachmentPrefetchProvider>
                 {/* APK/static pehli login: full warm chalte waqt background warm band — gate overlay set karti hai */}
@@ -110,6 +114,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 </EmbeddedAttachmentPrefetchProvider>
                 </EmbeddedLogoutProvider>
             </CompanyProvider>
+            </GateProvider>
             {/* EXE/APK: Firebase restore ke baad PIN/biometric overlay — Company tree ke upar full-screen */}
             <EmbeddedDeviceLockGate />
         </AuthProvider>

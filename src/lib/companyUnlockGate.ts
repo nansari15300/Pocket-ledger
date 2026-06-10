@@ -1,4 +1,7 @@
 import type { Company } from "@/hooks/useCompany";
+import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
+import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 
 /** Company row jisme selector `isOwned` set karta hai */
 export type CompanyUnlockRow = Company & { isOwned?: boolean };
@@ -35,14 +38,43 @@ export function onlineSharedHasPerUserPassword(company: CompanyUnlockRow, userEm
   return !!(se && se.password != null && String(se.password).trim() !== "");
 }
 
+/** Offline company me `localCompanyUsers` rows — bina Protect company password ke bhi login chahiye. */
+export function offlineCompanyHasLocalLoginUsers(company: unknown): boolean {
+  if (!company || typeof company !== "object") return false;
+  return parseLocalCompanyUserRows((company as { localCompanyUsers?: unknown }).localCompanyUsers).length > 0;
+}
+
 /** Select se pehle dialog dikhana hai ya nahi */
 export function shouldPromptCompanyUnlock(company: CompanyUnlockRow, userEmail?: string | null): boolean {
   // Shared + cloud: Protect company password ya shared row par user-specific password.
   if (isOnlineSharedCompany(company)) {
     return !!company.password || onlineSharedHasPerUserPassword(company, userEmail);
   }
+  if (isOfflineCompanyStorage(company)) {
+    if (isPlRemoteServerClientMode()) return true;
+    if (company.password) return true;
+    if (offlineCompanyHasLocalLoginUsers(company)) return true;
+    const se = getShareEntryForEmail(company, userEmail || undefined);
+    return !!se?.password;
+  }
   const se = getShareEntryForEmail(company, userEmail || undefined);
   return !!(se?.password || company.password);
+}
+
+/** List row slim ho to SQLite se local users check — unlock dialog ke liye. */
+export async function shouldPromptCompanyUnlockAsync(
+  company: CompanyUnlockRow,
+  userEmail?: string | null
+): Promise<boolean> {
+  if (shouldPromptCompanyUnlock(company, userEmail)) return true;
+  if (isPlRemoteServerClientMode() && isOfflineCompanyStorage(company)) return true;
+  if (!isOfflineCompanyStorage(company) || !company.id) return false;
+  try {
+    const doc = await getLocalCompanyById(company.id, { includeDeleted: true });
+    return offlineCompanyHasLocalLoginUsers(doc);
+  } catch {
+    return false;
+  }
 }
 
 /** Username field: online shared jab Protect on ho ya shared user ka apna password ho; offline shared jab share row me name+password ho */

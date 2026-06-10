@@ -16,14 +16,15 @@ const outDir = path.join(electronRoot, "build");
 const icoPath = path.join(outDir, "icon.ico");
 
 const base = await Jimp.read(pngPath);
-// Taskbar / installer: 256 + chota slot NSIS/MUI ke liye
-base.resize({ w: 256, h: 256 });
-const buf256 = await base.getBuffer("image/png");
-const small = base.clone();
-small.resize({ w: 48, h: 48 });
-const buf48 = await small.getBuffer("image/png");
+const sizes = [16, 32, 48, 64, 128, 256];
+const pngBuffers = [];
+for (const size of sizes) {
+  const img = base.clone();
+  img.resize({ w: size, h: size });
+  pngBuffers.push(await img.getBuffer("image/png"));
+}
 
-const icoBuf = await pngToIco([buf48, buf256]);
+const icoBuf = await pngToIco(pngBuffers);
 fs.mkdirSync(outDir, { recursive: true });
 fs.writeFileSync(icoPath, icoBuf);
 console.log("Wrote", icoPath);

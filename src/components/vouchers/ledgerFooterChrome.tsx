@@ -92,7 +92,7 @@ export const ledgerFooterIconBtnCn = `${LEDGER_FOOTER_PILL_H} w-8 shrink-0 px-0`
 /** Footer text/button triggers — chrome pill height */
 export const ledgerFooterPillBtnCn = `${LEDGER_FOOTER_PILL_H} shrink-0 gap-1 px-2.5`;
 
-/** Show Narration / Note / Check mode */
+/** Show Narration / Note — checkbox state se; pill hamesha blue chrome (Columns / Check mode jaisa). */
 export function LedgerFooterCheckboxPill({
   id,
   checked,
@@ -100,7 +100,6 @@ export function LedgerFooterCheckboxPill({
   label,
   disabled,
   labelClassName,
-  activeWhenChecked = true,
 }: {
   id: string;
   checked: boolean;
@@ -108,13 +107,9 @@ export function LedgerFooterCheckboxPill({
   label: React.ReactNode;
   disabled?: boolean;
   labelClassName?: string;
-  activeWhenChecked?: boolean;
 }) {
   return (
-    <LedgerFooterChromePill
-      active={activeWhenChecked ? checked : false}
-      className={cn(disabled && "pointer-events-none opacity-50")}
-    >
+    <LedgerFooterChromePill className={cn(disabled && "pointer-events-none opacity-50")}>
       <Checkbox
         id={id}
         checked={checked}

@@ -11,27 +11,32 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import type { Company } from "@/hooks/useCompany";
 import { useFirstLoginWarmGate } from "@/contexts/FirstLoginWarmGateContext";
-import { useEmbeddedAttachmentPrefetch } from "@/contexts/EmbeddedAttachmentPrefetchContext";
+import { useSetHeaderAttachmentPrefetchPercent } from "@/contexts/EmbeddedAttachmentPrefetchContext";
+import { shouldPrefetchAttachmentsForCompany } from "@/lib/offlineFullWarmSync";
 import {
-  shouldPrefetchAttachmentsForCompany,
-  runEmbeddedAttachmentPrefetchPhase,
-} from "@/lib/offlineFullWarmSync";
-
+  EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
+  runEmbeddedCompanyFullPreload,
+} from "@/lib/embeddedAccountOfflineWarm";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 const DEBOUNCE_AFTER_COMPANY_MS = 2_800;
 
 export function CompanyAttachmentOfflineBackfillManager() {
   const { user } = useAuth();
   const { companyId, company, loading } = useCompany();
   const { gateActive } = useFirstLoginWarmGate();
-  const { setHeaderAttachmentPercent } = useEmbeddedAttachmentPrefetch();
+  const setHeaderAttachmentPercent = useSetHeaderAttachmentPrefetchPercent();
   const runAbortRef = useRef<AbortController | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const companyRef = useRef(company);
+  companyRef.current = company;
   /** `setTimeout` closure me fresh gate/offline check — stale `gateActive` se duplicate prefetch na chale. */
   const gateActiveRef = useRef(gateActive);
   gateActiveRef.current = gateActive;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    // EXE: `OfflineWarmSyncManager` already serial warm chalata hai — duplicate prefetch + header % flicker avoid.
+    if (isElectronDesktopApp()) return;
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
@@ -39,11 +44,10 @@ export function CompanyAttachmentOfflineBackfillManager() {
     runAbortRef.current?.abort();
     runAbortRef.current = null;
 
-    if (!user || loading || !companyId?.trim() || !company) return;
-    if (!shouldPrefetchAttachmentsForCompany(company as Company)) return;
+    const c = companyRef.current;
+    if (!user || loading || !companyId?.trim() || !c) return;
+    if (!shouldPrefetchAttachmentsForCompany(c as Company)) return;
     if (gateActive) return;
-
-    const c = company as Company;
     const cid = companyId.trim();
 
     debounceRef.current = setTimeout(() => {
@@ -62,16 +66,12 @@ export function CompanyAttachmentOfflineBackfillManager() {
             console.log("[ATTACHMENT_SYNC]", "CompanyAttachmentOfflineBackfillManager:start", { companyId: cid });
           }
           setHeaderAttachmentPercent(1);
-          await runEmbeddedAttachmentPrefetchPhase({
+          await runEmbeddedCompanyFullPreload({
             company: c,
             localCompanyId: cid,
             signal: ac.signal,
-            onProgressPercent: (p) => setHeaderAttachmentPercent(p),
-            prefetchOverrides: {
-              maxUrls: 55_000,
-              maxTotalBytesApprox: 4_200 * 1024 * 1024,
-              concurrency: 7,
-            },
+            onAttachmentProgressPercent: (p) => setHeaderAttachmentPercent(p),
+            prefetchOverrides: EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
           });
         } catch {
           /* abort / offline */
@@ -92,7 +92,7 @@ export function CompanyAttachmentOfflineBackfillManager() {
       runAbortRef.current?.abort();
       runAbortRef.current = null;
     };
-  }, [user, loading, companyId, company, gateActive, setHeaderAttachmentPercent]);
+  }, [user, loading, companyId, gateActive]);
 
   return null;
 }

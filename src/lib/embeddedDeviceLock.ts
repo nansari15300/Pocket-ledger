@@ -38,6 +38,8 @@ export function getEmbeddedLockShellKind(): EmbeddedLockShellKind {
 const SESSION_UNLOCK_KEY = "pl_embedded_unlock_v1";
 /** APK: native biometric activity ke baad WebView reload/resume par `sessionStorage` khali ho sakta hai — unlock yahan bhi likho */
 const PERSISTENT_UNLOCK_KEY = "pl_embedded_unlock_persist_v1";
+/** EXE multi-tab: same app boot me unlock share — cold start par naya boot id = dubara PIN */
+const EXE_BOOT_UNLOCK_KEY = "pl_embedded_unlock_exe_boot_v1";
 const PIN_HASH_SUFFIX = "pl_embedded_pin_hash_v1";
 const PIN_SALT_SUFFIX = "pl_embedded_pin_salt_v1";
 const BIO_FLAG_SUFFIX = "pl_embedded_bio_on_v1";
@@ -151,15 +153,60 @@ export function setBiometricUnlockEnabled(firebaseUid: string, enabled: boolean)
   }
 }
 
+function readElectronBootSessionId(): string {
+  if (typeof window === "undefined" || !isElectronPackagedShell()) return "";
+  try {
+    const w = window as unknown as { plElectronApp?: { bootSessionId?: string } };
+    return String(w.plElectronApp?.bootSessionId || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function readExeBootScopedUnlock(): boolean {
+  const bootId = readElectronBootSessionId();
+  if (!bootId) return false;
+  try {
+    const raw = localStorage.getItem(EXE_BOOT_UNLOCK_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as { bootId?: string; unlocked?: boolean };
+    return parsed?.bootId === bootId && parsed?.unlocked === true;
+  } catch {
+    return false;
+  }
+}
+
+function markExeBootScopedUnlock(): void {
+  const bootId = readElectronBootSessionId();
+  if (!bootId) return;
+  try {
+    localStorage.setItem(EXE_BOOT_UNLOCK_KEY, JSON.stringify({ bootId, unlocked: true }));
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearExeBootScopedUnlock(): void {
+  try {
+    localStorage.removeItem(EXE_BOOT_UNLOCK_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function isEmbeddedSessionUnlocked(): boolean {
   try {
     if (sessionStorage.getItem(SESSION_UNLOCK_KEY) === "1") return true;
     // APK: fingerprint dialog se wapas aane par sessionStorage reset ho to bhi gate na atke
     if (isCapacitorNativeApp() && localStorage.getItem(PERSISTENT_UNLOCK_KEY) === "1") return true;
+    // EXE: har BrowserView ka alag sessionStorage — app boot id se unlock tabs me share
+    if (isElectronPackagedShell() && readExeBootScopedUnlock()) return true;
     return false;
   } catch {
     try {
-      return isCapacitorNativeApp() && localStorage.getItem(PERSISTENT_UNLOCK_KEY) === "1";
+      if (isCapacitorNativeApp() && localStorage.getItem(PERSISTENT_UNLOCK_KEY) === "1") return true;
+      if (isElectronPackagedShell() && readExeBootScopedUnlock()) return true;
+      return false;
     } catch {
       return false;
     }
@@ -176,6 +223,9 @@ export function markEmbeddedSessionUnlocked(): void {
     if (isCapacitorNativeApp()) {
       localStorage.setItem(PERSISTENT_UNLOCK_KEY, "1");
     }
+    if (isElectronPackagedShell()) {
+      markExeBootScopedUnlock();
+    }
   } catch {
     /* ignore */
   }
@@ -190,6 +240,7 @@ export function clearEmbeddedSessionUnlock(): void {
   }
   try {
     localStorage.removeItem(PERSISTENT_UNLOCK_KEY);
+    clearExeBootScopedUnlock();
   } catch {
     /* ignore */
   }

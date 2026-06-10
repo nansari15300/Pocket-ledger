@@ -10,6 +10,7 @@ import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { registerCompanyPickerFirestoreDetach } from "@/lib/companyPickerFirestoreDetach";
+import { sharedCompanyQueryKey, sharedCompanyQuerySpecs } from "@/lib/sharedWithEmailsQuery";
 
 function CreateCompanyPageLoading() {
   return (
@@ -78,15 +79,34 @@ function CreateCompanyPageContent() {
     };
 
     const ownedQuery = query(collection(firestore, "companies"), where("ownerId", "==", user.uid));
-    const sharedQuery = query(collection(firestore, "companies"), where("sharedWithEmails", "array-contains", user.email));
+    const sharedQuerySpecs = sharedCompanyQuerySpecs(user.email);
 
     let ownedCount = 0;
     let sharedCount = 0;
     let ownedDone = false;
-    let sharedDone = false;
+    let sharedDone = sharedQuerySpecs.length === 0;
+    const sharedSnapsByVariant = new Map<string, { docs: readonly { id: string; data: () => Record<string, unknown> }[] }>();
+    const sharedVariantsReady = new Set<string>();
     const maybeDone = () => {
       if (!ownedDone || !sharedDone) return;
       setSettled(ownedCount > 0 || sharedCount > 0);
+    };
+    const mergeSharedCount = () => {
+      if (sharedVariantsReady.size < sharedQuerySpecs.length) return;
+      const seen = new Set<string>();
+      let count = 0;
+      for (const snap of sharedSnapsByVariant.values()) {
+        for (const doc of snap.docs) {
+          if (seen.has(doc.id)) continue;
+          seen.add(doc.id);
+          if (isVisibleCompanyRow(doc.data() as { isDeleted?: unknown; movedToAdminRecycleAt?: unknown })) {
+            count += 1;
+          }
+        }
+      }
+      sharedCount = count;
+      sharedDone = true;
+      maybeDone();
     };
 
     const unsubOwned = onSnapshot(ownedQuery, (snapshot) => {
@@ -97,19 +117,26 @@ function CreateCompanyPageContent() {
       setSettled(false);
     });
 
-    const unsubShared = onSnapshot(sharedQuery, (snapshot) => {
-      sharedCount = snapshot.docs.filter((doc) => isVisibleCompanyRow(doc.data() as { isDeleted?: unknown; movedToAdminRecycleAt?: unknown })).length;
-      sharedDone = true;
-      maybeDone();
-    }, () => {
-      setSettled(false);
-    });
+    const unsubShared = sharedQuerySpecs.map((spec) =>
+      onSnapshot(
+        query(collection(firestore, "companies"), where(spec.field, "array-contains", spec.value)),
+        (snapshot) => {
+          const key = sharedCompanyQueryKey(spec);
+          sharedSnapsByVariant.set(key, snapshot);
+          sharedVariantsReady.add(key);
+          mergeSharedCount();
+        },
+        () => {
+          setSettled(false);
+        }
+      )
+    );
 
     const timeoutId = setTimeout(() => setSettled(false), 10000);
 
     const cleanupListeners = () => {
       unsubOwned();
-      unsubShared();
+      unsubShared.forEach((unsub) => unsub());
       clearTimeout(timeoutId);
     };
     registerCompanyPickerFirestoreDetach(cleanupListeners);

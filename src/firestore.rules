@@ -110,12 +110,29 @@ service cloud.firestore {
     function authEmailLower() {
       return request.auth.token.email != null ? request.auth.token.email.lower() : '';
     }
+    /** sharedWithEmails array — exact + lowercase token (legacy mixed-case invites). */
+    function isEmailInSharedWithEmails(emails) {
+      return emails is list && (
+        (request.auth.token.email != null && request.auth.token.email in emails) ||
+        (authEmailLower() != '' && authEmailLower() in emails)
+      );
+    }
+    /** Normalized lowercase-only array — `array-contains` query + rules align. */
+    function isEmailInSharedWithEmailsLower(emails) {
+      return emails is list && authEmailLower() != '' && authEmailLower() in emails;
+    }
+    function hasSharedCompanyAccess(data) {
+      return ('sharedWithEmailsLower' in data &&
+        isEmailInSharedWithEmailsLower(data.get('sharedWithEmailsLower', []))) ||
+        ('sharedWithEmails' in data &&
+          isEmailInSharedWithEmails(data.get('sharedWithEmails', [])));
+    }
     function isCompanyUser(companyId) {
       let c = get(/databases/$(database)/documents/companies/$(companyId));
       return isSignedIn() && c != null && c.data != null && (
         c.data.get('ownerId', '') == request.auth.uid ||
         (authEmailLower() != '' && c.data.get('ownerEmail', '').lower() == authEmailLower()) ||
-        (request.auth.token.email != null && request.auth.token.email in c.data.get('sharedWithEmails', [])) ||
+        hasSharedCompanyAccess(c.data) ||
         (authEmailLower() != '' && c.data.get('handoverTo', '').lower() == authEmailLower())
       );
     }
@@ -275,9 +292,7 @@ service cloud.firestore {
         resource.data.ownerId == request.auth.uid ||
         (authEmailLower() != '' &&
           resource.data.get('ownerEmail', '').lower() == authEmailLower()) ||
-        (request.auth.token.email != null &&
-          'sharedWithEmails' in resource.data &&
-          request.auth.token.email in resource.data.sharedWithEmails) ||
+        hasSharedCompanyAccess(resource.data) ||
         (authEmailLower() != '' &&
           resource.data.get('handoverTo', '').lower() == authEmailLower())
       );

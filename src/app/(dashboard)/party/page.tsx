@@ -74,8 +74,6 @@ import {
   writeOverdueImportanceFilter,
   type OverdueImportanceFilter,
 } from "@/lib/overdueImportanceFilter";
-import { reconcileUnusedInterCompanyCounterpartyParties } from "@/lib/interCompany/cleanupInterCompanyCounterpartyParty";
-
 /** Tab `replaceState` ke baad `useSearchParams` stale reh sakta hai — address bar (location) pehle. */
 function readPartyPageUrlState(viewFromUrl: string | null, selectedIdFromUrl: string | null) {
   if (typeof window === "undefined") {
@@ -135,13 +133,8 @@ function PartyPageContent() {
   const { company, companyId, loading: companyLoading, effectiveNotificationSettings } = useCompany();
   const { formatCurrency } = useDate();
   const { vouchers, loading: vouchersLoading, processedParties, processedPartiesForSelection, processedGroups: initialProcessedGroups, overdueTransactions, hasOverdueTransactions, userNames: voucherUserNames, journalAccountNames } = useVouchers();
-  useEffect(() => {
-    const cid = String(companyId || "").trim();
-    const uid = String(user?.uid || "").trim();
-    if (!cid || !uid) return;
-    void reconcileUnusedInterCompanyCounterpartyParties({ companyId: cid, deletedByUid: uid }).catch(() => {});
-  }, [companyId, user?.uid]);
   const waitingForCompany = Boolean(companyId && (companyLoading || !company));
+  const pageColdLoading = waitingForCompany || (vouchersLoading && processedParties.length === 0);
   const pageDataLoading = waitingForCompany || vouchersLoading;
   const { can } = usePermissions();
   const showApproveOnList =
@@ -855,7 +848,7 @@ function PartyPageContent() {
     );
   }
 
-  if (pageDataLoading) {
+  if (pageColdLoading) {
     return <LoadingSpinner />;
   }
   

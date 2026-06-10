@@ -2,10 +2,22 @@ function normalizePath(p: string): string {
   return (p || "").replace(/\/+$/, "") || "/";
 }
 
+function isOwnedByUser<
+  T extends { ownerId?: string; ownerEmail?: string },
+>(company: T, user: { uid: string; email: string | null }): boolean {
+  if (company.ownerId && company.ownerId === user.uid) return true;
+  const e = (user.email || "").toLowerCase().trim();
+  if (!e) return false;
+  if (company.ownerEmail && company.ownerEmail.toLowerCase().trim() === e) return true;
+  return false;
+}
+
 /**
- * Main app (not `/admin/*`): super admin only sees own companies (by uid or owner email), not "shared with me" from other users.
+ * Main app (not `/admin/*`): SuperAdmin sees only owned companies — no shared-with list.
  */
-export function filterSharedOnlyCompaniesForSuperAdminInMainApp<T extends { ownerId?: string; ownerEmail?: string }>(
+export function filterSharedOnlyCompaniesForSuperAdminInMainApp<
+  T extends { ownerId?: string; ownerEmail?: string; isOwned?: boolean },
+>(
   companies: T[],
   user: { uid: string; email: string | null } | null | undefined,
   isSuperAdmin: boolean,
@@ -13,10 +25,5 @@ export function filterSharedOnlyCompaniesForSuperAdminInMainApp<T extends { owne
 ): T[] {
   if (!isSuperAdmin || !user) return companies;
   if (normalizePath(pathname ?? "").startsWith("/admin")) return companies;
-  const e = (user.email || "").toLowerCase().trim();
-  return companies.filter((c) => {
-    if (c.ownerId && c.ownerId === user.uid) return true;
-    if (c.ownerEmail && e && c.ownerEmail.toLowerCase().trim() === e) return true;
-    return false;
-  });
+  return companies.filter((c) => isOwnedByUser(c, user));
 }

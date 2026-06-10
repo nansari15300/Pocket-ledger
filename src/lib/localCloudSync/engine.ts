@@ -3,6 +3,7 @@
 import {
   deleteCompanyDocFromBrowserDb,
   getCompanyDocFromBrowserDb,
+  notifyBrowserDbCollectionUpdated,
   upsertCompanyDocInBrowserDb,
 } from "@/lib/localCompanyDocMirror";
 import {
@@ -20,6 +21,7 @@ import {
   readCloudSyncDriveShareUsers,
   shouldUseLocalCloudSync,
 } from "@/lib/localCloudSync/companyConfig";
+import { pullDriveLocalReconciliationLinksForCompany } from "@/lib/reconciliation/driveLocalReconciliation";
 import { auth } from "@/lib/firebase";
 import { maybeShareDriveCompanyFolder } from "@/lib/localCloudSync/driveCloudSyncClient";
 import { runWithRemoteCloudSyncApply } from "@/lib/localCloudSync/enqueueFromWrite";
@@ -269,6 +271,7 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     let downloadedVouchers = 0;
     let downloadedFiles = 0;
 
+    const bumpedCollections = new Set<string>();
     await runWithRemoteCloudSyncApply(async () => {
       for (const op of remoteOps) {
         // Op payload se saare attachment refs nikaalo taaki apply/skip ke saath exact mapping mile.
@@ -292,7 +295,8 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
           const docForFiles = { ...(local ?? {}), ...op.payload };
           await removeLocalPendingRefsFromDoc(docForFiles);
           await deleteDriveAttachmentRefsForDoc(cid, docForFiles);
-          await deleteCompanyDocFromBrowserDb(cid, op.table, op.rowId, { force: true, notify: true });
+          await deleteCompanyDocFromBrowserDb(cid, op.table, op.rowId, { force: true, notify: false });
+          bumpedCollections.add(op.table);
           if (op.opSeq > maxRemoteSeq) maxRemoteSeq = op.opSeq;
           continue;
         }
@@ -311,7 +315,9 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
         await upsertCompanyDocInBrowserDb(cid, op.table, op.rowId, merged, {
           skipCloudSyncEnqueue: true,
           force: true,
+          notify: false,
         });
+        bumpedCollections.add(op.table);
         downloaded += 1;
         if (op.table === VOUCHER_SYNC_TABLE) {
           addedVouchers += 1;
@@ -335,6 +341,9 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
         if (op.opSeq > maxRemoteSeq) maxRemoteSeq = op.opSeq;
       }
     });
+    for (const table of bumpedCollections) {
+      notifyBrowserDbCollectionUpdated(cid, table);
+    }
 
     // Cursor sirf actually upload/download hue ops par advance — manifest.latestOp se mat badhao.
     // Pehle: khali download par bhi cursor manifest par chala jata tha → doosre device par data kabhi dubara download nahi hota.
@@ -443,6 +452,11 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
       attachments: attachSync.synced,
       lastSyncSummary,
     });
+    try {
+      await pullDriveLocalReconciliationLinksForCompany(cid);
+    } catch {
+      /* recon links optional */
+    }
     return { ok: true, uploaded, downloaded };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

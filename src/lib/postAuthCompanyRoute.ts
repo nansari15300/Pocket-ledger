@@ -13,7 +13,10 @@ export type PostAuthCompanyRoute = "/dashboard" | "/company";
  * Post-login / root redirect: remembered offline ya cloud "remember password" → `/dashboard`.
  * Static APK / `file:` / Capacitor + saved `companyId` → bhi `/dashboard` (browser web = `/company` jab remember na ho).
  */
-export function resolvePostAuthCompanyRoute(firebaseUid: string | undefined): PostAuthCompanyRoute {
+export function resolvePostAuthCompanyRoute(
+  firebaseUid: string | undefined,
+  userEmail?: string | null
+): PostAuthCompanyRoute {
   if (typeof window === "undefined") return "/company";
   // Multi-tab refresh: route decision should use this tab's company, not another tab's global last company.
   const selectedCompanyId = readSelectedCompanyId();
@@ -30,7 +33,7 @@ export function resolvePostAuthCompanyRoute(firebaseUid: string | undefined): Po
   }
 
   // Online company with per-company password: valid "remember X days" window means no prompt needed.
-  if (readCloudCompanyPasswordUnlockSession(firebaseUid, selectedCompanyId)) {
+  if (readCloudCompanyPasswordUnlockSession(firebaseUid, selectedCompanyId, userEmail)) {
     return "/dashboard";
   }
 

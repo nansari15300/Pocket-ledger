@@ -57,6 +57,18 @@ function filterVoucherRowsForSerial(
   });
 }
 
+function parseContraVoucherSerial(voucherNo: string, prefix: string): number {
+  const trimmed = (voucherNo || "").trim();
+  if (!trimmed) return NaN;
+  const base = normalizePrefix(prefix);
+  const tryPrefixes = [`${base} Out`, `${base} In`, prefix, base];
+  for (const p of tryPrefixes) {
+    const parsed = parseVoucherNumberPart(trimmed, p);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return NaN;
+}
+
 function maxSerialForPrefix(
   rows: Array<Record<string, unknown>>,
   prefix: string,
@@ -76,12 +88,26 @@ function maxSerialForPrefix(
           : [String(row.voucherNumber || "")];
     for (const voucherNo of voucherCandidates) {
       if (!voucherNo) continue;
-      if (!voucherNo.startsWith(prefix) && !voucherNo.startsWith(normalizePrefix(prefix))) continue;
-      const parsed = parseVoucherNumberPart(voucherNo, prefix);
+      const parsed =
+        voucherType === "contra"
+          ? parseContraVoucherSerial(voucherNo, prefix)
+          : (() => {
+              if (!voucherNo.startsWith(prefix) && !voucherNo.startsWith(normalizePrefix(prefix))) return NaN;
+              return parseVoucherNumberPart(voucherNo, prefix);
+            })();
       if (Number.isFinite(parsed) && parsed > maxNo) maxNo = parsed;
     }
   }
   return maxNo;
+}
+
+function dedupeVoucherRowsById(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const map = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    const id = String((row as { id?: string }).id || "").trim();
+    if (id) map.set(id, row);
+  }
+  return map.size > 0 ? [...map.values()] : rows;
 }
 
 export type GetNextVoucherNumberParams = {
@@ -111,12 +137,16 @@ export async function getNextVoucherNumberForCompany(params: GetNextVoucherNumbe
   const pureLocal =
     companyDoc != null && isOfflineCompanyStorage(companyDoc as { storageOption?: string });
 
+  const fsCompanyId = String(
+    (companyDoc as { authoritativeCompanyId?: string } | null | undefined)?.authoritativeCompanyId || companyId
+  ).trim();
+
   let fsRows: Array<Record<string, unknown>> = [];
   if (!pureLocal) {
     try {
-      const vouchersPath = collection(firestore, `companies/${companyId}/vouchers`);
+      const vouchersPath = collection(firestore, `companies/${fsCompanyId}/vouchers`);
       const typeQuery = query(vouchersPath, where("type", "==", String(voucherLike.type || "sale")));
-      fsRows = (await getDocs(typeQuery)).docs.map((d) => d.data() as Record<string, unknown>);
+      fsRows = (await getDocs(typeQuery)).docs.map((d) => ({ ...d.data(), id: d.id }) as Record<string, unknown>);
     } catch {
       fsRows = [];
     }
@@ -126,7 +156,10 @@ export async function getNextVoucherNumberForCompany(params: GetNextVoucherNumbe
     ? await listCompanyDocsFromBrowserDb(companyId, "vouchers", { forBackupMerge: true })
     : [];
 
-  const mergedRows = filterVoucherRowsForSerial([...fsRows, ...localRows], voucherLike);
+  const mergedRows = filterVoucherRowsForSerial(
+    dedupeVoucherRowsById([...fsRows, ...localRows]),
+    voucherLike
+  );
   const maxNo = maxSerialForPrefix(mergedRows, prefix, voucherLike.type);
   return formatVoucherNumber(prefix, maxNo + 1);
 }

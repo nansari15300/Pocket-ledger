@@ -6,7 +6,7 @@ import { isEmbeddedDeviceLockShell } from "@/lib/embeddedDeviceLock";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Fingerprint, Share2, Loader2, Hash, Eye, Palette, FileDigit, Zap, Building, ShieldAlert, Bell, Smartphone, ChevronLeft, PanelRight, CalendarRange, LockKeyhole, Cloud, Server } from "lucide-react";
+import { Share2, Loader2, Hash, Palette, FileDigit, Zap, Building, ShieldAlert, Bell, Smartphone, ChevronLeft, PanelRight, CalendarRange, LockKeyhole, Cloud, Server } from "lucide-react";
 import {
     isLocalAppServerSettingsNavVisible,
     isLocalhostDevPreview,
@@ -24,8 +24,6 @@ import { HandoverManager } from "@/components/settings/HandoverManager";
 import { CompanySettings } from "@/components/settings/CompanySettings";
 import { DangerZone } from "@/components/settings/DangerZone";
 import { CurrencySettings } from "@/components/settings/CurrencySettings";
-import { DisplaySettings } from "@/components/settings/DisplaySettings";
-import { IdSettings } from "@/components/settings/IdSettings";
 import { NotificationSettings } from "@/components/settings/NotificationSettings";
 import { FiscalSplitSettings } from "@/components/settings/FiscalSplitSettings";
 import { AppLockSettings } from "@/components/settings/AppLockSettings";
@@ -88,9 +86,7 @@ const settingsNavItems = [
     { id: "voucher", title: "Voucher Settings", icon: FileDigit, permission: "configure_company_settings" as const, href: null },
     { id: "theme", title: "Theme Settings", icon: Palette, permission: "configure_company_settings" as const, href: null },
     { id: "animation", title: "Animation Settings", icon: Zap, permission: "configure_company_settings" as const, href: null },
-    { id: "id_settings", title: "ID Settings", icon: Fingerprint, permission: "configure_company_settings" as const, href: null },
     { id: "decimals", title: "Decimal Settings", icon: Hash, permission: "configure_company_settings" as const, href: null },
-    { id: "display", title: "Display Settings", icon: Eye, permission: "configure_company_settings" as const, href: null },
     { id: "fiscal_split", title: "Fiscal year & split", icon: CalendarRange, permission: "configure_company_settings" as const, href: null },
     { id: "notification", title: "Notification", icon: Bell, permission: "configure_company_settings" as const, href: null },
     { id: "danger-zone", title: "Danger Zone", icon: ShieldAlert, permission: "configure_company_settings" as const, href: null, isDanger: true },
@@ -535,7 +531,7 @@ function SettingsPageContent() {
             case "app_lock":
                 return <AppLockSettings />;
             case "local_app_server":
-                return <LocalAppServerSettings onBack={backToSettingsListOnly} />;
+                return <LocalAppServerSettings />;
             case "voucher":
                 return can('configure_company_settings') ? <VoucherSettings /> : null;
             case "theme":
@@ -546,12 +542,8 @@ function SettingsPageContent() {
                 return canOpenThemeOrAnimation ? (
                     <AnimationSettings localPersistenceOnly={sharedLocalAppearanceOnly} />
                 ) : null;
-            case "id_settings":
-                return can('configure_company_settings') ? <IdSettings /> : null;
             case "decimals":
                  return can('configure_company_settings') ? <CurrencySettings /> : null;
-            case "display":
-                 return can('configure_company_settings') ? <DisplaySettings /> : null;
             case "fiscal_split":
                 return can("configure_company_settings") ? <FiscalSplitSettings /> : null;
             case "notification":

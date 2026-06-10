@@ -1,36 +1,72 @@
 "use client";
 
 /**
- * Background attachment IndexedDB/cache prefetch — header me patli horizontal progress (0–100).
- * `null` = strip band — koi active prefetch nahi.
+ * Background attachment prefetch progress — sirf header strip subscribe kare.
+ * Pehle `useState` yahan tha: har % update par poora app re-render → cards / details page hillte the.
  */
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from "react";
 
-type Ctx = {
-  headerAttachmentPercent: number | null;
+type PercentSnapshot = number | null;
+
+let headerAttachmentPercent: PercentSnapshot = null;
+const listeners = new Set<() => void>();
+
+function subscribeHeaderAttachmentPercent(onStoreChange: () => void): () => void {
+  listeners.add(onStoreChange);
+  return () => {
+    listeners.delete(onStoreChange);
+  };
+}
+
+function getHeaderAttachmentPercentSnapshot(): PercentSnapshot {
+  return headerAttachmentPercent;
+}
+
+function publishHeaderAttachmentPercent(next: PercentSnapshot): void {
+  if (headerAttachmentPercent === next) return;
+  headerAttachmentPercent = next;
+  for (const l of listeners) l();
+}
+
+type SetterCtx = {
   setHeaderAttachmentPercent: (v: number | null) => void;
 };
 
-const EmbeddedAttachmentPrefetchContext = createContext<Ctx | null>(null);
+const EmbeddedAttachmentPrefetchContext = createContext<SetterCtx | null>(null);
+
+const noopSetter = () => {};
 
 export function EmbeddedAttachmentPrefetchProvider({ children }: { children: React.ReactNode }) {
-  const [headerAttachmentPercent, setHeaderAttachmentPercentState] = useState<number | null>(null);
   const setHeaderAttachmentPercent = useCallback((v: number | null) => {
-    setHeaderAttachmentPercentState(v);
+    publishHeaderAttachmentPercent(v);
   }, []);
-  const value = useMemo(
-    () => ({ headerAttachmentPercent, setHeaderAttachmentPercent }),
-    [headerAttachmentPercent, setHeaderAttachmentPercent],
-  );
+  const value = useMemo(() => ({ setHeaderAttachmentPercent }), [setHeaderAttachmentPercent]);
   return (
     <EmbeddedAttachmentPrefetchContext.Provider value={value}>{children}</EmbeddedAttachmentPrefetchContext.Provider>
   );
 }
 
-export function useEmbeddedAttachmentPrefetch(): Ctx {
+/** Background warm / backfill — setter only; percent change par re-render nahi. */
+export function useSetHeaderAttachmentPrefetchPercent(): (v: number | null) => void {
   const c = useContext(EmbeddedAttachmentPrefetchContext);
+  return c?.setHeaderAttachmentPercent ?? noopSetter;
+}
+
+/** Header progress strip — is hook par hi % subscribe karo. */
+export function useHeaderAttachmentPrefetchPercent(): PercentSnapshot {
+  return useSyncExternalStore(
+    subscribeHeaderAttachmentPercent,
+    getHeaderAttachmentPercentSnapshot,
+    getHeaderAttachmentPercentSnapshot
+  );
+}
+
+/** @deprecated Prefer `useSetHeaderAttachmentPrefetchPercent` (managers) ya `useHeaderAttachmentPrefetchPercent` (header). */
+export function useEmbeddedAttachmentPrefetch(): SetterCtx & { headerAttachmentPercent: PercentSnapshot } {
+  const c = useContext(EmbeddedAttachmentPrefetchContext);
+  const percent = useHeaderAttachmentPrefetchPercent();
   if (!c) {
-    return { headerAttachmentPercent: null, setHeaderAttachmentPercent: () => {} };
+    return { headerAttachmentPercent: null, setHeaderAttachmentPercent: noopSetter };
   }
-  return c;
+  return { headerAttachmentPercent: percent, setHeaderAttachmentPercent: c.setHeaderAttachmentPercent };
 }

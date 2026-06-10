@@ -18,9 +18,9 @@ import { useToast } from "@/hooks/use-toast";
 import { MobileFloatingButton, ReportsMobileReportListFab } from "@/components/layout/MobileFloatingButton";
 import { CompanyDemotedBanner } from "@/components/company/CompanyDemotedBanner";
 import { PlanAuthoritativeSyncBanner } from "@/components/company/PlanAuthoritativeSyncBanner";
-import { RemoteServerClientBanner } from "@/components/settings/RemoteServerClientBanner";
 import { PlServerAccessBootstrap } from "@/components/settings/PlServerAccessBootstrap";
-import { PlServerAccessCompanyBanner } from "@/components/settings/PlServerAccessCompanyBanner";
+import { GateAccessBootstrap } from "@/components/gates/GateAccessBootstrap";
+import { ServerShareableCompaniesBridge } from "@/components/ServerShareableCompaniesBridge";
 import { FileHoverPreviewProvider } from "@/contexts/FileHoverPreviewContext";
 import { ReportPartyViewProvider } from "@/contexts/ReportPartyViewContext";
 import { ReportListProvider } from "@/contexts/ReportListContext";
@@ -42,6 +42,7 @@ import { shortDeviceLabelForList, deviceLabelTooltipIfTruncated } from "@/lib/de
 import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { activateOnlineGateForCompanyPicker } from "@/lib/gates/gateClientDefaults";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { toast } from "sonner";
 import { apkCloudCompanyOfflineViewOnly, apkCloudFirestoreMasterWriteFromCompanyShape } from "@/lib/apkOnlineFirestoreWritePolicy";
@@ -173,6 +174,10 @@ function DeviceLimitOverlay() {
     DEFAULT_PLANS[deviceOverlayAccountPlanId]?.name ?? String(deviceOverlayAccountPlanId);
   const { toast } = useToast();
   const router = useRouter();
+  const goSwitchCompany = useCallback(() => {
+    activateOnlineGateForCompanyPicker();
+    router.push("/company");
+  }, [router]);
   const { deviceLimitReached, singleDeviceOnly, replaceOffer, noPermissionNewDevice, kickedAndBlocked, deviceCount, maxDevices, refreshDeviceCheck, performReplaceAndRefresh, clearKickedAndRefresh } = useDeviceLimitContext();
   const [replacing, setReplacing] = useState(false);
   const [deviceIdShort, setDeviceIdShort] = useState("");
@@ -351,9 +356,13 @@ function DeviceLimitOverlay() {
             {rejoining ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             <span className={rejoining ? "ml-2" : ""}>{rejoining ? "Rejoining…" : "Use this device again"}</span>
           </Button>
-          <Link href="/company" className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent">
+          <Button
+            variant="outline"
+            onClick={goSwitchCompany}
+            className="rounded-md px-4 py-2 text-sm"
+          >
             Switch company
-          </Link>
+          </Button>
           <Button variant="outline" onClick={() => requestEmbeddedLogout()} className="rounded-md px-4 py-2 text-sm">
             Logout
           </Button>
@@ -621,12 +630,13 @@ function DeviceLimitOverlay() {
               {replacing ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               <span className={replacing ? "ml-2" : ""}>Join this device</span>
             </Button>
-            <Link
-              href="/company"
-              className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+            <Button
+              variant="outline"
+              onClick={goSwitchCompany}
+              className="rounded-md px-4 py-2 text-sm"
             >
               Switch company
-            </Link>
+            </Button>
             <Button
               variant="outline"
               onClick={() => requestEmbeddedLogout()}
@@ -642,12 +652,13 @@ function DeviceLimitOverlay() {
             This device is not allowed for this company. Remove a device above or switch company or upgrade your plan.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
-            <Link
-              href="/company"
-              className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
+            <Button
+              variant="outline"
+              onClick={goSwitchCompany}
+              className="rounded-md px-4 py-2 text-sm"
             >
               Switch company
-            </Link>
+            </Button>
             <Link
               href="/billing"
               className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
@@ -673,12 +684,12 @@ function DeviceLimitOverlay() {
             Slot full for this company. Change company or logout.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
-            <Link
-              href="/company"
-              className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            <Button
+              onClick={goSwitchCompany}
+              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             >
               Change company
-            </Link>
+            </Button>
             <Button
               variant="outline"
               onClick={() => requestEmbeddedLogout()}
@@ -893,8 +904,8 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       <CompanyDemotedBanner />
                       <PlanAuthoritativeSyncBanner />
                       <PlServerAccessBootstrap />
-                      <RemoteServerClientBanner />
-                      <PlServerAccessCompanyBanner />
+                      <ServerShareableCompaniesBridge />
+                      <GateAccessBootstrap />
                       <ApkCloudOfflineViewBanner />
                       <ApkCloudOnlineSyncToast />
                       <DashboardMainShell

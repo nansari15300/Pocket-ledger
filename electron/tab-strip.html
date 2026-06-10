@@ -41,7 +41,7 @@
       -webkit-app-region: no-drag;
     }
     #menuBtn:hover { background: rgba(157, 23, 77, 0.12); }
-    /* Tab strip left ↻ — background sync; success par ✓ 2s (JS `.sync-success`) */
+    /* Tab strip left ↻ — reload active tab (Ctrl+R) */
     #syncBtn {
       flex-shrink: 0;
       width: 36px;
@@ -57,21 +57,6 @@
       font-family: system-ui, "Segoe UI", sans-serif;
     }
     #syncBtn:hover { background: rgba(157, 23, 77, 0.12); }
-    #syncBtn.sync-loading {
-      animation: plSyncSpin 0.75s linear infinite;
-      opacity: 0.85;
-      pointer-events: none;
-    }
-    #syncBtn.sync-success {
-      color: #16a34a;
-      font-weight: 700;
-      font-size: 18px;
-      animation: none;
-    }
-    @keyframes plSyncSpin {
-      from { transform: rotate(0deg); }
-      to { transform: rotate(360deg); }
-    }
     /* Win/Linux merged: grouping + capped width taaki "+" tab ke baaju me rahe — mac framed: strip puri width tabs ke liye */
     #tabsChrome {
       display: flex;
@@ -219,7 +204,7 @@
 <body>
   <div id="bar">
     <button type="button" id="menuBtn" title="Menu (Alt)">&#9776;</button>
-    <button type="button" id="syncBtn" title="Sync in background">&#x21bb;</button>
+    <button type="button" id="syncBtn" title="Reload (Ctrl+R)">&#x21bb;</button>
     <div id="tabsChrome">
       <div id="tabs"></div>
       <button type="button" id="newBtn" title="New tab (Ctrl+T)">+</button>

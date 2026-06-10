@@ -457,6 +457,16 @@ export async function upsertCompanyDocInBrowserDb(
     const db = await getBrowserDb();
     if (!db) return;
     const json = JSON.stringify(serializeForLocalDb(data));
+    try {
+      const existing = db
+        .prepare("SELECT data FROM company_docs WHERE company_id = ? AND collection = ? AND id = ?")
+        .get(companyId, collectionName, docId) as { data?: string } | undefined;
+      if (existing?.data === json) {
+        return;
+      }
+    } catch {
+      /* compare optional */
+    }
     const now = Date.now();
     // SQLite UPSERT: static build single write path
     db.prepare(

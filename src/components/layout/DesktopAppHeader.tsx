@@ -33,6 +33,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
+import { sharedCompanyQueryKey, sharedCompanyQuerySpecs } from "@/lib/sharedWithEmailsQuery";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { firestore, auth, signOutWithFirestoreTeardown } from "@/lib/firebase";
 import { useEmbeddedLogout } from "@/contexts/EmbeddedLogoutContext";
@@ -99,11 +100,13 @@ import { RenewProrationPills } from "@/components/billing/RenewProrationPills";
 import { useDisplayCurrency } from "@/hooks/useDisplayCurrency";
 import { getCompanyPlanExpiryMsFromDoc } from "@/lib/companyPlanExpiryMs";
 
-import { useEmbeddedAttachmentPrefetch } from "@/contexts/EmbeddedAttachmentPrefetchContext";
+import { useHeaderAttachmentPrefetchPercent } from "@/contexts/EmbeddedAttachmentPrefetchContext";
 
 /** APK/static: background attachment cache — header ke niche patli strip (kam visible). */
 function EmbeddedAttachmentHeaderProgress() {
-  const { headerAttachmentPercent } = useEmbeddedAttachmentPrefetch();
+  const headerAttachmentPercent = useHeaderAttachmentPrefetchPercent();
+  // EXE: background warm chal raha ho to header layout shift / ledger scroll jump avoid.
+  if (isElectronDesktopApp()) return null;
   if (headerAttachmentPercent == null) return null;
   const w = Math.min(100, Math.max(0, Math.round(headerAttachmentPercent)));
   return (
@@ -1425,7 +1428,7 @@ export function DesktopAppHeader() {
         c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
     const mappedBase = (contextCompanies || [])
       .filter((c) => isCompanyVisibleInHeader(c as Company & { movedToAdminRecycleAt?: unknown }))
-      .map((c) => ({ ...c, isOwned: isOwnedByUser(c) })) as Company[];
+      .map((c) => ({ ...c, isOwned: c.isOwned ?? isOwnedByUser(c) })) as Company[];
     setUnfilteredHeaderCompanies(mappedBase);
     if (!companyContextLoading && (!contextCompanies || contextCompanies.length === 0)) {
       listLocalCompanies()
@@ -1435,7 +1438,7 @@ export function DesktopAppHeader() {
             .filter((r: { isDeleted?: boolean; movedToAdminRecycleAt?: unknown }) => !r?.isDeleted && r?.movedToAdminRecycleAt == null)
             .map((r) => {
               const c = { ...(r as unknown as Company) };
-              return { ...c, isOwned: isOwnedByUser(c) } as Company;
+              return { ...c, isOwned: c.isOwned ?? isOwnedByUser(c) } as Company;
             });
           setUnfilteredHeaderCompanies(mappedRows);
         })
@@ -1457,10 +1460,7 @@ export function DesktopAppHeader() {
       collection(firestore, "companies"),
       where("ownerId", "==", user.uid)
     );
-    const sharedQuery = query(
-      collection(firestore, "companies"),
-      where("sharedWithEmails", "array-contains", user.email)
-    );
+    const sharedQuerySpecs = isSuperAdminUser ? [] : sharedCompanyQuerySpecs(user.email);
     // SuperAdmin: also show companies where ownerEmail matches, so they can use app like a normal user
     const ownedByEmailQuery = isSuperAdminUser
       ? query(
@@ -1478,7 +1478,9 @@ export function DesktopAppHeader() {
       (!!c.ownerEmail && !!user?.email && c.ownerEmail.toLowerCase().trim() === user.email.toLowerCase().trim());
     // Keep first paint stable: wait for all initial listeners before publishing header data.
     let ownedReady = false;
-    let sharedReady = false;
+    let sharedReady = sharedQuerySpecs.length === 0;
+    const sharedSnapsByVariant = new Map<string, { docs: readonly { id: string; data: () => Record<string, unknown> }[] }>();
+    const sharedVariantsReady = new Set<string>();
     let ownedByEmailReady = !ownedByEmailQuery;
 
     const combineAndSet = () => {
@@ -1548,19 +1550,38 @@ export function DesktopAppHeader() {
       }
     );
 
-    const unsubShared = onSnapshot(
-      sharedQuery,
-      (snap) => {
-        sharedCompaniesCache = snap.docs
-          .map((doc) => ({ id: doc.id, ...doc.data() } as Company))
-          .filter((c) => isCompanyVisibleInHeader(c as Company & { movedToAdminRecycleAt?: unknown }));
-        sharedReady = true;
-        combineAndSet();
-      },
-      (error) => {
-        console.error("Error fetching shared companies:", error);
-        setLoading(false);
+    const mergeSharedHeaderCache = () => {
+      if (sharedVariantsReady.size < sharedQuerySpecs.length) return;
+      const byId = new Map<string, Company>();
+      for (const snap of sharedSnapsByVariant.values()) {
+        for (const doc of snap.docs) {
+          const company = { id: doc.id, ...doc.data() } as Company;
+          if (isCompanyVisibleInHeader(company as Company & { movedToAdminRecycleAt?: unknown })) {
+            byId.set(company.id, company);
+          }
+        }
       }
+      sharedCompaniesCache = Array.from(byId.values());
+      sharedReady = true;
+      combineAndSet();
+    };
+    const unsubSharedList = sharedQuerySpecs.map((spec) =>
+      onSnapshot(
+        query(
+          collection(firestore, "companies"),
+          where(spec.field, "array-contains", spec.value)
+        ),
+        (snap) => {
+          const key = sharedCompanyQueryKey(spec);
+          sharedSnapsByVariant.set(key, snap);
+          sharedVariantsReady.add(key);
+          mergeSharedHeaderCache();
+        },
+        (error) => {
+          console.error("Error fetching shared companies:", error);
+          setLoading(false);
+        }
+      )
     );
 
     const unsubOwnedByEmail = ownedByEmailQuery
@@ -1582,7 +1603,7 @@ export function DesktopAppHeader() {
 
     return () => {
       unsubOwned();
-      unsubShared();
+      unsubSharedList.forEach((unsub) => unsub());
       unsubOwnedByEmail();
     };
   }, [user, isSuperAdminUser]);

@@ -398,11 +398,11 @@ export function LocalCompanyCloudSyncSettings({
   useEffect(() => {
     if (!enabled) return;
     const tick = () => {
-      if (status.status === "syncing" || busy) {
-        setNextSyncInSec(0);
-        return;
-      }
-      setNextSyncInSec(Math.max(0, Math.ceil((nextSyncAtMsRef.current - Date.now()) / 1000)));
+      const next =
+        status.status === "syncing" || busy
+          ? 0
+          : Math.max(0, Math.ceil((nextSyncAtMsRef.current - Date.now()) / 1000));
+      setNextSyncInSec((prev) => (prev === next ? prev : next));
     };
     tick();
     const id = window.setInterval(tick, 1000);

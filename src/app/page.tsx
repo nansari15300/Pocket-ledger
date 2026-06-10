@@ -32,7 +32,7 @@ export default function LoginPage() {
     if (postAuthNavigateOnceRef.current) return;
     postAuthNavigateOnceRef.current = true;
     // Valid offline/cloud "remember" ho to `/company` skip; warna company picker — web + static dono par same rule.
-    const next = resolvePostAuthCompanyRoute(user.uid);
+    const next = resolvePostAuthCompanyRoute(user.uid, user.email);
     router.replace(next);
   }, [user, loading, router]);
 

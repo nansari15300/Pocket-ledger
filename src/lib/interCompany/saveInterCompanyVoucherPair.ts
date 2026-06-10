@@ -14,7 +14,6 @@ import {
   buildSourceInterCompanyLegs,
   buildSourceInterCompanyLegsApproved,
   buildTargetInterCompanyLegsPending,
-  interCompanyPairUsesConduitParty,
 } from "@/lib/interCompany/interCompanyPostingLegs";
 import { getNextInterCompanyVoucherNumber } from "@/lib/interCompany/nextInterCompanyVoucherNumber";
 import {
@@ -34,6 +33,12 @@ import {
   softDeleteVoucherMoveToRecycleBin,
 } from "@/lib/voucherActionsClient";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
+import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import {
+  isLocalToLocalInterCompanyPair,
+  isPureLocalInterCompanyCompany,
+} from "@/lib/interCompany/localInterCompanyPolicy";
+import { mergeVoucherCalendarDateWithSaveClock } from "@/lib/voucherDateNormalize";
 
 export type InterCompanyLinkDoc = {
   linkId: string;
@@ -181,8 +186,34 @@ function buildVoucherPayload(args: {
 
 /** Dono companies par linked pair create / update. */
 async function readCompanyDoc(companyId: string): Promise<Record<string, unknown> | null> {
-  const snap = await getDoc(doc(firestore, "companies", companyId));
+  const cid = String(companyId || "").trim();
+  if (!cid) return null;
+  if (await isPureLocalInterCompanyCompany(cid)) {
+    const local = await getLocalCompanyById(cid, { includeDeleted: true });
+    return local ? (local as unknown as Record<string, unknown>) : null;
+  }
+  const snap = await getDoc(doc(firestore, "companies", cid));
   return snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+}
+
+async function readInterCompanyVoucherRow(
+  companyId: string,
+  voucherId: string
+): Promise<Record<string, unknown> | null> {
+  const cid = String(companyId || "").trim();
+  const vid = String(voucherId || "").trim();
+  if (!cid || !vid) return null;
+  const local = await getCompanyDocFromBrowserDb(cid, "vouchers", vid);
+  if (local) return local as Record<string, unknown>;
+  if (await isPureLocalInterCompanyCompany(cid)) return null;
+  try {
+    const snap = await getDoc(doc(firestore, `companies/${cid}/vouchers`, vid));
+    return snap.exists()
+      ? ({ id: snap.id, ...(snap.data() as Record<string, unknown>) } as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Inter Company save: asli user naam — "Auto" sirf recurring ke liye; Firestore users doc prefer. */
@@ -269,7 +300,11 @@ export async function saveInterCompanyVoucherPair(
   }
 
   const linkId = input.existingLinkId || newLinkId();
-  const dateIso = input.date.toISOString();
+  const isCreate = !input.existingSourceVoucherId;
+  const dateForSave = isCreate
+    ? mergeVoucherCalendarDateWithSaveClock(input.date)
+    : input.date;
+  const dateIso = dateForSave.toISOString();
   const amount = Number(input.amount) || 0;
   const fileUrls = input.fileUrls ?? [];
   const shareAttachmentsWithPeer = input.shareAttachmentsWithPeer === true;
@@ -284,18 +319,20 @@ export async function saveInterCompanyVoucherPair(
   let targetVoucherNumber = sourceVoucherNumber;
 
   if (input.existingSourceVoucherId) {
-    const existing = await getDoc(
-      doc(firestore, `companies/${input.sourceCompanyId}/vouchers`, input.existingSourceVoucherId)
+    const existing = await readInterCompanyVoucherRow(
+      input.sourceCompanyId,
+      input.existingSourceVoucherId
     );
-    if (existing.exists()) {
-      sourceVoucherNumber = String(existing.data()?.voucherNumber || sourceVoucherNumber);
+    if (existing) {
+      sourceVoucherNumber = String(existing.voucherNumber || sourceVoucherNumber);
     }
     if (input.existingTargetVoucherId) {
-      const existingTarget = await getDoc(
-        doc(firestore, `companies/${input.targetCompanyId}/vouchers`, input.existingTargetVoucherId)
+      const existingTarget = await readInterCompanyVoucherRow(
+        input.targetCompanyId,
+        input.existingTargetVoucherId
       );
-      if (existingTarget.exists()) {
-        targetVoucherNumber = String(existingTarget.data()?.voucherNumber || targetVoucherNumber);
+      if (existingTarget) {
+        targetVoucherNumber = String(existingTarget.voucherNumber || targetVoucherNumber);
       }
     }
   } else {
@@ -312,31 +349,25 @@ export async function saveInterCompanyVoucherPair(
 
   const sourceEntityId = String(input.sourceEntityId || "").trim();
   const targetEntityId = String(input.targetEntityId || "").trim();
-  const useIcConduit = interCompanyPairUsesConduitParty({
-    sourceEntityKind: input.sourceEntityKind,
-    sourceEntityId: input.sourceEntityId,
-    targetEntityKind: input.targetEntityKind,
-    targetEntityId: input.targetEntityId,
-  });
+  // Har IC pair — com-to-com balance ke liye IC · Due from/to party (bank-to-bank par bhi).
+  const useIcConduit = true;
 
-  const [sourceIcPartyId, targetIcPartyId] = useIcConduit
-    ? await Promise.all([
-        ensureInterCompanyCounterpartyParty({
-          companyId: input.sourceCompanyId,
-          peerCompanyId: input.targetCompanyId,
-          peerCompanyName: input.targetCompanyName || "Company",
-          side: "source",
-          ownerId,
-        }),
-        ensureInterCompanyCounterpartyParty({
-          companyId: input.targetCompanyId,
-          peerCompanyId: input.sourceCompanyId,
-          peerCompanyName: input.sourceCompanyName || "Company",
-          side: "target",
-          ownerId,
-        }),
-      ])
-    : ["", ""];
+  const [sourceIcPartyId, targetIcPartyId] = await Promise.all([
+    ensureInterCompanyCounterpartyParty({
+      companyId: input.sourceCompanyId,
+      peerCompanyId: input.targetCompanyId,
+      peerCompanyName: input.targetCompanyName || "Company",
+      side: "source",
+      ownerId,
+    }),
+    ensureInterCompanyCounterpartyParty({
+      companyId: input.targetCompanyId,
+      peerCompanyId: input.sourceCompanyId,
+      peerCompanyName: input.sourceCompanyName || "Company",
+      side: "target",
+      ownerId,
+    }),
+  ]);
 
   const sourceLegs = buildSourceInterCompanyLegs({
     amount,
@@ -363,13 +394,27 @@ export async function saveInterCompanyVoucherPair(
     peerVoucherId: input.existingTargetVoucherId || "",
   };
 
-  const isCreate = !input.existingSourceVoucherId;
+  const localPair = await isLocalToLocalInterCompanyPair(
+    input.sourceCompanyId,
+    input.targetCompanyId
+  );
   const historyCreatedAt = new Date();
   // Create history + human userDisplayName — dono companies par (target par alag approval).
   const icHistoryOpts = isCreate
     ? await (async () => {
-        const actor = await resolveInterCompanyActorForSave(input.userId, input.approverName);
-        const phone = actor.phone ?? (await resolveCreatorPhoneForHistory(input.userId));
+        const actor = localPair
+          ? {
+              displayName: resolveHumanActorDisplayLabel({
+                candidate: input.approverName || auth.currentUser?.displayName,
+                email: auth.currentUser?.email,
+                userId: input.userId,
+              }),
+              email: auth.currentUser?.email?.trim() || null,
+              phone: auth.currentUser?.phoneNumber?.trim() || null,
+            }
+          : await resolveInterCompanyActorForSave(input.userId, input.approverName);
+        const phone =
+          actor.phone ?? (localPair ? null : await resolveCreatorPhoneForHistory(input.userId));
         return {
           interCompanyCreateHistory: interCompanyCreateHistoryInput(
             input,

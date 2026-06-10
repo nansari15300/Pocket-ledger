@@ -20,6 +20,7 @@ const ROUTE_PREFIX_LABELS: { prefix: string; label: string }[] = [
   { prefix: "/purchase-note", label: "Purchase Note" },
   { prefix: "/reports", label: "Reports" },
   { prefix: "/gallery", label: "Gallery" },
+  { prefix: "/gate", label: "Gate" },
   { prefix: "/production", label: "Production" },
   { prefix: "/quotations", label: "Quotations" },
   { prefix: "/dashboard", label: "Dashboard" },

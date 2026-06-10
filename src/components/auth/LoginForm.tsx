@@ -33,6 +33,7 @@ import {
 } from "@/lib/loginRememberEmail";
 import { resolvePostAuthCompanyRoute } from "@/lib/postAuthCompanyRoute";
 import { signInWithGoogleForApp } from "@/lib/googleFirebaseSignIn";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { stashSessionPasswordForSavedAccount } from "@/lib/savedLoginSessionPassword";
 
 // One-time handling of redirect result (survives Strict Mode double-mount so we don't consume result twice)
@@ -56,8 +57,8 @@ export function LoginForm() {
   const router = useRouter();
   const { toast } = useToast();
   // Post-login: `resolvePostAuthCompanyRoute` — web = remember/empty → `/company`; static/APK = last company → `/dashboard`.
-  const navigateAfterAuth = useCallback((firebaseUid: string | undefined, replace?: boolean) => {
-    const next = resolvePostAuthCompanyRoute(firebaseUid);
+  const navigateAfterAuth = useCallback((firebaseUid: string | undefined, userEmail?: string | null, replace?: boolean) => {
+    const next = resolvePostAuthCompanyRoute(firebaseUid, userEmail);
     if (replace) {
       router.replace(next);
       return;
@@ -81,7 +82,7 @@ export function LoginForm() {
       .then((result) => {
         if (result?.user) {
           // Redirect-flow login should also honor remembered company unlock on static/local builds.
-          navigateAfterAuth(result.user.uid, true);
+          navigateAfterAuth(result.user.uid, result.user.email, true);
         }
       })
       .catch((error: any) => {
@@ -158,7 +159,7 @@ export function LoginForm() {
 
       form.setValue("password", "");
       // Email/password login: choose dashboard directly when remember window for last company is valid.
-      navigateAfterAuth(auth.currentUser?.uid);
+      navigateAfterAuth(auth.currentUser?.uid, auth.currentUser?.email);
 
     } catch (error: any) {
       toast({
@@ -181,10 +182,10 @@ export function LoginForm() {
     try {
       const result = await signInWithGoogleForApp();
       if (result?.user) {
-        navigateAfterAuth(result.user.uid, true);
+        navigateAfterAuth(result.user.uid, result.user.email, true);
       }
+      // Redirect flow (EXE fallback): page Google par navigate — `getRedirectResult` login par complete karega.
     } catch (error: any) {
-      setIsGoogleLoading(false);
       // Keep native plugin failure details visible (status code 10/7/12501 etc.) so APK issues become diagnosable on-device.
       const rawCode = String(error?.code ?? error?.errorCode ?? "");
       const rawMessage = String(error?.message ?? "");
@@ -210,6 +211,18 @@ export function LoginForm() {
         description = "Google sign-in cancel hua (status 12501). Account chooser complete karke phir try karo.";
       } else if (nativeStatusCode === "12500" || nativeStatusCode === "12502") {
         description = "Google sign-in setup issue (status " + nativeStatusCode + "). Google provider + OAuth client + SHA fingerprints verify karo.";
+      } else if (
+        rawMessage.includes("GOOGLE_AUTH_TIMEOUT") ||
+        rawMessage.includes("GOOGLE_AUTH_NO_TOKEN")
+      ) {
+        description =
+          "Browser sign-in time out ya cancel ho gaya. Dubara try karein aur Chrome/Edge me account choose karke tab band karein.";
+      } else if (
+        rawMessage.includes("redirect_uri_mismatch") ||
+        rawMessage.toLowerCase().includes("redirect")
+      ) {
+        description =
+          "Google OAuth redirect setup missing. Google Cloud Console me ye URI add karein: http://127.0.0.1:28741/__pl_google_auth_callback/";
       }
       if (nativeStatusCode && !description.includes("status " + nativeStatusCode)) {
         // Append machine-readable code to help quick support/debug screenshots.
@@ -221,6 +234,8 @@ export function LoginForm() {
         title: "Google Sign-In Failed",
         description,
       });
+    } finally {
+      setIsGoogleLoading(false);
     }
   }
 
@@ -363,8 +378,13 @@ export function LoginForm() {
         ) : (
           <GoogleIcon />
         )}
-        Sign in with Google
+        {isElectronDesktopApp() ? "Sign in with Google (browser)" : "Sign in with Google"}
       </Button>
+      {isElectronDesktopApp() ? (
+        <p className="mt-2 text-center text-xs text-muted-foreground">
+          Chrome/Edge khulega — wahan pehle se logged-in Gmail account choose karein. Email/password yahan type na karein.
+        </p>
+      ) : null}
     </div>
   );
 }

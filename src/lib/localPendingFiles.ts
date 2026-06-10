@@ -8,6 +8,8 @@ import { firestore } from "@/lib/firebase";
 import { writeEntity } from "@/lib/writeGateway";
 import { Capacitor } from "@capacitor/core";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { electronAttachmentDisplayUrlFromPath } from "@/lib/electronAttachmentFs";
+import { usesEmbeddedNativeAttachmentStorage } from "@/lib/usesEmbeddedNativeAttachmentStorage";
 import {
   deleteAttachmentBlobFromDataDir,
   getAttachmentFileUriFromDataDir,
@@ -297,15 +299,20 @@ function setLocalFileRefMetaCache(meta: LocalFileRefMeta | null): void {
 
 /** App boot warm-up: native pending refs ko runtime cache me preload karo taaki `getLocalFileRefMetaSync` hit mile. */
 export async function primeLocalFileRefMetaRuntimeCache(): Promise<void> {
-  if (!isCapacitorNativeApp()) return;
+  if (!usesEmbeddedNativeAttachmentStorage()) return;
   try {
     const rows = await listAttachmentFileRefs("pending_file");
     for (const row of rows) {
       if (!row?.id) continue;
       const meta = parsePendingMeta(row.metaJson);
       const fileUri = row.filePath ? await getAttachmentFileUriFromDataDir(row.filePath) : null;
-      const displayUrl =
-        fileUri && typeof fileUri === "string" ? Capacitor.convertFileSrc(fileUri) : undefined;
+      let displayUrl: string | undefined;
+      if (fileUri && isCapacitorNativeApp()) {
+        displayUrl = Capacitor.convertFileSrc(fileUri);
+      } else if (row.filePath) {
+        displayUrl =
+          (await electronAttachmentDisplayUrlFromPath(row.filePath, row.contentType)) ?? undefined;
+      }
       setLocalFileRefMetaCache({
         id: row.id,
         contentType: row.contentType ?? null,
@@ -363,13 +370,18 @@ export async function getLocalFileRefMeta(url: string): Promise<LocalFileRefMeta
   if (!localId) return null;
   const cached = localFileRefMetaRuntimeCache.get(localId);
   if (cached) return cached;
-  if (isCapacitorNativeApp()) {
+  if (usesEmbeddedNativeAttachmentStorage()) {
     const row = await getAttachmentFileRef("pending_file", localId);
     if (!row) return null;
     const meta = parsePendingMeta(row.metaJson);
     const fileUri = row.filePath ? await getAttachmentFileUriFromDataDir(row.filePath) : null;
-    const displayUrl =
-      fileUri && typeof fileUri === "string" ? Capacitor.convertFileSrc(fileUri) : undefined;
+    let displayUrl: string | undefined;
+    if (fileUri && isCapacitorNativeApp()) {
+      displayUrl = Capacitor.convertFileSrc(fileUri);
+    } else if (row.filePath) {
+      displayUrl =
+        (await electronAttachmentDisplayUrlFromPath(row.filePath, row.contentType)) ?? undefined;
+    }
     const mapped: LocalFileRefMeta = {
       id: localId,
       contentType: row.contentType ?? null,
@@ -421,7 +433,7 @@ async function getPendingFileById(
   options?: LocalFileReadOptions
 ): Promise<PendingFilePayload | null> {
   if (!localId?.trim()) return null;
-  if (isCapacitorNativeApp()) {
+  if (usesEmbeddedNativeAttachmentStorage()) {
     if (options?.allowNativeRead === false) {
       throw new Error(
         `[localPendingFiles] Native read blocked for context=${options?.context || "unknown"}; expected convertFileSrc fast path`
@@ -594,11 +606,11 @@ export async function uploadPendingLocalFileRef(
 
 export async function putPendingFile(payload: PendingFilePayload): Promise<void> {
   const createdAt = payload.createdAt ?? Date.now();
-  if (isCapacitorNativeApp()) {
-    // Capacitor/mobile: bytes ko DataDirectory me rakho, SQLite me path/meta row.
+  if (usesEmbeddedNativeAttachmentStorage()) {
+    // APK/EXE: bytes disk par; SQLite me path/meta row.
     const path = pendingFileDataDirPath(payload.id, payload.fileName);
     const ok = await writeAttachmentBlobToDataDir(path, payload.blob);
-    if (!ok) throw new Error("Failed to persist pending attachment in DataDirectory");
+    if (!ok) throw new Error("Failed to persist pending attachment on device storage");
     const sha256Hex = await computeSha256HexFromBlob(payload.blob);
     const meta: PendingFileMeta = {
       docPath: payload.docPath,
@@ -618,15 +630,20 @@ export async function putPendingFile(payload: PendingFilePayload): Promise<void>
       updatedAt: createdAt,
       sha256Hex,
     });
-    // Freshly persisted local file: sync render/open fast-path ke liye runtime cache seed karo.
     const fileUri = await getAttachmentFileUriFromDataDir(path);
+    let displayUrl: string | undefined;
+    if (fileUri && isCapacitorNativeApp()) {
+      displayUrl = Capacitor.convertFileSrc(fileUri);
+    } else {
+      displayUrl = (await electronAttachmentDisplayUrlFromPath(path, payload.contentType)) ?? undefined;
+    }
     setLocalFileRefMetaCache({
       id: payload.id,
       contentType: payload.contentType || payload.blob.type || "application/octet-stream",
       fileName: payload.fileName,
       filePath: path,
       fileUri: fileUri ?? undefined,
-      displayUrl: fileUri ? Capacitor.convertFileSrc(fileUri) : undefined,
+      displayUrl,
       size: payload.blob.size || 0,
       createdAt,
       docPath: payload.docPath,
@@ -668,7 +685,7 @@ export async function putPendingFile(payload: PendingFilePayload): Promise<void>
 }
 
 export async function getPendingFiles(): Promise<PendingFilePayload[]> {
-  if (isCapacitorNativeApp()) {
+  if (usesEmbeddedNativeAttachmentStorage()) {
     const rows = await listAttachmentFileRefs("pending_file");
     const out: PendingFilePayload[] = [];
     for (const row of rows) {
@@ -713,11 +730,10 @@ export async function removePendingFile(id: string): Promise<void> {
       navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
     });
   }
-  if (isCapacitorNativeApp()) {
+  if (usesEmbeddedNativeAttachmentStorage()) {
     const row = await getAttachmentFileRef("pending_file", id);
     if (row?.filePath) await deleteAttachmentBlobFromDataDir(row.filePath);
     await deleteAttachmentFileRef("pending_file", id);
-    // Delete ke baad stale URI reuse na ho.
     localFileRefMetaRuntimeCache.delete(id);
     if (localPendingFilesForensicEnabled()) {
       console.warn("[FORENSIC_PENDING_REMOVE]", {

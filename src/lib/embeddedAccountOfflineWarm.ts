@@ -7,6 +7,9 @@
 import type { Company } from "@/hooks/useCompany";
 import {
   isCloudBackedCompanyShape,
+  runEmbeddedAttachmentPrefetchPhase,
+  runOfflineFullWarmSync,
+  shouldPrefetchAttachmentsForCompany,
   type AttachmentPrefetchOverrides,
 } from "@/lib/offlineFullWarmSync";
 
@@ -26,6 +29,50 @@ export function orderCloudCompaniesForAccountWarm(
   prioritizeCompanyId?: string | null,
 ): Company[] {
   const rows = (allCompanies ?? []).filter((c): c is Company => isCloudBackedCompanyShape(c));
+  const pid = prioritizeCompanyId?.trim();
+  if (!pid) return rows;
+  const first = rows.filter((c) => c.id === pid);
+  const rest = rows.filter((c) => c.id !== pid);
+  return [...first, ...rest];
+}
+
+/** SQLite mirror + saari attachment URLs IndexedDB/native cache — ek company poora offline preload. */
+export async function runEmbeddedCompanyFullPreload(args: {
+  company: Company;
+  localCompanyId: string;
+  signal?: AbortSignal;
+  prefetchOverrides?: AttachmentPrefetchOverrides;
+  onAttachmentProgressPercent?: (pct: number) => void;
+}): Promise<void> {
+  const localId = args.localCompanyId.trim();
+  if (!localId) return;
+
+  await runOfflineFullWarmSync({
+    company: args.company,
+    localCompanyId: localId,
+    signal: args.signal,
+    includeAttachmentPrefetch: false,
+    skipWarmBootstrapFlag: true,
+  });
+
+  if (args.signal?.aborted) return;
+  if (!shouldPrefetchAttachmentsForCompany(args.company)) return;
+
+  await runEmbeddedAttachmentPrefetchPhase({
+    company: args.company,
+    localCompanyId: localId,
+    signal: args.signal,
+    onProgressPercent: args.onAttachmentProgressPercent,
+    prefetchOverrides: args.prefetchOverrides ?? EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
+  });
+}
+
+/** Registry se cloud + Drive-sync local rows — account preload ke liye. */
+export function orderCompaniesForAccountFullPreload(
+  allCompanies: Company[] | null | undefined,
+  prioritizeCompanyId?: string | null,
+): Company[] {
+  const rows = (allCompanies ?? []).filter((c) => shouldPrefetchAttachmentsForCompany(c));
   const pid = prioritizeCompanyId?.trim();
   if (!pid) return rows;
   const first = rows.filter((c) => c.id === pid);

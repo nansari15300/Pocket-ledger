@@ -2,11 +2,14 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import {
   createAccessToken,
+  getAccessTokenSecret,
   getDevStatus,
   listAccessTokens,
   loadDevConfig,
   revokeAccessToken,
+  rotateAccessToken,
   saveDevConfig,
+  updateAccessToken,
 } from "@/lib/devPlLocalServer/store";
 
 export function isDevPlLocalServerEnabled(): boolean {
@@ -78,10 +81,28 @@ export async function devPlLocalServerHandle(
       return listAccessTokens();
     case "createAccessToken":
       return createAccessToken((payload.input as Parameters<typeof createAccessToken>[0]) || {});
+    case "updateAccessToken": {
+      const id = String(payload.id || "");
+      const token = updateAccessToken(id, (payload.input as Parameters<typeof updateAccessToken>[1]) || {});
+      if (!token) return { ok: false };
+      return { ok: true, token };
+    }
     case "revokeAccessToken": {
       const id = String(payload.id || "");
       const ok = revokeAccessToken(id);
       return { ok };
+    }
+    case "getAccessTokenSecret": {
+      const id = String(payload.id || "");
+      const secret = getAccessTokenSecret(id);
+      if (!secret) return { ok: false };
+      return { ok: true, ...secret };
+    }
+    case "rotateAccessToken": {
+      const id = String(payload.id || "");
+      const rotated = rotateAccessToken(id, (payload.input as Parameters<typeof rotateAccessToken>[1]) || {});
+      if (!rotated) return { ok: false };
+      return { ok: true, ...rotated };
     }
     default:
       throw new Error(`UNKNOWN_ACTION:${action}`);

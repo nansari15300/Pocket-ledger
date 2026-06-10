@@ -17,6 +17,8 @@ import {
 } from "@/lib/firebaseStorageDownloadUrl";
 import { storage } from "@/lib/firebase";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { electronAttachmentDisplayUrlFromPath } from "@/lib/electronAttachmentFs";
+import { usesEmbeddedNativeAttachmentStorage } from "@/lib/usesEmbeddedNativeAttachmentStorage";
 import {
   getAttachmentFileUriFromDataDir,
   readAttachmentBlobFromDataDir,
@@ -34,7 +36,7 @@ import {
   isOfflineCacheableAttachmentRef,
   offlineCacheKeyForAttachmentRef,
 } from "@/lib/attachmentRefBlobFetch";
-import { isLocalFileRef } from "@/lib/localPendingFiles";
+import { getBlobFromLocalFileRef, isLocalFileRef } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 
 /** Forensic: build par `NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG=1` — cache HIT/MISS / stable-key proof (temporary trace only). */
@@ -328,7 +330,13 @@ function emitPrefetchLog(
     /* callback errors should never break sync */
   }
   try {
-    const level = event.ok ? "debug" : event.retryable ? "warn" : "error";
+    const expectedClientHttp =
+      !event.ok &&
+      !event.retryable &&
+      event.status != null &&
+      event.status >= 400 &&
+      event.status < 500;
+    const level = event.ok ? "debug" : event.retryable ? "warn" : expectedClientHttp ? "warn" : "error";
     const msg = `[offlineAttachmentUrlCache] ${event.ok ? "OK" : "FAIL"} attempt=${event.attempt} status=${event.status ?? "n/a"} note=${event.note}`;
     if (level === "error") console.error(msg, event.url);
     else if (level === "warn") console.warn(msg, event.url);
@@ -350,56 +358,52 @@ function offlineCacheDataDirPath(id: string, contentType?: string | null): strin
   return `attachments/offline-cache/${id}.${ext}`;
 }
 
-/** Warm sync / preview: IndexedDB cache read */
-export async function getOfflineCachedAttachmentBlob(urlStr: string): Promise<Blob | null> {
-  if (!supportsOfflineAttachmentLookup(urlStr)) return null;
+/**
+ * Preview/open hot path: signed HTTPS URL, bare `voucher-files/…` path, stable object-key —
+ * warm sync kabhi alag string se likhta hai, voucher row kabhi doosri — sab keys try karo.
+ */
+export async function tryOfflineCachedAttachmentBlobMultiKey(urlStr: string): Promise<Blob | null> {
+  const trimmed = String(urlStr || "").trim();
+  if (!trimmed) return null;
+
+  const tryKey = async (key: string): Promise<Blob | null> => {
+    const k = String(key || "").trim();
+    if (!k) return null;
+    const b = await getOfflineCachedAttachmentBlob(k);
+    return b && b.size > 0 ? b : null;
+  };
+
+  let hit = await tryKey(trimmed);
+  if (hit) return hit;
+
+  const pathFromUrl = tryGetStoragePathFromFirebaseDownloadUrl(trimmed);
+  if (pathFromUrl) {
+    hit = await tryKey(pathFromUrl);
+    if (hit) return hit;
+    hit = await tryKey(`firebase-object:${pathFromUrl}`);
+    if (hit) return hit;
+  }
+
+  const norm = normalizeFirebaseStorageObjectPathForSdk(trimmed);
+  if (norm && norm !== trimmed) {
+    hit = await tryKey(norm);
+    if (hit) return hit;
+  }
+
+  if (isLocalFileRef(trimmed)) {
+    const localBlob = await getBlobFromLocalFileRef(trimmed);
+    if (localBlob && localBlob.size > 0) return localBlob;
+  }
+
+  return null;
+}
+
+async function readOfflineCacheBlobFromIndexedDb(
+  ids: string[],
+  originalInput?: string
+): Promise<Blob | null> {
+  if (typeof indexedDB === "undefined") return null;
   try {
-    const ids = await getOfflineAttachmentStoreIdsForLookup(urlStr.trim());
-    if (ids.length === 0) return null;
-    if (isCapacitorNativeApp()) {
-      for (const id of ids) {
-        const row = await getAttachmentFileRef("offline_cache", id);
-        if (!row) continue;
-        const b = await readAttachmentBlobFromDataDir(
-          row.filePath,
-          row.contentType,
-          row.sha256Hex ?? undefined
-        );
-        if (b && b.size > 0) {
-          if (offlineAttachmentForensicEnabled()) {
-            console.warn("[FORENSIC_OFFLINE_CACHE_READ]", {
-              originalInput: urlStr,
-              cacheHit: true,
-              blobSource: "native_data_dir_via_offline_cache_sqlite_row",
-              idMatched: id,
-              byteSize: b.size,
-              navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
-            });
-          }
-          return b;
-        }
-      }
-      if (offlineAttachmentForensicEnabled()) {
-        console.warn("[FORENSIC_OFFLINE_CACHE_READ]", {
-          originalInput: urlStr,
-          cacheHit: false,
-          blobSource: null,
-          idsTried: ids,
-          store: "native_offline_cache",
-          navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
-        });
-      }
-      return null;
-    }
-    if (typeof indexedDB === "undefined") return null;
-    if (offlineAttachmentForensicEnabled()) {
-      console.warn("[FORENSIC_PENDING_IDB_BLOB]", {
-        phase: "indexeddb_read_path_before_openDB",
-        dbName: getPendingIndexedDbFullName(),
-        store: "offlineAttachmentBlobs",
-        originalInputSample: String(urlStr).slice(0, 160),
-      });
-    }
     const db = await openDB();
     return await new Promise<Blob | null>((resolve) => {
       try {
@@ -407,16 +411,6 @@ export async function getOfflineCachedAttachmentBlob(urlStr: string): Promise<Bl
         const st = tx.objectStore("offlineAttachmentBlobs");
         const tryAt = (idx: number) => {
           if (idx >= ids.length) {
-            if (offlineAttachmentForensicEnabled()) {
-              console.warn("[FORENSIC_OFFLINE_CACHE_READ]", {
-                originalInput: urlStr,
-                cacheHit: false,
-                blobSource: null,
-                idsTried: ids,
-                store: "indexeddb_offlineAttachmentBlobs",
-                navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
-              });
-            }
             resolve(null);
             return;
           }
@@ -427,12 +421,11 @@ export async function getOfflineCachedAttachmentBlob(urlStr: string): Promise<Bl
             if (row?.blob && row.blob.size) {
               if (offlineAttachmentForensicEnabled()) {
                 console.warn("[FORENSIC_OFFLINE_CACHE_READ]", {
-                  originalInput: urlStr,
+                  originalInput,
                   cacheHit: true,
                   blobSource: "indexeddb_offlineAttachmentBlobs",
                   idMatched: ids[idx],
                   byteSize: row.blob.size,
-                  navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
                 });
               }
               resolve(row.blob);
@@ -441,34 +434,54 @@ export async function getOfflineCachedAttachmentBlob(urlStr: string): Promise<Bl
         };
         tryAt(0);
       } catch {
-        if (offlineAttachmentForensicEnabled()) {
-          console.warn("[FORENSIC_OFFLINE_CACHE_READ]", {
-            originalInput: urlStr,
-            cacheHit: false,
-            blobSource: null,
-            error: "indexeddb_transaction_throw",
-          });
-        }
         resolve(null);
       }
     });
-  } catch (e) {
-    if (offlineAttachmentForensicEnabled()) {
-      console.warn("[FORENSIC_OFFLINE_CACHE_READ]", {
-        originalInput: urlStr,
-        cacheHit: false,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
+  } catch {
     return null;
   }
 }
 
-/** Native fast-path: cached HTTPS attachment ke liye direct `convertFileSrc` URL (no JS blob/base64 bridge). */
+/** Warm sync / preview: native disk+SQLite (APK/EXE) ya IndexedDB (web). */
+export async function getOfflineCachedAttachmentBlob(urlStr: string): Promise<Blob | null> {
+  if (!supportsOfflineAttachmentLookup(urlStr)) return null;
+  try {
+    const ids = await getOfflineAttachmentStoreIdsForLookup(urlStr.trim());
+    if (ids.length === 0) return null;
+
+    if (usesEmbeddedNativeAttachmentStorage()) {
+      for (const id of ids) {
+        const row = await getAttachmentFileRef("offline_cache", id);
+        if (!row) continue;
+        const b = await readAttachmentBlobFromDataDir(
+          row.filePath,
+          row.contentType,
+          row.sha256Hex ?? undefined
+        );
+        if (b && b.size > 0) {
+          return b;
+        }
+      }
+      // Purana EXE build: IndexedDB me bytes the, SQLite row nahi — ek baar disk par migrate karo.
+      const legacy = await readOfflineCacheBlobFromIndexedDb(ids, urlStr);
+      if (legacy && legacy.size > 0) {
+        void putCachedBlob(urlStr.trim(), legacy);
+        return legacy;
+      }
+      return null;
+    }
+
+    return await readOfflineCacheBlobFromIndexedDb(ids, urlStr);
+  } catch {
+    return null;
+  }
+}
+
+/** Native fast-path: APK `convertFileSrc`; EXE session `blob:` from disk (no HTTPS). */
 export async function getOfflineCachedAttachmentNativeRef(
   urlStr: string
 ): Promise<OfflineCachedAttachmentNativeRef | null> {
-  if (!isCapacitorNativeApp()) return null;
+  if (!usesEmbeddedNativeAttachmentStorage()) return null;
   if (!supportsOfflineAttachmentLookup(urlStr)) return null;
   try {
     const ids = await getOfflineAttachmentStoreIdsForLookup(urlStr.trim());
@@ -478,9 +491,16 @@ export async function getOfflineCachedAttachmentNativeRef(
       if (!row?.filePath) continue;
       const fileUri = await getAttachmentFileUriFromDataDir(row.filePath);
       if (!fileUri) continue;
+      let displayUrl: string | null = null;
+      if (isCapacitorNativeApp()) {
+        displayUrl = Capacitor.convertFileSrc(fileUri);
+      } else {
+        displayUrl = await electronAttachmentDisplayUrlFromPath(row.filePath, row.contentType);
+      }
+      if (!displayUrl) continue;
       return {
         fileUri,
-        displayUrl: Capacitor.convertFileSrc(fileUri),
+        displayUrl,
         contentType: row.contentType ?? null,
         size: Number(row.size || 0),
       };
@@ -510,12 +530,14 @@ async function putCachedBlob(urlStr: string, blob: Blob): Promise<void> {
       blobSize: blob.size,
       contentType: blob.type || null,
       hashIdsWritten: ids,
-      targetStore: isCapacitorNativeApp() ? "native_offline_cache_sqlite+datadir" : "indexeddb_offlineAttachmentBlobs",
+      targetStore: usesEmbeddedNativeAttachmentStorage()
+        ? "native_offline_cache_sqlite+disk"
+        : "indexeddb_offlineAttachmentBlobs",
       navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
     });
   }
-  if (isCapacitorNativeApp()) {
-    // Capacitor/mobile: bytes file-system me; SQLite row me path+meta to avoid IndexedDB blob overhead.
+  if (usesEmbeddedNativeAttachmentStorage()) {
+    // APK/EXE: bytes disk par; SQLite row me path+meta (IndexedDB blob overhead avoid).
     const canonicalId = ids[0];
     if (!canonicalId) return;
     const path = offlineCacheDataDirPath(canonicalId, blob.type || null);
@@ -604,7 +626,7 @@ export async function getRemoteAttachmentBlobPreferOfflineCache(
     }
     return null;
   }
-  const cached = await getOfflineCachedAttachmentBlob(trimmed);
+  const cached = await tryOfflineCachedAttachmentBlobMultiKey(trimmed);
   if (cached && cached.size > 0) {
     if (offlineAttachmentForensicEnabled()) {
       console.warn("[FORENSIC_OFFLINE_CACHE_REMOTE_PREFER]", {
@@ -640,7 +662,7 @@ export async function getRemoteAttachmentBlobPreferOfflineCache(
 
   // Cache miss + offline: network/SDK fetch mat chalao — warna lamba hang / spinner (`HoverPreviewHttpsAwareImage`).
   // APK WebView: `navigator.onLine` kabhi galat false hota hai jab Firebase chal raha ho — thumbnail mat roko.
-  if (typeof navigator !== "undefined" && !navigator.onLine && !isCapacitorNativeApp()) {
+  if (typeof navigator !== "undefined" && !navigator.onLine && !usesEmbeddedNativeAttachmentStorage()) {
     if (offlineAttachmentForensicEnabled()) {
       console.warn("[FORENSIC_OFFLINE_CACHE_REMOTE_PREFER]", {
         originalInput: urlStr,

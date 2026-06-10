@@ -10,6 +10,9 @@ import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { normalizePlanIdForClient, type PlanId } from "@/config/plans";
 import { registerDeviceAndCheckLimit, replaceMyOtherDevicesAndRegister, getOrCreateDeviceId, setKickedForCompany, clearKickedForCompany, getWasKicked, enforceDeviceLimitByPlan } from "@/lib/deviceLimitClient";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { isCloudBackedCompanyShape } from "@/lib/offlineFullWarmSync";
+import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 
 const runCheckRef = { current: (() => Promise.resolve()) as () => void | Promise<void> };
 
@@ -54,6 +57,21 @@ export function useDeviceLimit() {
       myDeviceWasInListRef.current = null;
       return;
     }
+
+    // Remote server client (Gate → Connect): device slots register on server PC, not this viewer.
+    if (isPlRemoteServerClientMode()) {
+      setResult({ allowed: true, count: 0, limit: 1 });
+      myDeviceWasInListRef.current = null;
+      return;
+    }
+
+    // Pure local company (SQLite on this device) — no Firestore device-sync list.
+    if (isOfflineCompanyStorage(company) && !isCloudBackedCompanyShape(company)) {
+      setResult({ allowed: true, count: 0, limit: 1 });
+      myDeviceWasInListRef.current = null;
+      return;
+    }
+
     myDeviceWasInListRef.current = null;
 
     const isOwner =
@@ -65,7 +83,10 @@ export function useDeviceLimit() {
     const planIdForDeviceSlots = isOwner ? accountPlanId : companyPlanIdNormalized;
     const plan = getPlanFromPlans(livePlans, planIdForDeviceSlots);
     const hasMultiDeviceSync = plan.entitlements.hasMultiDeviceSync === true;
-    const planMaxDevices = Math.max(1, Number(plan.entitlements.maxDevices) || 1);
+    const localCompany = isOfflineCompanyStorage(company);
+    const planMaxDevices = localCompany
+      ? Math.max(1, Number(plan.entitlements.maxDevicesLocal ?? plan.entitlements.maxDevices) || 1)
+      : Math.max(1, Number(plan.entitlements.maxDevices) || 1);
     const maxDevices = hasMultiDeviceSync ? planMaxDevices : 1;
     const userCanUseMultiDevice = company?.userCanUseMultiDevice !== false;
 
@@ -74,7 +95,11 @@ export function useDeviceLimit() {
     const runCheck = (): Promise<void> => {
       if (cancelled) return Promise.resolve();
       const wasKicked = getWasKicked(companyId);
-      return registerDeviceAndCheckLimit(companyId, user!.uid, maxDevices, true, { userCanUseMultiDevice, isOwner, wasKicked })
+      return registerDeviceAndCheckLimit(companyId, user!.uid, maxDevices, hasMultiDeviceSync, {
+        userCanUseMultiDevice,
+        isOwner,
+        wasKicked,
+      })
         .then(async (r) => {
           if (cancelled) return;
           if (r.count > r.limit && r.limit >= 1) {
@@ -140,7 +165,10 @@ export function useDeviceLimit() {
     const planIdForDeviceSlots = isOwner ? accountPlanId : companyPlanIdNormalized;
     const plan = getPlanFromPlans(livePlans, planIdForDeviceSlots);
     const hasMultiDeviceSync = plan.entitlements.hasMultiDeviceSync === true;
-    const planMaxDevices = Math.max(1, Number(plan.entitlements.maxDevices) || 1);
+    const localCompany = isOfflineCompanyStorage(company);
+    const planMaxDevices = localCompany
+      ? Math.max(1, Number(plan.entitlements.maxDevicesLocal ?? plan.entitlements.maxDevices) || 1)
+      : Math.max(1, Number(plan.entitlements.maxDevices) || 1);
     const maxDevices = hasMultiDeviceSync ? planMaxDevices : 1;
     await replaceMyOtherDevicesAndRegister(companyId, user.uid, maxDevices);
     runCheckRef.current?.();

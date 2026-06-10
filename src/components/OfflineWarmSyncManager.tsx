@@ -13,21 +13,27 @@ import type { Company } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import {
-  runOfflineFullWarmSync,
-  isCloudBackedCompanyShape,
+  shouldPrefetchAttachmentsForCompany,
 } from "@/lib/offlineFullWarmSync";
+import {
+  EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
+  runEmbeddedCompanyFullPreload,
+} from "@/lib/embeddedAccountOfflineWarm";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { useFirstLoginWarmGate } from "@/contexts/FirstLoginWarmGateContext";
 import { isLocalOnlyMode } from "@/lib/localMode";
 
-const WARM_DEBOUNCE_MS = 4500;
+const WARM_DEBOUNCE_MS = 2_200;
 /** Doosri company ka warm overlap na ho selected company ke debounced run se (`WARM_DEBOUNCE_MS` ke baad shuru). */
-const EMBEDDED_MULTI_WALK_START_MS = 5_800;
+const EMBEDDED_MULTI_WALK_START_MS = 3_500;
 /** Har company warm ke beech thoda gap — APK memory / bandwidth. */
 const EMBEDDED_MULTI_GAP_MS = 750;
 /** User se bina click: online rehne par periodic resweep se missed/failing attachments bhi dheere-dheere cache ho jayein. */
 const EMBEDDED_MULTI_RESWEEP_MS = 8 * 60 * 1000;
+/** EXE desktop: ledger detail scroll jump avoid — background resweep kam frequent. */
+const EMBEDDED_MULTI_RESWEEP_MS_ELECTRON = 25 * 60 * 1000;
 import { backgroundWarmSyncEnabled } from "@/lib/firebaseBillingOptimization";
 
 const BACKGROUND_WARM_SYNC_ENABLED = backgroundWarmSyncEnabled();
@@ -45,9 +51,10 @@ export function OfflineWarmSyncManager() {
   const suppressOnlineEventWarm = embeddedMultiClient && isLocalOnlyMode();
 
   /** Id set badalne par walker dubara queue — nayi shared company SQLite me aate hi prefetch. */
-  const cloudBackedSig = useMemo(() => {
+  const preloadCompanySig = useMemo(() => {
     const rows =
-      allCompanies?.filter((c): c is Company => isCloudBackedCompanyShape(c as Company)) ?? [];
+      allCompanies?.filter((c): c is Company => shouldPrefetchAttachmentsForCompany(c as Company)) ??
+      [];
     return [...new Set(rows.map((c) => c.id).filter(Boolean))].sort().join(",");
   }, [allCompanies]);
 
@@ -64,6 +71,7 @@ export function OfflineWarmSyncManager() {
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const runAbortRef = useRef<AbortController | null>(null);
   const allCompaniesLatestRef = useRef(allCompanies);
+  const lastWarmCompletedAtRef = useRef(0);
 
   /** Serial multi-company walk — company list / abort lifecycle */
   const embeddedWalkAbortRef = useRef<AbortController | null>(null);
@@ -86,18 +94,21 @@ export function OfflineWarmSyncManager() {
       runAbortRef.current?.abort();
       const c = new AbortController();
       runAbortRef.current = c;
-      void runOfflineFullWarmSync({
+      void runEmbeddedCompanyFullPreload({
         company,
         localCompanyId: companyId.trim(),
         signal: c.signal,
-        // If warm sync is re-enabled later, keep startup attachment prefetch off by policy.
-        includeAttachmentPrefetch: false,
+        prefetchOverrides: EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
+      }).finally(() => {
+        if (!c.signal.aborted) lastWarmCompletedAtRef.current = Date.now();
       });
     }, WARM_DEBOUNCE_MS);
   }, [user, loading, companyId, company, gateActive]);
 
   useEffect(() => {
     if (!BACKGROUND_WARM_SYNC_ENABLED) return;
+    // APK/EXE: serial multi-company walk already warm karta hai — company-switch debounced warm UI churn avoid.
+    if (embeddedMultiClient) return;
     scheduleWarmFullSync();
     return () => {
       if (debounceTimerRef.current) {
@@ -110,10 +121,13 @@ export function OfflineWarmSyncManager() {
   useEffect(() => {
     if (!BACKGROUND_WARM_SYNC_ENABLED) return;
     if (typeof window === "undefined") return;
+    // APK/EXE: tab focus/online par selected-company warm mat — background walk + Firestore listeners kaafi.
+    if (embeddedMultiClient) return;
     if (suppressOnlineEventWarm) return;
     const onOnline = () => scheduleWarmFullSync();
     const onVisibility = () => {
-      if (typeof document !== "undefined" && document.visibilityState === "visible") scheduleWarmFullSync();
+      if (typeof document === "undefined" || document.visibilityState !== "visible") return;
+      scheduleWarmFullSync();
     };
     window.addEventListener("online", onOnline);
     document.addEventListener("visibilitychange", onVisibility);
@@ -140,7 +154,7 @@ export function OfflineWarmSyncManager() {
     }
 
     if (gateActive) return;
-    if (!embeddedMultiClient || !user || loading || !cloudBackedSig.trim()) return;
+    if (!embeddedMultiClient || !user || loading || !preloadCompanySig.trim()) return;
     if (typeof navigator === "undefined") return;
 
     const ac = new AbortController();
@@ -149,17 +163,23 @@ export function OfflineWarmSyncManager() {
     const walkAllCloudCompaniesOnce = async () => {
       const snapshot = allCompaniesLatestRef.current;
       const rows =
-        snapshot?.filter((c) => isCloudBackedCompanyShape(c as Company | null)) ?? [];
+        snapshot?.filter((c) => shouldPrefetchAttachmentsForCompany(c as Company | null)) ?? [];
+      const prioritizeId = companyId?.trim() || null;
+      const ordered = prioritizeId
+        ? [
+            ...rows.filter((c) => c.id === prioritizeId),
+            ...rows.filter((c) => c.id !== prioritizeId),
+          ]
+        : rows;
 
-      for (const row of rows) {
+      for (const row of ordered) {
         if (ac.signal.aborted || typeof navigator === "undefined" || !navigator.onLine) break;
         try {
-          await runOfflineFullWarmSync({
+          await runEmbeddedCompanyFullPreload({
             company: row,
             localCompanyId: String(row.id).trim(),
             signal: ac.signal,
-            // Background walker must not prefetch attachments globally.
-            includeAttachmentPrefetch: false,
+            prefetchOverrides: EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
           });
         } catch {
           /* per-row network failure: continue with next company */
@@ -184,8 +204,10 @@ export function OfflineWarmSyncManager() {
         return;
       }
       await walkAllCloudCompaniesOnce();
+      if (!ac.signal.aborted) lastWarmCompletedAtRef.current = Date.now();
       // Auto background warm: all-company cache complete hone tak repeated passes (no manual button/click).
-      scheduleNextPass(EMBEDDED_MULTI_RESWEEP_MS);
+      const resweepMs = isElectronDesktopApp() ? EMBEDDED_MULTI_RESWEEP_MS_ELECTRON : EMBEDDED_MULTI_RESWEEP_MS;
+      scheduleNextPass(resweepMs);
     };
 
     scheduleNextPass(EMBEDDED_MULTI_WALK_START_MS);
@@ -197,7 +219,7 @@ export function OfflineWarmSyncManager() {
         embeddedWalkTimerRef.current = null;
       }
     };
-  }, [embeddedMultiClient, user, loading, cloudBackedSig, embeddedOnlineWarmTick, gateActive]);
+  }, [embeddedMultiClient, user, loading, preloadCompanySig, embeddedOnlineWarmTick, gateActive, companyId]);
 
   return null;
 }

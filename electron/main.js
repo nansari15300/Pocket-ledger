@@ -7,11 +7,27 @@ const {
   ipcMain,
   dialog,
   nativeImage,
+  shell,
 } = require("electron");
+const googleAuthExternal = require("./googleAuthExternal");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const localAppServer = require("./localAppServer");
+
+/** Har app launch par naya id — EXE multi-tab PIN unlock isi session me share (cold start par dubara PIN). */
+let appBootSessionId = "";
+
+function getAppBootSessionId() {
+  if (!appBootSessionId) {
+    try {
+      appBootSessionId = require("crypto").randomUUID();
+    } catch (_) {
+      appBootSessionId = `boot-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+  }
+  return appBootSessionId;
+}
 
 /** Windows taskbar / Start menu grouping — `electron.app.*` default ID par Electron atom icon dikhta hai; `package.json` build.appId se match hona chahiye. */
 const WINDOWS_APP_USER_MODEL_ID = "com.pocketledger.desktop";
@@ -25,12 +41,7 @@ if (!gotSingleInstanceLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    const wins = BrowserWindow.getAllWindows();
-    if (wins.length > 0) {
-      const w = wins[0];
-      if (w.isMinimized()) w.restore();
-      w.focus();
-    }
+    void focusOrOpenMainWindow();
   });
 }
 
@@ -108,6 +119,164 @@ localAppServer.setServerDeps({
   isAllowedFirebaseProxyTarget,
 });
 
+/** Packaged app: UI BrowserView tabs (main window webContents khali rehta hai). */
+let serverDataBridgeWindow = null;
+
+function scoreLocalhostAppUrl(url) {
+  const u = String(url || "");
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(u)) return 0;
+  return 1;
+}
+
+function getAppTabWebContentsList() {
+  const out = [];
+  const seen = new Set();
+  const push = (wc) => {
+    if (!wc || wc.isDestroyed()) return;
+    const id = wc.id;
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push(wc);
+  };
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    const state = windowTabs.get(win.id);
+    if (state?.tabs?.length) {
+      for (const tab of state.tabs) {
+        push(tab.webContents);
+      }
+    }
+    push(win.webContents);
+  }
+  if (serverDataBridgeWindow && !serverDataBridgeWindow.isDestroyed()) {
+    push(serverDataBridgeWindow.webContents);
+  }
+  return out.sort((a, b) => scoreLocalhostAppUrl(a.getURL()) - scoreLocalhostAppUrl(b.getURL()));
+}
+
+async function waitForWindowBridgeFn(wc, fnName, timeoutMs = 25000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (!wc || wc.isDestroyed()) return false;
+    try {
+      const ok = await wc.executeJavaScript(`typeof window[${JSON.stringify(fnName)}] === "function"`, true);
+      if (ok) return true;
+    } catch (_) {}
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return false;
+}
+
+/** Hidden localhost tab — sharing on par company list + login bridge (tray-only server ke liye). */
+async function ensureServerDataBridgeWindow() {
+  if (!app.isPackaged) return null;
+  const cfg = localAppServer.loadConfig(userDataPath());
+  if (!localAppServer.shouldHostLocalServer(cfg) || !cfg.userWantsRunning) return null;
+  const bound = localAppServer.getServerListenAddress();
+  const port = bound?.port || localAppServer.getStaticServerPort();
+  if (!port) return null;
+  const bridgeUrl = `http://127.0.0.1:${port}/`;
+  if (!serverDataBridgeWindow || serverDataBridgeWindow.isDestroyed()) {
+    serverDataBridgeWindow = new BrowserWindow({
+      show: false,
+      skipTaskbar: true,
+      width: 640,
+      height: 480,
+      webPreferences: {
+        preload: path.join(__dirname, "app-content-preload.js"),
+        nodeIntegration: false,
+        contextIsolation: true,
+      },
+    });
+    installPlServerRequestHeaders(serverDataBridgeWindow.webContents.session);
+    serverDataBridgeWindow.on("closed", () => {
+      serverDataBridgeWindow = null;
+    });
+  }
+  const wc = serverDataBridgeWindow.webContents;
+  const current = wc.getURL() || "";
+  if (!current.includes(`127.0.0.1:${port}`) && !current.includes(`localhost:${port}`)) {
+    await wc.loadURL(bridgeUrl);
+  }
+  await waitForWindowBridgeFn(wc, "__plListShareableLocalCompanies");
+  return wc;
+}
+
+async function runInServerAppRenderer(script, opts = {}) {
+  const requireFn = opts.requireFn || "";
+  const accept = opts.accept;
+  const contentsList = getAppTabWebContentsList();
+  for (const wc of contentsList) {
+    try {
+      const url = wc.getURL();
+      if (!url || url.startsWith("devtools://")) continue;
+      if (requireFn) {
+        const ready = await wc.executeJavaScript(
+          `typeof window[${JSON.stringify(requireFn)}] === "function"`,
+          true
+        );
+        if (!ready) continue;
+      }
+      const result = await wc.executeJavaScript(script, true);
+      if (typeof accept === "function" ? accept(result) : result != null) return result;
+    } catch (_) {
+      /* next tab */
+    }
+  }
+  const bridge = await ensureServerDataBridgeWindow();
+  if (bridge && !bridge.isDestroyed()) {
+    if (requireFn) await waitForWindowBridgeFn(bridge, requireFn);
+    try {
+      const result = await bridge.executeJavaScript(script, true);
+      if (typeof accept === "function" ? accept(result) : result != null) return result;
+    } catch (_) {}
+  }
+  return null;
+}
+
+localAppServer.setShareableCompaniesProvider(async () => {
+  const rows = await runInServerAppRenderer(
+    `(async () => {
+      try {
+        if (typeof window.__plListShareableLocalCompanies !== "function") return [];
+        return await window.__plListShareableLocalCompanies();
+      } catch (_) {
+        return [];
+      }
+    })()`,
+    {
+      requireFn: "__plListShareableLocalCompanies",
+      accept: (r) => Array.isArray(r) && r.length > 0,
+    }
+  );
+  return Array.isArray(rows) ? rows : [];
+});
+
+localAppServer.setLocalCompanyAuthProvider(async (companyId, username, password) => {
+  const result = await runInServerAppRenderer(
+    `(async () => {
+      try {
+        if (typeof window.__plValidateLocalCompanyLogin !== "function") {
+          return { ok: false, error: "bridge_missing" };
+        }
+        return await window.__plValidateLocalCompanyLogin(${JSON.stringify(companyId)}, ${JSON.stringify(username)}, ${JSON.stringify(password)});
+      } catch (e) {
+        return { ok: false, error: e && e.message ? e.message : "Login failed" };
+      }
+    })()`,
+    { requireFn: "__plValidateLocalCompanyLogin" }
+  );
+  if (result && typeof result === "object" && result.ok === true) return result;
+  if (result && typeof result === "object" && result.error && result.error !== "bridge_missing") {
+    return result;
+  }
+  return {
+    ok: false,
+    error:
+      "Server data bridge is not ready. On the server PC keep Pocket Ledger open (or wait ~10s after starting sharing), then try again.",
+  };
+});
+
 function userDataPath() {
   return app.getPath("userData");
 }
@@ -145,7 +314,12 @@ async function startStaticServer() {
     throw new Error("PL_LOCAL_SERVER_STOPPED");
   }
   try {
-    return await localAppServer.startStaticServer(userDataPath());
+    const port = await localAppServer.startStaticServer(userDataPath());
+    const cfgAfter = localAppServer.loadConfig(userDataPath());
+    if (cfgAfter.userWantsRunning) {
+      void ensureServerDataBridgeWindow().catch(() => {});
+    }
+    return port;
   } catch (e) {
     if (String(e?.message || e) === "PL_LOCAL_SERVER_ROLE_CLIENT_ONLY") {
       throw e;
@@ -190,6 +364,19 @@ function destroyServerTray() {
   }
 }
 
+/** Shortcut / second instance / tray: window band ho to naya kholna, warna pehle wala dikhao. */
+async function focusOrOpenMainWindow() {
+  const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed());
+  if (wins.length > 0) {
+    const w = wins[0];
+    if (w.isMinimized()) w.restore();
+    w.show();
+    w.focus();
+    return;
+  }
+  await createWindow();
+}
+
 async function stopLocalServerAndPersist() {
   localAppServer.saveConfig(userDataPath(), { userWantsRunning: false });
   const cfg = localAppServer.loadConfig(userDataPath());
@@ -213,13 +400,17 @@ async function startSharedLocalServer() {
   const cfg = localAppServer.loadConfig(userDataPath());
   const expectedHost = localAppServer.listenHostForConfig(cfg);
   const bound = localAppServer.getServerListenAddress();
+  let port;
   if (!bound) {
-    return startStaticServer();
+    port = await startStaticServer();
+  } else if (bound.host !== expectedHost) {
+    port = await localAppServer.restartStaticServer(userDataPath());
+    void ensureServerDataBridgeWindow().catch(() => {});
+  } else {
+    port = bound.port;
+    void ensureServerDataBridgeWindow().catch(() => {});
   }
-  if (bound.host !== expectedHost) {
-    return localAppServer.restartStaticServer(userDataPath());
-  }
-  return bound.port;
+  return port;
 }
 
 function syncLocalServerTray() {
@@ -250,16 +441,8 @@ function syncLocalServerTray() {
     { type: "separator" },
     {
       label: "Open Pocket Ledger",
-      click: async () => {
-        const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed());
-        if (wins.length > 0) {
-          const w = wins[0];
-          if (w.isMinimized()) w.restore();
-          w.show();
-          w.focus();
-          return;
-        }
-        await createWindow();
+      click: () => {
+        void focusOrOpenMainWindow();
       },
     },
   ];
@@ -298,16 +481,8 @@ function syncLocalServerTray() {
   if (!serverTray) {
     serverTray = new Tray(trayIcon);
     serverTray.setToolTip("Pocket Ledger");
-    serverTray.on("double-click", async () => {
-      const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed());
-      if (wins.length > 0) {
-        const w = wins[0];
-        if (w.isMinimized()) w.restore();
-        w.show();
-        w.focus();
-        return;
-      }
-      await createWindow();
+    serverTray.on("double-click", () => {
+      void focusOrOpenMainWindow();
     });
   } else {
     serverTray.setImage(trayIcon);
@@ -335,14 +510,20 @@ function notifyServerStillRunningInTray(st) {
   } catch (_) {}
 }
 
+/** Gate → Connect: remote server origin → access token for webRequest header injection. */
+const remoteGateAuthByOrigin = new Map();
+
 function isPlServerRequest(urlStr, port, remoteBase) {
   try {
     const u = new URL(urlStr);
     const h = (u.hostname || "").toLowerCase();
     const reqPort = String(u.port || (u.protocol === "https:" ? "443" : "80"));
+    if (remoteGateAuthByOrigin.has(u.origin)) return true;
     if (port && reqPort === String(port)) {
       if (h === "localhost" || h === "127.0.0.1" || h === "[::1]") return true;
       if (/^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(h)) return true;
+      // Public WAN IP on sharing port (router port-forward / remote Gate clients).
+      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return true;
     }
     if (remoteBase) {
       const remote = new URL(remoteBase);
@@ -378,8 +559,16 @@ function installPlServerRequestHeaders(session) {
     if (isPlServerRequest(details.url || "", port, remoteBase)) {
       headers[localAppServer.PL_ELECTRON_MARKER_HEADER] = localAppServer.PL_ELECTRON_MARKER_VALUE;
       headers[localAppServer.PL_CLIENT_HEADER] = legacyToken;
-      if (accessTok) {
-        headers[localAppServer.PL_ACCESS_HEADER] = accessTok;
+      let gateTok = "";
+      try {
+        const origin = new URL(details.url || "").origin;
+        gateTok = remoteGateAuthByOrigin.get(origin) || "";
+      } catch {
+        /* ignore */
+      }
+      const tok = gateTok || accessTok;
+      if (tok) {
+        headers[localAppServer.PL_ACCESS_HEADER] = tok;
       }
     }
     callback({ requestHeaders: headers });
@@ -661,6 +850,23 @@ async function getAppEntryUrl() {
   const port = await ensureAppUiStaticServer();
   // Packaged app route loading must be HTTP to avoid file:// local-resource blocking.
   return `http://localhost:${port}/`;
+}
+
+async function reloadAllAppBrowserViews() {
+  const entryUrl = await getAppEntryUrl();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    const state = windowTabs.get(win.id);
+    if (!state) continue;
+    for (const view of state.tabs) {
+      if (!view.webContents || view.webContents.isDestroyed()) continue;
+      try {
+        await view.webContents.loadURL(entryUrl);
+      } catch (_) {
+        /* tab may be mid-navigation */
+      }
+    }
+  }
 }
 
 async function openNewTab(win) {
@@ -974,8 +1180,35 @@ async function createWindow() {
 
 if (gotSingleInstanceLock) {
   app.whenReady().then(async () => {
+  getAppBootSessionId();
+  ipcMain.on("pl-get-app-boot-session-id", (event) => {
+    event.returnValue = getAppBootSessionId();
+  });
+
+  ipcMain.on("pl-set-remote-gate-auth", (event, payload) => {
+    try {
+      const serverUrl = String(payload?.serverUrl || "").trim();
+      const accessToken = String(payload?.accessToken || "").trim();
+      const normalized = localAppServer.normalizeRemoteServerUrl(serverUrl);
+      if (!normalized) {
+        event.returnValue = { ok: false };
+        return;
+      }
+      const origin = new URL(normalized).origin;
+      if (accessToken) remoteGateAuthByOrigin.set(origin, accessToken);
+      else remoteGateAuthByOrigin.delete(origin);
+      event.returnValue = { ok: true, origin };
+    } catch {
+      event.returnValue = { ok: false };
+    }
+  });
+
   const bootCfg = localAppServer.loadConfig(userDataPath());
   localAppServer.applyLoginItemSettings(app, bootCfg.autoStartOnBoot);
+
+  ipcMain.handle("pl-google-auth-external", async () => {
+    return googleAuthExternal.signInWithGoogleExternal(shell);
+  });
 
   ipcMain.handle("pl-local-server-get-status", async () => {
     return localAppServer.getStatus(userDataPath());
@@ -1011,9 +1244,27 @@ if (gotSingleInstanceLock) {
   ipcMain.handle("pl-local-server-restart", async (_event, partial) => {
     if (partial && typeof partial === "object") {
       localAppServer.saveConfig(userDataPath(), partial);
+      if (typeof partial.autoStartOnBoot === "boolean") {
+        localAppServer.applyLoginItemSettings(app, partial.autoStartOnBoot);
+      }
     }
-    await stopStaticServer();
     const cfg = localAppServer.loadConfig(userDataPath());
+    const bound = localAppServer.getServerListenAddress();
+    const nextHost = localAppServer.listenHostForConfig(cfg);
+    const hostMatches =
+      bound &&
+      (bound.host === nextHost ||
+        (nextHost === "0.0.0.0" && (bound.host === "::" || bound.host === "0.0.0.0")));
+    const portMatches = bound && (!cfg.userWantsRunning || bound.port === Number(cfg.port));
+    const canKeepSocket =
+      bound && hostMatches && portMatches && localAppServer.shouldHostLocalServer(cfg);
+
+    if (canKeepSocket) {
+      syncLocalServerTray();
+      return { ok: true, port: bound.port, status: localAppServer.getStatus(userDataPath()) };
+    }
+
+    await stopStaticServer();
     if (!localAppServer.shouldHostLocalServer(cfg)) {
       syncLocalServerTray();
       return { ok: true, port: null, status: localAppServer.getStatus(userDataPath()) };
@@ -1032,6 +1283,9 @@ if (gotSingleInstanceLock) {
       return { ok: true, port: null, status: localAppServer.getStatus(userDataPath()) };
     }
     syncLocalServerTray();
+    if (app.isPackaged && port) {
+      void reloadAllAppBrowserViews();
+    }
     return { ok: true, port, status: localAppServer.getStatus(userDataPath()) };
   });
 
@@ -1041,6 +1295,30 @@ if (gotSingleInstanceLock) {
 
   ipcMain.handle("pl-local-server-create-access-token", async (_event, input) => {
     return localAppServer.accessTokens.createAccessToken(userDataPath(), input || {});
+  });
+
+  ipcMain.handle("pl-local-server-update-access-token", async (_event, payload) => {
+    const id = String(payload?.id || "");
+    const updated = localAppServer.accessTokens.updateAccessToken(userDataPath(), id, payload?.input || {});
+    if (!updated) return { ok: false };
+    return { ok: true, token: updated };
+  });
+
+  ipcMain.handle("pl-local-server-get-access-token-secret", async (_event, id) => {
+    const secret = localAppServer.accessTokens.getAccessTokenSecret(userDataPath(), String(id || ""));
+    if (!secret) return { ok: false };
+    return { ok: true, ...secret };
+  });
+
+  ipcMain.handle("pl-local-server-rotate-access-token", async (_event, payload) => {
+    const id = String(payload?.id || "");
+    const rotated = localAppServer.accessTokens.rotateAccessToken(
+      userDataPath(),
+      id,
+      payload?.input || {}
+    );
+    if (!rotated) return { ok: false };
+    return { ok: true, ...rotated };
   });
 
   ipcMain.handle("pl-local-server-revoke-access-token", async (_event, id) => {
@@ -1101,12 +1379,12 @@ if (gotSingleInstanceLock) {
     return { ok: false, error: "bad-action" };
   });
 
-  /** Tab strip ↻ — active tab pe CustomEvent; React `triggerSync`; khali login par preload ack nahi bhejta */
-  ipcMain.handle("pl-request-background-sync", async (event) => {
+  /** Tab strip ↻ — same as menu Refresh → Reload (Ctrl+R). */
+  ipcMain.handle("pl-reload-active-tab", async (event) => {
     const win = resolveWindowForTabStripIpc(event.sender);
     if (!win || win.isDestroyed()) return { ok: false, error: "no-window" };
     try {
-      await dispatchTabStripBackgroundSyncToActiveTab(win);
+      reloadActiveTab(win, false);
       return { ok: true };
     } catch (e) {
       return { ok: false, error: String(e?.message || e) };
@@ -1146,6 +1424,67 @@ if (gotSingleInstanceLock) {
       return { ok: true, path: result.filePaths[0] };
     } catch (e) {
       return { ok: false, error: String(e?.message || e) };
+    }
+  });
+
+  function safeAttachmentRelativePath(relRaw) {
+    const rel = String(relRaw || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
+    if (!rel || rel.includes("..")) return null;
+    return rel;
+  }
+
+  function attachmentsRootDir() {
+    return path.join(userDataPath(), "pl-attachments");
+  }
+
+  /** APK jaisa offline cache / pending files — disk par bytes, renderer SQLite me path. */
+  ipcMain.handle("pl-attachment-write", async (_event, payload) => {
+    try {
+      const rel = safeAttachmentRelativePath(payload?.relativePath);
+      const base64 = String(payload?.base64 || "");
+      if (!rel || !base64) return { ok: false, error: "missing-args" };
+      const full = path.join(attachmentsRootDir(), rel);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, Buffer.from(base64, "base64"));
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  });
+
+  ipcMain.handle("pl-attachment-read", async (_event, payload) => {
+    try {
+      const rel = safeAttachmentRelativePath(payload?.relativePath);
+      if (!rel) return { ok: false, error: "missing-path" };
+      const full = path.join(attachmentsRootDir(), rel);
+      if (!fs.existsSync(full)) return { ok: false, error: "not-found" };
+      const buf = fs.readFileSync(full);
+      return { ok: true, base64: buf.toString("base64") };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  });
+
+  ipcMain.handle("pl-attachment-delete", async (_event, relRaw) => {
+    try {
+      const rel = safeAttachmentRelativePath(relRaw);
+      if (!rel) return { ok: false, error: "missing-path" };
+      const full = path.join(attachmentsRootDir(), rel);
+      if (fs.existsSync(full)) fs.unlinkSync(full);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  });
+
+  ipcMain.handle("pl-attachment-exists", async (_event, relRaw) => {
+    try {
+      const rel = safeAttachmentRelativePath(relRaw);
+      if (!rel) return { ok: false, exists: false };
+      const full = path.join(attachmentsRootDir(), rel);
+      return { ok: true, exists: fs.existsSync(full) };
+    } catch (e) {
+      return { ok: false, exists: false, error: String(e?.message || e) };
     }
   });
 
@@ -1202,8 +1541,8 @@ if (gotSingleInstanceLock) {
   buildAppMenu();
   await createWindow();
   syncLocalServerTray();
-  app.on("activate", async () => {
-    if (BrowserWindow.getAllWindows().length === 0) await createWindow();
+  app.on("activate", () => {
+    void focusOrOpenMainWindow();
   });
   });
 }

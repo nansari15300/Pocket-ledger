@@ -14,6 +14,8 @@ import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 
 function useDisableSerwistForLocalBrowsing(): boolean {
   const disabledInDev = process.env.NODE_ENV === "development";
+  /** EXE: packaged app me SW claim race (`InvalidStateError`) + React shell churn — offline shell zaroori nahi. */
+  const disabledOnElectron = isElectronDesktopApp();
   const onLocalLoopback = useSyncExternalStore(
     () => () => {},
     () => {
@@ -26,7 +28,7 @@ function useDisableSerwistForLocalBrowsing(): boolean {
     },
     () => false
   );
-  return disabledInDev || onLocalLoopback;
+  return disabledInDev || onLocalLoopback || disabledOnElectron;
 }
 
 export function PocketSerwistProvider({ children }: { children: ReactNode }) {
@@ -34,7 +36,7 @@ export function PocketSerwistProvider({ children }: { children: ReactNode }) {
   /** EXE: navigation par history patch + SW message kam — real bug reports page duplicate `replace` tha, yeh extra guard. */
   const cacheOnNavigation = !isElectronDesktopApp();
 
-  // Pehle install SW localhost:55818 jaisa random port par bhi intercept karta — CORS log flood; disable=true par hata do.
+  // Pehle install SW localhost / Electron par bhi intercept karta — disable=true par hata do.
   useEffect(() => {
     if (!disable || typeof window === "undefined" || !("serviceWorker" in navigator)) return;
     let cancelled = false;

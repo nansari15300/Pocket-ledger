@@ -39,10 +39,7 @@ import {
   saveInterCompanyVoucherPair,
 } from "@/lib/interCompany/saveInterCompanyVoucherPair";
 import { approveVoucherWithHistory, patchVoucherFields } from "@/lib/voucherActionsClient";
-import {
-  buildSourceInterCompanyLegsApproved,
-  interCompanyPairUsesConduitParty,
-} from "@/lib/interCompany/interCompanyPostingLegs";
+import { buildSourceInterCompanyLegsApproved } from "@/lib/interCompany/interCompanyPostingLegs";
 import {
   inferInterCompanyEntity,
   readInterCompanyBankLabelSnapshot,
@@ -157,8 +154,7 @@ function mergeHydratedEntity(
 ): InterCompanyEntityDetail[] {
   if (!id) return entities;
   if (entities.some((e) => e.kind === kind && e.id === id)) return entities;
-  const label = readInterCompanyEntityLabelSnapshot(voucher, side);
-  if (!label) return entities;
+  const label = readInterCompanyEntityLabelSnapshot(voucher, side) || id;
   return [...entities, { id, kind, label }];
 }
 
@@ -519,14 +515,25 @@ export function InterCompanyVoucherForm({
     [allowAttachments, company, companyId, fileAttachmentLimits.maxFileCount, files]
   );
 
+  const lastNewVoucherBankResetKeyRef = useRef("");
+
+  useEffect(() => {
+    if (!displayVoucher?.id && !savedSourceId) {
+      void fetchVoucherNumber();
+    }
+  }, [displayVoucher?.id, savedSourceId, fetchVoucherNumber]);
+
   useEffect(() => {
     if (!displayVoucher?.id) {
-      lastHydratedVoucherIdRef.current = null;
-      setSourceCompanyBankId("");
-      setTargetCompanyBankId("");
-      setHydratedSourceBankExtra(null);
-      setHydratedTargetBankExtra(null);
-      if (!savedSourceId) void fetchVoucherNumber();
+      const resetKey = `${companyId || ""}|${savedSourceId || ""}`;
+      if (lastNewVoucherBankResetKeyRef.current !== resetKey) {
+        lastNewVoucherBankResetKeyRef.current = resetKey;
+        lastHydratedVoucherIdRef.current = null;
+        setSourceCompanyBankId("");
+        setTargetCompanyBankId("");
+        setHydratedSourceBankExtra(null);
+        setHydratedTargetBankExtra(null);
+      }
       return;
     }
     const vid = String(displayVoucher.id);
@@ -663,7 +670,7 @@ export function InterCompanyVoucherForm({
     return () => {
       bankHydrateCancelled = true;
     };
-  }, [displayVoucher, form, fetchVoucherNumber, savedSourceId, companyId]);
+  }, [displayVoucher, form, savedSourceId, companyId]);
 
   // Live snapshot / table row baad me bank fields laaye — `lastHydratedVoucherIdRef` dubara hydrate nahi karta
   useEffect(() => {
@@ -1388,12 +1395,7 @@ export function InterCompanyVoucherForm({
       const icPartyId = String(
         (voucherRow as { interCompanyCounterpartyPartyId?: string })?.interCompanyCounterpartyPartyId || ""
       ).trim();
-      const useIcConduit = interCompanyPairUsesConduitParty({
-        sourceEntityKind: sourcePayeeKind,
-        sourceEntityId: sourcePayeeId,
-        targetEntityKind: targetPayeeKind,
-        targetEntityId: targetPayeeId,
-      });
+      const useIcConduit = true;
       const approvedLegs = buildSourceInterCompanyLegsApproved({
         amount: Number(form.getValues().amount) || 0,
         entityKind: sourcePayeeKind,
@@ -1405,7 +1407,7 @@ export function InterCompanyVoucherForm({
       if (approvedLegs.length > 0) {
         await patchVoucherFields(companyId, sourceVoucherId, {
           interCompanyLegs: approvedLegs,
-          interCompanyCounterpartyPartyId: useIcConduit ? icPartyId : null,
+          interCompanyCounterpartyPartyId: icPartyId || null,
         });
       }
       toast.success("Inter Company approved", { id: toastId });
@@ -1640,7 +1642,9 @@ export function InterCompanyVoucherForm({
                   targetCompanyId={field.value}
                   onTargetCompanyChange={(id) => {
                     if (isInterCompanyEditLocked) return;
-                    field.onChange(id);
+                    const nextId = String(id || "").trim();
+                    if (!nextId || field.value === nextId) return;
+                    field.onChange(nextId);
                     setTargetPayeeId("");
                     setTargetCompanyBankId("");
                   }}

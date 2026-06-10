@@ -17,6 +17,7 @@ const OFFLINE_BASE_FEATURE_CONFIG: Record<string, boolean> = {
   items: true,
   reports: true,
   gallery: true,
+  gate: true,
   production: false,
   "sale-note": false,
   "purchase-note": false,

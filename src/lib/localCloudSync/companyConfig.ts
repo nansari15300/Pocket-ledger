@@ -170,6 +170,19 @@ export function cloudSyncFilesProviderId(
   return cfg.cloudSyncFilesProvider ?? cfg.cloudSyncProvider;
 }
 
+function localCompanyCloudSyncPatchUnchanged(
+  reg: LocalCompanyDoc,
+  patch: Record<string, unknown>
+): boolean {
+  for (const [key, nextVal] of Object.entries(patch)) {
+    const prevVal = (reg as Record<string, unknown>)[key];
+    if (JSON.stringify(prevVal ?? null) !== JSON.stringify(nextVal ?? null)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export async function patchLocalCompanyCloudSyncFields(
   companyId: string,
   patch: Partial<{
@@ -193,6 +206,7 @@ export async function patchLocalCompanyCloudSyncFields(
 ): Promise<void> {
   const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
   if (!reg) return;
+  if (localCompanyCloudSyncPatchUnchanged(reg, patch as Record<string, unknown>)) return;
   await upsertLocalCompany({ ...reg, ...patch } as LocalCompanyDoc);
 }
 

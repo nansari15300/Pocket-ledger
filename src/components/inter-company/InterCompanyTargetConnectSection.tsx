@@ -174,13 +174,18 @@ export function InterCompanyTargetConnectSection({
 
   const applyCompany = useCallback(
     (id: string, entityHit?: InterCompanyEntityHit) => {
+      const nextId = String(id || "").trim();
+      if (!nextId) return;
+      const sameCompany = nextId === targetCompanyId;
       // Company row search — entity hit ho to account row seed; nahi to purana seed clear
       setSeedEntityHit(entityHit ?? null);
       setCompanySearchTick((t) => t + 1);
-      onTargetCompanyChange(id);
+      // Blur / re-search on same company — target accounts mat clear karo
+      if (sameCompany) return;
+      onTargetCompanyChange(nextId);
       onPayeeIdChange("");
     },
-    [onTargetCompanyChange, onPayeeIdChange]
+    [targetCompanyId, onTargetCompanyChange, onPayeeIdChange]
   );
 
   /** Multi company pick — entity hits pending ho to us company ke accounts filter */

@@ -203,6 +203,7 @@ try {
       ...process.env,
       STATIC_BUILD: "1",
       NEXT_PUBLIC_STATIC_BUILD: "1",
+      NEXT_PUBLIC_BACKGROUND_WARM_SYNC: "1",
       NEXT_PUBLIC_BILLING_API_ORIGIN: POCKET_LEDGER_HOSTED_API_ORIGIN,
       // Hosted Drive OAuth project verify — client bundle se project key (firebase.ts fallback bhi hai).
       ...(process.env.FIREBASE_PROJECT_ID

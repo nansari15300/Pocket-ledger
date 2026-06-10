@@ -232,16 +232,22 @@ export function InterCompanyAccountLookupSection({
   const comboboxOptions = useMemo(() => {
     if (!searchBy.accountName) return [];
     const opts = interCompanyEntityComboboxOptions(entitiesForActiveKind);
+    // Naya voucher: pick list me hamesha poora naam — target privacy sirf detail card / partner view
+    if (voucherCreateLookup) return opts;
     if (!partnerViewPrivacy) return opts;
     return opts.map((o) => {
-      const display = partnerFieldDisplay(partnerViewPrivacy, "accountName", o.label);
+      const raw = String(o.label ?? "").trim();
+      if (!partnerViewPrivacy.viewFields.accountName) {
+        return { ...o, label: raw || "—", triggerLabel: raw || "—" };
+      }
+      const display = partnerFieldDisplay(partnerViewPrivacy, "accountName", raw);
       return {
         ...o,
-        label: display || "—",
-        triggerLabel: display || "—",
+        label: display || raw || "—",
+        triggerLabel: display || raw || "—",
       };
     });
-  }, [entitiesForActiveKind, searchBy.accountName, partnerViewPrivacy]);
+  }, [entitiesForActiveKind, searchBy.accountName, partnerViewPrivacy, voucherCreateLookup]);
 
   const selectedEntity = useMemo(() => {
     if (!entityId) return null;
@@ -252,7 +258,7 @@ export function InterCompanyAccountLookupSection({
   }, [entities, entityKind, entityId, ensuredIcAcByKey]);
 
   /** Select ke baad partner privacy — A/c No hamesha poora; baaki fields mask ho sakte hain */
-  const maskPartnerFields = Boolean(partnerViewPrivacy && entityId);
+  const maskPartnerFields = Boolean(partnerViewPrivacy && entityId && !voucherCreateLookup);
 
   const displayAccountAc = accountAcInput;
 
@@ -766,13 +772,17 @@ export function InterCompanyAccountLookupSection({
     if (lockEntityKind && entityKind !== lockEntityKind) return;
     if (!entityId) return;
     if (entitiesLoading) return;
+    // Transient empty list (fetch / gate) — parent selection preserve karo
+    if (entities.length === 0) return;
     if (
       pendingEntityHitRef.current?.entity.id === entityId &&
       pendingEntityHitRef.current.companyId === activeCompanyId
     ) {
       return;
     }
-    const stillValid = entitiesForActiveKind.some((e) => e.id === entityId);
+    const stillValid = entities.some(
+      (e) => e.kind === activeEntityKind && e.id === entityId
+    );
     if (!stillValid) {
       onEntityIdChange("");
       if (pendingEntityLookupRef.current) return;
@@ -784,7 +794,7 @@ export function InterCompanyAccountLookupSection({
   }, [
     activeCompanyId,
     activeEntityKind,
-    entitiesForActiveKind,
+    entities,
     entitiesLoading,
     entityId,
     entityKind,

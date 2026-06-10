@@ -92,3 +92,8 @@ git commit -m "comment"
 git push origin main
 
 ----------------------------------------------------------------------------------------------------
+
+to clear app data on pc 
+
+press windows + R
+type "%appdata%"  and press enter 

@@ -2,7 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { LocalAppServerConfig, LocalAppServerStatus } from "@/lib/electronLocalServer";
+import type {
+  LocalAppServerAccessTokenSummary,
+  LocalAppServerConfig,
+  LocalAppServerStatus,
+} from "@/lib/electronLocalServer";
 
 const CONFIG_FILE = "pl-local-server-config.json";
 const ACCESS_TOKENS_FILE = "pl-server-access-tokens.json";
@@ -200,6 +204,58 @@ export function createAccessToken(input: {
   };
 }
 
+export function getAccessTokenSecret(id: string): {
+  id: string;
+  token: string;
+  label: string;
+  allowedCompanyIds: string[];
+} | null {
+  const store = loadTokenStore();
+  const rec = store.tokens.find((t) => t && t.id === id && !t.revokedAt);
+  if (!rec || typeof rec.token !== "string" || !rec.token) return null;
+  return {
+    id: String(rec.id || ""),
+    token: rec.token,
+    label: String(rec.label || "Shared user"),
+    allowedCompanyIds: normalizeCompanyIds(rec.allowedCompanyIds),
+  };
+}
+
+export function rotateAccessToken(
+  id: string,
+  input: { label?: string; allowedCompanyIds?: string[] } = {}
+): {
+  id: string;
+  token: string;
+  label: string;
+  email: string | null;
+  uid: string | null;
+  allowedCompanyIds: string[];
+  createdAt: string | null;
+} | null {
+  const store = loadTokenStore();
+  const rec = store.tokens.find((t) => t && t.id === id && !t.revokedAt);
+  if (!rec) return null;
+  rec.token = crypto.randomBytes(32).toString("hex");
+  if (input.label != null) {
+    rec.label = String(input.label || rec.label || "Shared user").slice(0, 120);
+  }
+  if (input.allowedCompanyIds != null) {
+    rec.allowedCompanyIds = normalizeCompanyIds(input.allowedCompanyIds);
+  }
+  saveTokenStore(store);
+  const token = String(rec.token || "");
+  return {
+    id: String(rec.id || ""),
+    token,
+    label: String(rec.label || "Shared user"),
+    email: rec.email ? String(rec.email) : null,
+    uid: rec.uid ? String(rec.uid) : null,
+    allowedCompanyIds: normalizeCompanyIds(rec.allowedCompanyIds),
+    createdAt: rec.createdAt ? String(rec.createdAt) : null,
+  };
+}
+
 export function revokeAccessToken(id: string): boolean {
   const store = loadTokenStore();
   const rec = store.tokens.find((t) => t && t.id === id);
@@ -207,6 +263,33 @@ export function revokeAccessToken(id: string): boolean {
   rec.revokedAt = new Date().toISOString();
   saveTokenStore(store);
   return true;
+}
+
+export function updateAccessToken(
+  id: string,
+  input: { label?: string; allowedCompanyIds?: string[] }
+): LocalAppServerAccessTokenSummary | null {
+  const store = loadTokenStore();
+  const rec = store.tokens.find((t) => t && t.id === id && !t.revokedAt);
+  if (!rec) return null;
+  if (input.label != null) {
+    rec.label = String(input.label || rec.label || "Shared user").slice(0, 120);
+  }
+  if (input.allowedCompanyIds != null) {
+    rec.allowedCompanyIds = normalizeCompanyIds(input.allowedCompanyIds);
+  }
+  saveTokenStore(store);
+  const token = String(rec.token || "");
+  return {
+    id: String(rec.id || ""),
+    label: String(rec.label || "User"),
+    email: rec.email ? String(rec.email) : null,
+    uid: rec.uid ? String(rec.uid) : null,
+    createdAt: rec.createdAt ? String(rec.createdAt) : null,
+    lastUsedAt: rec.lastUsedAt ? String(rec.lastUsedAt) : null,
+    tokenPreview: token.length >= 10 ? `${token.slice(0, 6)}…${token.slice(-4)}` : "",
+    allowedCompanyIds: normalizeCompanyIds(rec.allowedCompanyIds),
+  };
 }
 
 function listLanUrls(port: number, publicHost: string): string[] {

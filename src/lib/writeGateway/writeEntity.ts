@@ -32,6 +32,8 @@ import {
 import { auth } from "@/lib/firebase";
 import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 import { getPlServerAllowedCompanyIds } from "@/lib/plServerAccessContext";
+import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
+import { isSoftDeleteLedgerPatch, purgeGhostLocalCompanyDoc } from "@/lib/purgeGhostLocalCompanyDoc";
 
 export type WriteEntityOperation = "create" | "update" | "delete";
 
@@ -154,7 +156,9 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
         try {
           await deleteDoc(docRef);
         } catch (e) {
-          return { ok: false, error: e instanceof Error ? e.message : "firestore delete failed" };
+          if (!isCompanyNotFoundError(e)) {
+            return { ok: false, error: e instanceof Error ? e.message : "firestore delete failed" };
+          }
         }
       }
       try {
@@ -192,8 +196,12 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
   // Remote-first (normal web Firebase mode): seedha Firestore — SQLite mirror listeners/`mirrorCollection` se aayega.
   try {
     if (req.operation === "delete") {
-      await deleteDoc(docRef);
-      await deleteCompanyDocFromBrowserDb(companyId, collectionName, effectiveDocId, { force: true, notify: true });
+      try {
+        await deleteDoc(docRef);
+      } catch (e) {
+        if (!isCompanyNotFoundError(e)) throw e;
+      }
+      await purgeGhostLocalCompanyDoc(companyId, collectionName, effectiveDocId);
       return { ok: true, docId: effectiveDocId };
     }
     if (useAutoId && req.operation === "create") {
@@ -217,6 +225,14 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
     void notifyRecycleBinAlertAfterWrite(fsCompanyId, companyId, collectionName, effectiveDocId, req.data || {});
     return { ok: true, docId: effectiveDocId };
   } catch (e) {
+    if (
+      isCompanyNotFoundError(e) &&
+      req.operation === "update" &&
+      isSoftDeleteLedgerPatch(req.data)
+    ) {
+      await purgeGhostLocalCompanyDoc(companyId, collectionName, effectiveDocId);
+      return { ok: true, docId: effectiveDocId };
+    }
     return { ok: false, error: e instanceof Error ? e.message : "firestore write failed" };
   }
 }

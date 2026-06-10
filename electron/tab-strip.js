@@ -12,29 +12,9 @@
   const maxBtn = document.getElementById("maxBtn");
   const closeBtn = document.getElementById("closeBtn");
 
-  const SYNC_ICON = "\u21bb";
-  const CHECK_ICON = "\u2713";
-  /** Renderer se ack na aaye (login page) — loading hatao */
-  const SYNC_ACK_FALLBACK_MS = 12000;
+  const RELOAD_ICON = "\u21bb";
 
   if (!tabsEl || !newBtn || !window.electronTabStrip) return;
-
-  function resetSyncButtonIcon() {
-    if (!syncBtn) return;
-    syncBtn.textContent = SYNC_ICON;
-    syncBtn.classList.remove("sync-loading", "sync-success");
-  }
-
-  function showSyncSuccessBriefly() {
-    if (!syncBtn) return;
-    clearTimeout(syncBtn._plSyncSuccessTid);
-    syncBtn.classList.remove("sync-loading");
-    syncBtn.textContent = CHECK_ICON;
-    syncBtn.classList.add("sync-success");
-    syncBtn._plSyncSuccessTid = setTimeout(function () {
-      resetSyncButtonIcon();
-    }, 2000);
-  }
 
   const merged =
     typeof window !== "undefined" &&
@@ -133,48 +113,22 @@
     }
   });
 
-  let unsubDone = null;
-
-  if (syncBtn && window.electronTabStrip.requestBackgroundSync) {
-    resetSyncButtonIcon();
-    let loadTimer = null;
+  if (syncBtn && window.electronTabStrip.reloadActiveTab) {
+    syncBtn.textContent = RELOAD_ICON;
     syncBtn.addEventListener("click", async () => {
-      if (syncBtn.classList.contains("sync-loading")) return;
-      clearTimeout(syncBtn._plSyncSuccessTid);
-      syncBtn.classList.remove("sync-success");
-      syncBtn.textContent = SYNC_ICON;
-      syncBtn.classList.add("sync-loading");
-      clearTimeout(loadTimer);
-      loadTimer = setTimeout(function () {
-        syncBtn.classList.remove("sync-loading");
-      }, SYNC_ACK_FALLBACK_MS);
       try {
-        const r = await window.electronTabStrip.requestBackgroundSync();
-        if (!r || r.ok === false) {
-          clearTimeout(loadTimer);
-          syncBtn.classList.remove("sync-loading");
-        }
+        const r = await window.electronTabStrip.reloadActiveTab();
+        if (!r || r.ok === false) console.error("Reload:", r?.error || "failed");
       } catch (err) {
-        clearTimeout(loadTimer);
-        syncBtn.classList.remove("sync-loading");
-        console.error("Background sync:", err);
+        console.error("Reload:", err);
       }
     });
-    if (window.electronTabStrip.onBackgroundSyncDone) {
-      unsubDone = window.electronTabStrip.onBackgroundSyncDone(function () {
-        clearTimeout(loadTimer);
-        showSyncSuccessBriefly();
-      });
-    }
   }
 
   const unsub = window.electronTabStrip.onTabsUpdate(render);
   window.addEventListener("beforeunload", () => {
     try {
       unsub();
-    } catch (_) {}
-    try {
-      if (typeof unsubDone === "function") unsubDone();
     } catch (_) {}
   });
 })();

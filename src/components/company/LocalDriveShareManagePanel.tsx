@@ -30,6 +30,7 @@ import { Crown, Eye, EyeOff, KeyRound, Loader2, Pencil, PlusCircle, Trash2 } fro
 import { useToast } from "@/hooks/use-toast";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import {
+  readCloudSyncConfigFromCompany,
   readCloudSyncDriveShareUsers,
   shareUsersToEmailList,
 } from "@/lib/localCloudSync/companyConfig";
@@ -505,7 +506,10 @@ export function LocalDriveShareManagePanel({
               )}
             </Label>
             <p className="text-xs text-muted-foreground mt-1">
-              Drive folder par write access. App me role table se set hota hai.
+              {readCloudSyncConfigFromCompany(localCompany).cloudSyncEnabled === true &&
+              readCloudSyncConfigFromCompany(localCompany).cloudSyncProvider === "google_drive"
+                ? "Drive folder par write access. App me role table se set hota hai."
+                : "Local login users for this company. Role sets permissions on this device and via local server gate."}
             </p>
           </div>
           <div className="flex flex-col items-end gap-1 shrink-0">

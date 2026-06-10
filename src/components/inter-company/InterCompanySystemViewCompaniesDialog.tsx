@@ -72,6 +72,11 @@ import {
 } from "@/lib/interCompany/interCompanyPublicCompanyProfile";
 import { interCompanySettingsCardClass } from "@/lib/interCompany/interCompanyVoucherChrome";
 import { cn } from "@/lib/utils";
+import {
+  isLocalDeviceInterCompanySystem,
+  isPureLocalInterCompanyCompanyFromShape,
+} from "@/lib/interCompany/localInterCompanyPolicy";
+import type { InterCompanyGroupCompanySummary } from "@/lib/interCompany/interCompanyGroups";
 
 type Props = {
   open: boolean;
@@ -574,10 +579,21 @@ export function InterCompanySystemViewCompaniesDialog({
     return [...groups, system];
   }, [groups, system]);
 
-  const companiesAvailableToAdd = useMemo(
-    () => myOwnedCompanies.filter((c) => !(system?.companyIds ?? []).includes(c.id)),
-    [myOwnedCompanies, systemCompanyIdsKey]
+  const localDeviceSystem = useMemo(
+    () => isLocalDeviceInterCompanySystem(system),
+    [system]
   );
+
+  const companiesAvailableToAdd = useMemo(() => {
+    let rows = myOwnedCompanies.filter((c) => !(system?.companyIds ?? []).includes(c.id));
+    if (localDeviceSystem) {
+      rows = rows.filter((c) => {
+        const full = allCompanies.find((x) => x.id === c.id);
+        return full && isPureLocalInterCompanyCompanyFromShape(full);
+      });
+    }
+    return rows;
+  }, [myOwnedCompanies, systemCompanyIdsKey, localDeviceSystem, allCompanies]);
 
   /** Top card — meri companies jo is system me add nahi */
   const notInSystemRows = useMemo((): InterCompanySystemCompanyRow[] => {
@@ -1072,6 +1088,7 @@ export function InterCompanySystemViewCompaniesDialog({
       if (!system || !groupOwnerUid || !companyId) return false;
       if (!userOwnedCompanyIds.includes(companyId)) return false;
       if (isSystemOwner && canWrite) return true;
+      if (isLocalDeviceInterCompanySystem(system) && isSystemOwner) return true;
       if (system.visibility === "public") return true;
       return false;
     },
@@ -1087,8 +1104,21 @@ export function InterCompanySystemViewCompaniesDialog({
         companyId,
         actingUserId: groupOwnerUid,
       });
-      const refreshed = await fetchInterCompanyGroupById(system.id);
-      if (refreshed) onSystemUpdated?.(refreshed);
+      if (isLocalDeviceInterCompanySystem(system)) {
+        const nextSummaries = { ...(system.companySummaries ?? {}) };
+        delete nextSummaries[companyId];
+        const nextOwners = { ...(system.companyOwners ?? {}) };
+        delete nextOwners[companyId];
+        onSystemUpdated?.({
+          ...system,
+          companyIds: system.companyIds.filter((id) => id !== companyId),
+          companySummaries: nextSummaries,
+          companyOwners: nextOwners,
+        });
+      } else {
+        const refreshed = await fetchInterCompanyGroupById(system.id);
+        if (refreshed) onSystemUpdated?.(refreshed);
+      }
       if (selectedOwnedCompanyId === companyId) {
         setSelectedOwnedCompanyId("");
       }
@@ -1099,6 +1129,22 @@ export function InterCompanySystemViewCompaniesDialog({
     } finally {
       setLeavingCompanyId(null);
     }
+  };
+
+  const buildLocalDeviceCompanySummary = (
+    company: Company | undefined,
+    companyId: string
+  ): InterCompanyGroupCompanySummary => {
+    const name =
+      String(company?.name || myOwnedCompanies.find((c) => c.id === companyId)?.name || companyId).trim();
+    const pan =
+      String(company?.pan || "")
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, "") || "—";
+    const phone = normalizeInterCompanyPhone(company?.phone) || "—";
+    const companyCode = company ? readCompanyInterCompanyCode(company) || "—" : "—";
+    return { name, companyCode, pan, phone };
   };
 
   const handleAddMyCompany = async (companyIdToAddRaw?: string) => {
@@ -1112,6 +1158,52 @@ export function InterCompanySystemViewCompaniesDialog({
         (currentCompanyId === companyIdToAdd
           ? allCompanies.find((c) => c.id === currentCompanyId)
           : undefined);
+
+      if (localDeviceSystem) {
+        if (!isPureLocalInterCompanyCompanyFromShape(companyForSummary)) {
+          toast.error("Only local-storage companies can join a local IC system.");
+          return;
+        }
+        const companySummary = buildLocalDeviceCompanySummary(companyForSummary, companyIdToAdd);
+        await assignCompanyToInterCompanyGroup({
+          groups: groupsForAssign,
+          companyId: companyIdToAdd,
+          groupId: system.id,
+          ownerUserId: firestoreOwnerUid,
+          companySummary,
+          companyOwner: {
+            ownerUserId: companyForSummary?.ownerId || groupOwnerUid,
+            ownerEmail: companyForSummary?.ownerEmail || userEmail,
+          },
+        });
+        const updated = {
+          ...system,
+          companyIds: system.companyIds.includes(companyIdToAdd)
+            ? system.companyIds
+            : [...system.companyIds, companyIdToAdd],
+          companySummaries: {
+            ...(system.companySummaries ?? {}),
+            [companyIdToAdd]: companySummary,
+          },
+          companyOwners: {
+            ...(system.companyOwners ?? {}),
+            [companyIdToAdd]: {
+              ownerUserId: companyForSummary?.ownerId || groupOwnerUid,
+              ownerEmail: companyForSummary?.ownerEmail || userEmail,
+            },
+          },
+        };
+        onSystemUpdated?.(updated);
+        if (isSystemOwner) {
+          onSystemCompaniesChanged?.(
+            groups.map((g) => (g.id === system.id ? updated : g))
+          );
+        }
+        setSelectedOwnedCompanyId(companyIdToAdd);
+        toast.success(`Company added to ${systemName}`);
+        return;
+      }
+
       // Firestore se poora code/PAN/phone — empty fallback mat bhejo
       const companySummary = await buildCompanySummaryForPublicSystem({
         companyId: companyIdToAdd,

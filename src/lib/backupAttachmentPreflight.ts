@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Attachment backup se pehle: server se files prefetch + har ref verify — taaki `.plbp` me koi file miss na ho.
- * DB merge `companyBackupCore` me online Firestore pull se; yahan sirf bytes cache + missing list.
+ * Attachment backup se pehle: bytes verify + (web) server prefetch.
+ * Static APK / EXE: local cache pehle; server download sirf missing refs (2nd pass).
  */
 
 import {
@@ -11,13 +11,13 @@ import {
 } from "@/lib/attachmentBackupBundle";
 import type { IncrementalAttachmentCache } from "@/lib/incrementalBackupFromLocation";
 import { refsMissingFromIncrementalCache } from "@/lib/incrementalBackupFromLocation";
+import { backupPrefersLocalSnapshot } from "@/lib/backupLocalFirst";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
 import {
   prefetchHttpsAttachmentUrls,
   type PrefetchAttachmentsProgress,
 } from "@/lib/offlineAttachmentUrlCache";
-import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 
 const HTTPS_REF = /^https?:\/\//i;
@@ -72,6 +72,29 @@ async function verifyRefsResolvable(
   return { ok, missing };
 }
 
+async function prefetchRemoteRefs(
+  refs: string[],
+  options: {
+    signal?: AbortSignal;
+    detail: string;
+    onProgress?: (p: { done: number; total: number; detail: string }) => void;
+  }
+): Promise<PrefetchAttachmentsProgress> {
+  if (refs.length === 0) {
+    return { cachedNew: 0, skippedAlreadyCached: 0, skippedBudget: 0, failed: 0 };
+  }
+  const embedded = isStaticAppBuild() || backupPrefersLocalSnapshot();
+  return prefetchHttpsAttachmentUrls(refs, {
+    concurrency: 6,
+    maxUrls: embedded ? 50_000 : 12_000,
+    maxTotalBytesApprox: embedded ? 8_000 * 1024 * 1024 : 2_500 * 1024 * 1024,
+    signal: options.signal,
+    onItemDone: (done, total) => {
+      options.onProgress?.({ done, total, detail: options.detail });
+    },
+  });
+}
+
 /** Backup embed se pehle: remote refs server/cache se prefetch, phir saari refs verify. */
 export async function preflightBackupAttachmentsBeforeEmbed(options: {
   backupData: Record<string, unknown>;
@@ -106,64 +129,77 @@ export async function preflightBackupAttachmentsBeforeEmbed(options: {
 
   const online = typeof navigator !== "undefined" && navigator.onLine;
   let prefetch = emptyPrefetch;
-
-  // Online: server se attachment bytes ek baar prefetch — backup collect phase me skip na ho.
-  if (online && remoteRefs.length > 0) {
-    const embedded = isStaticAppBuild() || isCapacitorNativeApp();
-    options.onProgress?.({
-      done: 0,
-      total: remoteRefs.length,
-      detail: "Downloading attachment files from server…",
-    });
-    prefetch = await prefetchHttpsAttachmentUrls(remoteRefs, {
-      concurrency: 6,
-      maxUrls: embedded ? 50_000 : 12_000,
-      maxTotalBytesApprox: embedded ? 8_000 * 1024 * 1024 : 2_500 * 1024 * 1024,
-      signal: options.signal,
-      onItemDone: (done, total) => {
-        options.onProgress?.({
-          done,
-          total,
-          detail: "Downloading attachment files from server…",
-        });
-      },
-    });
-  }
-
-  options.onProgress?.({
-    done: 0,
-    total: refsNeedingFetch.length,
-    detail: "Verifying attachment files…",
-  });
+  const localFirst = backupPrefersLocalSnapshot();
 
   let missingRefs: string[] = [];
-  {
+
+  if (localFirst) {
+    options.onProgress?.({
+      done: 0,
+      total: refsNeedingFetch.length,
+      detail: "Checking local attachment files…",
+    });
+    const first = await verifyRefsResolvable(refsNeedingFetch, options.signal, (done, total) => {
+      options.onProgress?.({ done, total, detail: "Checking local attachment files…" });
+    });
+    missingRefs = first.missing;
+
+    const needDownload = missingRefs.filter(isRemoteAttachmentRef);
+    if (online && needDownload.length > 0 && !options.signal?.aborted) {
+      options.onProgress?.({
+        done: 0,
+        total: needDownload.length,
+        detail: "Downloading missing attachment files…",
+      });
+      prefetch = await prefetchRemoteRefs(needDownload, {
+        signal: options.signal,
+        detail: "Downloading missing attachment files…",
+        onProgress: options.onProgress,
+      });
+      const retryVerify = await verifyRefsResolvable(needDownload, options.signal);
+      const fixedAfterRetry = new Set(retryVerify.ok);
+      missingRefs = missingRefs.filter((r) => !fixedAfterRetry.has(r));
+    }
+  } else {
+    if (online && remoteRefs.length > 0) {
+      options.onProgress?.({
+        done: 0,
+        total: remoteRefs.length,
+        detail: "Downloading attachment files from server…",
+      });
+      prefetch = await prefetchRemoteRefs(remoteRefs, {
+        signal: options.signal,
+        detail: "Downloading attachment files from server…",
+        onProgress: options.onProgress,
+      });
+    }
+
+    options.onProgress?.({
+      done: 0,
+      total: refsNeedingFetch.length,
+      detail: "Verifying attachment files…",
+    });
     const first = await verifyRefsResolvable(refsNeedingFetch, options.signal, (done, total) => {
       options.onProgress?.({ done, total, detail: "Verifying attachment files…" });
     });
     missingRefs = first.missing;
-  }
 
-  // Ek retry: pehli baar fail remote refs — server/network transient miss kam ho.
-  const retryRemote = missingRefs.filter(isRemoteAttachmentRef);
-  if (online && retryRemote.length > 0 && !options.signal?.aborted) {
-    options.onProgress?.({
-      done: 0,
-      total: retryRemote.length,
-      detail: "Retrying missing attachment files…",
-    });
-    await prefetchHttpsAttachmentUrls(retryRemote, {
-      concurrency: 4,
-      maxUrls: retryRemote.length,
-      maxTotalBytesApprox: isStaticAppBuild() ? 2_000 * 1024 * 1024 : 800 * 1024 * 1024,
-      signal: options.signal,
-      onItemDone: (done, total) => {
-        options.onProgress?.({ done, total, detail: "Retrying missing attachment files…" });
-      },
-    });
-    const retryVerify = await verifyRefsResolvable(retryRemote, options.signal);
-    const fixedAfterRetry = new Set(retryVerify.ok);
-    missingRefs = missingRefs.filter((r) => !fixedAfterRetry.has(r));
+    const retryRemote = missingRefs.filter(isRemoteAttachmentRef);
+    if (online && retryRemote.length > 0 && !options.signal?.aborted) {
+      options.onProgress?.({
+        done: 0,
+        total: retryRemote.length,
+        detail: "Retrying missing attachment files…",
+      });
+      await prefetchRemoteRefs(retryRemote, {
+        signal: options.signal,
+        detail: "Retrying missing attachment files…",
+        onProgress: options.onProgress,
+      });
+      const retryVerify = await verifyRefsResolvable(retryRemote, options.signal);
+      const fixedAfterRetry = new Set(retryVerify.ok);
+      missingRefs = missingRefs.filter((r) => !fixedAfterRetry.has(r));
+    }
   }
 
   const verifiedCount = allRefs.length - missingRefs.length;
@@ -179,7 +215,14 @@ export async function preflightBackupAttachmentsBeforeEmbed(options: {
 }
 
 /** User-facing error — kitni files miss hui. */
-export function formatBackupAttachmentPreflightError(missingCount: number, totalRefs: number): string {
+export function formatBackupAttachmentPreflightError(
+  missingCount: number,
+  totalRefs: number,
+  localFirst?: boolean
+): string {
   if (missingCount <= 0) return "";
+  if (localFirst) {
+    return `${missingCount} of ${totalRefs} attachment file(s) are not on this device (open those vouchers once to cache files, or backup without attachments).`;
+  }
   return `${missingCount} of ${totalRefs} attachment file(s) could not be loaded (check internet and try again, or backup without attachments).`;
 }

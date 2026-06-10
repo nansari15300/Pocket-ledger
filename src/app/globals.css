@@ -1337,6 +1337,7 @@ button.day_selected.is-today.has-transactions {
   .financial-summary-grid {
     display: grid !important;
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)) !important;
+    align-items: start;
     gap: 0.125rem;
     padding: 0 0.125rem;
     width: 100%;

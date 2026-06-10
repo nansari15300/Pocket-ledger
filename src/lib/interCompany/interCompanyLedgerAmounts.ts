@@ -7,9 +7,7 @@ import type { InterCompanyEntityKind } from "@/components/inter-company/InterCom
 import {
   getInterCompanyLegAmounts,
   interCompanyUsesConduitParty,
-  isInterCompanyOperationalEntityInvolved,
   resolveInterCompanyLegsForVoucher,
-  resolveInterCompanyViewerSide,
   applyInterCompanyReversedLedgerNetZero,
 } from "@/lib/interCompany/interCompanyPostingLegs";
 import {
@@ -73,42 +71,18 @@ export function interCompanyVoucherTouchesEntity(
   const ctx = legKindToContext(kind);
   const legs = resolveInterCompanyLegsForVoucher(transaction as Record<string, unknown>);
   if (legs.length > 0) {
-    const icCounterpartyId = String(transaction.interCompanyCounterpartyPartyId || "").trim();
     for (const leg of legs) {
       if (legKindToContext(leg.kind) !== ctx || String(leg.accountId) !== id) continue;
-      if (
-        kind === "party" &&
-        icCounterpartyId &&
-        id === icCounterpartyId
-      ) {
-        if (!interCompanyUsesConduitParty(transaction)) {
-          continue;
-        }
-        const side = resolveInterCompanyViewerSide(transaction);
-        if (
-          side &&
-          (side === "source" || side === "target") &&
-          !isInterCompanyOperationalEntityInvolved(transaction, side)
-        ) {
-          continue;
-        }
-      }
+      if (kind === "party" && !interCompanyUsesConduitParty(transaction)) continue;
       return true;
     }
   }
 
-  if (kind === "party" && String(transaction.interCompanyCounterpartyPartyId || "").trim() === id) {
-    if (!interCompanyUsesConduitParty(transaction)) {
-      return false;
-    }
-    const side = resolveInterCompanyViewerSide(transaction);
-    if (
-      side &&
-      (side === "source" || side === "target") &&
-      !isInterCompanyOperationalEntityInvolved(transaction, side)
-    ) {
-      return false;
-    }
+  if (
+    kind === "party" &&
+    String(transaction.interCompanyCounterpartyPartyId || "").trim() === id &&
+    interCompanyUsesConduitParty(transaction)
+  ) {
     return true;
   }
   if (kind === "bank" && readInterCompanyCompanyBankId(transaction) === id) {
@@ -165,10 +139,14 @@ export function getInterCompanyLedgerAmounts(
   if (String(transaction?.type || "") !== "inter_company") return empty;
   // Target bank: IC save ke baad pending Dr; entity ke liye source + target approve alag
   if (!isInterCompanyVisibleOnTargetBank(transaction)) return empty;
-  // Target entity: bank approve ke baad hi (party/staff/tax/expense)
+  const icCounterpartyId = String(transaction.interCompanyCounterpartyPartyId || "").trim();
+  const isIcCounterpartyLedger =
+    context === "party" && icCounterpartyId && entityId === icCounterpartyId;
+  // Target entity: bank approve ke baad hi (party/staff/tax/expense); IC · Due to = source approve par
   if (
     interCompanyVoucherViewerSide(transaction) === "target" &&
     context !== "account" &&
+    !isIcCounterpartyLedger &&
     !isInterCompanyVisibleOnTargetEntity(transaction)
   ) {
     return empty;
@@ -255,11 +233,15 @@ export function hideUnapprovedTargetInterCompanyEntityLedger(
   entityId: string
 ): boolean {
   if (!transaction || String(transaction.type || "") !== "inter_company") return false;
+  const id = String(entityId || "").trim();
+  const icCounterpartyId = String(transaction.interCompanyCounterpartyPartyId || "").trim();
+  if (context === "party" && icCounterpartyId && id === icCounterpartyId) {
+    return !isInterCompanyVisibleOnTargetBank(transaction);
+  }
   if (!isInterCompanyVisibleOnTargetBank(transaction)) return true;
   if (transaction.isApproved === true) return false;
   if (interCompanyVoucherViewerSide(transaction) !== "target") return false;
   if (context === "account") return false;
-  const id = String(entityId || "").trim();
   if (!id) return false;
   const kind = interCompanyKindForContext(context);
   if (!kind) return false;

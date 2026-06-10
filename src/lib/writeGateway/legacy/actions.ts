@@ -59,7 +59,7 @@ const DEFAULT_VOUCHER_SETTINGS = {
     payment_in: false, payment_out: false, contra: false, direct_income: false,
     direct_expense: false, journal: false, note: false, add_salary: false, pay_salary: false,
   },
-  enableLinkPaymentToTxns: true,
+  enableLinkPaymentToTxns: false,
   voucherHistoryEnabled: true,
   voucherHistoryLimit: 10,
   voucherHistoryFullBehavior: 'allow_edit_delete_last' as const,

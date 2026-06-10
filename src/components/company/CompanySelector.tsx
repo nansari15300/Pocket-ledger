@@ -20,7 +20,7 @@ import { DeleteCompanyDialog } from "./DeleteCompanyDialog";
 import { ShareCompanyDialog } from "./ShareCompanyDialog";
 import { AddLocalCompanyUserDialog } from "./AddLocalCompanyUserDialog";
 import { JoinSharedLocalCompanyDialog } from "./JoinSharedLocalCompanyDialog";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useCompany } from "@/hooks/useCompany";
 import type { Company as CompanyData } from "@/hooks/useCompany";
 import { cn } from "@/lib/utils";
@@ -43,7 +43,7 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { embeddedClientUsesFirestoreCompanyList } from "@/lib/planSyncClientPolicy";
 import { maybeMarkEmbeddedPendingCompanyDataWarm } from "@/lib/embeddedPendingCompanyWarm";
 import {
-  shouldPromptCompanyUnlock,
+  shouldPromptCompanyUnlockAsync,
   showCompanyUserNameField,
   verifyCompanyUnlock,
   isOfflineCompanyStorage,
@@ -55,10 +55,13 @@ import {
   readRememberedSharedUnlockUsername,
   saveRememberedSharedUnlockUsername,
 } from "@/lib/onlineSharedUnlockRememberUsername";
-import { localAuthLoginClientOnly } from "@/lib/localCompanyUsers";
-import { clearLocalAuth, setLocalAuthToken } from "@/lib/localApiClient";
+import { localAuthLoginForCompanyContext } from "@/lib/localCompanyUsers";
+import { clearLocalAuth, getLocalAuthToken, setLocalAuthToken } from "@/lib/localApiClient";
+import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
+import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import {
   OFFLINE_UNLOCK_REMEMBER_NEVER_DAYS,
+  readAnyStoredOfflineUnlockSessionForCompany,
   readStoredOfflineUnlockSession,
   saveOfflineUnlockSession,
 } from "@/lib/offlineCompanyUnlockRemember";
@@ -70,6 +73,15 @@ import {
 import { hasAnySelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { getSuperAdminEmails } from "@/lib/superAdminEmails";
+import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
+import { usePathname } from "next/navigation";
+import { useGate } from "@/contexts/GateContext";
+import { CompanyPickerGateBar } from "@/components/company/CompanyPickerGateBar";
+import { isDeviceGate, isLocalServerGate, pickGateAwareAutoSelectCompanyId } from "@/lib/gates/gateRuntime";
+import { isPlServerSharedCompanyRow } from "@/lib/plServerAccessContext";
+import { PL_GATE_CHANGED_EVENT } from "@/lib/gates/gateTypes";
+import { PL_SERVER_ACCESS_CONTEXT_EVENT } from "@/lib/plServerAccessContext";
 
 /** Company picker visibility: admin-hidden rows (`movedToAdminRecycleAt`) normal app me na dikhao. */
 function isCompanyVisibleInSelector(c: CompanyData): boolean {
@@ -117,6 +129,21 @@ function canRememberCompanyUsername(company: CompanyData, userEmail?: string | n
   return isOnlineSharedCompany(company as CompanyData & { isOwned?: boolean }) || isLocalOnlyMode();
 }
 
+function handleRememberUsernameCheckboxChange(
+  checked: boolean,
+  typedUsername: string,
+  companyId: string,
+  firebaseUid: string | undefined,
+  userEmail: string | null | undefined,
+  setRemember: (v: boolean) => void
+): void {
+  setRemember(checked);
+  const typed = typedUsername.trim();
+  if (checked && typed) {
+    saveRememberedSharedUnlockUsername(firebaseUid, companyId, typed, userEmail);
+  }
+}
+
 /** Radix: sidebar click = pointer-outside; header company menu band na ho. */
 const stopCloseIfMainSidebar = (e: { preventDefault: () => void; target: EventTarget | null }) => {
   const el = e.target as HTMLElement | null;
@@ -135,9 +162,29 @@ const GoogleDriveIcon = () => (
 export function CompanySelector({ companies: initialCompanies }: { companies: CompanyData[] }) {
   const { requestEmbeddedLogout } = useEmbeddedLogout();
   const router = useRouter();
-  const { user } = useAuth();
+  const pathname = usePathname();
+  const { user, customUser } = useAuth();
+  const isSuperAdminByEmail = useMemo(() => {
+    const e = (user?.email || "").toLowerCase().trim();
+    if (!e) return false;
+    return getSuperAdminEmails().some((x) => (x || "").toLowerCase().trim() === e);
+  }, [user?.email]);
+  const isSuperAdminUser = customUser?.role === "SuperAdmin" || isSuperAdminByEmail;
   // Local mode: list useCompany context se (local DB + mirror) — alag listLocalCompanies se sab ko isOwned true galat tha.
   const { setCompanyId, allCompanies: contextCompanies, loading: contextCompanyLoading, triggerSync, reloadLocalCompanyRegistry } = useCompany();
+  const { filterCompanies, canCreateCompanyOnActiveGate, activeGate, connectLocalServerGate } = useGate();
+  const [gateFilterEpoch, setGateFilterEpoch] = useState(0);
+
+  useEffect(() => {
+    const bump = () => setGateFilterEpoch((n) => n + 1);
+    window.addEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, bump);
+    window.addEventListener(PL_GATE_CHANGED_EVENT, bump);
+    return () => {
+      window.removeEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, bump);
+      window.removeEventListener(PL_GATE_CHANGED_EVENT, bump);
+    };
+  }, []);
+  const showJoinSharedLocal = isDeviceGate(activeGate);
   const [dialogState, setDialogState] = useState<{
     type: "share" | "addLocalUser" | "delete" | null;
     company: CompanyData | null;
@@ -168,6 +215,24 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   const [rememberUnlockDays, setRememberUnlockDays] = useState(0);
   /** Shared cloud unlock: sirf username yaad — `onlineSharedUnlockRememberUsername`. */
   const [rememberSharedUsername, setRememberSharedUsername] = useState(false);
+  const remoteAutoUnlockAttemptedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isPlRemoteServerClientMode() || remoteAutoUnlockAttemptedRef.current) return;
+    const preselect = readSelectedCompanyId()?.trim();
+    if (!preselect || getLocalAuthToken(preselect)) return;
+    const co = companies.find((c) => c.id === preselect);
+    if (!co || !isOfflineCompanyStorage(co)) return;
+    remoteAutoUnlockAttemptedRef.current = true;
+    void (async () => {
+      if (await shouldPromptCompanyUnlockAsync(co, user?.email)) {
+        setCompanyToUnlock(co);
+        setUsernameInput("");
+        setPasswordInput("");
+        setRememberUnlockDays(0);
+      }
+    })();
+  }, [companies, user?.email]);
 
   useEffect(() => {
     const isOwnedByUser = (c: CompanyData) =>
@@ -199,24 +264,41 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     const map = new Map<string, CompanyData>();
     mergeIntoMap(map, (initialCompanies ?? []).filter(isCompanyVisibleInSelector));
     // Drive restore/join: device-local rows SQLite se — parent Firestore list me nahi hote.
+    // Online owned + shared dono context se — EXE new tab par header jaisa poora list.
     (contextCompanies || []).forEach((c) => {
       if (!isCompanyVisibleInSelector(c)) return;
-      if (!isOfflineCompanyStorage(c)) return;
-      const driveSharedJoin =
-        (c as CompanyData & { driveSharedJoin?: boolean }).driveSharedJoin === true;
+      if (isOfflineCompanyStorage(c)) {
+        const driveSharedJoin =
+          (c as CompanyData & { driveSharedJoin?: boolean }).driveSharedJoin === true;
+        map.set(c.id, {
+          ...c,
+          storageOption: "local",
+          isOwned: driveSharedJoin ? false : (c.isOwned ?? isOwnedByUser(c)),
+        });
+        return;
+      }
       map.set(c.id, {
         ...c,
-        storageOption: "local",
-        isOwned: driveSharedJoin ? false : isOwnedByUser(c),
+        isOwned: c.isOwned ?? isOwnedByUser(c),
       });
     });
     setCompanies(Array.from(map.values()));
   }, [user, contextCompanies, contextCompanyLoading, parentCompaniesListSig, initialCompanies]);
 
 
-  const handleSelectCompany = (company: CompanyData) => {
+  const handleSelectCompany = async (company: CompanyData) => {
+    if (
+      isLocalServerGate(activeGate) &&
+      !isPlRemoteServerClientMode() &&
+      isPlServerSharedCompanyRow(company, activeGate.id)
+    ) {
+      connectLocalServerGate(activeGate.id, company.id);
+      return;
+    }
     if (isOfflineCompanyStorage(company)) {
-      const remembered = readStoredOfflineUnlockSession(user?.uid, company.id);
+      const remembered =
+        readStoredOfflineUnlockSession(user?.uid, company.id) ||
+        readAnyStoredOfflineUnlockSessionForCompany(company.id);
       if (remembered) {
         setLocalAuthToken(company.id, remembered.token, remembered.user);
         setCompanyId(company.id);
@@ -225,18 +307,20 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
       }
     }
     // Online company: pehle se valid "remember company password" window — dialog skip
-    if (!isOfflineCompanyStorage(company) && readCloudCompanyPasswordUnlockSession(user?.uid, company.id)) {
+    if (
+      !isOfflineCompanyStorage(company) &&
+      readCloudCompanyPasswordUnlockSession(user?.uid, company.id, user?.email)
+    ) {
       // APK/static: data warm overlay queue — `FirstDeviceCompanyHydrationOverlay` session flag.
       maybeMarkEmbeddedPendingCompanyDataWarm(user?.uid, company);
       setCompanyId(company.id);
       router.push("/dashboard");
       return;
     }
-    if (shouldPromptCompanyUnlock(company, user?.email)) {
+    if (await shouldPromptCompanyUnlockAsync(company, user?.email)) {
       setCompanyToUnlock(company);
-      const row = company as CompanyData & { isOwned?: boolean };
       const remembered = canRememberCompanyUsername(company, user?.email)
-        ? readRememberedSharedUnlockUsername(user?.uid, company.id)
+        ? readRememberedSharedUnlockUsername(user?.uid, company.id, user?.email)
         : null;
       setUsernameInput(remembered ?? "");
       setRememberSharedUsername(!!remembered);
@@ -245,7 +329,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
       setRememberUnlockDays(
         isOfflineCompanyStorage(company)
           ? 0
-          : readCloudCompanyPasswordUnlockPreferenceDays(user?.uid, company.id)
+          : readCloudCompanyPasswordUnlockPreferenceDays(user?.uid, company.id, user?.email)
       );
     } else {
       maybeMarkEmbeddedPendingCompanyDataWarm(user?.uid, company);
@@ -271,7 +355,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
           });
           return;
         }
-        const { token, user: localUser } = await localAuthLoginClientOnly(companyToUnlock.id, u, p);
+        const { token, user: localUser } = await localAuthLoginForCompanyContext(companyToUnlock.id, u, p);
         setLocalAuthToken(companyToUnlock.id, token, localUser);
         saveOfflineUnlockSession(user?.uid, companyToUnlock.id, rememberUnlockDays, token, localUser);
         toast({ title: "Access Granted", description: `Welcome to ${companyToUnlock.name}.` });
@@ -287,13 +371,23 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
       const result = verifyCompanyUnlock(row, user?.email, usernameInput, passwordInput);
       if (result.ok) {
         if (!isOfflineCompanyStorage(row)) {
-          saveCloudCompanyPasswordUnlockSession(user?.uid, companyToUnlock.id, rememberUnlockDays);
+          saveCloudCompanyPasswordUnlockSession(
+            user?.uid,
+            companyToUnlock.id,
+            rememberUnlockDays,
+            user?.email
+          );
         }
         if (canRememberCompanyUsername(companyToUnlock, user?.email)) {
           if (rememberSharedUsername) {
-            saveRememberedSharedUnlockUsername(user?.uid, companyToUnlock.id, usernameInput.trim());
+            saveRememberedSharedUnlockUsername(
+              user?.uid,
+              companyToUnlock.id,
+              usernameInput.trim(),
+              user?.email
+            );
           } else {
-            clearRememberedSharedUnlockUsername(user?.uid, companyToUnlock.id);
+            clearRememberedSharedUnlockUsername(user?.uid, companyToUnlock.id, user?.email);
           }
         }
         clearLocalAuth(companyToUnlock.id);
@@ -335,14 +429,24 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     companies.forEach(c => {
         if (c.isDeleted) return;
         if (!companyMap.has(c.id)) {
-            companyMap.set(c.id, { ...c, isOwned: isOwnedByUser(c) });
+            companyMap.set(c.id, { ...c, isOwned: c.isOwned ?? isOwnedByUser(c) });
         }
     });
-    return Array.from(companyMap.values());
-  }, [companies, user]);
+    const merged = Array.from(companyMap.values());
+    return filterSharedOnlyCompaniesForSuperAdminInMainApp(
+      merged,
+      user ? { uid: user.uid, email: user.email } : null,
+      isSuperAdminUser,
+      pathname
+    );
+  }, [companies, user, isSuperAdminUser, pathname]);
 
-  const ownedCompanies = allCompanies.filter(c => c.isOwned);
-  const sharedCompanies = allCompanies.filter(c => !c.isOwned);
+  const gateScopedCompanies = useMemo(
+    () => filterCompanies(allCompanies),
+    [allCompanies, filterCompanies, gateFilterEpoch]
+  );
+  const ownedCompanies = gateScopedCompanies.filter((c) => c.isOwned);
+  const sharedCompanies = gateScopedCompanies.filter((c) => !c.isOwned);
   // Header dropdown jaisa: offline/local storage vs cloud-owned alag section (select page par bhi same grouping).
   const isOfflineCompany = (c: CompanyData) =>
     ((c as CompanyData & { storageOption?: string }).storageOption || "local").toLowerCase() === "local";
@@ -447,9 +551,9 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
 
   return (
     <>
-      <div className="flex min-h-[calc(100vh-4rem)] items-center justify-center bg-background p-4">
-        <Card className="w-full max-w-lg">
-          <CardHeader className="space-y-1">
+      <div className="flex h-dvh max-h-dvh min-h-0 items-center justify-center overflow-hidden bg-background p-3 sm:p-4">
+        <Card className="flex h-[90dvh] max-h-[90dvh] w-full max-w-lg flex-col overflow-hidden">
+          <CardHeader className="shrink-0 space-y-1 pb-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
                 <CardTitle className="font-headline text-2xl">Select a Company</CardTitle>
@@ -470,14 +574,19 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
               </Button>
             </div>
           </CardHeader>
-          <CardContent className="space-y-6">
+          <CardContent className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain pr-1">
+            <CompanyPickerGateBar />
             {!hasAnyCompany && (
               <div className="rounded-lg border border-dashed bg-muted/30 px-4 py-10 text-center space-y-4">
-                <p className="text-sm text-muted-foreground">No companies yet. Create one to get started.</p>
-                <Button type="button" className="w-full sm:w-auto" onClick={() => router.push("/company/create")}>
-                  <PlusCircle className="mr-2 h-4 w-4" />
-                  Create New Company
-                </Button>
+                <p className="text-sm text-muted-foreground">
+                  No companies on this gate yet. Switch gate above or create one to get started.
+                </p>
+                {canCreateCompanyOnActiveGate ? (
+                  <Button type="button" className="w-full sm:w-auto" onClick={() => router.push("/company/create")}>
+                    <PlusCircle className="mr-2 h-4 w-4" />
+                    Create New Company
+                  </Button>
+                ) : null}
               </div>
             )}
             {/* Order: 1) owned local 2) shared local 3) owned online 4) shared online — user-requested labels */}
@@ -523,28 +632,21 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
             )}
           </CardContent>
           {hasAnyCompany ? (
-            <CardFooter className="flex flex-col sm:flex-row gap-2 justify-center">
-              <Button type="button" variant="outline" onClick={() => router.push("/company/create")}>
-                <PlusCircle className="mr-2 h-4 w-4" />
-                Create New Company
-              </Button>
-              <Button type="button" variant="secondary" onClick={() => setJoinSharedOpen(true)}>
-                <Share2 className="mr-2 h-4 w-4" />
-                Join shared local company
-              </Button>
+            <CardFooter className="shrink-0 flex flex-col sm:flex-row gap-2 justify-center border-t bg-card pt-4">
+              {canCreateCompanyOnActiveGate ? (
+                <Button type="button" variant="outline" onClick={() => router.push("/company/create")}>
+                  <PlusCircle className="mr-2 h-4 w-4" />
+                  Create New Company
+                </Button>
+              ) : null}
+              {showJoinSharedLocal ? (
+                <Button type="button" variant="secondary" onClick={() => setJoinSharedOpen(true)}>
+                  <Share2 className="mr-2 h-4 w-4" />
+                  Join shared local company
+                </Button>
+              ) : null}
             </CardFooter>
-          ) : (
-            <CardFooter className="flex flex-col sm:flex-row gap-2 justify-center">
-              <Button type="button" className="w-full sm:w-auto" onClick={() => router.push("/company/create")}>
-                <PlusCircle className="mr-2 h-4 w-4" />
-                Create New Company
-              </Button>
-              <Button type="button" variant="secondary" className="w-full sm:w-auto" onClick={() => setJoinSharedOpen(true)}>
-                <Share2 className="mr-2 h-4 w-4" />
-                Join shared local company
-              </Button>
-            </CardFooter>
-          )}
+          ) : null}
         </Card>
       </div>
 
@@ -584,11 +686,18 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         open={!!companyToUnlock}
         onOpenChange={(open) => {
           if (!open) {
+            const closing = companyToUnlock;
             setCompanyToUnlock(null);
             setUsernameInput("");
             setPasswordInput("");
-            setRememberUnlockDays(0);
             setRememberSharedUsername(false);
+            if (closing && !isOfflineCompanyStorage(closing)) {
+              setRememberUnlockDays(
+                readCloudCompanyPasswordUnlockPreferenceDays(user?.uid, closing.id, user?.email)
+              );
+            } else {
+              setRememberUnlockDays(0);
+            }
           }
         }}
       >
@@ -684,7 +793,8 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                     <Label htmlFor="cs-unlock-username">Company username</Label>
                     <Input
                       id="cs-unlock-username"
-                      autoComplete="username"
+                      autoComplete="off"
+                      name="pl-company-unlock-username"
                       placeholder={
                         isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
                         onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
@@ -701,7 +811,16 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                           <Checkbox
                             id="cs-remember-shared-username"
                             checked={rememberSharedUsername}
-                            onCheckedChange={(v) => setRememberSharedUsername(v === true)}
+                            onCheckedChange={(v) =>
+                              handleRememberUsernameCheckboxChange(
+                                v === true,
+                                usernameInput,
+                                companyToUnlock.id,
+                                user?.uid,
+                                user?.email,
+                                setRememberSharedUsername
+                              )
+                            }
                           />
                           <Label htmlFor="cs-remember-shared-username" className="text-sm font-normal cursor-pointer">
                             Remember username on this device
@@ -799,6 +918,7 @@ export function CompanyActions({
   const router = useRouter();
   const { user } = useAuth();
   const { companyId, setCompanyId, triggerSync, reloadLocalCompanyRegistry } = useCompany();
+  const { activeGate, connectLocalServerGate } = useGate();
   const [dialogState, setDialogState] = useState<{
     type: "share" | "addLocalUser" | "delete" | null;
     company: CompanyData | null;
@@ -821,34 +941,42 @@ export function CompanyActions({
   useEffect(() => {
     // Multi-tab: keep tab-specific selection stable; auto-pick first only when no saved company exists anywhere.
     if (!companyId && companies.length > 0 && !hasAnySelectedCompanyId()) {
-      const sorted = [...companies].sort((a, b) => {
-        const nameCmp = String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" });
-        if (nameCmp !== 0) return nameCmp;
-        return String(a.id || "").localeCompare(String(b.id || ""));
-      });
-      setCompanyId(sorted[0]!.id);
+      const pick = pickGateAwareAutoSelectCompanyId(companies, activeGate);
+      if (pick) setCompanyId(pick);
     }
-  }, [companyId, companies, setCompanyId]);
+  }, [companyId, companies, setCompanyId, activeGate]);
 
-  const handleSelectCompany = (selectedCompany: CompanyData) => {
+  const handleSelectCompany = async (selectedCompany: CompanyData) => {
+    if (
+      isLocalServerGate(activeGate) &&
+      !isPlRemoteServerClientMode() &&
+      isPlServerSharedCompanyRow(selectedCompany, activeGate.id)
+    ) {
+      connectLocalServerGate(activeGate.id, selectedCompany.id);
+      return;
+    }
     if (isOfflineCompanyStorage(selectedCompany)) {
-      const remembered = readStoredOfflineUnlockSession(user?.uid, selectedCompany.id);
+      const remembered =
+        readStoredOfflineUnlockSession(user?.uid, selectedCompany.id) ||
+        readAnyStoredOfflineUnlockSessionForCompany(selectedCompany.id);
       if (remembered) {
         setLocalAuthToken(selectedCompany.id, remembered.token, remembered.user);
         setCompanyId(selectedCompany.id);
         return;
       }
     }
-    if (!isOfflineCompanyStorage(selectedCompany) && readCloudCompanyPasswordUnlockSession(user?.uid, selectedCompany.id)) {
+    if (
+      !isOfflineCompanyStorage(selectedCompany) &&
+      readCloudCompanyPasswordUnlockSession(user?.uid, selectedCompany.id, user?.email)
+    ) {
       maybeMarkEmbeddedPendingCompanyDataWarm(user?.uid, selectedCompany);
       setCompanyId(selectedCompany.id);
       return;
     }
-    if (shouldPromptCompanyUnlock(selectedCompany, user?.email)) {
+    if (await shouldPromptCompanyUnlockAsync(selectedCompany, user?.email)) {
       setCompanyToUnlock(selectedCompany);
-      const row = selectedCompany as CompanyData & { isOwned?: boolean };
       const remembered = canRememberCompanyUsername(selectedCompany, user?.email)
-        ? readRememberedSharedUnlockUsername(user?.uid, selectedCompany.id)
+        ? readRememberedSharedUnlockUsername(user?.uid, selectedCompany.id, user?.email)
         : null;
       setUsernameInput(remembered ?? "");
       setRememberSharedUsername(!!remembered);
@@ -857,7 +985,7 @@ export function CompanyActions({
       setRememberUnlockDays(
         isOfflineCompanyStorage(selectedCompany)
           ? 0
-          : readCloudCompanyPasswordUnlockPreferenceDays(user?.uid, selectedCompany.id)
+          : readCloudCompanyPasswordUnlockPreferenceDays(user?.uid, selectedCompany.id, user?.email)
       );
     } else {
         maybeMarkEmbeddedPendingCompanyDataWarm(user?.uid, selectedCompany);
@@ -881,7 +1009,7 @@ export function CompanyActions({
           });
           return;
         }
-        const { token, user: localUser } = await localAuthLoginClientOnly(companyToUnlock.id, u, p);
+        const { token, user: localUser } = await localAuthLoginForCompanyContext(companyToUnlock.id, u, p);
         setLocalAuthToken(companyToUnlock.id, token, localUser);
         saveOfflineUnlockSession(user?.uid, companyToUnlock.id, rememberUnlockDays, token, localUser);
         toast({ title: "Access Granted", description: `Switched to ${companyToUnlock.name}.` });
@@ -896,13 +1024,23 @@ export function CompanyActions({
       const result = verifyCompanyUnlock(row, user?.email, usernameInput, passwordInput);
       if (result.ok) {
         if (!isOfflineCompanyStorage(row)) {
-          saveCloudCompanyPasswordUnlockSession(user?.uid, companyToUnlock.id, rememberUnlockDays);
+          saveCloudCompanyPasswordUnlockSession(
+            user?.uid,
+            companyToUnlock.id,
+            rememberUnlockDays,
+            user?.email
+          );
         }
         if (canRememberCompanyUsername(companyToUnlock, user?.email)) {
           if (rememberSharedUsername) {
-            saveRememberedSharedUnlockUsername(user?.uid, companyToUnlock.id, usernameInput.trim());
+            saveRememberedSharedUnlockUsername(
+              user?.uid,
+              companyToUnlock.id,
+              usernameInput.trim(),
+              user?.email
+            );
           } else {
-            clearRememberedSharedUnlockUsername(user?.uid, companyToUnlock.id);
+            clearRememberedSharedUnlockUsername(user?.uid, companyToUnlock.id, user?.email);
           }
         }
         clearLocalAuth(companyToUnlock.id);
@@ -1150,11 +1288,18 @@ export function CompanyActions({
         open={!!companyToUnlock}
         onOpenChange={(open) => {
           if (!open) {
+            const closing = companyToUnlock;
             setCompanyToUnlock(null);
             setUsernameInput("");
             setPasswordInput("");
-            setRememberUnlockDays(0);
             setRememberSharedUsername(false);
+            if (closing && !isOfflineCompanyStorage(closing)) {
+              setRememberUnlockDays(
+                readCloudCompanyPasswordUnlockPreferenceDays(user?.uid, closing.id, user?.email)
+              );
+            } else {
+              setRememberUnlockDays(0);
+            }
           }
         }}
       >
@@ -1249,7 +1394,8 @@ export function CompanyActions({
                     <Label htmlFor="ca-unlock-username">Company username</Label>
                     <Input
                       id="ca-unlock-username"
-                      autoComplete="username"
+                      autoComplete="off"
+                      name="pl-company-unlock-username-header"
                       placeholder={
                         isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
                         onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
@@ -1266,7 +1412,16 @@ export function CompanyActions({
                           <Checkbox
                             id="ca-remember-shared-username"
                             checked={rememberSharedUsername}
-                            onCheckedChange={(v) => setRememberSharedUsername(v === true)}
+                            onCheckedChange={(v) =>
+                              handleRememberUsernameCheckboxChange(
+                                v === true,
+                                usernameInput,
+                                companyToUnlock.id,
+                                user?.uid,
+                                user?.email,
+                                setRememberSharedUsername
+                              )
+                            }
                           />
                           <Label htmlFor="ca-remember-shared-username" className="text-sm font-normal cursor-pointer">
                             Remember username on this device

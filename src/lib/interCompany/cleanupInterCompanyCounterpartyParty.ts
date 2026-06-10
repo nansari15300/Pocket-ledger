@@ -1,4 +1,4 @@
-import { interCompanyUsesConduitParty } from "@/lib/interCompany/interCompanyPostingLegs";
+import { isInterCompanyCounterpartyPartyName } from "@/lib/interCompany/interCompanyCounterpartyPartyName";
 import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
@@ -12,7 +12,7 @@ export function isInterCompanyAutoPartyRow(row: Record<string, unknown> | null |
   if (row.isInterCompanyCounterparty === true) return true;
   const id = String(row.id || "").trim();
   if (id.startsWith("ic_peer_")) return true;
-  return String(row.name || "").trim().startsWith("IC · Due ");
+  return isInterCompanyCounterpartyPartyName(row.name);
 }
 
 async function readPartyRow(
@@ -59,8 +59,7 @@ export async function countActiveInterCompanyVouchersForCounterpartyParty(
     (v) =>
       String(v.type || "") === "inter_company" &&
       v.isDeleted !== true &&
-      String(v.interCompanyCounterpartyPartyId || "").trim() === pid &&
-      interCompanyUsesConduitParty(v)
+      String(v.interCompanyCounterpartyPartyId || "").trim() === pid
   ).length;
 }
 

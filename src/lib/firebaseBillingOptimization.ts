@@ -1,16 +1,25 @@
 "use client";
 
+import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
+
 /**
  * Firebase / Storage billing knobs — safe defaults reduce reads, duplicate uploads, and sync churn.
  * Override via env only when debugging legacy behaviour.
  */
 
-/** Background full warm sync (Firestore pull + attachment prefetch). Keep off in production. */
+/**
+ * Background full warm sync (Firestore → SQLite mirror + attachment bytes cache).
+ * Static APK / EXE: default ON so offline par voucher files click par load na hon.
+ * Web-only: opt-in via `NEXT_PUBLIC_BACKGROUND_WARM_SYNC=1`. Force off: `=0`.
+ */
 export function backgroundWarmSyncEnabled(): boolean {
-  return (
-    typeof process !== "undefined" &&
-    String(process.env.NEXT_PUBLIC_BACKGROUND_WARM_SYNC || "").trim() === "1"
-  );
+  if (typeof process === "undefined") return false;
+  const raw = String(process.env.NEXT_PUBLIC_BACKGROUND_WARM_SYNC || "").trim();
+  if (raw === "0") return false;
+  if (raw === "1") return true;
+  if (process.env.NEXT_PUBLIC_STATIC_BUILD === "1") return true;
+  if (typeof window !== "undefined" && isEmbeddedOfflinePreloadClient()) return true;
+  return false;
 }
 
 /** Debounce rapid cloud-sync poke events so one burst of saves → one Drive cycle. */

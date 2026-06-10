@@ -15,6 +15,10 @@ import { embeddedClientUsesFirestoreCompanyList } from "@/lib/planSyncClientPoli
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { registerCompanyPickerFirestoreDetach } from "@/lib/companyPickerFirestoreDetach";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { getSuperAdminEmails } from "@/lib/superAdminEmails";
+import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
+import { sharedCompanyQueryKey, sharedCompanyQuerySpecs } from "@/lib/sharedWithEmailsQuery";
+import { activateOnlineGateForCompanyPicker } from "@/lib/gates/gateClientDefaults";
 
 /** Device-local SQLite rows — online Firestore picker list me merge (Drive restore / join ke baad). */
 function mergeDeviceLocalCompaniesIntoMap(
@@ -61,7 +65,13 @@ function isCompanyVisibleInCompanyPage(c: Company): boolean {
 function SelectCompanyPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, loading: authLoading } = useAuth();
+  const { user, customUser, loading: authLoading } = useAuth();
+  const isSuperAdminByEmail = useMemo(() => {
+    const e = (user?.email || "").toLowerCase().trim();
+    if (!e) return false;
+    return getSuperAdminEmails().some((x) => (x || "").toLowerCase().trim() === e);
+  }, [user?.email]);
+  const isSuperAdminUser = customUser?.role === "SuperAdmin" || isSuperAdminByEmail;
   // Local mode: list Firestore snapshots se nahi, useCompany() ke local DB hydrate se aati hai (owned/shared wahi logic jo CompanySelector me).
   const { allCompanies: contextCompanies, loading: companyContextLoading, reloadLocalCompanyRegistry, triggerSync } = useCompany();
   const [loading, setLoading] = useState(true);
@@ -69,6 +79,10 @@ function SelectCompanyPageContent() {
   const [sharedCompanies, setSharedCompanies] = useState<Company[]>([]);
   const [newlyCreatedCompany, setNewlyCreatedCompany] = useState<Company | null>(null);
   const [isCreateCompanyDialogOpen, setIsCreateCompanyDialogOpen] = useState(false);
+
+  useEffect(() => {
+    activateOnlineGateForCompanyPicker();
+  }, []);
 
   useEffect(() => {
     // Static/APK: Firestore company list — pure web local-only me page-level listeners skip.
@@ -110,10 +124,10 @@ function SelectCompanyPageContent() {
     };
 
     const ownedQuery = query(collection(firestore, "companies"), where("ownerId", "==", user.uid));
-    const sharedQuery = query(collection(firestore, "companies"), where("sharedWithEmails", "array-contains", user.email));
+    const sharedQuerySpecs = isSuperAdminUser ? [] : sharedCompanyQuerySpecs(user.email);
 
     let ownedDone = false;
-    let sharedDone = false;
+    let sharedDone = sharedQuerySpecs.length === 0;
     const maybeDone = () => {
       if (ownedDone && sharedDone) setSettled();
     };
@@ -130,24 +144,43 @@ function SelectCompanyPageContent() {
         setSettled();
     });
 
-    const unsubShared = onSnapshot(sharedQuery, (snapshot) => {
-        const companies = snapshot.docs
-            .map((doc: DocumentData) => ({ id: doc.id, ...doc.data(), isOwned: false } as Company))
-            .filter(isCompanyVisibleInCompanyPage);
-        setSharedCompanies(companies);
-        sharedDone = true;
-        maybeDone();
-    }, (error) => {
-        console.error("Error fetching shared companies:", error);
-        setSettled();
-    });
+    const sharedSnapsByVariant = new Map<string, { docs: readonly { id: string; data: () => Record<string, unknown> }[] }>();
+    const sharedVariantsReady = new Set<string>();
+    const mergeAndPublishShared = () => {
+      if (sharedVariantsReady.size < sharedQuerySpecs.length) return;
+      const byId = new Map<string, Company>();
+      for (const snap of sharedSnapsByVariant.values()) {
+        for (const docSnap of snap.docs) {
+          const company = { id: docSnap.id, ...docSnap.data(), isOwned: false } as Company;
+          if (isCompanyVisibleInCompanyPage(company)) byId.set(company.id, company);
+        }
+      }
+      setSharedCompanies(Array.from(byId.values()));
+      sharedDone = true;
+      maybeDone();
+    };
+    const unsubShared = sharedQuerySpecs.map((spec) =>
+      onSnapshot(
+        query(collection(firestore, "companies"), where(spec.field, "array-contains", spec.value)),
+        (snapshot) => {
+          const key = sharedCompanyQueryKey(spec);
+          sharedSnapsByVariant.set(key, snapshot);
+          sharedVariantsReady.add(key);
+          mergeAndPublishShared();
+        },
+        (error) => {
+          console.error("Error fetching shared companies:", error);
+          setSettled();
+        }
+      )
+    );
 
     // Fallback: stop loading after 10s so user never stays on skeleton (e.g. network/rules issues)
     const timeoutId = setTimeout(setSettled, 10000);
 
     const cleanupListeners = () => {
       unsubOwned();
-      unsubShared();
+      unsubShared.forEach((unsub) => unsub());
       clearTimeout(timeoutId);
     };
     registerCompanyPickerFirestoreDetach(cleanupListeners);
@@ -156,7 +189,7 @@ function SelectCompanyPageContent() {
       registerCompanyPickerFirestoreDetach(null);
       cleanupListeners();
     };
-  }, [user, authLoading, router]);
+  }, [user, authLoading, router, isSuperAdminUser]);
 
   // Online web: SQLite local / Drive-restored companies context se — sirf Firestore listeners se missing the.
   useEffect(() => {
@@ -236,14 +269,20 @@ function SelectCompanyPageContent() {
       (contextCompanies || []) as Company[],
       user
     );
-    return Array.from(companyMap.values());
-}, [ownedCompanies, sharedCompanies, user, newlyCreatedCompany, contextCompanies]);
+    const merged = Array.from(companyMap.values());
+    return filterSharedOnlyCompaniesForSuperAdminInMainApp(
+      merged,
+      user ? { uid: user.uid, email: user.email } : null,
+      isSuperAdminUser,
+      "/company"
+    );
+}, [ownedCompanies, sharedCompanies, user, newlyCreatedCompany, contextCompanies, isSuperAdminUser]);
 
   // Static/APK: Firestore hydrate; pure web local-only: SQLite context loading.
   if (authLoading || (isLocalOnlyMode() && !embeddedClientUsesFirestoreCompanyList() ? companyContextLoading : loading)) {
     return (
-        <div className="flex min-h-screen items-center justify-center">
-            <Card className="w-full max-w-lg">
+        <div className="flex h-dvh max-h-dvh items-center justify-center overflow-hidden p-3">
+            <Card className="flex h-[90dvh] max-h-[90dvh] w-full max-w-lg flex-col overflow-hidden">
                 <CardHeader>
                     <Skeleton className="h-8 w-48" />
                     <Skeleton className="h-4 w-full max-w-sm" />

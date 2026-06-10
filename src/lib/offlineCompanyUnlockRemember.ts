@@ -94,3 +94,20 @@ export function clearOfflineUnlockSession(firebaseUid: string | undefined, compa
   if (typeof window === "undefined" || !companyId) return;
   localStorage.removeItem(storageKey(firebaseUid, companyId));
 }
+
+/** Logout: is account ke saare offline company unlock sessions hatao. */
+export function clearAllOfflineUnlockSessionsForUser(firebaseUid: string | undefined): void {
+  if (typeof window === "undefined") return;
+  const uid = firebaseUid?.trim() || "no_uid";
+  const keysToRemove: string[] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (!key?.startsWith(`${STORAGE_PREFIX}_`)) continue;
+      if (key.includes(`_${uid}_`) || key.includes("_no_uid_")) keysToRemove.push(key);
+    }
+    for (const k of keysToRemove) localStorage.removeItem(k);
+  } catch {
+    /* ignore */
+  }
+}

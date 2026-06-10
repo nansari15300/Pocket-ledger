@@ -19,7 +19,7 @@ import { proDashboardRibbonClass } from "@/lib/proTheme";
 import { useDate } from "@/hooks/useDate";
 import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
-import { useDashboardRecurringAccrual } from "@/hooks/useDashboardRecurringAccrual";
+import { useRecurringAccrualTemplates, useRecurringAccrualLiveSnapshot, computeRecurringAccrualSnapshot, recurringAccrualSnapshotDisplayKey, type RecurringAccrualComputeInputs } from "@/hooks/useDashboardRecurringAccrual";
 import { buildCompanyFlowDrCrContext } from "@/lib/dashboardRecurringAccrual";
 import usePermissions from "@/hooks/usePermissions";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
@@ -30,8 +30,195 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import type { RecurringDashboardLine } from "@/lib/dashboardRecurringAccrual";
 import { X } from "lucide-react";
 
-/** useDate().formatCurrency — JSX return (animated span possible) */
 type RecurringDetailsFmt = (n: number) => React.ReactNode;
+
+type RecurringLiveComputeBase = Omit<RecurringAccrualComputeInputs, "nowMs">;
+
+/** Card totals — sirf text; parent se `snap` aata hai (ek hi live engine). */
+const RecurringAutoSummaryAmountRows = React.memo(function RecurringAutoSummaryAmountRows({
+  snap,
+  formatAmount,
+}: {
+  snap: ReturnType<typeof useRecurringAccrualLiveSnapshot>;
+  formatAmount: (n: number) => string;
+}) {
+  const dr = snap.detailDebitLines.reduce((s, r) => s + r.debit, 0);
+  const cr = snap.detailCreditLines.reduce((s, r) => s + r.credit, 0);
+  const balance = snap.detailNetCompanyDrMinusCr;
+
+  return (
+    <>
+      <div className="flex min-h-[1.5rem] min-w-0 items-baseline justify-between gap-2 sm:gap-3">
+        <span className="min-w-0 shrink truncate text-xs text-muted-foreground">Inflow to company</span>
+        <span className="shrink-0 whitespace-nowrap text-base font-bold tabular-nums text-green-600">
+          {formatAmount(dr)} <span className="text-xs">Dr</span>
+        </span>
+      </div>
+      <div className="flex min-h-[1.5rem] min-w-0 items-baseline justify-between gap-2 sm:gap-3">
+        <span className="min-w-0 shrink truncate text-xs text-muted-foreground">Outflow from company</span>
+        <span className="shrink-0 whitespace-nowrap text-base font-bold tabular-nums text-red-600">
+          {formatAmount(cr)} <span className="text-xs">Cr</span>
+        </span>
+      </div>
+      <div className="mt-2 flex min-h-[1.75rem] min-w-0 items-baseline justify-between gap-2 border-t pt-2 sm:gap-3">
+        <span className="min-w-0 shrink truncate text-sm font-bold">Balance</span>
+        <span
+          className={cn(
+            "shrink-0 whitespace-nowrap text-lg font-bold tabular-nums",
+            balance > 0 ? "text-green-600" : balance < 0 ? "text-red-600" : "text-muted-foreground",
+          )}
+        >
+          {balance !== 0 ? (
+            <>
+              {formatAmount(Math.abs(balance))} <span className="text-xs">{balance > 0 ? "Dr" : "Cr"}</span>
+            </>
+          ) : (
+            formatAmount(0)
+          )}
+        </span>
+      </div>
+    </>
+  );
+});
+
+type RecurringLiveDetailsProps = {
+  snap: ReturnType<typeof useRecurringAccrualLiveSnapshot>;
+  fmt: RecurringDetailsFmt;
+  onLineOpenVoucher?: (bodyVoucherId: string) => void;
+  isMobile: boolean;
+  onClose: () => void;
+};
+
+/** Dialog tables — snap parent live engine se; alag tick nahi. */
+const RecurringAutoSummaryLiveDetails = React.memo(function RecurringAutoSummaryLiveDetails({
+  snap,
+  fmt,
+  onLineOpenVoucher,
+  isMobile,
+  onClose,
+}: RecurringLiveDetailsProps) {
+  const lineOpenHandler = onLineOpenVoucher;
+
+  return (
+    <>
+      <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden">
+        {isMobile ? (
+          <Tabs
+            defaultValue="debit"
+            className="grid min-h-0 w-full flex-1 grid-rows-[minmax(0,1fr)_auto] overflow-hidden"
+          >
+            <TabsContent
+              value="debit"
+              className="col-start-1 row-start-1 m-0 mt-0 flex h-full min-h-0 min-w-0 flex-col overflow-hidden p-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+            >
+              <RecurringDetailsDebitPanel rows={snap.detailDebitLines} fmt={fmt} onLineOpenVoucher={lineOpenHandler} />
+            </TabsContent>
+            <TabsContent
+              value="credit"
+              className="col-start-1 row-start-1 m-0 mt-0 flex h-full min-h-0 min-w-0 flex-col overflow-hidden p-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+            >
+              <RecurringDetailsCreditPanel rows={snap.detailCreditLines} fmt={fmt} onLineOpenVoucher={lineOpenHandler} />
+            </TabsContent>
+            <TabsContent
+              value="both"
+              className="col-start-1 row-start-1 m-0 mt-0 flex h-full min-h-0 min-w-0 flex-col overflow-x-auto overflow-y-hidden p-0 focus-visible:ring-0 focus-visible:ring-offset-0 md:overflow-x-hidden"
+            >
+              <div className="flex h-full min-h-0 w-max min-w-full flex-row divide-x divide-black dark:divide-neutral-300 md:w-full md:min-w-0">
+                <div className="flex h-full min-h-0 w-[min(88vw,22rem)] shrink-0 flex-col md:min-w-0 md:w-auto md:flex-1 md:shrink">
+                  <RecurringDetailsDebitPanel rows={snap.detailDebitLines} fmt={fmt} onLineOpenVoucher={lineOpenHandler} />
+                </div>
+                <div className="flex h-full min-h-0 w-[min(88vw,22rem)] shrink-0 flex-col md:min-w-0 md:w-auto md:flex-1 md:shrink">
+                  <RecurringDetailsCreditPanel rows={snap.detailCreditLines} fmt={fmt} onLineOpenVoucher={lineOpenHandler} />
+                </div>
+              </div>
+            </TabsContent>
+            <TabsList className="col-start-1 row-start-2 grid min-h-8 h-auto w-full shrink-0 grid-cols-3 items-stretch gap-1 border-t-2 border-black bg-muted/30 px-1.5 py-1.5 dark:border-neutral-300">
+              <TabsTrigger
+                value="debit"
+                className={cn(
+                  "flex items-center justify-center rounded-full border border-transparent px-1 py-0.5 text-[11px] font-semibold leading-tight shadow-none transition-[border-color,box-shadow]",
+                  "!bg-green-200 !text-green-950 dark:!bg-green-800/90 dark:!text-green-50",
+                  "data-[state=active]:!bg-green-200 data-[state=active]:!text-green-950 data-[state=active]:dark:!bg-green-800/90",
+                  "data-[state=active]:!border-blue-500 dark:data-[state=active]:!border-blue-600 data-[state=inactive]:!border-transparent",
+                  "data-[state=active]:shadow-none data-[state=inactive]:shadow-none",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:focus-visible:ring-blue-600",
+                )}
+              >
+                Debit ({snap.detailDebitLines.length})
+              </TabsTrigger>
+              <TabsTrigger
+                value="both"
+                className={cn(
+                  "flex items-center justify-center rounded-full border border-transparent px-1 py-0.5 text-[11px] font-semibold leading-tight shadow-none transition-[border-color,box-shadow]",
+                  "!bg-slate-200 !text-slate-950 dark:!bg-slate-700/90 dark:!text-slate-50",
+                  "data-[state=active]:!bg-slate-200 data-[state=active]:!text-slate-950 data-[state=active]:dark:!bg-slate-700/90",
+                  "data-[state=active]:!border-blue-500 dark:data-[state=active]:!border-blue-600 data-[state=inactive]:!border-transparent",
+                  "data-[state=active]:shadow-none data-[state=inactive]:shadow-none",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:focus-visible:ring-blue-600",
+                )}
+              >
+                Both
+              </TabsTrigger>
+              <TabsTrigger
+                value="credit"
+                className={cn(
+                  "flex items-center justify-center rounded-full border border-transparent px-1 py-0.5 text-[11px] font-semibold leading-tight shadow-none transition-[border-color,box-shadow]",
+                  "!bg-pink-200 !text-pink-950 dark:!bg-pink-800/85 dark:!text-pink-50",
+                  "data-[state=active]:!bg-pink-200 data-[state=active]:!text-pink-950 data-[state=active]:dark:!bg-pink-800/85",
+                  "data-[state=active]:!border-blue-500 dark:data-[state=active]:!border-blue-600 data-[state=inactive]:!border-transparent",
+                  "data-[state=active]:shadow-none data-[state=inactive]:shadow-none",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:focus-visible:ring-blue-600",
+                )}
+              >
+                Credit ({snap.detailCreditLines.length})
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        ) : (
+          <div className="flex min-h-0 w-full flex-1 flex-row divide-x divide-black dark:divide-neutral-300">
+            <RecurringDetailsDebitPanel rows={snap.detailDebitLines} fmt={fmt} onLineOpenVoucher={lineOpenHandler} />
+            <RecurringDetailsCreditPanel rows={snap.detailCreditLines} fmt={fmt} onLineOpenVoucher={lineOpenHandler} />
+          </div>
+        )}
+      </div>
+      <div
+        className={cn(
+          "flex shrink-0 flex-col gap-2 border-t border-black bg-gradient-to-r from-slate-100/90 via-slate-50/80 to-rose-100/90 px-3 py-2 dark:border-neutral-300 dark:from-slate-900/55 dark:via-slate-950/40 dark:to-rose-950/40",
+          "md:flex-row md:items-center md:justify-between md:gap-3",
+          "max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-[60] max-md:border-t-2 max-md:pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] max-md:pt-2 max-md:shadow-[0_-6px_16px_rgba(0,0,0,0.12)]",
+        )}
+      >
+        <p className="m-0 min-w-0 flex-1 text-center text-sm font-semibold leading-snug md:text-left">
+          Balance (Dr lines − Cr lines):{" "}
+          <span
+            className={cn(
+              "tabular-nums",
+              snap.detailNetCompanyDrMinusCr > 0
+                ? "text-green-700"
+                : snap.detailNetCompanyDrMinusCr < 0
+                  ? "text-red-700"
+                  : "text-muted-foreground",
+            )}
+          >
+            {snap.detailNetCompanyDrMinusCr !== 0 ? (
+              <>
+                {fmt(Math.abs(snap.detailNetCompanyDrMinusCr))}{" "}
+                <span className="text-xs">{snap.detailNetCompanyDrMinusCr > 0 ? "Dr" : "Cr"}</span>
+              </>
+            ) : (
+              fmt(0)
+            )}
+          </span>
+        </p>
+        <div className="hidden shrink-0 md:block">
+          <Button type="button" variant="secondary" size="sm" className="font-semibold" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    </>
+  );
+});
 
 type RecurringDetailsPanelProps = {
   rows: RecurringDashboardLine[];
@@ -77,7 +264,7 @@ function RecurringDetailsDebitPanel({ rows, fmt, onLineOpenVoucher }: RecurringD
                 const openEdit = onLineOpenVoucher && bodyId ? () => onLineOpenVoucher(bodyId) : undefined;
                 return (
                   <tr
-                    key={`d-${row.templateDocId}-${i}`}
+                    key={`d-${row.templateDocId}`}
                     className={cn(
                       "border-b border-black/55 dark:border-neutral-400/90",
                       i % 2 === 0
@@ -175,7 +362,7 @@ function RecurringDetailsCreditPanel({ rows, fmt, onLineOpenVoucher }: Recurring
                 const openEdit = onLineOpenVoucher && bodyId ? () => onLineOpenVoucher(bodyId) : undefined;
                 return (
                   <tr
-                    key={`c-${row.templateDocId}-${i}`}
+                    key={`c-${row.templateDocId}`}
                     className={cn(
                       "border-b border-black/55 dark:border-neutral-400/90",
                       i % 2 === 0
@@ -238,28 +425,22 @@ function RecurringDetailsCreditPanel({ rows, fmt, onLineOpenVoucher }: Recurring
   );
 }
 
-type Props = {
-  className?: string;
-  placement?: "with-all" | "summary";
-  /** `gridCell` = Outstanding jaisa `col-span-1` financial summary grid ke andar */
-  layout?: "default" | "gridCell";
-  /** Dr/Cr line click → parent voucher edit dialog (e.g. dashboard `AddVoucherDialog`) */
-  onOpenBodyVoucher?: (bodyVoucherId: string) => void;
+type RecurringLiveSnap = ReturnType<typeof useRecurringAccrualLiveSnapshot>;
+
+type RecurringLiveSnapEngineProps = {
+  templates: Array<{ id: string; tpl: import("@/lib/recurringVouchers").RecurringVoucherTemplate }>;
+  recurringCompanyEnabled: boolean;
+  hadResolvedRowsRef: React.MutableRefObject<boolean>;
+  onSnapChange: (snap: RecurringLiveSnap) => void;
 };
 
-/**
- * Auto recurring: company toggle + live accrued (AddVoucher jaisa) + Outstanding-style rows jab ON ho.
- */
-export function RecurringAutoSummaryCard({
-  className,
-  placement = "with-all",
-  layout = "default",
-  onOpenBodyVoucher,
-}: Props) {
-  const { company, companyId, triggerSync, reloadLocalCompanyRegistry } = useCompany();
-  const { can } = usePermissions();
-  const cid = String(companyId || "").trim();
-  const recurringCompanyEnabled = isRecurringVoucherGenerationEnabled(company);
+/** `useVouchers` sirf yahan — sync bumps is component ke andar absorb; view re-render na ho. */
+const RecurringLiveSnapEngine = React.memo(function RecurringLiveSnapEngine({
+  templates,
+  recurringCompanyEnabled,
+  hadResolvedRowsRef,
+  onSnapChange,
+}: RecurringLiveSnapEngineProps) {
   const {
     vouchers,
     journalAccountNames,
@@ -270,12 +451,6 @@ export function RecurringAutoSummaryCard({
     processedAccounts,
     processedItems,
   } = useVouchers();
-  const { formatCurrency } = useDate();
-
-  // Sirf `view_recurring_auto_summary` — configure alag hai (switch ke liye); OR se card bypass mat ho.
-  const canViewRecurringCard = can("view_recurring_auto_summary");
-  const canToggleRecurring = can("configure_recurring_auto_company");
-  const [savingToggle, setSavingToggle] = React.useState(false);
 
   const partyNameById = React.useMemo(() => {
     const m = new Map<string, string>();
@@ -295,7 +470,6 @@ export function RecurringAutoSummaryCard({
     return m;
   }, [processedStaff]);
 
-  // Journal flow: party/staff/tax Cr→Cr column; income/bank/item/expense “clear” rules — `dashboardRecurringAccrual` me detail
   const companyFlowCtx = React.useMemo(
     () =>
       buildCompanyFlowDrCrContext({
@@ -315,20 +489,80 @@ export function RecurringAutoSummaryCard({
     [partyNameById, staffNameById, processedTaxes, expenseAccounts, processedAccounts, processedItems],
   );
 
-  const agg = useDashboardRecurringAccrual({
-    companyId: cid || undefined,
-    recurringCompanyEnabled,
-    vouchers: vouchers as Record<string, unknown>[],
-    journalAccountNames,
-    partyNameById,
-    staffNameById,
-    companyFlowCtx,
-  });
+  const voucherById = React.useMemo(() => {
+    const m = new Map<string, Record<string, unknown>>();
+    for (const v of vouchers) {
+      const id = String((v as { id?: string }).id || "").trim();
+      if (id) m.set(id, v as Record<string, unknown>);
+    }
+    return m;
+  }, [vouchers]);
 
+  const liveComputeBase = React.useMemo(
+    (): RecurringLiveComputeBase => ({
+      templates,
+      voucherById,
+      journalAccountNames,
+      partyNameById,
+      staffNameById,
+      companyFlowCtx,
+    }),
+    [templates, voucherById, journalAccountNames, partyNameById, staffNameById, companyFlowCtx],
+  );
+
+  const liveActive = recurringCompanyEnabled && templates.length > 0;
+  const liveSnap = useRecurringAccrualLiveSnapshot(liveComputeBase, liveActive);
+  const lastDisplayKeyRef = React.useRef("");
+
+  React.useEffect(() => {
+    if (liveSnap.templateRows.length > 0) {
+      hadResolvedRowsRef.current = true;
+    }
+    const key = recurringAccrualSnapshotDisplayKey(liveSnap);
+    if (key === lastDisplayKeyRef.current) return;
+    lastDisplayKeyRef.current = key;
+    onSnapChange(liveSnap);
+  }, [liveSnap, onSnapChange, hadResolvedRowsRef]);
+
+  return null;
+});
+
+type RecurringAutoSummaryLiveViewProps = {
+  snap: RecurringLiveSnap;
+  templates: Array<{ id: string; tpl: import("@/lib/recurringVouchers").RecurringVoucherTemplate }>;
+  templatesLoading: boolean;
+  detailsOpen: boolean;
+  setDetailsOpen: (open: boolean) => void;
+  onOpenBodyVoucher?: (bodyVoucherId: string) => void;
+  inGrid: boolean;
+  hadResolvedRowsRef: React.MutableRefObject<boolean>;
+};
+
+/** Stable UI — `useVouchers` nahi; sirf snap badle tab re-render. */
+const RecurringAutoSummaryLiveView = React.memo(function RecurringAutoSummaryLiveView({
+  snap,
+  templates,
+  templatesLoading,
+  detailsOpen,
+  setDetailsOpen,
+  onOpenBodyVoucher,
+  inGrid,
+  hadResolvedRowsRef,
+}: RecurringAutoSummaryLiveViewProps) {
+  const { formatCurrencyForPrint } = useDate();
   const isMobile = useIsMobile();
-  const [detailsOpen, setDetailsOpen] = React.useState(false);
 
-  // Popup band karke parent ko body voucher id — Recent table jaisa `AddVoucherDialog`
+  const waitingForVouchers =
+    !templatesLoading && templates.length > 0 && snap.templateRows.length === 0 && !hadResolvedRowsRef.current;
+  const showLiveAmounts = !waitingForVouchers;
+  const triggeringCount = snap.templateRows.length > 0 ? snap.templateRows.length : templates.length;
+  const triggeringLabel =
+    triggeringCount === 1 ? "1 voucher triggering" : `${triggeringCount} vouchers triggering`;
+  const formatAmount = React.useCallback(
+    (n: number) => formatCurrencyForPrint(n, { showDrCr: false }),
+    [formatCurrencyForPrint],
+  );
+
   const handleLineOpenVoucher = React.useCallback(
     (bodyVoucherId: string) => {
       const id = String(bodyVoucherId || "").trim();
@@ -336,10 +570,225 @@ export function RecurringAutoSummaryCard({
       setDetailsOpen(false);
       onOpenBodyVoucher(id);
     },
-    [onOpenBodyVoucher],
+    [onOpenBodyVoucher, setDetailsOpen],
   );
   const lineOpenHandler = onOpenBodyVoucher ? handleLineOpenVoucher : undefined;
 
+  return (
+    <>
+      {waitingForVouchers ? (
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          {templates.length} schedule(s) are enabled, but the clone/source vouchers are not in the list yet. Refresh
+          the page or wait for sync; amounts will appear here.
+        </p>
+      ) : showLiveAmounts ? (
+        <RecurringAutoSummaryAmountRows snap={snap} formatAmount={formatAmount} />
+      ) : null}
+
+      <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <div className={cn("flex min-w-0 items-center justify-between gap-2 pt-2", inGrid && "mt-auto shrink-0")}>
+          <span className="min-w-0 truncate text-xs font-medium text-muted-foreground" title="Active Auto Monthly journal schedules">
+            {templatesLoading ? "…" : triggeringLabel}
+          </span>
+          {waitingForVouchers ? (
+            <span className="shrink-0 text-xs text-muted-foreground">Details after sync</span>
+          ) : (
+            <DialogTrigger asChild>
+              <Button variant="link" size="sm" className="h-auto shrink-0 p-0 text-rose-700">
+                View details
+              </Button>
+            </DialogTrigger>
+          )}
+        </div>
+        <DialogContent
+          hideCloseButton
+          className={cn(
+            "fixed z-50 flex min-h-0 flex-col gap-0 overflow-hidden border border-blue-500 bg-background p-0 shadow-lg dark:border-blue-600",
+            "left-0 top-0 h-[100dvh] max-h-[100dvh] w-full max-w-none translate-x-0 translate-y-0 rounded-none max-md:pb-[calc(3rem+env(safe-area-inset-bottom,0px))]",
+            "md:left-1/2 md:top-1/2 md:h-[90vh] md:max-h-[90vh] md:w-[min(100vw-16px,64rem)] md:max-w-5xl md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-lg md:pb-0",
+          )}
+        >
+          <DialogHeader className="flex shrink-0 flex-row items-center gap-1 space-y-0 border-b border-blue-600/20 bg-blue-500 px-2 py-[0.24rem] dark:border-blue-800/35 dark:bg-blue-600 md:gap-1.5 md:px-3 md:py-[0.28rem]">
+            <div className="w-6 shrink-0 md:w-7" aria-hidden />
+            <DialogTitle className="flex-1 text-center text-xs font-semibold leading-none text-white md:text-[0.8125rem] md:leading-tight">
+              Auto recurring vouchers
+            </DialogTitle>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-[1.4rem] w-[1.4rem] shrink-0 text-white hover:bg-white/20 hover:text-white focus-visible:ring-white/60 md:h-[1.6rem] md:w-[1.6rem]"
+              aria-label="Close dialog"
+              onClick={() => setDetailsOpen(false)}
+            >
+              <X className="h-3 w-3 md:h-3.5 md:w-3.5" strokeWidth={2.25} />
+            </Button>
+          </DialogHeader>
+          {!waitingForVouchers ? (
+            <RecurringAutoSummaryLiveDetails
+              snap={snap}
+              fmt={formatAmount}
+              onLineOpenVoucher={lineOpenHandler}
+              isMobile={isMobile}
+              onClose={() => setDetailsOpen(false)}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+});
+
+type RecurringAutoSummaryLiveIslandProps = {
+  templates: Array<{ id: string; tpl: import("@/lib/recurringVouchers").RecurringVoucherTemplate }>;
+  templatesLoading: boolean;
+  recurringCompanyEnabled: boolean;
+  detailsOpen: boolean;
+  setDetailsOpen: (open: boolean) => void;
+  onOpenBodyVoucher?: (bodyVoucherId: string) => void;
+  inGrid: boolean;
+  hadResolvedRowsRef: React.MutableRefObject<boolean>;
+};
+
+const RecurringAutoSummaryLiveIsland = React.memo(function RecurringAutoSummaryLiveIsland(
+  props: RecurringAutoSummaryLiveIslandProps,
+) {
+  const [snap, setSnap] = React.useState<RecurringLiveSnap>(() =>
+    computeRecurringAccrualSnapshot({
+      templates: props.templates,
+      voucherById: new Map(),
+      journalAccountNames: {},
+      partyNameById: new Map(),
+      staffNameById: new Map(),
+      companyFlowCtx: buildCompanyFlowDrCrContext({
+        partyIds: [],
+        staffIds: [],
+        taxIds: [],
+        expenseAccounts: [],
+        bankCashAccountIds: [],
+        itemIds: [],
+      }),
+      nowMs: Date.now(),
+    }),
+  );
+
+  const onSnapChange = React.useCallback((next: RecurringLiveSnap) => {
+    setSnap((prev) =>
+      recurringAccrualSnapshotDisplayKey(prev) === recurringAccrualSnapshotDisplayKey(next) ? prev : next,
+    );
+  }, []);
+
+  return (
+    <>
+      <RecurringLiveSnapEngine
+        templates={props.templates}
+        recurringCompanyEnabled={props.recurringCompanyEnabled}
+        hadResolvedRowsRef={props.hadResolvedRowsRef}
+        onSnapChange={onSnapChange}
+      />
+      <RecurringAutoSummaryLiveView {...props} snap={snap} />
+    </>
+  );
+});
+
+type RecurringAutoSummaryCardBodyProps = {
+  companyId: string;
+  recurringCompanyEnabled: boolean;
+  templates: Array<{ id: string; tpl: import("@/lib/recurringVouchers").RecurringVoucherTemplate }>;
+  templatesLoading: boolean;
+  detailsOpen: boolean;
+  setDetailsOpen: (open: boolean) => void;
+  onOpenBodyVoucher?: (bodyVoucherId: string) => void;
+  inGrid: boolean;
+};
+
+/** Templates-only shell — `useVouchers` / sync flicker yahan nahi. */
+const RecurringAutoSummaryCardBody = React.memo(function RecurringAutoSummaryCardBody({
+  companyId,
+  recurringCompanyEnabled,
+  templates,
+  templatesLoading,
+  detailsOpen,
+  setDetailsOpen,
+  onOpenBodyVoucher,
+  inGrid,
+}: RecurringAutoSummaryCardBodyProps) {
+  const hadResolvedRowsRef = React.useRef(false);
+  const templatesEverLoadedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    hadResolvedRowsRef.current = false;
+    templatesEverLoadedRef.current = false;
+  }, [companyId]);
+
+  if (templates.length > 0) {
+    templatesEverLoadedRef.current = true;
+  }
+
+  const emptySchedules = !templatesLoading && templates.length === 0 && recurringCompanyEnabled;
+  const showInitialTemplateLoading =
+    templatesLoading && !templatesEverLoadedRef.current && !hadResolvedRowsRef.current;
+
+  return (
+    <CardContent className={cn("min-h-[8.5rem] space-y-2 p-4 pt-0", inGrid && "flex flex-1 flex-col")}>
+      {!recurringCompanyEnabled ? (
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          Turn the switch on to generate and track scheduled vouchers. You can also change this under Settings →
+          Voucher settings.
+        </p>
+      ) : showInitialTemplateLoading ? (
+        <Skeleton className="h-20 w-full" />
+      ) : emptySchedules ? (
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          No enabled auto schedule yet. Open a voucher, turn on auto recurring, and save.
+        </p>
+      ) : (
+        <RecurringAutoSummaryLiveIsland
+          templates={templates}
+          templatesLoading={templatesLoading}
+          recurringCompanyEnabled={recurringCompanyEnabled}
+          detailsOpen={detailsOpen}
+          setDetailsOpen={setDetailsOpen}
+          onOpenBodyVoucher={onOpenBodyVoucher}
+          inGrid={inGrid}
+          hadResolvedRowsRef={hadResolvedRowsRef}
+        />
+      )}
+    </CardContent>
+  );
+});
+
+type Props = {
+  className?: string;
+  placement?: "with-all" | "summary";
+  /** `gridCell` = Outstanding jaisa `col-span-1` financial summary grid ke andar */
+  layout?: "default" | "gridCell";
+  /** Dr/Cr line click → parent voucher edit dialog (e.g. dashboard `AddVoucherDialog`) */
+  onOpenBodyVoucher?: (bodyVoucherId: string) => void;
+};
+
+/**
+ * Auto recurring: company toggle + live accrued (AddVoucher jaisa) + Outstanding-style rows jab ON ho.
+ */
+export const RecurringAutoSummaryCard = React.memo(function RecurringAutoSummaryCard({
+  className,
+  placement = "with-all",
+  layout = "default",
+  onOpenBodyVoucher,
+}: Props) {
+  const { company, companyId, triggerSync, reloadLocalCompanyRegistry } = useCompany();
+  const { can } = usePermissions();
+  const cid = String(companyId || "").trim();
+  const recurringCompanyEnabled = isRecurringVoucherGenerationEnabled(company);
+  const { templates, loading: templatesLoading } = useRecurringAccrualTemplates(
+    cid || undefined,
+    recurringCompanyEnabled,
+  );
+
+  const canViewRecurringCard = can("view_recurring_auto_summary");
+  const canToggleRecurring = can("configure_recurring_auto_company");
+  const [savingToggle, setSavingToggle] = React.useState(false);
+  const [detailsOpen, setDetailsOpen] = React.useState(false);
   const inGrid = layout === "gridCell";
 
   const onRecurringToggle = React.useCallback(
@@ -387,40 +836,18 @@ export function RecurringAutoSummaryCard({
     [cid, company, canToggleRecurring, reloadLocalCompanyRegistry, triggerSync],
   );
 
-  // Card Dr/Cr = View details popup jaisa (detailDebitLines / detailCreditLines totals)
-  // totalAccruedDr/Cr alag flow-weight se kabhi ulta dikha sakte hain — card par popup source use karo
-  const cardDrTotal = agg.detailDebitLines.reduce((s, r) => s + r.debit, 0);
-  const cardCrTotal = agg.detailCreditLines.reduce((s, r) => s + r.credit, 0);
-  const cardBalanceDrMinusCr = agg.detailNetCompanyDrMinusCr;
-  const hasResolvedRows = agg.templateRows.length > 0;
-  const waitingForVouchers = !agg.loading && agg.firestoreEnabledCount > 0 && !hasResolvedRows;
-  const emptySchedules = !agg.loading && agg.firestoreEnabledCount === 0 && recurringCompanyEnabled;
-  // Footer: kitne journal Auto Monthly schedules active (resolved list ya Firestore count).
-  const triggeringCount = hasResolvedRows ? agg.templateRows.length : agg.firestoreEnabledCount;
-  const triggeringLabel =
-    triggeringCount === 1 ? "1 voucher triggering" : `${triggeringCount} vouchers triggering`;
-
-  const fmt = (n: number) => formatCurrency(n, { showDrCr: false, noAnimation: true });
-
-  // View permission ke bina dashboard card bilkul mat dikhao (configure-only users → Voucher Settings).
   if (!canViewRecurringCard) return null;
 
-  // `min-w-min` + parent grid `minmax(min-content,1fr)` — lamba amount cut/wrap na ho, column width badhe
   const gridOuterClass = cn(
-    "col-span-1 min-w-min w-full transition-colors app-chrome-top-ribbon",
+    "col-span-1 min-w-min w-full h-full min-h-[12rem] flex flex-col app-chrome-top-ribbon",
     proDashboardRibbonClass(4),
     className,
   );
-  const defaultOuterClass = cn(
-    "min-w-min w-full app-chrome-top-ribbon",
-    proDashboardRibbonClass(4),
-    className,
-  );
+  const defaultOuterClass = cn("min-w-min w-full min-h-[12rem] app-chrome-top-ribbon", proDashboardRibbonClass(4), className);
 
   return (
     <Card className={inGrid ? gridOuterClass : defaultOuterClass}>
-      <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 p-4 pb-2">
-        {/* Switch ke left visible label — user ne "Auto recurring" maanga */}
+      <CardHeader className="flex shrink-0 flex-row items-center justify-between gap-2 space-y-0 p-4 pb-2">
         <CardTitle className="min-w-0 truncate text-base font-semibold text-card-foreground">Auto recurring</CardTitle>
         <div className="flex shrink-0 items-center gap-2">
           <Switch
@@ -432,257 +859,16 @@ export function RecurringAutoSummaryCard({
         </div>
       </CardHeader>
 
-      <CardContent className="space-y-2 p-4 pt-0">
-        {!recurringCompanyEnabled ? (
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            Turn the switch on to generate and track scheduled vouchers. You can also change this under Settings →
-            Voucher settings.
-          </p>
-        ) : agg.loading ? (
-          <Skeleton className="h-20 w-full" />
-        ) : emptySchedules ? (
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            No enabled auto schedule yet. Open a voucher, turn on auto recurring, and save.
-          </p>
-        ) : waitingForVouchers ? (
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            {agg.firestoreEnabledCount} schedule(s) are enabled, but the clone/source vouchers are not in the list yet.
-            Refresh the page or wait for sync; amounts will appear here.
-          </p>
-        ) : (
-          <>
-            {/* Lambe amounts: nowrap + gap; label chhota ho to truncate, rakam kabhi wrap nahi */}
-            <div className="flex min-w-0 items-baseline justify-between gap-2 sm:gap-3">
-              <span className="min-w-0 shrink truncate text-xs text-muted-foreground">Inflow to company</span>
-              <span className="shrink-0 whitespace-nowrap text-base font-bold tabular-nums text-green-600">
-                {fmt(cardDrTotal)} <span className="text-xs">Dr</span>
-              </span>
-            </div>
-            <div className="flex min-w-0 items-baseline justify-between gap-2 sm:gap-3">
-              <span className="min-w-0 shrink truncate text-xs text-muted-foreground">Outflow from company</span>
-              <span className="shrink-0 whitespace-nowrap text-base font-bold tabular-nums text-red-600">
-                {fmt(cardCrTotal)} <span className="text-xs">Cr</span>
-              </span>
-            </div>
-            <div className="mt-2 flex min-w-0 items-baseline justify-between gap-2 border-t pt-2 sm:gap-3">
-              {/* Label sirf "Balance" — Dr/Cr amount ke saath right side par hi dikhe */}
-              <span className="min-w-0 shrink truncate text-sm font-bold">Balance</span>
-              <span
-                className={cn(
-                  "shrink-0 whitespace-nowrap text-lg font-bold tabular-nums",
-                  cardBalanceDrMinusCr > 0
-                    ? "text-green-600"
-                    : cardBalanceDrMinusCr < 0
-                      ? "text-red-600"
-                      : "text-muted-foreground",
-                )}
-              >
-                {cardBalanceDrMinusCr !== 0 ? (
-                  <>
-                    {fmt(Math.abs(cardBalanceDrMinusCr))}{" "}
-                    <span className="text-xs">{cardBalanceDrMinusCr > 0 ? "Dr" : "Cr"}</span>
-                  </>
-                ) : (
-                  fmt(0)
-                )}
-              </span>
-            </div>
-          </>
-        )}
-
-        {recurringCompanyEnabled && !emptySchedules && (
-          <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
-            <div className="flex min-w-0 items-center justify-between gap-2 pt-2">
-              <span className="min-w-0 truncate text-xs font-medium text-muted-foreground" title="Active Auto Monthly journal schedules">
-                {agg.loading ? "…" : triggeringLabel}
-              </span>
-              {waitingForVouchers ? (
-                <span className="shrink-0 text-xs text-muted-foreground">Details after sync</span>
-              ) : (
-                <DialogTrigger asChild>
-                  <Button variant="link" size="sm" className="h-auto shrink-0 p-0 text-rose-700">
-                    View details
-                  </Button>
-                </DialogTrigger>
-              )}
-            </div>
-            <DialogContent
-              hideCloseButton
-              className={cn(
-                // min-h-0: mobile tabs + ScrollArea ke liye height chain (warna footer / total beech mein atakte)
-                // Bahar patla border = ribbon jaisa blue (default dialog `border` grey hata)
-                "fixed z-50 flex min-h-0 flex-col gap-0 overflow-hidden border border-blue-500 bg-background p-0 shadow-lg dark:border-blue-600",
-                // Mobile: sirf balance strip fixed — Close nahi; ~3rem+safe scroll padding
-                "left-0 top-0 h-[100dvh] max-h-[100dvh] w-full max-w-none translate-x-0 translate-y-0 rounded-none max-md:pb-[calc(3rem+env(safe-area-inset-bottom,0px))]",
-                // PC: screen ka ~90% height, centered modal
-                "md:left-1/2 md:top-1/2 md:h-[90vh] md:max-h-[90vh] md:w-[min(100vw-16px,64rem)] md:max-w-5xl md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-lg md:pb-0",
-              )}
-            >
-              {/* Neela ribbon: pehle se aur ~20% patla (py / hit-area / font) — layout same */}
-              <DialogHeader className="flex shrink-0 flex-row items-center gap-1 space-y-0 border-b border-blue-600/20 bg-blue-500 px-2 py-[0.24rem] dark:border-blue-800/35 dark:bg-blue-600 md:gap-1.5 md:px-3 md:py-[0.28rem]">
-                <div className="w-6 shrink-0 md:w-7" aria-hidden />
-                <DialogTitle className="flex-1 text-center text-xs font-semibold leading-none text-white md:text-[0.8125rem] md:leading-tight">
-                  Auto recurring vouchers
-                </DialogTitle>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="h-[1.4rem] w-[1.4rem] shrink-0 text-white hover:bg-white/20 hover:text-white focus-visible:ring-white/60 md:h-[1.6rem] md:w-[1.6rem]"
-                  aria-label="Close dialog"
-                  onClick={() => setDetailsOpen(false)}
-                >
-                  <X className="h-3 w-3 md:h-3.5 md:w-3.5" strokeWidth={2.25} />
-                </Button>
-              </DialogHeader>
-              <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden">
-                {isMobile ? (
-                  <Tabs
-                    defaultValue="debit"
-                    className="grid min-h-0 w-full flex-1 grid-rows-[minmax(0,1fr)_auto] overflow-hidden"
-                  >
-                    {/* Mobile: pehle table+total, neeche tab bar — row 1 = `minmax(0,1fr)` height chain */}
-                    <TabsContent
-                      value="debit"
-                      className="col-start-1 row-start-1 m-0 mt-0 flex h-full min-h-0 min-w-0 flex-col overflow-hidden p-0 focus-visible:ring-0 focus-visible:ring-offset-0"
-                    >
-                      <RecurringDetailsDebitPanel
-                        rows={agg.detailDebitLines}
-                        fmt={fmt}
-                        onLineOpenVoucher={lineOpenHandler}
-                      />
-                    </TabsContent>
-                    <TabsContent
-                      value="credit"
-                      className="col-start-1 row-start-1 m-0 mt-0 flex h-full min-h-0 min-w-0 flex-col overflow-hidden p-0 focus-visible:ring-0 focus-visible:ring-offset-0"
-                    >
-                      <RecurringDetailsCreditPanel
-                        rows={agg.detailCreditLines}
-                        fmt={fmt}
-                        onLineOpenVoucher={lineOpenHandler}
-                      />
-                    </TabsContent>
-                    {/* Both: chhoti screen = fixed cols + horizontal scroll; md+ / PC modal = 50-50 full width */}
-                    <TabsContent
-                      value="both"
-                      className="col-start-1 row-start-1 m-0 mt-0 flex h-full min-h-0 min-w-0 flex-col overflow-x-auto overflow-y-hidden p-0 focus-visible:ring-0 focus-visible:ring-offset-0 md:overflow-x-hidden"
-                    >
-                      <div className="flex h-full min-h-0 w-max min-w-full flex-row divide-x divide-black dark:divide-neutral-300 md:w-full md:min-w-0">
-                        <div className="flex h-full min-h-0 w-[min(88vw,22rem)] shrink-0 flex-col md:min-w-0 md:w-auto md:flex-1 md:shrink">
-                          <RecurringDetailsDebitPanel
-                            rows={agg.detailDebitLines}
-                            fmt={fmt}
-                            onLineOpenVoucher={lineOpenHandler}
-                          />
-                        </div>
-                        <div className="flex h-full min-h-0 w-[min(88vw,22rem)] shrink-0 flex-col md:min-w-0 md:w-auto md:flex-1 md:shrink">
-                          <RecurringDetailsCreditPanel
-                            rows={agg.detailCreditLines}
-                            fmt={fmt}
-                            onLineOpenVoucher={lineOpenHandler}
-                          />
-                        </div>
-                      </div>
-                    </TabsContent>
-                    {/* Debit | Both | Credit — footer tab bar same row */}
-                    <TabsList className="col-start-1 row-start-2 grid min-h-8 h-auto w-full shrink-0 grid-cols-3 items-stretch gap-1 border-t-2 border-black bg-muted/30 px-1.5 py-1.5 dark:border-neutral-300">
-                      <TabsTrigger
-                        value="debit"
-                        className={cn(
-                          "flex items-center justify-center rounded-full border border-transparent px-1 py-0.5 text-[11px] font-semibold leading-tight shadow-none transition-[border-color,box-shadow]",
-                          "!bg-green-200 !text-green-950 dark:!bg-green-800/90 dark:!text-green-50",
-                          "data-[state=active]:!bg-green-200 data-[state=active]:!text-green-950 data-[state=active]:dark:!bg-green-800/90",
-                          "data-[state=active]:!border-blue-500 dark:data-[state=active]:!border-blue-600 data-[state=inactive]:!border-transparent",
-                          "data-[state=active]:shadow-none data-[state=inactive]:shadow-none",
-                          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:focus-visible:ring-blue-600",
-                        )}
-                      >
-                        Debit ({agg.detailDebitLines.length})
-                      </TabsTrigger>
-                      <TabsTrigger
-                        value="both"
-                        className={cn(
-                          "flex items-center justify-center rounded-full border border-transparent px-1 py-0.5 text-[11px] font-semibold leading-tight shadow-none transition-[border-color,box-shadow]",
-                          "!bg-slate-200 !text-slate-950 dark:!bg-slate-700/90 dark:!text-slate-50",
-                          "data-[state=active]:!bg-slate-200 data-[state=active]:!text-slate-950 data-[state=active]:dark:!bg-slate-700/90",
-                          "data-[state=active]:!border-blue-500 dark:data-[state=active]:!border-blue-600 data-[state=inactive]:!border-transparent",
-                          "data-[state=active]:shadow-none data-[state=inactive]:shadow-none",
-                          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:focus-visible:ring-blue-600",
-                        )}
-                      >
-                        Both
-                      </TabsTrigger>
-                      <TabsTrigger
-                        value="credit"
-                        className={cn(
-                          "flex items-center justify-center rounded-full border border-transparent px-1 py-0.5 text-[11px] font-semibold leading-tight shadow-none transition-[border-color,box-shadow]",
-                          "!bg-pink-200 !text-pink-950 dark:!bg-pink-800/85 dark:!text-pink-50",
-                          "data-[state=active]:!bg-pink-200 data-[state=active]:!text-pink-950 data-[state=active]:dark:!bg-pink-800/85",
-                          "data-[state=active]:!border-blue-500 dark:data-[state=active]:!border-blue-600 data-[state=inactive]:!border-transparent",
-                          "data-[state=active]:shadow-none data-[state=inactive]:shadow-none",
-                          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:focus-visible:ring-blue-600",
-                        )}
-                      >
-                        Credit ({agg.detailCreditLines.length})
-                      </TabsTrigger>
-                    </TabsList>
-                  </Tabs>
-                ) : (
-                  <div className="flex min-h-0 w-full flex-1 flex-row divide-x divide-black dark:divide-neutral-300">
-                    <RecurringDetailsDebitPanel
-                      rows={agg.detailDebitLines}
-                      fmt={fmt}
-                      onLineOpenVoucher={lineOpenHandler}
-                    />
-                    <RecurringDetailsCreditPanel
-                      rows={agg.detailCreditLines}
-                      fmt={fmt}
-                      onLineOpenVoucher={lineOpenHandler}
-                    />
-                  </div>
-                )}
-              </div>
-              <div
-                className={cn(
-                  // Mobile: column + balance center; PC: ek row — balance baen, Close daen
-                  "flex shrink-0 flex-col gap-2 border-t border-black bg-gradient-to-r from-slate-100/90 via-slate-50/80 to-rose-100/90 px-3 py-2 dark:border-neutral-300 dark:from-slate-900/55 dark:via-slate-950/40 dark:to-rose-950/40",
-                  "md:flex-row md:items-center md:justify-between md:gap-3",
-                  "max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-[60] max-md:border-t-2 max-md:pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] max-md:pt-2 max-md:shadow-[0_-6px_16px_rgba(0,0,0,0.12)]",
-                )}
-              >
-                <p className="m-0 min-w-0 flex-1 text-center text-sm font-semibold leading-snug md:text-left">
-                  Balance (Dr lines − Cr lines):{" "}
-                  <span
-                    className={cn(
-                      "tabular-nums",
-                      agg.detailNetCompanyDrMinusCr > 0
-                        ? "text-green-700"
-                        : agg.detailNetCompanyDrMinusCr < 0
-                          ? "text-red-700"
-                          : "text-muted-foreground",
-                    )}
-                  >
-                    {agg.detailNetCompanyDrMinusCr !== 0 ? (
-                      <>
-                        {fmt(Math.abs(agg.detailNetCompanyDrMinusCr))}{" "}
-                        <span className="text-xs">{agg.detailNetCompanyDrMinusCr > 0 ? "Dr" : "Cr"}</span>
-                      </>
-                    ) : (
-                      fmt(0)
-                    )}
-                  </span>
-                </p>
-                {/* Desktop: same row daen; mobile — ribbon X */}
-                <div className="hidden shrink-0 md:block">
-                  <Button type="button" variant="secondary" size="sm" className="font-semibold" onClick={() => setDetailsOpen(false)}>
-                    Close
-                  </Button>
-                </div>
-              </div>
-            </DialogContent>
-          </Dialog>
-        )}
-      </CardContent>
+      <RecurringAutoSummaryCardBody
+        companyId={cid}
+        recurringCompanyEnabled={recurringCompanyEnabled}
+        templates={templates}
+        templatesLoading={templatesLoading}
+        detailsOpen={detailsOpen}
+        setDetailsOpen={setDetailsOpen}
+        onOpenBodyVoucher={onOpenBodyVoucher}
+        inGrid={inGrid}
+      />
     </Card>
   );
-}
+});

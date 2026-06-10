@@ -50,8 +50,16 @@ import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySu
 import {
   filterCompaniesForPlServerAccess,
   getPlServerAllowedCompanyIds,
+  getPlServerSharedCompanies,
+  isPlServerSharedCompanyRow,
+  companyStubFromPlServerShared,
   PL_SERVER_ACCESS_CONTEXT_EVENT,
 } from "@/lib/plServerAccessContext";
+import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
+import { getActiveGate } from "@/lib/gates/gateStore";
+import { filterCompaniesForActiveGate, pickGateAwareAutoSelectCompanyId } from "@/lib/gates/gateRuntime";
+import { PL_GATE_CHANGED_EVENT } from "@/lib/gates/gateTypes";
+import { sharedCompanyQueryKey, sharedCompanyQuerySpecs } from "@/lib/sharedWithEmailsQuery";
 import { clearSelectedCompanyId, readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { shouldSuppressTransientCompanyClear, shouldDeferMissingCompanyRedirectNative } from "@/lib/apkLedgerRouteShield";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
@@ -64,6 +72,7 @@ import { readCompanyInterCompanyAcNo } from "@/lib/interCompany/interCompanyAcco
 import { plNavDbg, plNavDbgCritical, plNavDbgIdHint } from "@/lib/plNavRedirectDebug";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import {
   embeddedClientRequiresServerPlanSyncWhenOnline,
   embeddedClientUsesFirestoreCompanyList,
@@ -372,10 +381,49 @@ function mergeOnlineCompanyWithLocalPlanOverlay(online: Company, localNorm: Comp
   return mergedPlan;
 }
 
+/** Background cloud-sync tick fields — in-memory company ref stable rakho jab sirf ye badlen. */
+const COMPANY_CLOUD_SYNC_VOLATILE_KEYS = [
+  "cloudSyncLastSyncAt",
+  "cloudSyncStatus",
+  "cloudSyncLastError",
+  "cloudSyncLastSyncSummary",
+  "updatedAt",
+] as const;
+
+function companyLedgerUiFingerprint(company: Company | null | undefined): string {
+  if (!company) return "";
+  const row = { ...company } as Record<string, unknown>;
+  for (const key of COMPANY_CLOUD_SYNC_VOLATILE_KEYS) delete row[key];
+  return JSON.stringify(row);
+}
+
+function keepCompanyRefIfLedgerUnchanged(prev: Company | null, next: Company | null): Company | null {
+  if (!next) return null;
+  if (!prev) return next;
+  if (prev.id !== next.id) return next;
+  if (companyLedgerUiFingerprint(prev) === companyLedgerUiFingerprint(next)) return prev;
+  return next;
+}
+
+function planSyncBannerStatesEqual(a: PlanSyncBannerState, b: PlanSyncBannerState): boolean {
+  return (
+    a.lastSuccessAtMs === b.lastSuccessAtMs &&
+    a.isStale === b.isStale &&
+    a.needsOnlinePlanSync === b.needsOnlinePlanSync &&
+    a.offlineLicenseValidUntilMs === b.offlineLicenseValidUntilMs &&
+    a.offlineLicenseExpired === b.offlineLicenseExpired &&
+    a.isBrowserOnline === b.isBrowserOnline &&
+    a.planSyncInFlight === b.planSyncInFlight
+  );
+}
+
 type CompanyContextType = {
   companyId: string | null;
   company: Company | null;
+  /** Active gate + server token filter — header / day-to-day UI. */
   allCompanies: Company[];
+  /** Poori registry (owned + shared) — Gate page / company picker detail. */
+  allCompaniesRegistry: Company[];
   loading: boolean;
   /** Light tick: plan-banner + online Firestore listeners re-attach (company root / sharing change). */
   triggerSync: () => void;
@@ -384,7 +432,7 @@ type CompanyContextType = {
   /** Local-only registry reload counter — SQLite company row refresh (e.g. Edit Company “Existing users”). */
   localCompanyRegistryEpoch: number;
   setCompanyId: (companyId: string) => void;
-  clearCompanyId: () => void;
+  clearCompanyId: (opts?: { force?: boolean }) => void;
   /** Server → local sync UX: 3d stale, 20d “go online”, offline license expiry */
   planAuthoritativeSync: PlanSyncBannerState;
   /** Manual: POST `/api/company/sync-plan` → SQLite overwrite + banner; avatar “Sync plan” se. */
@@ -420,6 +468,7 @@ function pathExemptFromAutoSelectCompanyPush(t: string): boolean {
   const p = normalizeAppPath(t);
   if (p === "/not-authorized") return true;
   if (p.startsWith("/company") || p.startsWith("/admin") || p.startsWith("/settings")) return true;
+  if (p.startsWith("/gate")) return true;
   if (p.startsWith("/messages")) return true;
   if (p.startsWith("/billing")) return true;
   if (p.startsWith("/backup")) return true;
@@ -483,25 +532,70 @@ function canRunServerPlanSyncForCompanyRow(row: Company | null | undefined): boo
 const LIST_RECOVERY_ONLINE_EMPTY_GRACE_MS = 4500;
 const LIST_RECOVERY_ONLINE_NONEMPTY_GRACE_MS = 3200;
 
+/** Refresh boot: gate/list/server-access settle hone se pehle pinned company mat clear karo (EXE SQLite/Firestore slow). */
+function companyRefreshBootGraceMs(): number {
+  if (isElectronDesktopApp()) return 6500;
+  if (isStaticAppBuild() || isCapacitorNativeApp()) return 4500;
+  return 2500;
+}
+
+function shouldDeferRefreshBootCompanyClear(
+  companyId: string,
+  mountedAtMs: number,
+  bootPinnedId: string
+): boolean {
+  const id = String(companyId || "").trim();
+  const pinned = String(bootPinnedId || readSelectedCompanyId() || "").trim();
+  if (!id || !pinned || id !== pinned) return false;
+  if (Date.now() - mountedAtMs >= companyRefreshBootGraceMs()) return false;
+  plDbgCompanyRecovery("refreshBoot:deferClear", { companyId: id, ageMs: Date.now() - mountedAtMs });
+  return true;
+}
+
 export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const [companyId, setCompanyIdState] = useState<string | null>(null);
   const [company, setCompany] = useState<Company | null>(null);
   /** Local fiscal split save/tab change — merged `company` dubara banao. */
   const [fiscalLocalEpoch, setFiscalLocalEpoch] = useState(0);
   const [allCompanies, setAllCompanies] = useState<Company[]>([]);
+  /** Unfiltered owned + shared — Gate page / picker detail (SuperAdmin main-app filter se alag). */
+  const [allCompaniesRegistry, setAllCompaniesRegistry] = useState<Company[]>([]);
   /** setCompanyId turant list se row dhundhne ke liye — render ke saath sync ref. */
   const allCompaniesLiveRef = useRef<Company[]>([]);
+  /** Gate check / recovery: UI-filter se pehle poori registry (refresh boot race). */
+  const allCompaniesRegistryLiveRef = useRef<Company[]>([]);
+  const allCompaniesUnfilteredLiveRef = useRef<Company[]>([]);
+  /** Mount par session/local se read — refresh boot grace me isi id ko clear mat karo. */
+  const bootPinnedCompanyIdRef = useRef<string>("");
   const [serverAccessEpoch, setServerAccessEpoch] = useState(0);
+  const [gateEpoch, setGateEpoch] = useState(0);
   useEffect(() => {
     const onCtx = () => setServerAccessEpoch((n) => n + 1);
     window.addEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, onCtx);
     return () => window.removeEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, onCtx);
   }, []);
+  useEffect(() => {
+    const onGate = () => setGateEpoch((n) => n + 1);
+    window.addEventListener(PL_GATE_CHANGED_EVENT, onGate);
+    return () => window.removeEventListener(PL_GATE_CHANGED_EVENT, onGate);
+  }, []);
+  useEffect(() => {
+    allCompaniesRegistryLiveRef.current = allCompaniesRegistry;
+  }, [allCompaniesRegistry]);
+
   const allCompaniesForUi = useMemo(() => {
-    const filtered = filterCompaniesForPlServerAccess(allCompanies);
+    allCompaniesUnfilteredLiveRef.current = allCompanies;
+    if (isPlRemoteServerClientMode()) {
+      const filtered = filterCompaniesForPlServerAccess(allCompanies);
+      allCompaniesLiveRef.current = filtered;
+      return filtered;
+    }
+    const activeGate = getActiveGate();
+    const byGate = filterCompaniesForActiveGate(allCompanies, activeGate);
+    const filtered = filterCompaniesForPlServerAccess(byGate);
     allCompaniesLiveRef.current = filtered;
     return filtered;
-  }, [allCompanies, serverAccessEpoch]);
+  }, [allCompanies, serverAccessEpoch, gateEpoch]);
   const [loading, setLoading] = useState(true);
   /** Online mode: company doc / sharing change par listener re-subscribe (light). */
   const [registryVersion, setRegistryVersion] = useState(0);
@@ -521,6 +615,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const ownedSnapRef = useRef<any>(null);
   const ownedLegacySnapRef = useRef<any>(null);
   const sharedSnapRef = useRef<any>(null);
+  /** Case variants: `array-contains` lowercase + legacy exact auth email. */
+  const sharedSnapByVariantRef = useRef<Map<string, { docs: readonly unknown[] }>>(new Map());
   const ownedByEmailSnapRef = useRef<any>(null);
   /** Doc-snapshot async callback stale company switch na kare — `setCompany` se pehle match karo. */
   const companyIdLiveRef = useRef<string | null>(null);
@@ -641,12 +737,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       });
       return;
     }
-    setPlanAuthoritativeSync(
-      recomputePlanSyncBannerState(companyId, company, {
+    setPlanAuthoritativeSync((prev) => {
+      const next = recomputePlanSyncBannerState(companyId, company, {
         online: isBrowserOnline,
         planSyncInFlight,
-      })
-    );
+      });
+      return planSyncBannerStatesEqual(prev, next) ? prev : next;
+    });
   }, [companyId, registryVersion, company, isBrowserOnline, planSyncInFlight]);
 
   /**
@@ -727,7 +824,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       // Multi-tab: prefer this tab's saved company so refresh does not jump to another tab's company.
       const storedCompanyId = readSelectedCompanyId();
       if (storedCompanyId && storedCompanyId.trim()) {
-        setCompanyIdState(storedCompanyId);
+        const pinned = storedCompanyId.trim();
+        bootPinnedCompanyIdRef.current = pinned;
+        // EXE/BrowserView reload: session tab key kabhi late — global + tab dono dubara pin.
+        writeSelectedCompanyId(pinned);
+        setCompanyIdState(pinned);
       } else {
         setLoading(false);
       }
@@ -736,11 +837,25 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     }
   }, []);
   
-  const clearCompanyId = useCallback(() => {
+  /** `clearCompanyId` ke turant baad auto-select same company → permission-denied loop (shared EXE user). */
+  const suppressAutoSelectUntilRef = useRef(0);
+  const AUTO_SELECT_AFTER_CLEAR_SUPPRESS_MS = 15_000;
+
+  const clearCompanyId = useCallback((opts?: { force?: boolean }) => {
+    const liveId = String(companyIdLiveRef.current || "").trim();
+    if (
+      !opts?.force &&
+      liveId &&
+      shouldDeferRefreshBootCompanyClear(liveId, mountedAtRef.current, bootPinnedCompanyIdRef.current)
+    ) {
+      plDbgCompanyRecovery("clearCompanyId:deferredRefreshBoot", { companyId: liveId });
+      return;
+    }
     const err = new Error();
     const st = typeof err.stack === "string" ? err.stack.split("\n").slice(1, 10).join(" | ") : "";
     plDbgCompanyRecovery("clearCompanyId", { stackHint: st });
     plNavDbgCritical("useCompany.clearCompanyId", { stackHint: st.slice(0, 400) });
+    suppressAutoSelectUntilRef.current = Date.now() + AUTO_SELECT_AFTER_CLEAR_SUPPRESS_MS;
     // Clear both tab override and global fallback when user leaves/deletes the active company.
     clearSelectedCompanyId();
     setCompanyIdState(null);
@@ -752,9 +867,36 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     const allowed = getPlServerAllowedCompanyIds();
     if (!allowed?.length || !companyId) return;
     if (!allowed.includes(companyId)) {
+      if (shouldDeferRefreshBootCompanyClear(companyId, mountedAtRef.current, bootPinnedCompanyIdRef.current)) {
+        return;
+      }
       clearCompanyId();
     }
   }, [companyId, serverAccessEpoch, clearCompanyId]);
+
+  useEffect(() => {
+    if (!companyId) return;
+    if (loading) return;
+    // Refresh boot: list / gate filter settle hone se pehle stored company mat clear karo.
+    if (Date.now() - mountedAtRef.current < companyRefreshBootGraceMs()) return;
+    const registrySource =
+      allCompaniesRegistryLiveRef.current.length > 0
+        ? allCompaniesRegistryLiveRef.current
+        : allCompaniesUnfilteredLiveRef.current;
+    if (registrySource.length === 0) return;
+    const activeGate = getActiveGate();
+    const allowedForGate = filterCompaniesForPlServerAccess(
+      filterCompaniesForActiveGate(registrySource, activeGate)
+    );
+    if (!allowedForGate.some((c) => c.id === companyId)) {
+      if (shouldDeferRefreshBootCompanyClear(companyId, mountedAtRef.current, bootPinnedCompanyIdRef.current)) {
+        return;
+      }
+      // Gate switch par auto-select purani (device) company na uthaye — clear ↔ select loop avoid.
+      suppressAutoSelectUntilRef.current = Date.now() + AUTO_SELECT_AFTER_CLEAR_SUPPRESS_MS;
+      clearCompanyId();
+    }
+  }, [companyId, gateEpoch, clearCompanyId, loading, allCompaniesForUi]);
 
   const setCompanyId = useCallback((newCompanyId: string) => {
     // Debug: APK par save ke baad company switch race — hr set dikhao (flag ON par only).
@@ -764,7 +906,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     // Purani company row turant hatao — warna useVouchers stale `companyRef` se galat SQLite gate / merge kare.
     const fromList = allCompaniesLiveRef.current.find((c) => c.id === nextId) ?? null;
     if (fromList) {
-      setCompany(fromList);
+      setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, fromList));
       setLoading(false);
     } else {
       setCompany(null);
@@ -881,12 +1023,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             const ownedQueries = ownerIdCandidates.map((ownerId) =>
               query(collection(firestore, "companies"), where("ownerId", "==", ownerId))
             );
-            const sharedQ = user.email
-              ? query(
-                  collection(firestore, "companies"),
-                  where("sharedWithEmails", "array-contains", user.email)
-                )
-              : null;
+            const sharedQuerySpecs = sharedCompanyQuerySpecs(user.email);
             const ownedByEmailQ = user.email
               ? query(collection(firestore, "companies"), where("ownerEmail", "==", user.email))
               : null;
@@ -901,12 +1038,28 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
               return await getDocs(q);
             };
             const ownedSnaps = await Promise.all(ownedQueries.map((q) => pullSnap(q)));
-            const sharedSnap = sharedQ ? await pullSnap(sharedQ) : { docs: [] as any[] };
+            const sharedSnaps =
+              sharedQuerySpecs.length > 0
+                ? await Promise.all(
+                    sharedQuerySpecs.map((spec) =>
+                      pullSnap(
+                        query(
+                          collection(firestore, "companies"),
+                          where(spec.field, "array-contains", spec.value)
+                        )
+                      )
+                    )
+                  )
+                : [];
             const ownedByEmailSnap = ownedByEmailQ ? await pullSnap(ownedByEmailQ) : { docs: [] as any[] };
+            const sharedDocsById = new Map<string, (typeof ownedSnaps)[0]["docs"][number]>();
+            for (const snap of sharedSnaps) {
+              for (const d of snap.docs) sharedDocsById.set(d.id, d);
+            }
             const mergedDocs = [
               ...ownedSnaps.flatMap((snap) => snap.docs),
               ...ownedByEmailSnap.docs,
-              ...sharedSnap.docs,
+              ...sharedDocsById.values(),
             ];
             cloudMirrorAllowedIds = new Set(mergedDocs.map((d) => String(d.id || "")).filter(Boolean));
             for (const d of mergedDocs) {
@@ -997,6 +1150,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           liveCompanyId: companyIdLiveRef.current,
           ledgerShield: shouldSuppressTransientCompanyClear(),
         });
+        setAllCompaniesRegistry(normalizedLocalCompanies);
         setAllCompanies(filteredLocals);
         const liveId = companyIdLiveRef.current;
         if (!liveId) {
@@ -1029,7 +1183,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           }
           return;
         }
-        setCompany(norm);
+        setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, norm));
       } finally {
         if (touchLoading) setLoading(false);
       }
@@ -1066,7 +1220,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         const rowAfter = await getLocalCompanyById(companyId);
         if (rowAfter && r.ok && r.applied) {
           const norm = normalizeLocalCompany(rowAfter as unknown as Company);
-          setCompany((prev) => (prev?.id === companyId ? norm : prev));
+          setCompany((prev) => (prev?.id === companyId ? keepCompanyRefIfLedgerUnchanged(prev, norm) : prev));
           setAllCompanies((prev) => {
             const idx = prev.findIndex((c) => c.id === companyId);
             if (idx < 0) return prev;
@@ -1075,12 +1229,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             return next;
           });
         }
-        setPlanAuthoritativeSync(
-          recomputePlanSyncBannerState(companyId, rowAfter as { offlineLicenseValidUntilMs?: number } | null, {
+        setPlanAuthoritativeSync((prev) => {
+          const next = recomputePlanSyncBannerState(companyId, rowAfter as { offlineLicenseValidUntilMs?: number } | null, {
             online: typeof navigator !== "undefined" ? navigator.onLine : true,
             planSyncInFlight: false,
-          })
-        );
+          });
+          return planSyncBannerStatesEqual(prev, next) ? prev : next;
+        });
         if (r.ok && options?.recordDailySuccess && user.uid) {
           markDailyAuthoritativePlanSyncDone(user.uid);
         }
@@ -1238,12 +1393,20 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     if (!user?.uid || !companyId?.trim() || authLoading) return;
     if (shouldSkipPeriodicPlanSyncForLocalOnlyMode(isLocalOnlyMode())) return;
+    const activeGate = getActiveGate();
+    if (
+      !filterCompaniesForActiveGate(allCompaniesLiveRef.current, activeGate).some(
+        (c) => c.id === companyId
+      )
+    ) {
+      return;
+    }
     const row = allCompanies.find((c) => c.id === companyId);
     if (!canRunServerPlanSyncForCompanyRow(row)) return;
     if (!row || isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user.email ?? null })) return;
     void refreshAuthoritativePlan();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- burst sirf company switch par
-  }, [companyId, user?.uid, authLoading]);
+  }, [companyId, user?.uid, authLoading, gateEpoch]);
 
   // Local-only (pure web): turant sirf SQLite se list; static/APK Firestore listener path use karta hai — yahan mat chalao.
   useEffect(() => {
@@ -1277,6 +1440,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           liveCompanyId: companyIdLiveRef.current,
           ledgerShield: shouldSuppressTransientCompanyClear(),
         });
+        setAllCompaniesRegistry(normalizedLocalCompanies);
         setAllCompanies(filteredFast);
 
         if (!liveCompanyId) {
@@ -1291,7 +1455,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             needImmediateFullMirror = true;
             setCompany(null);
           } else {
-            setCompany(normalizeLocalCompany(sel as unknown as Company));
+            setCompany((prev) =>
+              keepCompanyRefIfLedgerUnchanged(prev, normalizeLocalCompany(sel as unknown as Company))
+            );
           }
           setLoading(false);
         }
@@ -1352,6 +1518,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             isSuperAdminUser,
             pathnameRef.current
           );
+          setAllCompaniesRegistry(normalizedLocalCompanies);
           setAllCompanies(filteredFast);
           setLoading(false);
         }
@@ -1483,6 +1650,14 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           !isOwnerRow &&
           !isDriveSharedJoin
         ) {
+          const isOnlineMirrorRow =
+            !isPureLocalRow ||
+            (row as { syncedFromCloud?: boolean }).syncedFromCloud === true;
+          if (isOnlineMirrorRow) {
+            // EXE multi-tab: owned snapshot pehle, shared baad — SQLite shared mirror tab tak mat hatao.
+            companyMap.set(c.id, { ...normalized, isOwned: isOwnedByUser(normalized) });
+            continue;
+          }
           // Shared online mirror revoke — device-local owner rows upar `isPureLocalRow && isOwnerRow` se safe.
           await removeLocalCompanyById(c.id, { firebaseUid: user.uid });
           continue;
@@ -1493,10 +1668,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       }
     }
 
-    let mergedCompanies = Array.from(companyMap.values());
-    latestOnlineMergedUnfilteredRef.current = mergedCompanies;
-    mergedCompanies = filterSharedOnlyCompaniesForSuperAdminInMainApp(
-      mergedCompanies,
+    const unfilteredMerged = Array.from(companyMap.values());
+    latestOnlineMergedUnfilteredRef.current = unfilteredMerged;
+    setAllCompaniesRegistry(unfilteredMerged);
+    let mergedCompanies = filterSharedOnlyCompaniesForSuperAdminInMainApp(
+      unfilteredMerged,
       user,
       isSuperAdminUser,
       pathnameRef.current
@@ -1553,6 +1729,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     }
     if (!user?.uid) {
       setAllCompanies([]);
+      setAllCompaniesRegistry([]);
       if(!authLoading) setLoading(false);
       ownedSnapRef.current = null;
       ownedLegacySnapRef.current = null;
@@ -1566,6 +1743,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     ownedSnapRef.current = null;
     ownedLegacySnapRef.current = null;
     sharedSnapRef.current = null;
+    sharedSnapByVariantRef.current.clear();
 
     const ownerIdCandidates = resolveOwnerIdQueryCandidates(user.uid, customUser?.userDocId);
     const ownedQuery = query(collection(firestore, "companies"), where("ownerId", "==", ownerIdCandidates[0] || user.uid));
@@ -1573,9 +1751,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       ownerIdCandidates.length > 1
         ? query(collection(firestore, "companies"), where("ownerId", "==", ownerIdCandidates[1]!))
         : null;
-    const sharedQuery = user.email
-      ? query(collection(firestore, "companies"), where("sharedWithEmails", "array-contains", user.email))
-      : null;
+    const sharedQuerySpecs = sharedCompanyQuerySpecs(user.email);
     // Email login — ownerEmail se owned companies (sirf SuperAdmin nahi, sab users)
     const ownedByEmailQuery = user.email
       ? query(collection(firestore, "companies"), where("ownerEmail", "==", user.email))
@@ -1621,22 +1797,53 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       console.error("Owned Companies listener error:", err);
     });
     
-    const unsubShared = sharedQuery
-      ? onSnapshot(sharedQuery, (snap) => {
-          sharedSnapRef.current = snap;
-          triggerUpdate();
-        }, (err: any) => {
-          if (String(err?.code || "") === "already-exists") {
-            // Firestore SDK watch target collision: listener chain ko clean retry do.
-            scheduleCompanyFirestoreListenerRetry("shared");
-          }
-          if (err?.code === 'permission-denied' || err?.code === 'PERMISSION_DENIED' || String(err?.message || '').includes('permission')) {
-            console.warn('[PERMISSION_DENIED TRACK] source=useCompany query=shared (companies where sharedWithEmails contains email)', { code: err?.code });
-          }
-          console.error("Shared Companies listener error:", err);
-        })
-      : () => {};
-    if (!sharedQuery) sharedSnapRef.current = null;
+    const mergeSharedSnapshots = () => {
+      const byId = new Map<string, unknown>();
+      for (const snap of sharedSnapByVariantRef.current.values()) {
+        for (const d of snap.docs) {
+          const doc = d as { id: string };
+          byId.set(doc.id, d);
+        }
+      }
+      sharedSnapRef.current = { docs: [...byId.values()] };
+    };
+
+    const unsubSharedList =
+      sharedQuerySpecs.length > 0
+        ? sharedQuerySpecs.map((spec) =>
+            onSnapshot(
+              query(
+                collection(firestore, "companies"),
+                where(spec.field, "array-contains", spec.value)
+              ),
+              (snap) => {
+                sharedSnapByVariantRef.current.set(sharedCompanyQueryKey(spec), snap);
+                mergeSharedSnapshots();
+                triggerUpdate();
+              },
+              (err: any) => {
+                if (String(err?.code || "") === "already-exists") {
+                  scheduleCompanyFirestoreListenerRetry("shared");
+                }
+                if (
+                  err?.code === "permission-denied" ||
+                  err?.code === "PERMISSION_DENIED" ||
+                  String(err?.message || "").includes("permission")
+                ) {
+                  console.warn(
+                    "[PERMISSION_DENIED TRACK] source=useCompany query=shared (companies sharedWithEmails/Lower)",
+                    { code: err?.code, field: spec.field, value: spec.value }
+                  );
+                }
+                console.error("Shared Companies listener error:", err);
+              }
+            )
+          )
+        : [];
+    if (!sharedQuerySpecs.length) {
+      sharedSnapRef.current = null;
+      sharedSnapByVariantRef.current.clear();
+    }
 
     const unsubOwnedLegacy = ownedLegacyQuery
       ? onSnapshot(ownedLegacyQuery, (snap) => {
@@ -1680,11 +1887,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     return () => {
         unsubOwned();
         unsubOwnedLegacy();
-        unsubShared();
+        unsubSharedList.forEach((u) => u());
         unsubOwnedByEmail();
         ownedSnapRef.current = null;
         ownedLegacySnapRef.current = null;
         sharedSnapRef.current = null;
+        sharedSnapByVariantRef.current.clear();
         ownedByEmailSnapRef.current = null;
     }
 }, [user?.uid, user?.email, customUser?.userDocId, authLoading, isSuperAdmin, handleSnapshotUpdate, registryVersion, companyFirestoreListenerRetryEpoch, scheduleCompanyFirestoreListenerRetry]);
@@ -1720,7 +1928,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           }
           if (cancelled || merged.id !== companyIdLiveRef.current) return;
 
-          setCompany(merged);
+          setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, merged));
           plDbgCompanyRecovery("activeCompanyDoc:listRowMerge", {
             companyId: merged.id,
             isDeleted: merged.isDeleted === true,
@@ -1804,7 +2012,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       ledgerShield: shouldSuppressTransientCompanyClear(),
     });
     if (companyFromList && isCompanyVisibleInMainApp(companyFromList)) {
-      setCompany(companyFromList);
+      setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, companyFromList));
       listRecoverySyncForIdRef.current = null;
       return;
     }
@@ -1820,6 +2028,18 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       setCompany(null);
       listRecoverySyncForIdRef.current = null;
       clearCompanyId();
+      return;
+    }
+
+    if (!companyFromList && isPlServerSharedCompanyRow({ id: companyId } as Company)) {
+      const shared =
+        getPlServerSharedCompanies().find((r) => r.id === companyId) ??
+        ({ id: companyId, name: companyId, storageOption: "local" as const, ownerEmail: null });
+      const stub = companyStubFromPlServerShared(shared);
+      plDbgCompanyRecovery("listRecovery:plServerSharedStub", { companyId });
+      setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, stub));
+      setAllCompanies((prev) => (prev.some((c) => c.id === companyId) ? prev : [...prev, stub]));
+      listRecoverySyncForIdRef.current = companyId;
       return;
     }
 
@@ -1872,7 +2092,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           return;
         }
         plDbgCompanyRecovery("listRecovery:sqliteMergeIntoList", { companyId });
-        setCompany(normalized);
+        setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, normalized));
         setAllCompanies((prev) => {
           if (prev.some((c) => c.id === companyId)) return prev;
           return [...prev, normalized];
@@ -1892,7 +2112,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
               const normalized = normalizeLocalCompany(raw);
               if (isCompanyVisibleInMainApp(normalized)) {
                 plDbgCompanyRecovery("listRecovery:firestoreFallbackMerge", { companyId });
-                setCompany(normalized);
+                setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, normalized));
                 setAllCompanies((prev) => {
                   if (prev.some((c) => c.id === companyId)) return prev;
                   return [...prev, normalized];
@@ -1928,21 +2148,29 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     if (companyId) return;
     if (loading || authLoading) return;
     if (!user) return;
-    if (!allCompanies || allCompanies.length === 0) return;
+    try {
+      const persisted = readSelectedCompanyId()?.trim();
+      if (persisted) {
+        setCompanyId(persisted);
+        plNavDbg("useCompany.autoSelect:hydratePersisted", { hint: plNavDbgIdHint(persisted) });
+        return;
+      }
+    } catch {
+      /* ignore */
+    }
+    const gateScoped = allCompaniesLiveRef.current;
+    if (!gateScoped || gateScoped.length === 0) return;
+    if (Date.now() < suppressAutoSelectUntilRef.current) return;
     const livePath = normalizeAppPath(getBrowserPathname());
     if (pathExemptFromAutoSelectCompanyPush(livePath)) return;
-    // Stable order — list merge par [0] badalne se rapid company switch na ho.
-    const sorted = [...allCompanies].sort((a, b) => {
-      const nameCmp = String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" });
-      if (nameCmp !== 0) return nameCmp;
-      return String(a.id || "").localeCompare(String(b.id || ""));
-    });
-    setCompanyId(sorted[0]!.id);
+    const pick = pickGateAwareAutoSelectCompanyId(gateScoped, getActiveGate());
+    if (!pick) return;
+    setCompanyId(pick);
     plNavDbg("useCompany.autoSelectFirstCompany (companyId was null)", {
-      firstHint: plNavDbgIdHint(sorted[0]!.id),
-      listLen: allCompanies.length,
+      firstHint: plNavDbgIdHint(pick),
+      listLen: gateScoped.length,
     });
-  }, [companyId, allCompanies, setCompanyId, user, loading, authLoading]);
+  }, [companyId, allCompaniesForUi, gateEpoch, setCompanyId, user, loading, authLoading]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -2048,6 +2276,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       ? latestLocalNormalizedCompaniesRef.current
       : latestOnlineMergedUnfilteredRef.current;
     if (raw.length === 0) return;
+    setAllCompaniesRegistry(raw);
     setAllCompanies(
       filterSharedOnlyCompaniesForSuperAdminInMainApp(raw, user, isSuperAdminUser, pathname)
     );
@@ -2058,23 +2287,41 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     [company, companyId, fiscalLocalEpoch]
   );
 
+  const companyContextValue = useMemo(
+    () => ({
+      companyId,
+      company: companyWithLocalFiscal,
+      loading,
+      triggerSync,
+      reloadLocalCompanyRegistry,
+      localCompanyRegistryEpoch: localRegistryEpoch,
+      setCompanyId,
+      clearCompanyId,
+      allCompanies: allCompaniesForUi,
+      allCompaniesRegistry,
+      planAuthoritativeSync,
+      refreshAuthoritativePlan: () => refreshAuthoritativePlan(),
+      effectiveNotificationSettings,
+    }),
+    [
+      companyId,
+      companyWithLocalFiscal,
+      loading,
+      triggerSync,
+      reloadLocalCompanyRegistry,
+      localRegistryEpoch,
+      setCompanyId,
+      clearCompanyId,
+      allCompaniesForUi,
+      allCompaniesRegistry,
+      planAuthoritativeSync,
+      refreshAuthoritativePlan,
+      effectiveNotificationSettings,
+    ]
+  );
+
   return (
-    <CompanyContext.Provider
-      value={{
-        companyId,
-        company: companyWithLocalFiscal,
-        loading,
-        triggerSync,
-        reloadLocalCompanyRegistry,
-        localCompanyRegistryEpoch: localRegistryEpoch,
-        setCompanyId,
-        clearCompanyId,
-        allCompanies: allCompaniesForUi,
-        planAuthoritativeSync,
-        refreshAuthoritativePlan: () => refreshAuthoritativePlan(),
-        effectiveNotificationSettings,
-      }}
-    >
+    <CompanyContext.Provider value={companyContextValue}>
       {children}
     </CompanyContext.Provider>
   );

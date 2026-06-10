@@ -25,6 +25,9 @@ export function createDevPlLocalServerClientApi(): PlElectronLocalServerApi {
     restart: (partial) => devPlCall("restart", { partial }),
     listAccessTokens: () => devPlCall("listAccessTokens"),
     createAccessToken: (input) => devPlCall("createAccessToken", { input }),
+    updateAccessToken: (id, input) => devPlCall("updateAccessToken", { id, input }),
+    getAccessTokenSecret: (id) => devPlCall("getAccessTokenSecret", { id }),
+    rotateAccessToken: (id, input) => devPlCall("rotateAccessToken", { id, input }),
     revokeAccessToken: (id) => devPlCall("revokeAccessToken", { id }),
   };
 }

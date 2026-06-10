@@ -312,6 +312,7 @@ export function CommissionPayoutDialog({
                       enabled
                       onShortActivate={() => fileInputRef.current?.click()}
                       onPastedFiles={(incoming) => void handleFileChange(syntheticFileInputChangeEvent(incoming))}
+                      voucherAttachmentReuse={{ currentFiles: files, setFiles, maxFiles: 3 }}
                       className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
                     >
                       <PlusCircle className="h-6 w-6" />

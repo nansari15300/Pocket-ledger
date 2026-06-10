@@ -100,11 +100,59 @@ export function tryGetStoragePathFromFirebaseDownloadUrl(url: string): string | 
   }
 }
 
+/** Voucher attachment folders under `voucher-files/{companyId}/…` */
+const VOUCHER_ATTACH_FOLDER_NAMES = new Set([
+  "payment_out",
+  "payment_in",
+  "sale",
+  "purchase",
+  "direct_income",
+  "direct_expense",
+  "contra",
+  "journal",
+  "add_salary",
+  "note",
+  "inter_company",
+  "inter_company_reverse",
+  "sale_service",
+  "purchase_service",
+]);
+
+export type NormalizeStoragePathOpts = { companyId?: string };
+
+function decodeStoragePathCandidate(value: string): string {
+  let d = String(value || "").trim();
+  if (d.includes("%")) {
+    try {
+      d = decodeURIComponent(d);
+    } catch {
+      /* keep raw */
+    }
+  }
+  return d.replace(/^\/+/, "");
+}
+
+function isKnownVoucherAttachFolder(segment: string): boolean {
+  return VOUCHER_ATTACH_FOLDER_NAMES.has(String(segment || "").toLowerCase());
+}
+
+/** `generateCompanyId` → `slug_27e15173` — mirror tail `27e15173/...` se match */
+function companyIdMatchesShortSuffix(companyId: string, suffix: string): boolean {
+  const cid = String(companyId || "").trim();
+  const suf = String(suffix || "").trim();
+  if (!cid || !suf) return false;
+  if (cid === suf) return true;
+  return cid.endsWith(`_${suf}`);
+}
+
 /**
- * SQLite / mirror kabhi sirf tail store karta hai (`e09230eb…%2Fcontra%2F…`) — bina `voucher-files/` prefix ke
+ * SQLite / mirror kabhi sirf tail store karta hai (`27e15173%2Fpayment_out%2F…`) — bina `voucher-files/` prefix ke
  * `getBlob(ref)` + offline cache lookup dono miss; gallery me JPG badge par bhi generic FILE icon.
  */
-export function normalizeFirebaseStorageObjectPathForSdk(value: string): string {
+export function normalizeFirebaseStorageObjectPathForSdk(
+  value: string,
+  opts?: NormalizeStoragePathOpts
+): string {
   const v = String(value || "").trim();
   if (!v) return v;
   if (/^https?:\/\//i.test(v)) {
@@ -137,18 +185,11 @@ export function normalizeFirebaseStorageObjectPathForSdk(value: string): string 
     }
     return out;
   }
-  let d = v;
-  if (v.includes("%")) {
-    try {
-      d = decodeURIComponent(v);
-    } catch {
-      d = v;
-    }
-  }
+  const d = decodeStoragePathCandidate(v);
   // Company UUID folder + voucher subpath → bucket root `voucher-files/…` (Storage rules ke hisaab se).
   const uuidThenSlash = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\//i;
   if (uuidThenSlash.test(d)) {
-    const out = `voucher-files/${d.replace(/^\/+/, "")}`;
+    const out = `voucher-files/${d}`;
     if (attachmentPathForensicEnabled()) {
       console.warn("[FORENSIC_FIREBASE_STORAGE_NORMALIZE]", {
         phase: "normalizeFirebaseStorageObjectPathForSdk",
@@ -161,6 +202,21 @@ export function normalizeFirebaseStorageObjectPathForSdk(value: string): string 
     }
     return out;
   }
+
+  const parts = d.split("/").filter(Boolean);
+  if (parts.length >= 2 && isKnownVoucherAttachFolder(parts[1])) {
+    const companyId = String(opts?.companyId || "").trim();
+    // Full doc id: `copy_test_27e15173/payment_out/file.jpg`
+    if (parts[0].includes("_") || (companyId && parts[0] === companyId)) {
+      const out = `voucher-files/${parts.join("/")}`;
+      return out;
+    }
+    // EXE/SQLite mirror tail: `27e15173/payment_out/file.jpg` + active company `*_27e15173`
+    if (companyId && companyIdMatchesShortSuffix(companyId, parts[0])) {
+      return `voucher-files/${companyId}/${parts.slice(1).join("/")}`;
+    }
+  }
+
   if (attachmentPathForensicEnabled()) {
     console.warn("[FORENSIC_FIREBASE_STORAGE_NORMALIZE]", {
       phase: "normalizeFirebaseStorageObjectPathForSdk",
@@ -175,12 +231,15 @@ export function normalizeFirebaseStorageObjectPathForSdk(value: string): string 
 }
 
 /** Voucher/entity attachment object path (without protocol) — e.g. `voucher-files/.../file.jpg`. */
-export function looksLikeFirebaseStorageObjectPath(value: string): boolean {
+export function looksLikeFirebaseStorageObjectPath(
+  value: string,
+  opts?: NormalizeStoragePathOpts
+): boolean {
   const v = String(value || "").trim();
   if (!v) return false;
-  if (/^(https?:|data:|blob:|local:|capacitor:|file:)/i.test(v)) return false;
+  if (/^(https?:|data:|blob:|local:|capacitor:|file:|drive:)/i.test(v)) return false;
   if (/^voucher-files\//i.test(v) || /^companies\//i.test(v) || /^entity-files\//i.test(v)) return true;
-  const norm = normalizeFirebaseStorageObjectPathForSdk(v);
+  const norm = normalizeFirebaseStorageObjectPathForSdk(v, opts);
   return (
     /^voucher-files\//i.test(norm) || /^companies\//i.test(norm) || /^entity-files\//i.test(norm)
   );

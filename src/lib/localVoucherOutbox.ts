@@ -41,6 +41,7 @@ import {
   getBackupEncryptionPassphraseFromSession,
 } from "@/lib/serverBackupEncryption";
 import { hydrateVoucherLocalAttachmentsForServer, hydratePendingLocalFileRefsDeep } from "@/lib/hydrateVoucherLocalAttachmentsForServer";
+import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
 
 /** REST `Commit` pe idem create race → `already-exists`; outbox duplicate-cleanup pehchan ke liye. */
 function isFirestoreAlreadyExistsError(e: unknown): boolean {
@@ -531,6 +532,21 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
           return "applied" as const;
         });
       } catch (e) {
+        if (isCompanyNotFoundError(e)) {
+          const ghostPayload = outboxJsonParse(row.payload);
+          const isGhostDelete =
+            row.op === "delete" ||
+            (typeof ghostPayload === "object" &&
+              ghostPayload &&
+              (ghostPayload as Record<string, unknown>).isDeleted === true);
+          if (isGhostDelete) {
+            const { purgeGhostLocalCompanyDoc } = await import("@/lib/purgeGhostLocalCompanyDoc");
+            await purgeGhostLocalCompanyDoc(row.company_id, row.collection_name, row.doc_id);
+            db.prepare(`DELETE FROM sync_outbox WHERE outbox_id = ?`).run(row.outbox_id);
+            ok++;
+            continue;
+          }
+        }
         if (isFirestoreAlreadyExistsError(e)) {
           try {
             const snap = await getDoc(idemRef);
@@ -566,6 +582,25 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
       // Every collection: align SQLite with server timestamps + hydrated URLs (previously only vouchers were mirrored post-flush).
       await mirrorCompanyDocToBrowserDb(row.company_id, row.collection_name, row.doc_id);
     } catch (e) {
+      if (isCompanyNotFoundError(e)) {
+        try {
+          const ghostPayload = outboxJsonParse(row.payload);
+          const isGhostDelete =
+            row.op === "delete" ||
+            (typeof ghostPayload === "object" &&
+              ghostPayload &&
+              (ghostPayload as Record<string, unknown>).isDeleted === true);
+          if (isGhostDelete) {
+            const { purgeGhostLocalCompanyDoc } = await import("@/lib/purgeGhostLocalCompanyDoc");
+            await purgeGhostLocalCompanyDoc(row.company_id, row.collection_name, row.doc_id);
+            db.prepare(`DELETE FROM sync_outbox WHERE outbox_id = ?`).run(row.outbox_id);
+            ok++;
+            continue;
+          }
+        } catch {
+          /* fall through */
+        }
+      }
       console.warn("[flushVoucherOutbox] row failed", row.outbox_id, e);
       failed++;
       // One bad row should not block the entire outbox forever; keep flushing remaining rows.

@@ -15,6 +15,7 @@ import { useVoucherAttachmentFallback } from "@/contexts/VoucherAttachmentFallba
 import { getAttachmentFormatLabel, sniffBlobKindForPreview } from "@/lib/attachmentFormatLabel";
 import { getRemoteAttachmentBlobPreferOfflineCache } from "@/lib/offlineAttachmentUrlCache";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+import { usesEmbeddedNativeAttachmentStorage } from "@/lib/usesEmbeddedNativeAttachmentStorage";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { normalizeAttachmentUrlForDevicePreview } from "@/lib/attachmentHoldClipboard";
@@ -114,7 +115,14 @@ function HoverPreviewHttpsAwareImage(props: {
     }
     const fromLru = peekHoverCachedBlobUrl(u);
     if (fromLru) return fromLru;
-    if (typeof navigator !== "undefined" && navigator.onLine && isElectronDesktopApp()) return u;
+    if (
+      !usesEmbeddedNativeAttachmentStorage() &&
+      typeof navigator !== "undefined" &&
+      navigator.onLine &&
+      isElectronDesktopApp()
+    ) {
+      return u;
+    }
     return "";
   });
 
@@ -167,9 +175,12 @@ function HoverPreviewHttpsAwareImage(props: {
       };
     }
 
-    // Electron EXE online: web jaisi direct Firebase HTTPS — IndexedDB prefetch baad spinner nahi chipkata
+    // Web-only Electron fallback: embedded disk cache (APK jaisa) enabled ho to HTTPS mat.
     const electronServeRemoteFirst =
-      typeof navigator !== "undefined" && navigator.onLine && isElectronDesktopApp();
+      !usesEmbeddedNativeAttachmentStorage() &&
+      typeof navigator !== "undefined" &&
+      navigator.onLine &&
+      isElectronDesktopApp();
     if (electronServeRemoteFirst) {
       setDisplaySrc(u);
       void (async () => {
@@ -265,7 +276,7 @@ export function LocalFileRefTooltipPreview({
     const urlRef = { current: null as string | null };
     void (async () => {
       try {
-        if (isCapacitorNativeApp() && isLocalFileRef(effectiveUrl)) {
+        if (usesEmbeddedNativeAttachmentStorage() && isLocalFileRef(effectiveUrl)) {
           // Native fast-path: preview ke liye JS blob read mat karo; direct `convertFileSrc` display URL hi use karo.
           const meta = getLocalFileRefMetaSync(effectiveUrl) ?? (await getLocalFileRefMeta(effectiveUrl));
           if (cancelled) return;

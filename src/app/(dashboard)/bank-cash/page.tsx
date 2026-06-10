@@ -60,6 +60,7 @@ function BankCashPageContent() {
   const { company, companyId, effectiveNotificationSettings } = useCompany();
   const { formatCurrency, formatRunning } = useDate();
   const { vouchers, loading: vouchersLoading, processedAccounts, processedAccountGroups: initialProcessedAccountGroups, userNames } = useVouchers();
+  const pageColdLoading = vouchersLoading && processedAccounts.length === 0;
   const router = useRouter();
   const searchParams = useSearchParams();
   const selectedIdFromUrl = searchParams.get("selected");
@@ -306,7 +307,7 @@ function BankCashPageContent() {
           ? groupItem
           : accountItem
         : groupItem || accountItem;
-    if (item) setSelected(item);
+    if (item && selected?.id !== item.id) setSelected(item);
     const canonical =
       viewFromUrl === "groups"
         ? `/bank-cash?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
@@ -314,7 +315,7 @@ function BankCashPageContent() {
     if (shouldReplaceWithMasterDetailCanonical(canonical)) {
       router.replace(canonical, { scroll: false });
     }
-  }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedAccounts, processedAccountGroups, setSelected, setActiveView, router]);
+  }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedAccounts, processedAccountGroups, selected?.id, setSelected, setActiveView, router]);
   
   // Initial Mount Safety
   useEffect(() => {
@@ -393,7 +394,7 @@ function BankCashPageContent() {
     }).length;
   }, [processedAccountGroupsForList, searchTerm]);
 
-  if (vouchersLoading) {
+  if (pageColdLoading) {
     return <LoadingSpinner />;
   }
   

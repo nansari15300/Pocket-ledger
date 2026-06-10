@@ -33,6 +33,67 @@ let staticPublicDir = "";
 let isPackaged = false;
 let rewriteReconciliationDocumentUrl = null;
 let isAllowedFirebaseProxyTarget = null;
+let listShareableCompaniesProvider = null;
+let localCompanyAuthProvider = null;
+
+function setShareableCompaniesProvider(fn) {
+  listShareableCompaniesProvider = typeof fn === "function" ? fn : null;
+}
+
+function setLocalCompanyAuthProvider(fn) {
+  localCompanyAuthProvider = typeof fn === "function" ? fn : null;
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      try {
+        const raw = Buffer.concat(chunks).toString("utf8").trim();
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch (e) {
+        reject(e);
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+function stubShareableCompaniesFromIds(allowedIds) {
+  if (!Array.isArray(allowedIds) || allowedIds.length === 0) return [];
+  return allowedIds.map((id) => ({
+    id: String(id).trim(),
+    name: String(id).trim(),
+    storageOption: "local",
+    ownerEmail: null,
+  })).filter((row) => row.id);
+}
+
+async function shareableCompaniesForToken(allowedIds) {
+  const idSet =
+    Array.isArray(allowedIds) && allowedIds.length > 0
+      ? new Set(allowedIds.map((x) => String(x || "").trim()).filter(Boolean))
+      : null;
+  let all = [];
+  if (listShareableCompaniesProvider) {
+    try {
+      const rows = await listShareableCompaniesProvider();
+      if (Array.isArray(rows)) all = rows;
+    } catch (_) {
+      /* fallback below */
+    }
+  }
+  if (!all.length && idSet?.size) {
+    return stubShareableCompaniesFromIds([...idSet]);
+  }
+  return all.filter((c) => {
+    if (!c || !c.id) return false;
+    const id = String(c.id).trim();
+    if (!idSet) return true;
+    return idSet.has(id);
+  });
+}
 
 function setServerDeps(deps) {
   staticPublicDir = deps.staticPublicDir || "";
@@ -102,9 +163,19 @@ function loadConfig(userDataPath) {
 }
 
 function saveConfig(userDataPath, partial) {
-  const next = { ...loadConfig(userDataPath), ...partial };
+  const prev = loadConfig(userDataPath);
+  const next = { ...prev, ...partial };
   if (partial && partial.appRole != null) next.appRole = normalizeAppRole(partial.appRole);
   if (partial && partial.bindMode != null) next.bindMode = normalizeBindMode(partial.bindMode);
+  if (partial && partial.port != null) {
+    const newPort = Number(partial.port);
+    const oldPort = Number(prev.port);
+    if (Number.isFinite(newPort) && newPort > 0 && newPort < 65536 && newPort !== oldPort) {
+      try {
+        fs.unlinkSync(path.join(userDataPath, PERSISTED_PORT_FILE));
+      } catch (_) {}
+    }
+  }
   try {
     fs.mkdirSync(path.dirname(configPath(userDataPath)), { recursive: true });
     fs.writeFileSync(configPath(userDataPath), JSON.stringify(next, null, 2), "utf8");
@@ -142,7 +213,12 @@ function shouldUseRemoteEntry(cfg) {
 function packagedStaticPortCandidates(userDataPath, preferred) {
   const persisted = readPersistedPackagedPort(userDataPath);
   const fallbacks = [37123, 38123, 39123, 40123, 41123];
-  const ordered = [...(persisted != null ? [persisted] : []), preferred, ...fallbacks];
+  // Settings → Port (preferred) pehle — warna purana persisted (e.g. 37123) user ke 30000 ko ignore karta tha.
+  const ordered = [
+    preferred,
+    ...(persisted != null && persisted !== preferred ? [persisted] : []),
+    ...fallbacks,
+  ];
   const seen = new Set();
   const out = [];
   for (const n of ordered) {
@@ -180,8 +256,45 @@ function isElectronAppRequest(req) {
   return typeof legacy === "string" && legacy.length >= 8;
 }
 
+function tokenFromRequest(req) {
+  const fromHeader = headerValue(req, PL_ACCESS_HEADER).trim();
+  if (fromHeader) return fromHeader;
+  try {
+    const u = new URL(req.url || "/", "http://localhost");
+    const fromQuery = (u.searchParams.get("pl_access") || "").trim();
+    if (fromQuery) return fromQuery;
+  } catch {
+    /* fall through */
+  }
+  const cookie = headerValue(req, "cookie");
+  if (cookie) {
+    const match = cookie.match(/(?:^|;\s*)pl_access=([^;]*)/);
+    if (match?.[1]) {
+      try {
+        return decodeURIComponent(match[1].trim());
+      } catch {
+        return match[1].trim();
+      }
+    }
+  }
+  return "";
+}
+
+function attachPlAccessTokenCookie(req, res, userDataPath) {
+  const tok = tokenFromRequest(req);
+  if (!tok || !accessTokens.validateAccessToken(userDataPath, tok)) return;
+  const cookieVal = `pl_access=${encodeURIComponent(tok)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`;
+  const prev = res.getHeader("Set-Cookie");
+  if (!prev) {
+    res.setHeader("Set-Cookie", cookieVal);
+  } else {
+    const arr = Array.isArray(prev) ? prev : [String(prev)];
+    res.setHeader("Set-Cookie", [...arr, cookieVal]);
+  }
+}
+
 function isAccessTokenRequest(req, userDataPath) {
-  const tok = headerValue(req, PL_ACCESS_HEADER);
+  const tok = tokenFromRequest(req);
   if (!tok) return false;
   return accessTokens.validateAccessToken(userDataPath, tok);
 }
@@ -204,8 +317,58 @@ function blockedExternalBrowserHtml() {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Pocket Ledger</title></head><body style="font-family:system-ui;padding:2rem;max-width:32rem"><h1>Pocket Ledger app only</h1><p>Open this address in the <strong>Pocket Ledger desktop app</strong>, not Chrome or Edge.</p></body></html>`;
 }
 
-function blockedAccessTokenHtml() {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Pocket Ledger</title></head><body style="font-family:system-ui;padding:2rem;max-width:32rem"><h1>Access token required</h1><p>Ask the server owner for a Pocket Ledger access token and enter it in <strong>Settings → Server → Client</strong>.</p></body></html>`;
+function escapeHtmlText(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Remote browser / Gate client: token paste form — `?pl_access=` ya `pl_access` cookie se aage badhega. */
+function blockedAccessTokenHtml(req, userDataPath) {
+  let actionPath = "/";
+  try {
+    const u = new URL(req.url || "/", "http://localhost");
+    actionPath = u.pathname || "/";
+  } catch (_) {}
+  const tok = tokenFromRequest(req);
+  const showInvalid = !!tok && !accessTokens.validateAccessToken(userDataPath, tok);
+  const invalidBlock = showInvalid
+    ? `<p style="margin:0 0 1rem;padding:0.75rem 1rem;border-radius:0.5rem;background:#fef2f2;color:#991b1b;border:1px solid #fecaca">That access token is not valid. Copy the <strong>full</strong> token from the server PC (Settings → Server → Access tokens → Show / Copy), not the short preview.</p>`
+    : "";
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pocket Ledger — Access token</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f4f7fb; color: #0f172a; padding: 1.5rem; }
+    .card { width: 100%; max-width: 28rem; background: #fff; border: 1px solid #dbe3ef; border-radius: 1rem; padding: 1.5rem; box-shadow: 0 8px 30px rgba(15, 23, 42, 0.08); }
+    h1 { margin: 0 0 0.5rem; font-size: 1.35rem; }
+    p { margin: 0 0 1rem; line-height: 1.5; color: #475569; font-size: 0.95rem; }
+    label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem; }
+    input[type="password"], input[type="text"] { width: 100%; box-sizing: border-box; padding: 0.65rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 0.5rem; font-size: 1rem; }
+    button { margin-top: 1rem; width: 100%; padding: 0.7rem 1rem; border: 0; border-radius: 0.5rem; background: #2563eb; color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    .hint { margin-top: 1rem; font-size: 0.8rem; color: #64748b; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Access token required</h1>
+    <p>Ask the server owner for a Pocket Ledger access token, then paste it below to open this server in your browser.</p>
+    ${invalidBlock}
+    <form method="GET" action="${escapeHtmlText(actionPath)}">
+      <label for="pl_access">Access token</label>
+      <input id="pl_access" name="pl_access" type="password" autocomplete="off" placeholder="Paste token from server owner" required autofocus />
+      <button type="submit">Continue</button>
+    </form>
+    <p class="hint">Pocket Ledger app users: you can also add the token under <strong>Settings → Server → Client</strong> or <strong>Gate → Server PCs</strong>.</p>
+  </div>
+</body>
+</html>`;
 }
 
 function listLanUrls(port, publicHost) {
@@ -225,6 +388,23 @@ function listLanUrls(port, publicHost) {
     urls.push(`http://${host}:${port}/`);
   }
   return [...new Set(urls)];
+}
+
+/** Gate page / dev browser: cross-origin fetch to `/__pl_access_context` (token in header). */
+function applyPlAccessContextCors(req, res) {
+  const origin = headerValue(req, "origin");
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    `Accept, Content-Type, ${PL_ACCESS_HEADER}, ${PL_CLIENT_HEADER}, ${PL_ELECTRON_MARKER_HEADER}`
+  );
+  res.setHeader("Access-Control-Max-Age", "86400");
 }
 
 function createRequestHandler(userDataPath) {
@@ -256,6 +436,18 @@ function createRequestHandler(userDataPath) {
         return;
       }
       if (requestUrl.pathname === "/__pl_access_context") {
+        applyPlAccessContextCors(request, response);
+        if (request.method === "OPTIONS") {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          response.statusCode = 405;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "method_not_allowed" }));
+          return;
+        }
         const fromLocalhost = isRequestFromLocalhost(request);
         if (fromLocalhost) {
           response.statusCode = 200;
@@ -264,7 +456,7 @@ function createRequestHandler(userDataPath) {
           response.end(JSON.stringify({ unrestricted: true, allowedCompanyIds: null, label: null }));
           return;
         }
-        const tok = headerValue(request, PL_ACCESS_HEADER);
+        const tok = tokenFromRequest(request);
         const rec = accessTokens.getAccessTokenRecord(userDataPath, tok);
         if (!rec) {
           response.statusCode = 403;
@@ -274,6 +466,7 @@ function createRequestHandler(userDataPath) {
         }
         accessTokens.validateAccessToken(userDataPath, tok);
         const ids = accessTokens.normalizeCompanyIds(rec.allowedCompanyIds);
+        const companies = await shareableCompaniesForToken(ids);
         response.statusCode = 200;
         response.setHeader("content-type", "application/json; charset=utf-8");
         response.setHeader("cache-control", "no-store");
@@ -281,9 +474,85 @@ function createRequestHandler(userDataPath) {
           JSON.stringify({
             label: rec.label || null,
             allowedCompanyIds: ids.length > 0 ? ids : null,
+            companies,
           })
         );
         return;
+      }
+      if (requestUrl.pathname === "/__pl_company_login") {
+        applyPlAccessContextCors(request, response);
+        if (request.method === "OPTIONS") {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+        if (request.method !== "POST") {
+          response.statusCode = 405;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "method_not_allowed" }));
+          return;
+        }
+        const accessTok = tokenFromRequest(request);
+        if (!accessTok || !accessTokens.validateAccessToken(userDataPath, accessTok)) {
+          response.statusCode = 403;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "invalid_or_missing_token" }));
+          return;
+        }
+        try {
+          const body = await readJsonBody(request);
+          const companyId = String(body.companyId || "").trim();
+          const username = String(body.username || "").trim();
+          const password = String(body.password || "").trim();
+          if (!companyId || !username || !password) {
+            response.statusCode = 400;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "missing_fields" }));
+            return;
+          }
+          const rec = accessTokens.getAccessTokenRecord(userDataPath, accessTok);
+          const allowedIds = accessTokens.normalizeCompanyIds(rec?.allowedCompanyIds);
+          if (allowedIds.length > 0 && !allowedIds.includes(companyId)) {
+            response.statusCode = 403;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "company_not_allowed_for_token" }));
+            return;
+          }
+          if (!localCompanyAuthProvider) {
+            response.statusCode = 503;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "server_login_unavailable" }));
+            return;
+          }
+          const authResult = await localCompanyAuthProvider(companyId, username, password);
+          if (!authResult || authResult.ok !== true) {
+            response.statusCode = 401;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(
+              JSON.stringify({
+                ok: false,
+                error: String(authResult?.error || "Invalid username or password"),
+              })
+            );
+            return;
+          }
+          response.statusCode = 200;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.setHeader("cache-control", "no-store");
+          response.end(
+            JSON.stringify({
+              ok: true,
+              token: authResult.token,
+              user: authResult.user,
+            })
+          );
+          return;
+        } catch (_) {
+          response.statusCode = 400;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "bad_request" }));
+          return;
+        }
       }
     } catch {
       /* fall through */
@@ -301,7 +570,12 @@ function createRequestHandler(userDataPath) {
       return;
     }
 
-    if (cfg.appOnlyAccess && !fromLocalhost && !isElectronAppRequest(request)) {
+    if (
+      cfg.appOnlyAccess &&
+      !fromLocalhost &&
+      !isElectronAppRequest(request) &&
+      !isAccessTokenRequest(request, userDataPath)
+    ) {
       response.statusCode = 403;
       response.setHeader("content-type", "text/html; charset=utf-8");
       response.end(blockedExternalBrowserHtml());
@@ -316,9 +590,11 @@ function createRequestHandler(userDataPath) {
     ) {
       response.statusCode = 403;
       response.setHeader("content-type", "text/html; charset=utf-8");
-      response.end(blockedAccessTokenHtml());
+      response.end(blockedAccessTokenHtml(request, userDataPath));
       return;
     }
+
+    attachPlAccessTokenCookie(request, response, userDataPath);
 
     try {
       const requestUrl = new URL(request.url || "/", "http://localhost");
@@ -345,14 +621,40 @@ function createRequestHandler(userDataPath) {
   };
 }
 
+function forceCloseHttpServer(server) {
+  try {
+    if (typeof server.closeAllConnections === "function") {
+      server.closeAllConnections();
+    }
+    if (typeof server.closeIdleConnections === "function") {
+      server.closeIdleConnections();
+    }
+  } catch (_) {}
+}
+
 function stopStaticServer() {
   if (!staticServer) return Promise.resolve();
+  const server = staticServer;
+  staticServer = null;
+  staticServerPort = null;
   return new Promise((resolve) => {
-    staticServer.close(() => {
-      staticServer = null;
-      staticServerPort = null;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
       resolve();
-    });
+    };
+    const forceTimer = setTimeout(finish, 1500);
+    forceCloseHttpServer(server);
+    try {
+      server.close(() => {
+        clearTimeout(forceTimer);
+        finish();
+      });
+    } catch (_) {
+      clearTimeout(forceTimer);
+      finish();
+    }
   });
 }
 
@@ -478,7 +780,7 @@ function getStatus(userDataPath) {
     electronMarkerHeader: PL_ELECTRON_MARKER_HEADER,
     portForwardHint:
       cfg.bindMode !== "localhost"
-        ? "Router me TCP port forward: external port → this PC LAN IP + server port. Firewall me port allow karein."
+        ? "On your router, forward the external TCP port to this PC's LAN IP and server port. Allow the port in Windows Firewall."
         : null,
   };
 }
@@ -498,6 +800,8 @@ module.exports = {
   PL_ELECTRON_MARKER_HEADER,
   PL_ELECTRON_MARKER_VALUE,
   setServerDeps,
+  setShareableCompaniesProvider,
+  setLocalCompanyAuthProvider,
   loadConfig,
   saveConfig,
   getOrCreateClientToken,

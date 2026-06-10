@@ -110,6 +110,20 @@ export function EmbeddedDeviceLockGate() {
     }
   }, [uid, localSynthetic]);
 
+  /** EXE multi-tab: pehle wale tab me unlock hone par nayi / khuli tab bhi gate hata de. */
+  useEffect(() => {
+    if (shellKind !== "exe" || !uid || localSynthetic) return;
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== "pl_embedded_unlock_exe_boot_v1") return;
+      if (isEmbeddedSessionUnlocked()) {
+        setUnlockedNow(true);
+        setUnlockBump((b) => b + 1);
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [shellKind, uid, localSynthetic]);
+
   useEffect(() => {
     if (!isApk || !uid || localSynthetic) return;
     let remove: (() => void) | undefined;

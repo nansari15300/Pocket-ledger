@@ -34,6 +34,17 @@ import {
   sendReconciliationUnlinkedAlert,
 } from "@/lib/reconciliation/notifications";
 import { reconciliationViewerSide } from "@/lib/reconciliation/sideMeta";
+import {
+  DRIVE_RECON_CHANGED_EVENT,
+  getDriveLocalReconciliationShare,
+  isDriveLocalReconciliationShareId,
+  listDriveLocalReconciliationSharesForViewer,
+  loadReconciliationPartyAccountsFromLocalMirror,
+  pullDriveLocalReconciliationLinksForCompany,
+  refreshDriveLocalReconciliationSideSnapshot,
+  saveDriveLocalReconciliationRowComment,
+  unlinkDriveLocalReconciliationShare,
+} from "@/lib/reconciliation/driveLocalReconciliation";
 
 const SHARES = () => collection(firestore, "reconciliation_shares");
 
@@ -121,6 +132,15 @@ export async function backfillReconciliationShareCompanyIndex(
 export async function loadReconciliationAccountsForCompany(companyId: string): Promise<ReconciliationAccountOption[]> {
   if (!companyId) return [];
   // Abhi sirf Party accounts load — bank/staff/tax/expense baad me enable karenge
+  const localParties = await loadReconciliationPartyAccountsFromLocalMirror(companyId);
+  if (localParties.length > 0) {
+    return localParties.map((p) => ({
+      id: p.id,
+      name: p.name,
+      entityType: "party" as ReconciliationEntityType,
+      collection: "parties",
+    }));
+  }
   const all = await Promise.all(
     RECON_ENTITY_OPTIONS_UI.map(async ({ value, collection: col }) => {
       const snap = await getDocs(collection(firestore, `companies/${companyId}/${col}`));
@@ -416,6 +436,10 @@ export async function unlinkReconciliationShare(params: {
   userId: string;
   userEmail?: string;
 }): Promise<void> {
+  if (isDriveLocalReconciliationShareId(params.shareId)) {
+    await unlinkDriveLocalReconciliationShare(params);
+    return;
+  }
   const shareRef = doc(firestore, "reconciliation_shares", params.shareId);
   const shareSnap = await getDoc(shareRef);
   if (!shareSnap.exists()) throw new Error("Share not found");
@@ -558,6 +582,10 @@ export async function refreshReconciliationSideSnapshot(params: {
   shareId: string;
   side: "sender" | "receiver";
 }): Promise<void> {
+  if (isDriveLocalReconciliationShareId(params.shareId)) {
+    await refreshDriveLocalReconciliationSideSnapshot(params);
+    return;
+  }
   const shareRef = doc(firestore, "reconciliation_shares", params.shareId);
   const shareSnap = await getDoc(shareRef);
   if (!shareSnap.exists()) throw new Error("Share not found");
@@ -612,6 +640,9 @@ export async function getReconciliationShare(
 ): Promise<ReconciliationShare | null> {
   const id = String(shareId || "").trim();
   if (!id) return null;
+  if (isDriveLocalReconciliationShareId(id)) {
+    return getDriveLocalReconciliationShare(id);
+  }
   try {
     const snap = await getDoc(doc(firestore, "reconciliation_shares", id));
     if (snap.exists()) return { id: snap.id, ...snap.data() } as ReconciliationShare;
@@ -679,6 +710,9 @@ export function subscribeReconciliationSharesForViewer(
   const emit = () => {
     const map = new Map<string, ReconciliationShare>();
     [...sent, ...recv, ...linkedRecv, ...senderCo, ...receiverCo, ...companyIdx].forEach((s) => map.set(s.id, s));
+    for (const s of listDriveLocalReconciliationSharesForViewer(userId, cid)) {
+      map.set(s.id, s);
+    }
     onData(Array.from(map.values()).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""))));
   };
   const onListenError = (label: string) => (err: unknown) => {
@@ -756,8 +790,21 @@ export function subscribeReconciliationSharesForViewer(
       )
     );
   }
-  return () => unsubs.forEach((u) => u());
+  const onDriveReconChanged = () => emit();
+  if (typeof window !== "undefined") {
+    window.addEventListener(DRIVE_RECON_CHANGED_EVENT, onDriveReconChanged);
+    emit();
+  }
+  return () => {
+    unsubs.forEach((u) => u());
+    if (typeof window !== "undefined") {
+      window.removeEventListener(DRIVE_RECON_CHANGED_EVENT, onDriveReconChanged);
+    }
+  };
 }
+
+/** Drive-synced local companies — recon links pull (background). */
+export { pullDriveLocalReconciliationLinksForCompany };
 
 /** Linked share jahan current company + account involved ho — company index primary (shared staff). */
 export function subscribeLinkedSharesForAccount(
@@ -837,6 +884,10 @@ export async function saveReconciliationRowComment(params: {
   rowId: string;
   comment: string;
 }): Promise<void> {
+  if (isDriveLocalReconciliationShareId(params.shareId)) {
+    await saveDriveLocalReconciliationRowComment(params);
+    return;
+  }
   const trimmed = String(params.comment || "").trim();
   const shareRef = doc(firestore, "reconciliation_shares", params.shareId);
   await updateDoc(shareRef, {

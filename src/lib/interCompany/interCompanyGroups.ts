@@ -25,7 +25,8 @@ import {
 import { auth, firestore } from "@/lib/firebase";
 import { upsertInterCompanyPublicCompanyProfile } from "@/lib/interCompany/interCompanyPublicCompanyProfile";
 
-export type InterCompanyGroupVisibility = "public" | "private";
+/** `local` = device-only system — sirf pure local companies, SQLite IC (Firebase nahi). */
+export type InterCompanyGroupVisibility = "public" | "private" | "local";
 
 export type InterCompanyGroupMemberUser = {
   email: string;
@@ -269,7 +270,9 @@ function assertLocalInterCompanySystemNameAvailable(
 export function normalizeInterCompanyGroupVisibility(
   raw: unknown
 ): InterCompanyGroupVisibility {
-  return raw === "public" ? "public" : "private";
+  if (raw === "public") return "public";
+  if (raw === "local") return "local";
+  return "private";
 }
 
 /** Firestore rules — create ke liye auth.uid; local:… session par Firestore mat use karo */
@@ -416,6 +419,14 @@ export async function createInterCompanyGroup(args: {
   const visibility = normalizeInterCompanyGroupVisibility(args.visibility);
 
   assertLocalInterCompanySystemNameAvailable(ownerUserId, name);
+
+  /** Local IC system — hamesha device par; Firestore par mat bhejo. */
+  if (visibility === "local") {
+    return {
+      id: createLocalGroup({ ...args, ownerUserId, name, visibility: "local" }),
+      localOnly: true,
+    };
+  }
 
   try {
     const nameKey = await assertInterCompanySystemNameAvailable({
@@ -877,8 +888,27 @@ export async function removeCompanyFromInterCompanySystem(args: {
   const systemId = args.systemId.trim();
   const companyId = args.companyId.trim();
   const actingUserId = args.actingUserId.trim();
-  if (!systemId || !companyId || systemId.startsWith("local-")) {
+  if (!systemId || !companyId) {
     throw new Error("Invalid system or company.");
+  }
+
+  if (systemId.startsWith("local-")) {
+    const uid = actingUserId || "";
+    const prev = readLocalGroups(uid);
+    const row = prev.find((g) => g.id === systemId);
+    if (!row) throw new Error("System not found.");
+    if (!row.companyIds.includes(companyId)) return;
+    const nextIds = row.companyIds.filter((id) => id !== companyId);
+    const nextSummaries = { ...(row.companySummaries ?? {}) };
+    delete nextSummaries[companyId];
+    const nextOwners = { ...(row.companyOwners ?? {}) };
+    delete nextOwners[companyId];
+    await updateInterCompanyGroup(
+      systemId,
+      { companyIds: nextIds, companySummaries: nextSummaries, companyOwners: nextOwners },
+      uid
+    );
+    return;
   }
 
   const ref = doc(firestore, "inter_company_groups", systemId);

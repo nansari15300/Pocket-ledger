@@ -3,15 +3,12 @@
 /**
  * Online (Firestore) company: owner/shared unlock sirf company password se —
  * "Remember for X days" ke liye offline jaisa hi localStorage expiry (token nahi, sirf until).
- * Firebase login uid + companyId se key; device/account alag ho to alag remember.
- * `no_uid` fallback: unlock ke waqt kabhi `user.uid` late ho to entry galat key par save ho sakti thi —
- * read par migrate karke current uid par bandho (offline remember jaisa strict multi-company local).
+ * Firebase uid + companyId (+ email backup) se key; har company alag remember.
  */
 
 import { OFFLINE_UNLOCK_REMEMBER_NEVER_DAYS } from "@/lib/offlineCompanyUnlockRemember";
 
 const STORAGE_PREFIX = "cloudCompanyPasswordUnlock_v1";
-/** Last "Remember for" dropdown — session expiry ke baad bhi default ke liye (server par nahi). */
 const PREF_PREFIX = "cloudCompanyPasswordUnlockPref_v1";
 
 /** UI "Never" — practically dubara password na puche */
@@ -19,9 +16,12 @@ const REMEMBER_UNTIL_MAX_MS = 8640000000000000;
 
 function normalizeCloudUnlockUid(firebaseUid: string | undefined): string {
   const uid = firebaseUid?.trim() || "";
-  // Embedded/local synthetic uid stable auth identity nahi hota; remember key ko shared fallback bucket par rakho.
   if (!uid || uid.startsWith("local:")) return "no_uid";
   return uid;
+}
+
+function normalizeUnlockEmail(email: string | null | undefined): string {
+  return String(email || "").trim().toLowerCase();
 }
 
 function storageKey(firebaseUid: string | undefined, companyId: string): string {
@@ -29,30 +29,110 @@ function storageKey(firebaseUid: string | undefined, companyId: string): string 
   return `${STORAGE_PREFIX}_${uid}_${companyId}`;
 }
 
+function emailStorageKey(email: string | null | undefined, companyId: string): string | null {
+  const e = normalizeUnlockEmail(email);
+  if (!e || !companyId) return null;
+  return `${STORAGE_PREFIX}_email_${e}_${companyId}`;
+}
+
 function prefStorageKey(firebaseUid: string | undefined, companyId: string): string {
   const uid = normalizeCloudUnlockUid(firebaseUid);
   return `${PREF_PREFIX}_${uid}_${companyId}`;
 }
 
+function prefEmailStorageKey(email: string | null | undefined, companyId: string): string | null {
+  const e = normalizeUnlockEmail(email);
+  if (!e || !companyId) return null;
+  return `${PREF_PREFIX}_email_${e}_${companyId}`;
+}
+
 type Stored = { until: number };
 
-function migrateLegacySyntheticCloudUnlockSession(firebaseUid: string | undefined, companyId: string): boolean {
+function parseStored(raw: string | null): Stored | null {
+  if (!raw) return null;
+  try {
+    const data = JSON.parse(raw) as Stored;
+    if (typeof data.until !== "number") return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function isStoredValid(data: Stored | null): boolean {
+  return !!data && typeof data.until === "number" && data.until > Date.now();
+}
+
+function isStoredExpired(data: Stored | null): boolean {
+  return !!data && typeof data.until === "number" && data.until <= Date.now();
+}
+
+function collectUnlockKeys(firebaseUid: string | undefined, companyId: string, userEmail?: string | null): string[] {
+  const keys = new Set<string>();
+  keys.add(storageKey(firebaseUid, companyId));
+  keys.add(storageKey(undefined, companyId));
+  const ek = emailStorageKey(userEmail, companyId);
+  if (ek) keys.add(ek);
+  return [...keys];
+}
+
+function collectPrefKeys(firebaseUid: string | undefined, companyId: string, userEmail?: string | null): string[] {
+  const keys = new Set<string>();
+  keys.add(prefStorageKey(firebaseUid, companyId));
+  keys.add(prefStorageKey(undefined, companyId));
+  const ek = prefEmailStorageKey(userEmail, companyId);
+  if (ek) keys.add(ek);
+  return [...keys];
+}
+
+/** APK/EXE: uid late hydrate — kisi bhi valid key par company remember mil jaye. */
+function readAnyStoredCloudUnlockForCompany(
+  companyId: string,
+  firebaseUid?: string,
+  userEmail?: string | null
+): Stored | null {
+  if (typeof window === "undefined" || !companyId) return null;
+  const suffix = `_${companyId}`;
+  const uidNorm = normalizeCloudUnlockUid(firebaseUid);
+  const emailNorm = normalizeUnlockEmail(userEmail);
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith(`${STORAGE_PREFIX}_`) || !key.endsWith(suffix)) continue;
+      const matchesUser =
+        key.includes(`_${uidNorm}_`) ||
+        key.includes("_no_uid_") ||
+        (emailNorm && key.includes(`_email_${emailNorm}_`));
+      if (!matchesUser) continue;
+      const data = parseStored(localStorage.getItem(key));
+      if (isStoredValid(data)) return data;
+      if (isStoredExpired(data)) localStorage.removeItem(key);
+      continue;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+function migrateLegacySyntheticCloudUnlockSession(
+  firebaseUid: string | undefined,
+  companyId: string,
+  userEmail?: string | null
+): boolean {
   if (typeof window === "undefined") return false;
-  const canonicalKey = storageKey(firebaseUid, companyId);
+  const targetKeys = collectUnlockKeys(firebaseUid, companyId, userEmail);
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (!k) continue;
-      // Purana format: `cloudCompanyPasswordUnlock_v1_local:*_{companyId}` — normalize karke canonical key me le aao.
       if (!k.startsWith(`${STORAGE_PREFIX}_local:`) || !k.endsWith(`_${companyId}`)) continue;
-      const raw = localStorage.getItem(k);
-      if (!raw) continue;
-      const data = JSON.parse(raw) as Stored;
-      if (typeof data.until !== "number" || data.until <= Date.now()) {
+      const data = parseStored(localStorage.getItem(k));
+      if (!isStoredValid(data)) {
         localStorage.removeItem(k);
         continue;
       }
-      localStorage.setItem(canonicalKey, JSON.stringify({ until: data.until }));
+      for (const tk of targetKeys) localStorage.setItem(tk, JSON.stringify({ until: data.until }));
       localStorage.removeItem(k);
       return true;
     }
@@ -62,14 +142,17 @@ function migrateLegacySyntheticCloudUnlockSession(firebaseUid: string | undefine
   return false;
 }
 
-function migrateLegacySyntheticCloudPref(firebaseUid: string | undefined, companyId: string): number {
+function migrateLegacySyntheticCloudPref(
+  firebaseUid: string | undefined,
+  companyId: string,
+  userEmail?: string | null
+): number {
   if (typeof window === "undefined") return 0;
-  const canonicalKey = prefStorageKey(firebaseUid, companyId);
+  const targetKeys = collectPrefKeys(firebaseUid, companyId, userEmail);
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (!k) continue;
-      // Purana format: `cloudCompanyPasswordUnlockPref_v1_local:*_{companyId}` ko canonical pref key me migrate.
       if (!k.startsWith(`${PREF_PREFIX}_local:`) || !k.endsWith(`_${companyId}`)) continue;
       const raw = localStorage.getItem(k);
       if (raw == null || raw === "") {
@@ -81,7 +164,7 @@ function migrateLegacySyntheticCloudPref(firebaseUid: string | undefined, compan
         localStorage.removeItem(k);
         continue;
       }
-      localStorage.setItem(canonicalKey, String(n));
+      for (const tk of targetKeys) localStorage.setItem(tk, String(n));
       localStorage.removeItem(k);
       return n;
     }
@@ -91,68 +174,66 @@ function migrateLegacySyntheticCloudPref(firebaseUid: string | undefined, compan
   return 0;
 }
 
-/** Purani `no_uid` session ko real Firebase uid key par shift karo taaki dubara password na puche. */
-function migrateNoUidCloudUnlockSessionToUser(firebaseUid: string | undefined, companyId: string): boolean {
+function migrateNoUidCloudUnlockSessionToUser(
+  firebaseUid: string | undefined,
+  companyId: string,
+  userEmail?: string | null
+): boolean {
   const real = firebaseUid?.trim();
   if (!real || real === "no_uid") return false;
   const orphanKey = storageKey(undefined, companyId);
-  const canonicalKey = storageKey(firebaseUid, companyId);
-  if (orphanKey === canonicalKey) return false;
-  try {
-    const raw = localStorage.getItem(orphanKey);
-    if (!raw) return false;
-    const data = JSON.parse(raw) as Stored;
-    if (typeof data.until !== "number" || data.until <= Date.now()) {
-      localStorage.removeItem(orphanKey);
-      return false;
-    }
-    localStorage.removeItem(orphanKey);
-    localStorage.setItem(canonicalKey, JSON.stringify({ until: data.until }));
-    return true;
-  } catch {
+  const data = parseStored(localStorage.getItem(orphanKey));
+  if (!isStoredValid(data)) {
+    if (data) localStorage.removeItem(orphanKey);
     return false;
   }
+  for (const tk of collectUnlockKeys(firebaseUid, companyId, userEmail)) {
+    localStorage.setItem(tk, JSON.stringify({ until: data.until }));
+  }
+  localStorage.removeItem(orphanKey);
+  return true;
 }
 
-/** Dropdown default: pehle exact uid, phir `no_uid` pref migrate. */
-function migrateNoUidCloudPrefToUser(firebaseUid: string | undefined, companyId: string): number {
+function migrateNoUidCloudPrefToUser(
+  firebaseUid: string | undefined,
+  companyId: string,
+  userEmail?: string | null
+): number {
   const real = firebaseUid?.trim();
   if (!real || real === "no_uid") return 0;
   const orphanKey = prefStorageKey(undefined, companyId);
-  const canonicalKey = prefStorageKey(firebaseUid, companyId);
-  if (orphanKey === canonicalKey) return 0;
-  try {
-    const raw = localStorage.getItem(orphanKey);
-    if (!raw) return 0;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) {
-      localStorage.removeItem(orphanKey);
-      return 0;
-    }
+  const raw = localStorage.getItem(orphanKey);
+  if (raw == null || raw === "") return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
     localStorage.removeItem(orphanKey);
-    localStorage.setItem(canonicalKey, String(n));
-    return n;
-  } catch {
     return 0;
   }
+  for (const tk of collectPrefKeys(firebaseUid, companyId, userEmail)) {
+    localStorage.setItem(tk, String(n));
+  }
+  localStorage.removeItem(orphanKey);
+  return n;
 }
 
 /** Last successful "Remember for" days (0 = har baar poochho) — sirf local, multi-company per key. */
 export function readCloudCompanyPasswordUnlockPreferenceDays(
   firebaseUid: string | undefined,
-  companyId: string
+  companyId: string,
+  userEmail?: string | null
 ): number {
   if (typeof window === "undefined" || !companyId) return 0;
   try {
-    const k = prefStorageKey(firebaseUid, companyId);
-    const raw = localStorage.getItem(k);
-    if (raw != null && raw !== "") {
-      const n = Number(raw);
-      return Number.isFinite(n) ? n : 0;
+    for (const k of collectPrefKeys(firebaseUid, companyId, userEmail)) {
+      const raw = localStorage.getItem(k);
+      if (raw != null && raw !== "") {
+        const n = Number(raw);
+        if (Number.isFinite(n)) return n;
+      }
     }
-    const migrated = migrateNoUidCloudPrefToUser(firebaseUid, companyId);
+    const migrated = migrateNoUidCloudPrefToUser(firebaseUid, companyId, userEmail);
     if (migrated) return migrated;
-    return migrateLegacySyntheticCloudPref(firebaseUid, companyId);
+    return migrateLegacySyntheticCloudPref(firebaseUid, companyId, userEmail);
   } catch {
     return 0;
   }
@@ -161,45 +242,40 @@ export function readCloudCompanyPasswordUnlockPreferenceDays(
 function saveCloudCompanyPasswordUnlockPreferenceDays(
   firebaseUid: string | undefined,
   companyId: string,
-  days: number
+  days: number,
+  userEmail?: string | null
 ): void {
   if (typeof window === "undefined" || !companyId) return;
-  const key = prefStorageKey(firebaseUid, companyId);
+  const keys = collectPrefKeys(firebaseUid, companyId, userEmail);
   if (days === 0) {
-    localStorage.removeItem(key);
-    const orphan = prefStorageKey(undefined, companyId);
-    if (orphan !== key) localStorage.removeItem(orphan);
+    for (const k of keys) localStorage.removeItem(k);
     return;
   }
-  localStorage.setItem(key, String(days));
-  const orphan = prefStorageKey(undefined, companyId);
-  const real = firebaseUid?.trim();
-  if (real && real !== "no_uid" && orphan !== key) localStorage.removeItem(orphan);
+  for (const k of keys) localStorage.setItem(k, String(days));
 }
 
 /** Abhi valid saved "unlocked" window hai — tab password dialog mat dikhao */
 export function readCloudCompanyPasswordUnlockSession(
   firebaseUid: string | undefined,
-  companyId: string
+  companyId: string,
+  userEmail?: string | null
 ): boolean {
   if (typeof window === "undefined" || !companyId) return false;
   try {
-    const key = storageKey(firebaseUid, companyId);
-    const raw = localStorage.getItem(key);
-    if (raw) {
-      const data = JSON.parse(raw) as Stored;
-      if (typeof data.until === "number" && data.until > Date.now()) {
-        // Canonical valid ho to purani `no_uid` duplicate session hatao (storage + confusion dono se bachne ke liye).
-        const orphanSess = storageKey(undefined, companyId);
-        if (orphanSess !== key) localStorage.removeItem(orphanSess);
-        return true;
-      }
-      if (typeof data.until === "number" && data.until <= Date.now()) localStorage.removeItem(key);
+    for (const key of collectUnlockKeys(firebaseUid, companyId, userEmail)) {
+      const data = parseStored(localStorage.getItem(key));
+      if (isStoredValid(data)) return true;
+      if (isStoredExpired(data)) localStorage.removeItem(key);
     }
-    // `no_uid` par save hua ho + ab `user.uid` loaded hai — migrate karke auto-login restore.
-    if (migrateNoUidCloudUnlockSessionToUser(firebaseUid, companyId)) return true;
-    // Legacy synthetic keys (local:* uid) ko normalize key par shift karke same-company re-unlock preserve karo.
-    if (migrateLegacySyntheticCloudUnlockSession(firebaseUid, companyId)) return true;
+    if (migrateNoUidCloudUnlockSessionToUser(firebaseUid, companyId, userEmail)) return true;
+    if (migrateLegacySyntheticCloudUnlockSession(firebaseUid, companyId, userEmail)) return true;
+    const any = readAnyStoredCloudUnlockForCompany(companyId, firebaseUid, userEmail);
+    if (any) {
+      for (const tk of collectUnlockKeys(firebaseUid, companyId, userEmail)) {
+        localStorage.setItem(tk, JSON.stringify({ until: any.until }));
+      }
+      return true;
+    }
     return false;
   } catch {
     return false;
@@ -210,32 +286,59 @@ export function readCloudCompanyPasswordUnlockSession(
 export function saveCloudCompanyPasswordUnlockSession(
   firebaseUid: string | undefined,
   companyId: string,
-  days: number
+  days: number,
+  userEmail?: string | null
 ): void {
   if (typeof window === "undefined" || !companyId) return;
-  const key = storageKey(firebaseUid, companyId);
+  const keys = collectUnlockKeys(firebaseUid, companyId, userEmail);
   if (days === 0) {
-    localStorage.removeItem(key);
-    const orphan = storageKey(undefined, companyId);
-    if (orphan !== key) localStorage.removeItem(orphan);
-    saveCloudCompanyPasswordUnlockPreferenceDays(firebaseUid, companyId, 0);
+    for (const k of keys) localStorage.removeItem(k);
+    saveCloudCompanyPasswordUnlockPreferenceDays(firebaseUid, companyId, 0, userEmail);
     return;
   }
   const until =
     days === OFFLINE_UNLOCK_REMEMBER_NEVER_DAYS ? REMEMBER_UNTIL_MAX_MS : Date.now() + days * 24 * 60 * 60 * 1000;
   const payload: Stored = { until };
-  localStorage.setItem(key, JSON.stringify(payload));
-  // Duble entry na rahe: real uid save ke baad orphan hatao.
-  const orphan = storageKey(undefined, companyId);
-  const real = firebaseUid?.trim();
-  if (real && real !== "no_uid" && orphan !== key) localStorage.removeItem(orphan);
-  saveCloudCompanyPasswordUnlockPreferenceDays(firebaseUid, companyId, days);
+  for (const k of keys) localStorage.setItem(k, JSON.stringify(payload));
+  saveCloudCompanyPasswordUnlockPreferenceDays(firebaseUid, companyId, days, userEmail);
 }
 
-export function clearCloudCompanyPasswordUnlockSession(firebaseUid: string | undefined, companyId: string): void {
+export function clearCloudCompanyPasswordUnlockSession(
+  firebaseUid: string | undefined,
+  companyId: string,
+  userEmail?: string | null
+): void {
   if (typeof window === "undefined" || !companyId) return;
-  localStorage.removeItem(storageKey(firebaseUid, companyId));
-  const orphan = storageKey(undefined, companyId);
-  if (orphan !== storageKey(firebaseUid, companyId)) localStorage.removeItem(orphan);
-  saveCloudCompanyPasswordUnlockPreferenceDays(firebaseUid, companyId, 0);
+  for (const k of collectUnlockKeys(firebaseUid, companyId, userEmail)) {
+    localStorage.removeItem(k);
+  }
+  saveCloudCompanyPasswordUnlockPreferenceDays(firebaseUid, companyId, 0, userEmail);
+}
+
+/** Logout: is account ke saare company unlock remember entries hatao. */
+export function clearAllCloudCompanyPasswordUnlockSessionsForUser(
+  firebaseUid: string | undefined,
+  userEmail?: string | null
+): void {
+  if (typeof window === "undefined") return;
+  const uidNorm = normalizeCloudUnlockUid(firebaseUid);
+  const emailNorm = normalizeUnlockEmail(userEmail);
+  const keysToRemove: string[] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      const isUnlock = key.startsWith(`${STORAGE_PREFIX}_`);
+      const isPref = key.startsWith(`${PREF_PREFIX}_`);
+      if (!isUnlock && !isPref) continue;
+      const matches =
+        key.includes(`_${uidNorm}_`) ||
+        key.includes("_no_uid_") ||
+        (emailNorm && key.includes(`_email_${emailNorm}_`));
+      if (matches) keysToRemove.push(key);
+    }
+    for (const k of keysToRemove) localStorage.removeItem(k);
+  } catch {
+    /* ignore */
+  }
 }

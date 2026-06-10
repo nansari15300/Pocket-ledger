@@ -106,6 +106,7 @@ import { HistoryDialog } from '@/components/vouchers/HistoryDialog';
 import { LinkAdvancesToVoucherDialog } from '@/components/vouchers/LinkAdvancesToVoucherDialog';
 import { LinkPaymentToTxnsDialog } from '@/components/vouchers/LinkPaymentToTxnsDialog';
 import { toast } from 'sonner';
+import { getCompanyDocFromBrowserDb } from '@/lib/localCompanyDocMirror';
 import { useTransactions } from '@/hooks/use-transactions';
 import { useFeatureAccess } from '@/hooks/use-feature-access';
 import { useSidebar } from "@/components/ui/sidebar";
@@ -120,6 +121,7 @@ import {
 import { computeReceivablesPayablesFinancialSummary } from "@/lib/receivablesPayablesFinancialSummary";
 import { useServerReceivablesPayablesSummary } from "@/hooks/useServerReceivablesPayablesSummary";
 import { RecurringAutoSummaryCard } from "@/components/dashboard/RecurringAutoSummaryCard";
+import { DashboardWelcomeClockLine } from "@/components/dashboard/DashboardWelcomeClockLine";
 
 // Type definitions
 type Voucher = {
@@ -667,8 +669,6 @@ function DashboardPageContent() {
   const [recentUnapprovedOnly, setRecentUnapprovedOnly] = useState(false);
   const [activeRecentFilter, setActiveRecentFilter] = useState<string | null>(null);
   const [isDateChange, setIsDateChange] = useState(false);
-  const [liveTime, setLiveTime] = useState(new Date());
-
   const isReportsEnabled = useFeatureAccess('reports');
 
   const transactionDates = useMemo(() => vouchers.map(v => safeToDate(v.date)).filter(Boolean) as Date[], [vouchers]);
@@ -689,14 +689,37 @@ function DashboardPageContent() {
     (async () => {
       try {
         const snap = await getDoc(doc(firestore, `companies/${pending.companyId}/vouchers`, pending.voucherId));
-        if (snap.exists()) {
-          const d = snap.data();
-          const dateVal = d.date;
+        const fromFirestore = snap.exists()
+          ? (() => {
+              const d = snap.data();
+              const dateVal = d.date;
+              return {
+                id: snap.id,
+                ...d,
+                date: dateVal?.toDate ? dateVal.toDate() : dateVal,
+              };
+            })()
+          : null;
+        const fromLocal =
+          fromFirestore ??
+          ((await getCompanyDocFromBrowserDb(pending.companyId, "vouchers", pending.voucherId)) as Record<
+            string,
+            unknown
+          > | null);
+        if (fromLocal) {
+          const dateVal = (fromLocal as { date?: { toDate?: () => Date } | Date }).date;
           const voucher = {
-            id: snap.id,
-            ...d,
-            date: dateVal?.toDate ? dateVal.toDate() : dateVal,
+            ...fromLocal,
+            id: String(fromLocal.id ?? pending.voucherId),
+            date: dateVal && typeof dateVal === "object" && "toDate" in dateVal && typeof dateVal.toDate === "function"
+              ? dateVal.toDate()
+              : dateVal,
           };
+          if (!fromFirestore) {
+            toast.warning('Opened from offline copy', {
+              description: 'This voucher is not on the server yet. Save will upload it; delete will mark it removed.',
+            });
+          }
           setSelectedVoucher(voucher);
           setIsVoucherDialogOpen(true);
         } else {
@@ -727,26 +750,6 @@ function DashboardPageContent() {
 }, [dateSystem]);
 
 
-  useEffect(() => {
-    const timer = setInterval(() => setLiveTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  /** Welcome card clock line: app `dateSystem` ke mutabiq aaj ki tariikh — AD/BS label zaroor dikhein (pehle sirf locale AD tha). */
-  const welcomeSystemDateTimeLine = useMemo(() => {
-    const d = liveTime;
-    if (!(d instanceof Date) || isNaN(d.getTime())) return "";
-    const weekday = format(d, "EEEE");
-    const timePart = d.toLocaleTimeString();
-    if (dateSystem === "AD") {
-      return `${weekday}, ${formatDate(d)} (AD) | ${timePart}`;
-    }
-    if (dateSystem === "BS") {
-      return `${weekday}, ${formatDateBS(d)} (BS) | ${timePart}`;
-    }
-    return `${weekday} · AD ${formatDate(d)} · BS ${formatDateBS(d)} | ${timePart}`;
-  }, [liveTime, dateSystem, formatDate, formatDateBS]);
-
   const newYearInfo = useMemo(() => {
     const now = new Date();
     const today = startOfDay(now);
@@ -769,7 +772,7 @@ function DashboardPageContent() {
     if (daysToBsNY >= 0 && daysToBsNY <= 10) return { event: "Nepali New Year Countdown", isNewYear: false, daysLeft: daysToBsNY, year: currentBsYear + 1 };
 
     return null;
-  }, [liveTime]);
+  }, []);
 
 
   useEffect(() => {
@@ -1571,6 +1574,17 @@ function DashboardPageContent() {
     return `${adPart} · ${bsPart}`;
   }, [recentDateRange, dateSystem, formatDate, formatDateBS]);
 
+  const recurringSummarySlot = React.useMemo(
+    () =>
+      visibleCard === "all" || visibleCard === "financial-summaries" ? (
+        <RecurringAutoSummaryCard
+          layout="gridCell"
+          placement={visibleCard === "financial-summaries" ? "summary" : "with-all"}
+          onOpenBodyVoucher={openRecurringBodyVoucher}
+        />
+      ) : null,
+    [visibleCard, openRecurringBodyVoucher],
+  );
 
   const renderFinancialSummaries = (reportsEnabled: boolean, showVoucherDateCharts = false) => {
     return (
@@ -1587,13 +1601,9 @@ function DashboardPageContent() {
         compact={false}
         showVoucherDateCharts={showVoucherDateCharts}
         recurringSummarySlot={
-          !showVoucherDateCharts && (visibleCard === "all" || visibleCard === "financial-summaries") ? (
-            <RecurringAutoSummaryCard
-              layout="gridCell"
-              placement={visibleCard === "financial-summaries" ? "summary" : "with-all"}
-              onOpenBodyVoucher={openRecurringBodyVoucher}
-            />
-          ) : undefined
+          !showVoucherDateCharts && (visibleCard === "all" || visibleCard === "financial-summaries")
+            ? recurringSummarySlot
+            : undefined
         }
       />
     );
@@ -1897,9 +1907,7 @@ function DashboardPageContent() {
             </CardTitle>
           )}
 
-          <p className="text-sm text-muted-foreground font-mono">
-            {welcomeSystemDateTimeLine}
-          </p>
+          <DashboardWelcomeClockLine />
         </CardHeader>
       </Card>
     </div>

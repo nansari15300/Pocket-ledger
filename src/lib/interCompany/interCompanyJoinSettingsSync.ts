@@ -16,6 +16,7 @@ import {
   writeInterCompanyLocalSettings,
   type InterCompanyLocalSettings,
 } from "@/lib/interCompany/interCompanyLocalStore";
+import { isPureLocalInterCompanyCompany } from "@/lib/interCompany/localInterCompanyPolicy";
 import {
   DEFAULT_PARTNER_MASK_IN_VIEW,
   DEFAULT_PARTNER_SEARCH_BY,
@@ -68,6 +69,12 @@ export async function loadInterCompanyJoinSettings(
   if (!companyId) {
     return { settings: readInterCompanyLocalSettings(companyId), companyGroupId: null };
   }
+  if (await isPureLocalInterCompanyCompany(companyId)) {
+    return {
+      settings: readInterCompanyLocalSettings(companyId),
+      companyGroupId: null,
+    };
+  }
   try {
     const snap = await getDoc(settingsDocRef(companyId));
     if (snap.exists()) {
@@ -95,23 +102,43 @@ export function subscribeInterCompanyJoinSettings(
   onError?: (err: unknown) => void
 ): Unsubscribe {
   if (!companyId) return () => undefined;
-  return onSnapshot(
-    settingsDocRef(companyId),
-    (snap) => {
-      if (!snap.exists()) {
-        onData({ settings: readInterCompanyLocalSettings(companyId), companyGroupId: null });
-        return;
-      }
-      const data = snap.data() as Record<string, unknown>;
-      const settings = docToLocalSettings(data);
-      writeInterCompanyLocalSettings(companyId, settings);
+
+  let cancelled = false;
+  let firestoreUnsub: Unsubscribe = () => undefined;
+
+  void (async () => {
+    if (await isPureLocalInterCompanyCompany(companyId)) {
+      if (cancelled) return;
       onData({
-        settings,
-        companyGroupId: String(data.companyGroupId || "").trim() || null,
+        settings: readInterCompanyLocalSettings(companyId),
+        companyGroupId: null,
       });
-    },
-    (err) => onError?.(err)
-  );
+      return;
+    }
+    if (cancelled) return;
+    firestoreUnsub = onSnapshot(
+      settingsDocRef(companyId),
+      (snap) => {
+        if (!snap.exists()) {
+          onData({ settings: readInterCompanyLocalSettings(companyId), companyGroupId: null });
+          return;
+        }
+        const data = snap.data() as Record<string, unknown>;
+        const settings = docToLocalSettings(data);
+        writeInterCompanyLocalSettings(companyId, settings);
+        onData({
+          settings,
+          companyGroupId: String(data.companyGroupId || "").trim() || null,
+        });
+      },
+      (err) => onError?.(err)
+    );
+  })();
+
+  return () => {
+    cancelled = true;
+    firestoreUnsub();
+  };
 }
 
 /** Save button — Firestore + localStorage */
@@ -128,6 +155,9 @@ export async function saveInterCompanyJoinSettings(args: {
     partnerViewFields: normalizePartnerViewFields(args.settings.partnerViewFields),
   };
   writeInterCompanyLocalSettings(companyId, settings);
+  if (await isPureLocalInterCompanyCompany(companyId)) {
+    return;
+  }
   await setDoc(
     settingsDocRef(companyId),
     {

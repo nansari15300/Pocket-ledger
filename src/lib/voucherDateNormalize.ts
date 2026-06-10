@@ -2,6 +2,7 @@
 
 import { format } from "date-fns";
 import { Timestamp } from "firebase/firestore";
+import { PL_CLIENT_OFFLINE_FIRST_PERSIST_MS } from "@/lib/localMirrorServerMeta";
 
 /**
  * Firestore Timestamp / JSON `{ seconds, nanoseconds }` / ISO / `Date` → JS `Date` (form default + sale edit)
@@ -92,7 +93,27 @@ export function getVoucherEntryTimeSourceDate(transaction: Record<string, unknow
   if (fromEdited) return fromEdited;
   const fromUpdated = parseFirestoreDateFieldToJsDate(transaction["updatedAt"]);
   if (fromUpdated) return fromUpdated;
+  const offlineMs = transaction[PL_CLIENT_OFFLINE_FIRST_PERSIST_MS];
+  if (typeof offlineMs === "number" && Number.isFinite(offlineMs)) {
+    return new Date(offlineMs);
+  }
   return parseFirestoreDateFieldToJsDate(transaction["date"]);
+}
+
+/** New voucher save: user-picked calendar day + abhi ka local clock — `date` fallback par 12:00 AM na dikhe. */
+export function mergeVoucherCalendarDateWithSaveClock(calendarDate: Date): Date {
+  const d =
+    calendarDate instanceof Date && !isNaN(calendarDate.getTime()) ? calendarDate : new Date();
+  const now = new Date();
+  return new Date(
+    d.getFullYear(),
+    d.getMonth(),
+    d.getDate(),
+    now.getHours(),
+    now.getMinutes(),
+    now.getSeconds(),
+    now.getMilliseconds()
+  );
 }
 
 export function formatVoucherEntryTimeLocal(

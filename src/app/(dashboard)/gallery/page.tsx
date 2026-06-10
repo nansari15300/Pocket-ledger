@@ -140,13 +140,14 @@ function isValidGalleryPageSize(n: number): n is (typeof GALLERY_FILES_PER_PAGE_
 function getVoucherAttachmentMeta(
   item: any,
   url: string,
-  fileIndex: number
+  fileIndex: number,
+  companyId?: string
 ): { storagePath?: string; fileSize?: number; sourceFileName?: string; contentType?: string } {
   const fromParser = tryGetStoragePathFromFirebaseDownloadUrl(url) ?? undefined;
   // Mirror / SQLite kabhi HTTPS ke bajay encoded tail rakhta hai — `FilePreview` + PDF thumb ke liye SDK path banao.
   const fromBareTail =
     !fromParser && typeof url === "string" && !/^https?:\/\//i.test(url.trim())
-      ? normalizeFirebaseStorageObjectPathForSdk(url)
+      ? normalizeFirebaseStorageObjectPathForSdk(url, { companyId })
       : "";
   const fromNormalized =
     fromBareTail &&
@@ -698,7 +699,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
     if (!mounted) return;
     const ac = new AbortController();
     const entries = paginatedCompanyRows.map(({ item, url, fileIndex }) => {
-      const meta = getVoucherAttachmentMeta(item, url, fileIndex);
+      const meta = getVoucherAttachmentMeta(item, url, fileIndex, companyId);
       return { url, storagePath: meta.storagePath };
     });
 
@@ -723,7 +724,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
     })();
 
     return () => ac.abort();
-  }, [mounted, companyPdfPrewarmKey, hasPdfToPrewarmOnPage]);
+  }, [mounted, companyPdfPrewarmKey, hasPdfToPrewarmOnPage, companyId]);
 
  const getAccountNameFromVoucher = (voucher: any) => {
     if (voucher.isAvatar) return voucher.name;
@@ -799,7 +800,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
           style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${previewSize}px, 1fr))` }}
         >
         {paginatedCompanyRows.map(({ item, url, fileIndex: index }) => {
-              const attachMeta = getVoucherAttachmentMeta(item, url, index);
+              const attachMeta = getVoucherAttachmentMeta(item, url, index, companyId);
               const formatCaption = companyGalleryFormatCaption(url, attachMeta, pendingLocalLabelsByRef);
               const cleanFileName = getCleanName(
                 attachMeta.sourceFileName || url.split("/").pop()?.split("?")[0] || ""
@@ -825,6 +826,14 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                               void openAttachmentInApp(url, {
                                 title: cleanFileName,
                                 kind: openKindFromGalleryCaption(formatCaption, url),
+                                serverFallback:
+                                  companyId && item?.id
+                                    ? {
+                                        companyId,
+                                        voucherId: String(item.id),
+                                        clientFileUrls: item.fileUrls,
+                                      }
+                                    : undefined,
                               });
                             }}
                          >
@@ -834,6 +843,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                               size={Number(previewSize)}
                               storagePath={attachMeta.storagePath}
                               fileSize={attachMeta.fileSize}
+                              attachmentCompanyId={companyId}
                               enableHoverFullPreview={false}
                               holdAttachmentClipboard={false}
                             />
@@ -919,6 +929,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                                   file={url}
                                   storagePath={attachMeta.storagePath}
                                   fileSize={attachMeta.fileSize}
+                                  attachmentCompanyId={companyId}
                                   size={700}
                                   previewBox={GALLERY_HOVER_PREVIEW_BOX}
                                   objectFit="contain"

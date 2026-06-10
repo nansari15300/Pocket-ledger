@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileImage, Link2, Search, X } from "lucide-react";
+import { FileImage, Link2, Loader2, Search, X } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -12,10 +12,18 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
-import { useVouchers } from "@/hooks/useVouchers";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import {
   buildCompanyAttachmentCatalogFromVouchers,
   COMPANY_ATTACHMENT_CATALOG_MAX,
+  loadCompanyVoucherAttachmentSources,
   matchesCompanyAttachmentCatalogSearch,
 } from "@/lib/companyAttachmentCatalog";
 import { FilePreview } from "@/components/vouchers/FilePreview";
@@ -23,6 +31,7 @@ import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageD
 import { linkCloudAttachmentRefs } from "@/lib/companyAttachmentRegistry";
 import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 import { useCompany } from "@/hooks/useCompany";
+import { useCrossCompanyAttachmentAccess } from "@/hooks/useCrossCompanyAttachmentAccess";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -94,22 +103,65 @@ export function CompanyAttachmentReuseDialog({
   maxFiles,
   onAddUrls,
 }: Props) {
-  const { vouchers } = useVouchers();
-  const { companyId } = useCompany();
+  const { companyId, allCompaniesRegistry } = useCompany();
+  const { isAttachmentVisible } = useCrossCompanyAttachmentAccess();
   const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [linking, setLinking] = useState<string | null>(null);
+  const [selectedCompanyId, setSelectedCompanyId] = useState("");
+  const [sourceVouchers, setSourceVouchers] = useState<
+    Awaited<ReturnType<typeof loadCompanyVoucherAttachmentSources>>
+  >([]);
+  const [loadingSources, setLoadingSources] = useState(false);
+
+  const companyOptions = useMemo(() => {
+    return [...allCompaniesRegistry]
+      .filter((c) => c.isDeleted !== true && (c as { movedToAdminRecycleAt?: unknown }).movedToAdminRecycleAt == null)
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" }))
+      .map((c) => ({ id: c.id, name: String(c.name || c.id).trim() || c.id }));
+  }, [allCompaniesRegistry]);
+
+  const selectedCompanyName =
+    companyOptions.find((c) => c.id === selectedCompanyId)?.name ?? selectedCompanyId;
+  const currentCompanyName =
+    companyOptions.find((c) => c.id === companyId)?.name ?? companyId ?? "this company";
 
   useEffect(() => {
-    if (!open) setSearch("");
-  }, [open]);
+    if (!open) {
+      setSearch("");
+      return;
+    }
+    if (companyId) setSelectedCompanyId(companyId);
+  }, [open, companyId]);
+
+  useEffect(() => {
+    if (!open || !selectedCompanyId) {
+      setSourceVouchers([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingSources(true);
+    void loadCompanyVoucherAttachmentSources(selectedCompanyId)
+      .then((rows) => {
+        if (!cancelled) setSourceVouchers(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setSourceVouchers([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSources(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, selectedCompanyId]);
 
   const exclude = useMemo(() => new Set(currentUrls.filter((u) => typeof u === "string")), [currentUrls]);
   const remaining = Math.max(0, maxFiles - currentUrls.length);
 
   const catalog = useMemo(
-    () => buildCompanyAttachmentCatalogFromVouchers(vouchers, { excludeUrls: exclude }),
-    [vouchers, exclude]
+    () => buildCompanyAttachmentCatalogFromVouchers(sourceVouchers, { excludeUrls: exclude }),
+    [sourceVouchers, exclude]
   );
 
   const filtered = useMemo(() => {
@@ -125,12 +177,26 @@ export function CompanyAttachmentReuseDialog({
       toast({ variant: "destructive", title: "Attachment limit reached" });
       return;
     }
+    if (!isAttachmentVisible(url)) {
+      toast({
+        variant: "destructive",
+        title: "File not available here",
+        description: "You do not have access to this attachment from the current company.",
+      });
+      return;
+    }
     setLinking(url);
     try {
       if (companyId) await linkCloudAttachmentRefs(companyId, [url]);
       onAddUrls([url]);
       const kind = isDriveFileRef(url) ? "cloud file" : "file";
-      toast({ title: "Attachment linked", description: `Reused existing ${kind} — no new upload.` });
+      const crossCompany = selectedCompanyId && companyId && selectedCompanyId !== companyId;
+      toast({
+        title: "Attachment linked",
+        description: crossCompany
+          ? `Linked from ${selectedCompanyName} — no new upload.`
+          : `Reused existing ${kind} — no new upload.`,
+      });
       onOpenChange(false);
     } catch (e) {
       toast({
@@ -151,38 +217,77 @@ export function CompanyAttachmentReuseDialog({
           "border-2 border-emerald-500/75 pl-dashboard-ribbon-emerald bg-emerald-50/90 sm:gap-4"
         )}
       >
-        <DialogHeader className="shrink-0">
+        <DialogHeader className="shrink-0 space-y-1">
           <DialogTitle>Reuse company attachment</DialogTitle>
           <DialogDescription>
-            Pick a file already saved on another voucher — links the same storage URL (no duplicate upload).
+            Pick a file from any of your companies — links the same storage URL on this voucher (no duplicate
+            upload).
           </DialogDescription>
         </DialogHeader>
-        <div className="relative shrink-0">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by file or voucher no."
-            className={cn(
-              "border-emerald-500/60 bg-white/85 pl-9 focus-visible:ring-emerald-500/40",
-              search.trim() ? "pr-9" : "pr-3"
-            )}
-          />
-          {search.trim() ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="absolute right-0.5 top-1/2 h-8 w-8 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              aria-label="Clear search"
-              onClick={() => setSearch("")}
+        <div className="shrink-0 space-y-1.5">
+          <Label htmlFor="pl-reuse-attachment-search" className="text-xs text-muted-foreground">
+            Search files in company
+          </Label>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                id="pl-reuse-attachment-search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by file or voucher no."
+                className={cn(
+                  "h-10 border-emerald-500/60 bg-white/85 pl-9 focus-visible:ring-emerald-500/40",
+                  search.trim() ? "pr-9" : "pr-3"
+                )}
+              />
+              {search.trim() ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-0.5 top-1/2 h-8 w-8 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
+                  onClick={() => setSearch("")}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              ) : null}
+            </div>
+            <Select
+              value={selectedCompanyId || undefined}
+              onValueChange={setSelectedCompanyId}
+              disabled={companyOptions.length === 0 || loadingSources}
             >
-              <X className="h-4 w-4" />
-            </Button>
+              <SelectTrigger
+                id="pl-reuse-company-select"
+                className="h-10 w-full shrink-0 border-emerald-500/60 bg-white/85 sm:w-[min(42%,14rem)]"
+              >
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {companyOptions.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                    {c.id === companyId ? " (current)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {selectedCompanyId && companyId && selectedCompanyId !== companyId ? (
+            <p className="text-[11px] text-muted-foreground">
+              Use adds the link to your voucher in <span className="font-medium">{currentCompanyName}</span>.
+            </p>
           ) : null}
         </div>
         <p className="shrink-0 text-xs text-muted-foreground" aria-live="polite">
-          {search.trim() ? (
+          {loadingSources ? (
+            <span className="inline-flex items-center gap-1.5">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+              Loading attachments from {selectedCompanyName || "company"}…
+            </span>
+          ) : search.trim() ? (
             <>
               <span className="font-medium text-foreground">{filtered.length}</span>{" "}
               {filtered.length === 1 ? "match" : "matches"} of{" "}
@@ -195,15 +300,26 @@ export function CompanyAttachmentReuseDialog({
               {catalog.length !== 1 ? "s" : ""}
             </>
           )}
-          {catalogCapped ? ` (first ${COMPANY_ATTACHMENT_CATALOG_MAX} shown)` : null}
-          <span className="block text-[10px] opacity-80">From vouchers already loaded in this app — no extra list fetch.</span>
+          {!loadingSources && catalogCapped ? ` (first ${COMPANY_ATTACHMENT_CATALOG_MAX} shown)` : null}
+          {!loadingSources ? (
+            <span className="block text-[10px] opacity-80">
+              From vouchers in {selectedCompanyName || "selected company"}.
+            </span>
+          ) : null}
         </p>
         <ScrollArea
           listChrome
           className="min-h-0 flex-1 rounded-md border-2 border-emerald-600/50 bg-emerald-50/50"
         >
-          {catalog.length === 0 ? (
-            <p className="p-4 text-sm text-muted-foreground">No reusable attachments found.</p>
+          {loadingSources ? (
+            <p className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading…
+            </p>
+          ) : catalog.length === 0 ? (
+            <p className="p-4 text-sm text-muted-foreground">
+              No reusable attachments found in {selectedCompanyName || "this company"}.
+            </p>
           ) : filtered.length === 0 ? (
             <p className="p-4 text-sm text-muted-foreground">No files match your search.</p>
           ) : (
@@ -285,12 +401,12 @@ export function CompanyAttachmentReuseButton({
         type="button"
         variant="outline"
         size="sm"
-        className={className}
+        className={cn("whitespace-normal text-center", className)}
         disabled={!canAdd}
         onClick={() => setOpen(true)}
       >
-        <Link2 className="mr-1.5 h-3.5 w-3.5" />
-        Reuse file
+        <Link2 className="h-5 w-5 shrink-0" aria-hidden />
+        <span>Reuse file</span>
       </Button>
       <CompanyAttachmentReuseDialog
         open={open}

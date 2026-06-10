@@ -22,6 +22,7 @@ import { appendLocalCompanyUserClient, parseLocalCompanyUserRows, upsertUserInLi
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import type { Company } from "@/hooks/useCompany";
+import { readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConfig";
 import { enableDriveEncryptionAndShareEmail } from "@/lib/localCloudSync/driveCloudSyncClient";
 import { setBackupEncryptionSessionFromLogin } from "@/lib/serverBackupEncryption";
 import { backfillLocalDocsToCloudSyncOutbox } from "@/lib/localCloudSync/backfillOutbox";
@@ -35,7 +36,14 @@ type Props = {
   onUserAdded?: () => void;
 };
 
+function driveShareEnabledForCompany(company: Company | null): boolean {
+  if (!company) return false;
+  const cfg = readCloudSyncConfigFromCompany(company as Record<string, unknown>);
+  return cfg.cloudSyncEnabled === true && cfg.cloudSyncProvider === "google_drive";
+}
+
 export function AddLocalCompanyUserDialog({ company, open, onOpenChange, onUserAdded }: Props) {
+  const driveShareMode = driveShareEnabledForCompany(company);
   const [displayName, setDisplayName] = useState("");
   const [loginUsername, setLoginUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -69,7 +77,7 @@ export function AddLocalCompanyUserDialog({ company, open, onOpenChange, onUserA
       });
       return;
     }
-    if (!gmail.includes("@")) {
+    if (driveShareMode && !gmail.includes("@")) {
       toast({
         variant: "destructive",
         title: "Gmail required",
@@ -93,6 +101,16 @@ export function AddLocalCompanyUserDialog({ company, open, onOpenChange, onUserA
         displayName: n,
         role: role.toLowerCase(),
       });
+
+      if (!driveShareMode) {
+        toast({
+          title: "User added",
+          description: `${n} can log in with username "${u}" when opening this company (or via your local server gate).`,
+        });
+        onOpenChange(false);
+        onUserAdded?.();
+        return;
+      }
 
       // Gmail se bhi login ho sake — password sync `opening/users.json` me email row ke saath.
       if (gmail.toLowerCase() !== u.toLowerCase()) {
@@ -143,7 +161,9 @@ export function AddLocalCompanyUserDialog({ company, open, onOpenChange, onUserA
           <DialogTitle>Add company user</DialogTitle>
           <DialogDescription>
             Add a login for <span className="font-medium text-foreground">{company?.name ?? "this company"}</span>.
-            User ka password Drive encryption key hai (company password na ho to). Gmail par Drive folder share hoga.
+            {driveShareMode
+              ? " User password is also used for Drive encryption. Gmail gets writer access on the shared folder."
+              : " They use this username and password on Select company, or on another PC via your local server gate + access token."}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 py-2">
@@ -207,20 +227,22 @@ export function AddLocalCompanyUserDialog({ company, open, onOpenChange, onUserA
               Shared user dusre device par isi username/password se login kare — tab Drive se decrypt ho payega.
             </p>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="alu-share-gmail">Share Drive folder with (Gmail)</Label>
-            <Input
-              id="alu-share-gmail"
-              type="email"
-              value={shareGmail}
-              onChange={(e) => setShareGmail(e.target.value)}
-              placeholder="staff@gmail.com"
-              autoComplete="off"
-            />
-            <p className="text-xs text-muted-foreground">
-              Add user ke saath Drive company folder writer access — encrypted data sync.
-            </p>
-          </div>
+          {driveShareMode ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="alu-share-gmail">Share Drive folder with (Gmail)</Label>
+              <Input
+                id="alu-share-gmail"
+                type="email"
+                value={shareGmail}
+                onChange={(e) => setShareGmail(e.target.value)}
+                placeholder="staff@gmail.com"
+                autoComplete="off"
+              />
+              <p className="text-xs text-muted-foreground">
+                Add user ke saath Drive company folder writer access — encrypted data sync.
+              </p>
+            </div>
+          ) : null}
         </div>
         <DialogFooter className="gap-2 sm:gap-0">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>
@@ -228,7 +250,7 @@ export function AddLocalCompanyUserDialog({ company, open, onOpenChange, onUserA
           </Button>
           <Button type="button" onClick={() => void handleSubmit()} disabled={loading}>
             {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Add user & share Drive
+            {driveShareMode ? "Add user & share Drive" : "Add user"}
           </Button>
         </DialogFooter>
       </DialogContent>

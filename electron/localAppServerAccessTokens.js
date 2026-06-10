@@ -115,11 +115,74 @@ function revokeAccessToken(userDataPath, id) {
   return true;
 }
 
+function getAccessTokenSecret(userDataPath, id) {
+  const store = loadAccessTokenStore(userDataPath);
+  const rec = store.tokens.find((t) => t && t.id === id && !t.revokedAt);
+  if (!rec || !rec.token) return null;
+  return {
+    id: rec.id,
+    token: rec.token,
+    label: rec.label || "Shared user",
+    allowedCompanyIds: normalizeCompanyIds(rec.allowedCompanyIds),
+  };
+}
+
+/** New secret string — same token row id (old secret stops working). */
+function rotateAccessToken(userDataPath, id, input = {}) {
+  const store = loadAccessTokenStore(userDataPath);
+  const rec = store.tokens.find((t) => t && t.id === id && !t.revokedAt);
+  if (!rec) return null;
+  rec.token = crypto.randomBytes(32).toString("hex");
+  if (input.label != null) {
+    rec.label = String(input.label || rec.label || "Shared user").slice(0, 120);
+  }
+  if (input.allowedCompanyIds != null) {
+    rec.allowedCompanyIds = normalizeCompanyIds(input.allowedCompanyIds);
+  }
+  saveAccessTokenStore(userDataPath, store);
+  return {
+    id: rec.id,
+    token: rec.token,
+    label: rec.label,
+    email: rec.email || null,
+    uid: rec.uid || null,
+    allowedCompanyIds: normalizeCompanyIds(rec.allowedCompanyIds),
+    createdAt: rec.createdAt || null,
+  };
+}
+
+function updateAccessToken(userDataPath, id, input = {}) {
+  const store = loadAccessTokenStore(userDataPath);
+  const rec = store.tokens.find((t) => t && t.id === id && !t.revokedAt);
+  if (!rec) return null;
+  if (input.label != null) {
+    rec.label = String(input.label || rec.label || "Shared user").slice(0, 120);
+  }
+  if (input.allowedCompanyIds != null) {
+    rec.allowedCompanyIds = normalizeCompanyIds(input.allowedCompanyIds);
+  }
+  saveAccessTokenStore(userDataPath, store);
+  const ids = normalizeCompanyIds(rec.allowedCompanyIds);
+  return {
+    id: rec.id,
+    label: rec.label || "User",
+    email: rec.email || null,
+    uid: rec.uid || null,
+    createdAt: rec.createdAt || null,
+    lastUsedAt: rec.lastUsedAt || null,
+    tokenPreview: rec.token ? `${rec.token.slice(0, 6)}…${rec.token.slice(-4)}` : "",
+    allowedCompanyIds: ids,
+  };
+}
+
 module.exports = {
   listAccessTokens,
   getAccessTokenRecord,
   validateAccessToken,
   createAccessToken,
+  getAccessTokenSecret,
+  rotateAccessToken,
+  updateAccessToken,
   revokeAccessToken,
   normalizeCompanyIds,
 };

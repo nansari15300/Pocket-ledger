@@ -244,7 +244,7 @@ export function VoucherSettings() {
           contra: false, direct_income: false, direct_expense: false, journal: false, note: false,
           add_salary: false, pay_salary: false,
         },
-        enableLinkPaymentToTxns: true,
+        enableLinkPaymentToTxns: false,
         enableCrossCompanyLedgerCopy: false,
         enableShareForReconciliation: false,
         spendWiseEnabled: false,
@@ -294,7 +294,7 @@ export function VoucherSettings() {
             ...form.getValues('enableVoucherPrefixSelection'),
             ...(company as any).enableVoucherPrefixSelection,
         },
-        enableLinkPaymentToTxns: (company as any).enableLinkPaymentToTxns !== false,
+        enableLinkPaymentToTxns: (company as any).enableLinkPaymentToTxns === true,
         // `reset` me zaroor ho — warna RHF default `false` pe wapas, company Firestore se `true` ho to header switch mismatch
         enableCrossCompanyLedgerCopy: (company as any).enableCrossCompanyLedgerCopy === true,
         enableShareForReconciliation: (company as any).enableShareForReconciliation === true,

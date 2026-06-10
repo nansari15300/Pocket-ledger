@@ -5,7 +5,7 @@ import { auth } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
-import { shouldSkipEmbeddedStartupAuthChurn } from "@/lib/embeddedWarmBootstrapFlags";
+import { shouldSkipEmbeddedStartupAuthChurn, embeddedClientPrefersQuietBackgroundSync } from "@/lib/embeddedWarmBootstrapFlags";
 import { flushVoucherOutbox } from "@/lib/localVoucherOutbox";
 import { useCompany } from "@/hooks/useCompany";
 
@@ -61,8 +61,14 @@ export function StaticFastResumeSyncManager() {
           typeof navigator !== "undefined" &&
           navigator.onLine !== false;
 
+        /** APK/EXE: resume/mount par registry tick se poori company/voucher listeners dubara bind — page "recover"/shake feel. */
+        const embeddedQuietBackgroundOnly = embeddedClientPrefersQuietBackgroundSync();
+
         const skipRegistryAndToken =
-          quietResumeNoRegistryTick || skipEmbeddedWarmMount || skipHeavyMountWhileOnlineSession;
+          quietResumeNoRegistryTick ||
+          skipEmbeddedWarmMount ||
+          skipHeavyMountWhileOnlineSession ||
+          embeddedQuietBackgroundOnly;
 
         if (process.env.NODE_ENV !== "production") {
           // `flushVoucherOutbox` andar `enableNetwork` chala sakta — yehi Firestore listener churn se "refresh" correlate hota hai.

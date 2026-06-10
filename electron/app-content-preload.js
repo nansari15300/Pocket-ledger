@@ -1,5 +1,13 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+function readAppBootSessionId() {
+  try {
+    return String(ipcRenderer.sendSync("pl-get-app-boot-session-id") || "");
+  } catch (_) {
+    return "";
+  }
+}
+
 /**
  * Next tab BrowserView — tab strip se “background sync” ke baad strip ko green ✓ dikhane ke liye IPC.
  * `main.js` `pl-tab-strip-sync-done-ack` strip ko forward karta hai.
@@ -10,6 +18,11 @@ contextBridge.exposeInMainWorld("plElectronTabBridge", {
       ipcRenderer.send("pl-tab-strip-sync-done-from-app");
     } catch (_) {}
   },
+});
+
+/** Multi-device / Firestore label: renderer `os.hostname` nahi padh sakta — main IPC se string. */
+contextBridge.exposeInMainWorld("plElectronApp", {
+  bootSessionId: readAppBootSessionId(),
 });
 
 /** Multi-device / Firestore label: renderer `os.hostname` nahi padh sakta — main IPC se string. */
@@ -25,6 +38,30 @@ contextBridge.exposeInMainWorld("plElectronBackup", {
   readBackupFile: (args) => ipcRenderer.invoke("pl-read-backup-file", args),
 });
 
+/** EXE: voucher/transaction attachment bytes — userData/pl-attachments (APK DataDirectory jaisa). */
+contextBridge.exposeInMainWorld("plElectronAttachments", {
+  writeFile: (args) => ipcRenderer.invoke("pl-attachment-write", args),
+  readFile: (args) => ipcRenderer.invoke("pl-attachment-read", args),
+  deleteFile: (relativePath) => ipcRenderer.invoke("pl-attachment-delete", relativePath),
+  exists: (relativePath) => ipcRenderer.invoke("pl-attachment-exists", relativePath),
+});
+
+/** EXE: Google sign-in system browser (Chrome/Edge) — saved account one-tap. */
+contextBridge.exposeInMainWorld("plElectronAuth", {
+  signInWithGoogleExternal: () => ipcRenderer.invoke("pl-google-auth-external"),
+});
+
+/** Gate → Connect & open: inject access token on remote server static requests (WAN IP). */
+contextBridge.exposeInMainWorld("plElectronGate", {
+  setRemoteAuth: (serverUrl, accessToken) => {
+    try {
+      return ipcRenderer.sendSync("pl-set-remote-gate-auth", { serverUrl, accessToken });
+    } catch (_) {
+      return { ok: false };
+    }
+  },
+});
+
 /** EXE / Linux desktop: local static server — settings → Server */
 contextBridge.exposeInMainWorld("plElectronLocalServer", {
   getStatus: () => ipcRenderer.invoke("pl-local-server-get-status"),
@@ -35,5 +72,8 @@ contextBridge.exposeInMainWorld("plElectronLocalServer", {
   restart: (partial) => ipcRenderer.invoke("pl-local-server-restart", partial),
   listAccessTokens: () => ipcRenderer.invoke("pl-local-server-list-access-tokens"),
   createAccessToken: (input) => ipcRenderer.invoke("pl-local-server-create-access-token", input),
+  updateAccessToken: (id, input) => ipcRenderer.invoke("pl-local-server-update-access-token", { id, input }),
+  getAccessTokenSecret: (id) => ipcRenderer.invoke("pl-local-server-get-access-token-secret", id),
+  rotateAccessToken: (id, input) => ipcRenderer.invoke("pl-local-server-rotate-access-token", { id, input }),
   revokeAccessToken: (id) => ipcRenderer.invoke("pl-local-server-revoke-access-token", id),
 });

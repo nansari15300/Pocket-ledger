@@ -5,6 +5,8 @@
  */
 import {
   collectInterCompanyIdsForPendingApproval,
+  interCompanyVoucherViewerSide,
+  isInterCompanyVisibleOnTargetBank,
   isInterCompanyVisibleOnTargetEntity,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
 
@@ -47,8 +49,14 @@ export function voucherTouchesPartyLedger(v: any, partyId: string): boolean {
   if (v.entries?.some((e: any) => ledgerIdEq(e?.accountId, partyId))) return true;
   if (v.type === "note" && ledgerIdEq(v.entityId, partyId)) return true;
   if (v.type === "contra" && (ledgerIdEq(v.fromAccountId, partyId) || ledgerIdEq(v.toAccountId, partyId))) return true;
-  // Inter Company — source/target party ids (sirf `partyId` kabhi peer side par nahi hota)
+  // Inter Company — source/target party + IC · Due from/to counterparty
   if (v.type === "inter_company") {
+    if (ledgerIdEq(v.interCompanyCounterpartyPartyId, partyId)) {
+      if (interCompanyVoucherViewerSide(v) === "target" && !isInterCompanyVisibleOnTargetBank(v)) {
+        return false;
+      }
+      return true;
+    }
     if (!isInterCompanyVisibleOnTargetEntity(v)) return false;
     const sk = String(v.sourceEntityKind || "").toLowerCase();
     const tk = String(v.targetEntityKind || "").toLowerCase();

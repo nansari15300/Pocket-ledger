@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,12 +16,14 @@ import {
   blobToFile,
   refreshAttachmentHoldSessionBackup,
   persistableAttachmentRefFromHoldPayload,
+  ATTACHMENT_HOLD_CROSS_TAB_BACKUP_KEY,
 } from "@/lib/attachmentHoldClipboard";
 import { toast as sonnerToast } from "sonner";
 import { CompanyAttachmentReuseButton } from "@/components/vouchers/CompanyAttachmentReuseDialog";
 import { voucherAttachmentReuseEnabled } from "@/lib/firebaseBillingOptimization";
 import { linkCloudAttachmentRefs } from "@/lib/companyAttachmentRegistry";
 import { useCompany } from "@/hooks/useCompany";
+import { useCrossCompanyAttachmentAccess } from "@/hooks/useCrossCompanyAttachmentAccess";
 
 function sanitizeDownloadFileName(raw: string): string {
   const base = String(raw || "attachment").trim() || "attachment";
@@ -29,11 +31,15 @@ function sanitizeDownloadFileName(raw: string): string {
   return noPath.replace(/[^\w.\- ()\u0900-\u097F]+/g, "_").slice(0, 180) || "attachment";
 }
 
-type VoucherAttachmentReuseConfig = {
+export type VoucherAttachmentReuseConfig = {
   currentFiles: Array<File | string>;
   setFiles: React.Dispatch<React.SetStateAction<Array<File | string>>>;
   maxFiles: number;
 };
+
+/** Voucher attach row — sky circle; sale/payment/contra sab jagah same dikhe. */
+export const VOUCHER_ATTACHMENT_REUSE_TILE_CLASS =
+  "h-24 w-24 shrink-0 flex-col items-center justify-center gap-1 rounded-full border-2 border-dashed border-sky-400/70 bg-sky-100/80 px-1 text-[10px] font-medium leading-tight text-sky-900 hover:border-sky-500 hover:bg-sky-200/80 dark:border-sky-400/55 dark:bg-sky-950/35 dark:text-sky-100";
 
 type Props = {
   /** Khali slot + role allow ho tab hi */
@@ -60,8 +66,19 @@ export function AttachmentHoldPasteSurface({
   voucherAttachmentReuse,
 }: Props) {
   const { companyId } = useCompany();
+  const { isHoldPayloadVisible } = useCrossCompanyAttachmentAccess();
   const tapMode = useTapInteractionMode();
   const [mobilePasteRevealed, setMobilePasteRevealed] = useState(false);
+
+  /** EXE multi-tab: Tab A copy → Tab B me Paste chip dikhao (storage event). */
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== ATTACHMENT_HOLD_CROSS_TAB_BACKUP_KEY || !e.newValue) return;
+      setMobilePasteRevealed(true);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   /** Hold + Paste button dono isi path se — ek hi toast / validation. */
   const runPasteFromHoldClipboard = useCallback(async () => {
@@ -75,6 +92,14 @@ export function AttachmentHoldPasteSurface({
     const payload = parseAttachmentHoldClipboardText(text);
     if (!payload) {
       sonnerToast.error("Clipboard is not a Pocket Ledger attachment");
+      return;
+    }
+
+    if (!isHoldPayloadVisible(payload)) {
+      sonnerToast.error("Other company file (not available here)", {
+        description:
+          "This attachment is from another company. Switch to that company, or use a login where both companies are available.",
+      });
       return;
     }
 
@@ -119,7 +144,7 @@ export function AttachmentHoldPasteSurface({
         : "Unsaved copy — save uploads a separate file.",
     });
     setMobilePasteRevealed(false);
-  }, [companyId, onPastedFiles, voucherAttachmentReuse]);
+  }, [companyId, isHoldPayloadVisible, onPastedFiles, voucherAttachmentReuse]);
 
   const hold = useAttachmentHoldPointer({
     disabled: !enabled,
@@ -131,22 +156,20 @@ export function AttachmentHoldPasteSurface({
       : undefined,
   });
 
-  const reuseTile =
-    voucherAttachmentReuse &&
+  const canShowReuseTile =
+    Boolean(voucherAttachmentReuse) &&
     voucherAttachmentReuseEnabled() &&
-    enabled &&
-    voucherAttachmentReuse.currentFiles.length < voucherAttachmentReuse.maxFiles ? (
-      <CompanyAttachmentReuseButton
-        currentFiles={voucherAttachmentReuse.currentFiles}
-        maxFiles={voucherAttachmentReuse.maxFiles}
-        onAddUrls={(urls) => voucherAttachmentReuse.setFiles((prev) => [...prev, ...urls])}
-        disabled={!enabled}
-        className={cn(
-          "h-24 w-24 flex-col gap-1 border-2 border-dashed text-[10px] px-1 shrink-0",
-          className?.includes("w-24") ? "" : "h-24 w-24"
-        )}
-      />
-    ) : null;
+    (voucherAttachmentReuse?.currentFiles.length ?? 0) < (voucherAttachmentReuse?.maxFiles ?? 0);
+
+  const reuseTile = canShowReuseTile && voucherAttachmentReuse ? (
+    <CompanyAttachmentReuseButton
+      currentFiles={voucherAttachmentReuse.currentFiles}
+      maxFiles={voucherAttachmentReuse.maxFiles}
+      onAddUrls={(urls) => voucherAttachmentReuse.setFiles((prev) => [...prev, ...urls])}
+      disabled={!enabled}
+      className={VOUCHER_ATTACHMENT_REUSE_TILE_CLASS}
+    />
+  ) : null;
 
   const addTile = (
     <div

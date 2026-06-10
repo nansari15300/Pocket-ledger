@@ -1,25 +1,23 @@
 "use client";
 
 import { useEffect } from "react";
-import { useCompany } from "@/hooks/useCompany";
+import { flushVoucherOutbox } from "@/lib/localVoucherOutbox";
 
 /** Tab strip ↻ se aata hai — `main.js` executeJavaScript event */
 export const ELECTRON_TAB_STRIP_SYNC_EVENT = "pocket-ledger-tab-strip-sync";
 
 /**
- * EXE tab strip: background sync — sirf `triggerSync` (registry tick), `reloadLocalCompanyRegistry` mat (poori list hilti).
+ * EXE tab strip: background sync — outbox flush only (registry tick se poori UI dubara bind na ho).
  * Khatam hone par `plElectronTabBridge` se strip par 2s green ✓.
  */
 export function ElectronTabStripSyncBridge() {
-  const { triggerSync } = useCompany();
-
   useEffect(() => {
     const w = window as unknown as {
       plElectronTabBridge?: { notifyTabStripBackgroundSyncDone?: () => void };
     };
     const onStripSync = () => {
       try {
-        triggerSync();
+        void flushVoucherOutbox();
       } finally {
         queueMicrotask(() => {
           try {
@@ -32,7 +30,7 @@ export function ElectronTabStripSyncBridge() {
     };
     window.addEventListener(ELECTRON_TAB_STRIP_SYNC_EVENT, onStripSync);
     return () => window.removeEventListener(ELECTRON_TAB_STRIP_SYNC_EVENT, onStripSync);
-  }, [triggerSync]);
+  }, []);
 
   return null;
 }

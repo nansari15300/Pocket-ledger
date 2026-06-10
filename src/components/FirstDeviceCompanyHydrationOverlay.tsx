@@ -22,8 +22,8 @@ import {
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 import {
   EMBEDDED_ACCOUNT_WARM_GAP_MS,
-  EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
-  orderCloudCompaniesForAccountWarm,
+  orderCompaniesForAccountFullPreload,
+  runEmbeddedCompanyFullPreload,
   sleepMs,
 } from "@/lib/embeddedAccountOfflineWarm";
 import {
@@ -31,13 +31,8 @@ import {
   readEmbeddedFullWarmSucceeded,
 } from "@/lib/embeddedWarmBootstrapFlags";
 import { useFirstLoginWarmGate } from "@/contexts/FirstLoginWarmGateContext";
-import { useEmbeddedAttachmentPrefetch } from "@/contexts/EmbeddedAttachmentPrefetchContext";
-import {
-  runOfflineFullWarmSync,
-  isCloudBackedCompanyShape,
-  shouldPrefetchAttachmentsForCompany,
-  runEmbeddedAttachmentPrefetchPhase,
-} from "@/lib/offlineFullWarmSync";
+import { useSetHeaderAttachmentPrefetchPercent } from "@/contexts/EmbeddedAttachmentPrefetchContext";
+import { shouldPrefetchAttachmentsForCompany } from "@/lib/offlineFullWarmSync";
 import {
   clearEmbeddedPendingCompanyDataWarm,
   hasEmbeddedPendingCompanyDataWarm,
@@ -68,7 +63,7 @@ export function FirstDeviceCompanyHydrationOverlay() {
   const { user, loading: authLoading } = useAuth();
   const { companyId, company, allCompanies, loading: registryLoading } = useCompany();
   const { setGateActive } = useFirstLoginWarmGate();
-  const { setHeaderAttachmentPercent } = useEmbeddedAttachmentPrefetch();
+  const setHeaderAttachmentPercent = useSetHeaderAttachmentPrefetchPercent();
 
   const uid = user?.uid ?? "";
   const isLoginRoute = pathname === "/" || pathname === "";
@@ -153,7 +148,7 @@ export function FirstDeviceCompanyHydrationOverlay() {
       dismissedRef.current = false;
     }
     prevCompanyIdForResetRef.current = next;
-  }, [companyId, embeddedFullWarm, setHeaderAttachmentPercent]);
+  }, [companyId, embeddedFullWarm]);
 
   useEffect(() => {
     if (eligible) {
@@ -212,21 +207,16 @@ export function FirstDeviceCompanyHydrationOverlay() {
     setGateActive(false);
     if (!hasCompanyHydrationSplashBeenSeen(uid)) markCompanyHydrationSplashSeen(uid);
     router.replace("/dashboard");
-  }, [companyId, router, setGateActive, setHeaderAttachmentPercent, uid]);
+  }, [companyId, router, setGateActive, uid]);
 
   /** APK/static/EXE: account ki saari cloud companies — selected pehle, phir baaki serial warm + attachments. */
   const startEmbeddedWarm = useCallback(async () => {
     if (!embeddedFullWarm || warmStartedRef.current || !uid) return;
     warmStartedRef.current = true;
 
-    const ordered = orderCloudCompaniesForAccountWarm(allCompanies ?? [], companyId);
-    /** Pehli baar poora account; baad mein sirf nayi/changed company (switch) — dubara saari companies mat khinchao. */
+    /** Hamesha account ki saari preload-eligible companies — offline files miss na hon. */
+    const rows = orderCompaniesForAccountFullPreload(allCompanies ?? [], companyId);
     const accountWideFirstWarm = !readEmbeddedFullWarmSucceeded(uid);
-    const rows = accountWideFirstWarm
-      ? ordered
-      : companyId?.trim()
-        ? ordered.filter((c) => c.id === companyId.trim())
-        : ordered;
     setCloudRows(rows);
 
     if (rows.length === 0) {
@@ -270,50 +260,23 @@ export function FirstDeviceCompanyHydrationOverlay() {
           const localId = String(row.id).trim();
 
           try {
-            await runOfflineFullWarmSync({
+            setHeaderAttachmentPercent(1);
+            await runEmbeddedCompanyFullPreload({
               company: row,
               localCompanyId: localId,
               signal: accountAc.signal,
-              includeAttachmentPrefetch: false,
-              skipWarmBootstrapFlag: accountWideFirstWarm,
-              onProgress: (e) => {
-                if (e.kind === "data_subcollection" && e.localCompanyId === row.id) {
-                  const data = e.total ? Math.min(100, Math.round((e.completed / e.total) * 100)) : 0;
-                  setProgressById((prev) => ({
-                    ...prev,
-                    [row.id]: { ...(prev[row.id] ?? { data: 0, attach: 0 }), data },
-                  }));
-                }
-              },
+              onAttachmentProgressPercent: (pct) => setHeaderAttachmentPercent(pct),
             });
           } catch {
             /* per-company network / abort */
+          } finally {
+            setHeaderAttachmentPercent(null);
           }
 
           setProgressById((prev) => ({
             ...prev,
-            [row.id]: { data: 100, attach: 0 },
+            [row.id]: { data: 100, attach: 100 },
           }));
-
-          if (accountAc.signal.aborted) break;
-
-          attachmentBgAbortRef.current?.abort();
-          const bgAc = new AbortController();
-          attachmentBgAbortRef.current = bgAc;
-          try {
-            setHeaderAttachmentPercent(1);
-            await runEmbeddedAttachmentPrefetchPhase({
-              company: row,
-              localCompanyId: localId,
-              signal: bgAc.signal,
-              onProgressPercent: (pct) => setHeaderAttachmentPercent(pct),
-              prefetchOverrides: EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
-            });
-          } catch {
-            /* offline mid-run */
-          } finally {
-            setHeaderAttachmentPercent(null);
-          }
 
           if (i < rows.length - 1 && !accountAc.signal.aborted) {
             try {
@@ -340,7 +303,6 @@ export function FirstDeviceCompanyHydrationOverlay() {
     companyId,
     router,
     setGateActive,
-    setHeaderAttachmentPercent,
   ]);
 
   useEffect(() => {
@@ -377,7 +339,7 @@ export function FirstDeviceCompanyHydrationOverlay() {
       setGateActive(false);
       setHeaderAttachmentPercent(null);
     };
-  }, [setGateActive, setHeaderAttachmentPercent]);
+  }, [setGateActive]);
 
   /** Embedded running: overlay % = data mirror only (attachments header me). */
   useEffect(() => {

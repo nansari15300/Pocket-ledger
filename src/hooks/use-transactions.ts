@@ -39,6 +39,7 @@ import {
   interCompanyVoucherViewerSide,
   shouldShowInterCompanyInDaybookOrRecent,
 } from "@/lib/interCompany/interCompanyVoucherHydrate";
+import { formatInterCompanyLedgerVoucherNumber } from "@/lib/interCompany/interCompanyVoucherDisplay";
 import { sumJournalAmountsForAccount } from "@/lib/journalLedgerAmounts";
 
 
@@ -1427,9 +1428,14 @@ export function useTransactions(
                     }
                 }
                 // Contra: in account context use Out number on from-account, In number on to-account
-                const displayVoucherNumber = (t.type === 'contra' && context === 'account' && entity && 'id' in entity)
-                    ? (entity.id === t.fromAccountId ? (t.voucherNumberOut ?? t.voucherNumber) : (t.voucherNumberIn ?? t.voucherNumber))
-                    : (t.voucherNumber ?? (t as any).voucher_number);
+                const displayVoucherNumber =
+                    t.type === "contra" && context === "account" && entity && "id" in entity
+                        ? entity.id === t.fromAccountId
+                            ? (t.voucherNumberOut ?? t.voucherNumber)
+                            : (t.voucherNumberIn ?? t.voucherNumber)
+                        : t.type === "inter_company"
+                          ? formatInterCompanyLedgerVoucherNumber(t as Record<string, unknown>)
+                          : (t.voucherNumber ?? (t as any).voucher_number);
                 // Preserve which contra leg user clicked in account ledger so edit dialog can show same current voucher leg.
                 const clickedContraLeg = (t.type === 'contra' && context === 'account' && entity && 'id' in entity)
                     ? (entity.id === t.fromAccountId ? 'out' : entity.id === t.toAccountId ? 'in' : (t as any)._contraLeg)

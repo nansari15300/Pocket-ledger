@@ -2,6 +2,13 @@
 
 import { Capacitor } from "@capacitor/core";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+import {
+  electronAttachmentBlobExists,
+  electronDeleteAttachmentBlob,
+  electronReadAttachmentBlob,
+  electronWriteAttachmentBlob,
+} from "@/lib/electronAttachmentFs";
 import { Directory } from "@capacitor/filesystem";
 
 type FsModule = typeof import("@capacitor/filesystem");
@@ -56,8 +63,11 @@ function base64RawToBlob(base64Raw: string, contentType?: string | null): Blob {
   return new Blob([bytes], { type: contentType || "application/octet-stream" });
 }
 
-/** Capacitor DataDirectory me attachment bytes write; return `path` (SQLite ref me store karne ke liye). */
+/** Capacitor DataDirectory / EXE userData me attachment bytes write; return `path` (SQLite ref me store). */
 export async function writeAttachmentBlobToDataDir(path: string, blob: Blob): Promise<boolean> {
+  if (isElectronDesktopApp()) {
+    return electronWriteAttachmentBlob(path, blob);
+  }
   const writer = await getBlobWriter();
   if (writer) {
     try {
@@ -134,13 +144,18 @@ async function verifyAttachmentBlobSha256(
   return blob;
 }
 
-/** DataDirectory path -> Blob. */
+/** DataDirectory / EXE disk path -> Blob. */
 export async function readAttachmentBlobFromDataDir(
   path: string,
   contentType?: string | null,
   /** Row se aaya `sha256_hex` — mismatch par tamper/corrupt treat karke null. */
   expectedSha256Hex?: string | null
 ): Promise<Blob | null> {
+  if (isElectronDesktopApp()) {
+    const blob = await electronReadAttachmentBlob(path, contentType);
+    if (!blob || blob.size <= 0) return null;
+    return verifyAttachmentBlobSha256(blob, path, expectedSha256Hex);
+  }
   // APK: blob-writer binary files ko WebView fetch se padho — readFile base64 bridge corrupt/mismatch de sakta hai.
   if (isCapacitorNativeApp()) {
     const uri = await getAttachmentFileUriFromDataDir(path);
@@ -184,8 +199,12 @@ export async function readAttachmentBlobFromDataDir(
   }
 }
 
-/** Relative DataDirectory path ka file:// URI (Capacitor.convertFileSrc ke liye). */
+/** Relative path ka native URI — Capacitor `file://`; EXE par disk path marker (display URL alag helper). */
 export async function getAttachmentFileUriFromDataDir(path: string): Promise<string | null> {
+  if (isElectronDesktopApp()) {
+    const exists = await electronAttachmentBlobExists(path);
+    return exists ? `electron-attachment://${path}` : null;
+  }
   const fs = await getFsModule();
   if (!fs) return null;
   try {
@@ -201,6 +220,7 @@ export async function getAttachmentFileUriFromDataDir(path: string): Promise<str
 
 /** Path existence probe — thumbnail cache hit/miss fast check. */
 export async function attachmentFileExistsInDataDir(path: string): Promise<boolean> {
+  if (isElectronDesktopApp()) return electronAttachmentBlobExists(path);
   const fs = await getFsModule();
   if (!fs) return false;
   try {
@@ -214,8 +234,12 @@ export async function attachmentFileExistsInDataDir(path: string): Promise<boole
   }
 }
 
-/** DataDirectory cleanup — stale attachment rows ka disk usage leak avoid. */
+/** DataDirectory / EXE disk cleanup — stale attachment rows ka disk usage leak avoid. */
 export async function deleteAttachmentBlobFromDataDir(path: string): Promise<void> {
+  if (isElectronDesktopApp()) {
+    await electronDeleteAttachmentBlob(path);
+    return;
+  }
   const fs = await getFsModule();
   if (!fs) return;
   try {

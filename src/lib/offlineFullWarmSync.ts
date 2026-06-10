@@ -20,6 +20,21 @@ import { decryptFirestoreCompanyDocIfNeeded, type ServerBackupCryptoContext } fr
 import { listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { stampLocalMirrorBackedByFirestore } from "@/lib/localMirrorServerMeta";
 import { prefetchHttpsAttachmentUrls } from "@/lib/offlineAttachmentUrlCache";
+import {
+  beginAttachmentPrefetchVoucherLookupSession,
+  endAttachmentPrefetchVoucherLookupSession,
+  maybeNotifyAttachmentPrefetchBatchSummary,
+  maybeNotifyAttachmentPrefetchFailure,
+} from "@/lib/attachmentPrefetchUserNotice";
+import {
+  indexVoucherRowsForAttachmentLookup,
+  registerAttachmentVoucherLookupKeys,
+  type AttachmentVoucherHit,
+} from "@/lib/attachmentPrefetchVoucherLookup";
+import {
+  getCrossCompanyAttachmentAccessPolicy,
+  isCrossCompanyAttachmentVisibleToUser,
+} from "@/lib/crossCompanyAttachmentAccess";
 import { peekAttachmentPrefetchPrioritySnapshot } from "@/lib/attachmentPrefetchPriorityBuffer";
 import { looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
 import {
@@ -146,15 +161,56 @@ function skipAttachmentScrapeKey(key: string): boolean {
 }
 
 export async function scrapeLocalMirrorAttachmentUrls(localCompanyId: string): Promise<Set<string>> {
+  const scraped = await scrapeLocalMirrorAttachmentUrlsWithVoucherIndex(localCompanyId);
+  return scraped.urls;
+}
+
+/** Warm prefetch: URL set + scrape-time voucher index (exact voucher no. toast ke liye). */
+export async function scrapeLocalMirrorAttachmentUrlsWithVoucherIndex(localCompanyId: string): Promise<{
+  urls: Set<string>;
+  voucherByAttachmentKey: Map<string, AttachmentVoucherHit>;
+}> {
   const out = new Set<string>();
+  const voucherByAttachmentKey = new Map<string, AttachmentVoucherHit>();
   const paths = COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS as unknown as readonly string[];
   for (const collection of paths) {
     const rows = await listCompanyDocsFromBrowserDb(localCompanyId, collection, { forBackupMerge: true });
+    if (collection === "vouchers") {
+      indexVoucherRowsForAttachmentLookup(rows, localCompanyId, voucherByAttachmentKey);
+      for (const row of rows) {
+        const r = row as Record<string, unknown>;
+        const id = String(r.id || "").trim();
+        if (!id) continue;
+        const hit: AttachmentVoucherHit = {
+          id,
+          voucherNumber: String(r.voucherNumber || "").trim() || id,
+          type: String(r.type || "").trim(),
+          companyId: localCompanyId,
+        };
+        const rowUrls = new Set<string>();
+        scrapeHttpsAttachmentUrlsFromDocTree(row, rowUrls, 0);
+        for (const u of rowUrls) {
+          registerAttachmentVoucherLookupKeys(voucherByAttachmentKey, u, hit, localCompanyId);
+        }
+      }
+    }
     for (const row of rows) {
       scrapeHttpsAttachmentUrlsFromDocTree(row, out, 0);
     }
   }
-  return out;
+
+  const policy = getCrossCompanyAttachmentAccessPolicy();
+  const accessible =
+    policy.accessibleCompanyIds.size > 0
+      ? policy.accessibleCompanyIds
+      : new Set([localCompanyId]);
+  const filteredUrls = new Set<string>();
+  for (const u of out) {
+    if (isCrossCompanyAttachmentVisibleToUser(u, localCompanyId, accessible)) {
+      filteredUrls.add(u);
+    }
+  }
+  return { urls: filteredUrls, voucherByAttachmentKey };
 }
 
 async function mergePlansIntoLocalStorageBestEffort(): Promise<boolean> {
@@ -297,9 +353,11 @@ export async function runOfflineFullWarmSync(options: {
     result.prefetchFailures = 0;
     onProgress?.({ kind: "attachment_item", localCompanyId: localTrim, done: 1, total: 1 });
   } else {
-    const urls = await scrapeLocalMirrorAttachmentUrls(localTrim);
+    const scraped = await scrapeLocalMirrorAttachmentUrlsWithVoucherIndex(localTrim);
+    const urls = scraped.urls;
     result.attachmentUrlsSeen = urls.size;
-
+    beginAttachmentPrefetchVoucherLookupSession(scraped.voucherByAttachmentKey, localTrim);
+    try {
     const prefetch = await prefetchHttpsAttachmentUrls(urls, {
       concurrency: 6,
       // Auto-full cache mode: embedded app me strict warm caps se files offline miss ho rahi thi; upper budget badhao.
@@ -326,12 +384,21 @@ export async function runOfflineFullWarmSync(options: {
             note: ev.note,
             url: ev.url,
           });
+          maybeNotifyAttachmentPrefetchFailure(ev, { mirrorCompanyId: localTrim });
         }
       },
     });
     result.prefetchCachedNew = prefetch.cachedNew;
     result.prefetchSkippedCache = prefetch.skippedAlreadyCached;
     result.prefetchFailures = prefetch.failed + prefetch.skippedBudget;
+    maybeNotifyAttachmentPrefetchBatchSummary({
+      failedCount: prefetch.failed,
+      companyName: company?.name ?? null,
+      companyId: localTrim,
+    });
+    } finally {
+      endAttachmentPrefetchVoucherLookupSession();
+    }
   }
 
   try {
@@ -421,8 +488,11 @@ export async function runEmbeddedAttachmentPrefetchPhase(args: {
     (typeof window !== "undefined" && isCapacitorNativeApp()) ||
     (typeof window !== "undefined" && window.location.protocol === "file:");
 
-  const urls = await scrapeLocalMirrorAttachmentUrls(trim);
+  const scraped = await scrapeLocalMirrorAttachmentUrlsWithVoucherIndex(trim);
+  const urls = scraped.urls;
   const attachmentUrlsSeen = urls.size;
+  beginAttachmentPrefetchVoucherLookupSession(scraped.voucherByAttachmentKey, trim);
+  try {
   if (offlineWarmForensicEnabled()) {
     console.warn("[FORENSIC_EMBEDDED_PREFETCH_PHASE]", {
       phase: "post_scrape_local_mirror",
@@ -467,11 +537,17 @@ export async function runEmbeddedAttachmentPrefetchPhase(args: {
         }
       } else {
         console.warn("[runEmbeddedAttachmentPrefetchPhase:item]", { ok: false, url: ev.url, note: ev.note });
+        maybeNotifyAttachmentPrefetchFailure(ev, { mirrorCompanyId: trim });
       }
     },
   });
 
   onProgressPercent?.(100);
+  maybeNotifyAttachmentPrefetchBatchSummary({
+    failedCount: prefetch.failed,
+    companyName: company?.name ?? null,
+    companyId: trim,
+  });
   if (offlineWarmForensicEnabled()) {
     console.warn("[FORENSIC_EMBEDDED_PREFETCH_PHASE]", {
       phase: "complete",
@@ -490,4 +566,7 @@ export async function runEmbeddedAttachmentPrefetchPhase(args: {
     prefetchSkippedCache: prefetch.skippedAlreadyCached,
     prefetchFailures: prefetch.failed + prefetch.skippedBudget,
   };
+  } finally {
+    endAttachmentPrefetchVoucherLookupSession();
+  }
 }

@@ -45,6 +45,12 @@ import { getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-al
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { generateLocalVoucherIdForCreate } from "@/lib/localEntityIds";
 import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
+import {
+  filterAttachmentsForCompanyContext,
+  filterVoucherAttachmentsForCompanyContext,
+  getCrossCompanyAttachmentAccessPolicy,
+} from "@/lib/crossCompanyAttachmentAccess";
+import { isSoftDeleteLedgerPatch, purgeGhostLocalCompanyDoc } from "@/lib/purgeGhostLocalCompanyDoc";
 import { sendRecycleBinMovedAlert } from "@/lib/writeGateway/legacy/recycleBinAlerts";
 import type { Company } from "@/hooks/useCompany";
 import { LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY, PL_CLIENT_OFFLINE_FIRST_PERSIST_MS } from "@/lib/localMirrorServerMeta";
@@ -85,6 +91,16 @@ async function resolveAuthoritativeFirestoreCompanyId(companyId: string): Promis
   } catch {
     return companyId;
   }
+}
+
+async function firestoreCompanyDocExists(
+  companyId: string,
+  collectionName: string,
+  docId: string
+): Promise<boolean> {
+  const fsCompanyId = await resolveAuthoritativeFirestoreCompanyId(companyId);
+  const snap = await getDoc(doc(firestore, `companies/${fsCompanyId}/${collectionName}`, docId)).catch(() => null);
+  return Boolean(snap?.exists());
 }
 
 /** Direct `addDoc`/`updateDoc` se pehle: `local:` refs → HTTPS (outbox-only path me `flushVoucherOutbox` pehle se karta tha). */
@@ -152,6 +168,13 @@ function removeUndefined(obj: any): any {
   return obj;
 }
 
+/** `normalizeVoucherAttachmentFieldsForPersistence` kabhi `key: undefined` set kar deta hai — Firestore reject. */
+function deleteUndefinedTopLevelFields(data: Record<string, unknown>): void {
+  for (const key of Object.keys(data)) {
+    if (data[key] === undefined) delete data[key];
+  }
+}
+
 function normalizePersistableAttachmentUrl(raw: unknown): string | null {
   const s = typeof raw === "string" ? raw.trim() : "";
   if (!s) return null;
@@ -163,7 +186,8 @@ function normalizePersistableAttachmentUrl(raw: unknown): string | null {
 }
 
 function normalizeVoucherAttachmentFieldsForPersistence(
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  companyId?: string | null
 ): void {
   const rawFileUrls = data.fileUrls;
   if (Array.isArray(rawFileUrls)) {
@@ -173,7 +197,16 @@ function normalizeVoucherAttachmentFieldsForPersistence(
       if (url) normalized.push(url);
     }
     // Keep order stable but strip duplicates so repeated marker values do not inflate attachment arrays.
-    data.fileUrls = normalized.filter((u, i) => normalized.indexOf(u) === i);
+    let urls = normalized.filter((u, i) => normalized.indexOf(u) === i);
+    if (companyId) {
+      const policy = getCrossCompanyAttachmentAccessPolicy();
+      urls = filterAttachmentsForCompanyContext(
+        urls,
+        companyId,
+        policy.accessibleCompanyIds.size > 0 ? policy.accessibleCompanyIds : new Set([companyId])
+      );
+    }
+    data.fileUrls = urls;
   } else if (typeof rawFileUrls === "string") {
     const one = normalizePersistableAttachmentUrl(rawFileUrls);
     data.fileUrls = one ? [one] : [];
@@ -186,8 +219,23 @@ function normalizeVoucherAttachmentFieldsForPersistence(
     // Invalid clipboard marker payload (`sid`-only etc.) should be dropped to avoid saving broken pseudo-URLs.
     if (normalizedUrl) uf.url = normalizedUrl;
     else delete uf.url;
-    data.unassignedFile = uf;
+    const cleaned = removeUndefined(uf) as Record<string, unknown>;
+    if (Object.keys(cleaned).length > 0) data.unassignedFile = cleaned;
+    else delete data.unassignedFile;
+  } else if (rawUf == null) {
+    delete data.unassignedFile;
   }
+  if (companyId) {
+    const filtered = filterVoucherAttachmentsForCompanyContext(data, companyId);
+    data.fileUrls = filtered.fileUrls;
+    const filteredUf = filtered.unassignedFile;
+    if (filteredUf != null && typeof filteredUf === "object") {
+      data.unassignedFile = filteredUf;
+    } else {
+      delete data.unassignedFile;
+    }
+  }
+  deleteUndefinedTopLevelFields(data);
 }
 
 /** Date / Firestore Timestamp / ISO string → JS Date (update path me `new Date(ts)` galat Invalid Date deta tha) */
@@ -359,6 +407,29 @@ async function enforceDailyMonthlyVoucherQuotaForCreate(
   }
 }
 
+/** Firestore pe voucher doc missing (sirf SQLite mirror) — `setDoc` merge se server row banao / update karo. */
+async function setFirestoreVoucherFromLocalMirrorWhenMissing(
+  companyId: string,
+  voucherId: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  const fsCompanyId = await resolveAuthoritativeFirestoreCompanyId(companyId);
+  const awaitHydrate = shouldAwaitBlockingHydrateForFirestorePayload(payload);
+  const payloadForFs = awaitHydrate
+    ? await voucherPayloadHydrateLocalFilesForFirestore(fsCompanyId, payload)
+    : (removeUndefined(payload) as Record<string, unknown>);
+  await setDoc(doc(firestore, `companies/${fsCompanyId}/vouchers`, voucherId), payloadForFs, { merge: true });
+  if (!awaitHydrate) {
+    maybeBackgroundSyncPendingAttachmentsAfterFirestoreWrite(payload);
+  }
+  try {
+    await removeOutboxRowsForCompanyDoc(companyId, "vouchers", voucherId);
+  } catch {
+    /* optional */
+  }
+  await mirrorVoucherDocToBrowserDb(companyId, voucherId);
+}
+
 /** Hybrid firebase-company vouchers: patch tail `updateDoc` fail (offline/static) → full row SQLite + voucher outbox. */
 async function upsertLocalVoucherFromPartialForOutbox(
   companyId: string,
@@ -389,6 +460,13 @@ export async function patchVoucherFields(
   await assertCompanyAllowsLedgerMutations(companyId);
   // APK / static mobile: SQLite+outbox ke beech pathname race — `/dashboard` jump se pehle URL + company pin.
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
+  if (isSoftDeleteLedgerPatch(partial)) {
+    const onServer = await firestoreCompanyDocExists(companyId, "vouchers", voucherId);
+    if (!onServer) {
+      await purgeGhostLocalCompanyDoc(companyId, "vouchers", voucherId);
+      return;
+    }
+  }
   if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) {
     // Local-first: SQLite turant; online mirror company ke liye Firestore bhi seedha — warna outbox/JSON se delete server pe late/miss, refresh pe voucher wapas.
     const existing = (await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId)) || {};
@@ -437,6 +515,10 @@ export async function patchVoucherFields(
         // Naya voucher abhi sirf SQLite + create-outbox pe ho sakta hai; server pe doc nahi → updateDoc "No document to update".
         // setDoc merge se poora local payload likho, warna SalaryForm ka syncSalaryBillWiseLinks throw karke Save success UI / dialog band nahi hota.
         if (isCompanyNotFoundError(e)) {
+          if (isSoftDeleteLedgerPatch(partial)) {
+            await purgeGhostLocalCompanyDoc(companyId, "vouchers", voucherId);
+            return;
+          }
           try {
             const awaitHydrateFull = shouldAwaitBlockingHydrateForFirestorePayload(payload);
             const payloadForFs = awaitHydrateFull
@@ -484,6 +566,24 @@ export async function patchVoucherFields(
       maybeBackgroundSyncPendingAttachmentsAfterFirestoreWrite(partial as Record<string, unknown>);
     }
   } catch (e) {
+    if (isCompanyNotFoundError(e)) {
+      if (isSoftDeleteLedgerPatch(partial)) {
+        await purgeGhostLocalCompanyDoc(companyId, "vouchers", voucherId);
+        return;
+      }
+      const existingRaw = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId).catch(() => null);
+      const existing = ((existingRaw as Record<string, unknown> | null) || {}) as Record<string, unknown>;
+      const fullPayload = removeUndefined({
+        ...existing,
+        ...partial,
+        id: voucherId,
+        updatedAt: Timestamp.now(),
+        lastEditedAt: Timestamp.now(),
+      }) as Record<string, unknown>;
+      coerceVoucherDocumentDate(fullPayload);
+      await setFirestoreVoucherFromLocalMirrorWhenMissing(companyId, voucherId, fullPayload);
+      return;
+    }
     if (!isLikelyOfflineFirestoreError(e)) throw e;
     if (!(await allowLocalFirestoreFailureQueue(companyId))) throw e;
     await upsertLocalVoucherFromPartialForOutbox(companyId, voucherId, partial);
@@ -945,7 +1045,8 @@ export async function saveVoucher(
   await assertCompanyAllowsLedgerMutations(companyId);
   const cleanVoucherData = removeUndefined(voucherData);
   // Normalize clipboard marker URLs before any local-ref detection/sync routing.
-  normalizeVoucherAttachmentFieldsForPersistence(cleanVoucherData as Record<string, unknown>);
+  normalizeVoucherAttachmentFieldsForPersistence(cleanVoucherData as Record<string, unknown>, companyId);
+  deleteUndefinedTopLevelFields(cleanVoucherData as Record<string, unknown>);
   const voucherPath = `companies/${companyId}/vouchers`;
   /** APK/static/EXE + offline: hamesha SQLite/outbox — Firestore/Storage await se "Saving…" (attachments) na atke. */
   const sqliteFirstEarly =
@@ -959,7 +1060,8 @@ export async function saveVoucher(
       cleanVoucherData as Record<string, unknown>,
       voucherId ?? null
     );
-    normalizeVoucherAttachmentFieldsForPersistence(cleanVoucherData as Record<string, unknown>);
+    normalizeVoucherAttachmentFieldsForPersistence(cleanVoucherData as Record<string, unknown>, companyId);
+    deleteUndefinedTopLevelFields(cleanVoucherData as Record<string, unknown>);
   }
   const sqliteFirst = sqliteFirstEarly;
 
@@ -1139,7 +1241,10 @@ export async function saveVoucher(
       await setDoc(docRef, bodyForCreate);
       maybeBackgroundSyncPendingAttachmentsAfterFirestoreWrite(bodyForCreate);
     } else {
-      const added = await addDoc(collection(firestore, voucherPath), createPayloadHydrated as Record<string, unknown>);
+      const added = await addDoc(
+        collection(firestore, voucherPath),
+        removeUndefined(createPayloadHydrated) as Record<string, unknown>,
+      );
       newId = added.id;
       docRef = added;
     }
@@ -1186,7 +1291,9 @@ export async function saveVoucher(
     }
   }
 
-  const oldSnap = await getDoc(voucherRef).catch(() => null);
+  const fsIdForEdit = await resolveAuthoritativeFirestoreCompanyId(companyId);
+  const firestoreVoucherRef = doc(firestore, `companies/${fsIdForEdit}/vouchers`, voucherId!);
+  const oldSnap = await getDoc(firestoreVoucherRef).catch(() => null);
   let oldData: any;
   if (oldSnap?.exists()) {
     oldData = oldSnap.data();
@@ -1298,32 +1405,43 @@ export async function saveVoucher(
   else if (shouldResetApproval) fireUpdate.approvedAt = null;
 
   try {
-    const fsIdUpdate = await resolveAuthoritativeFirestoreCompanyId(companyId);
     const awaitHydrateUpdate = shouldAwaitBlockingHydrateForFirestorePayload(fireUpdate as Record<string, unknown>);
     const fireUpdateHydrated = awaitHydrateUpdate
-      ? await voucherPayloadHydrateLocalFilesForFirestore(fsIdUpdate, fireUpdate as Record<string, unknown>)
+      ? await voucherPayloadHydrateLocalFilesForFirestore(fsIdForEdit, fireUpdate as Record<string, unknown>)
       : (removeUndefined(fireUpdate) as Record<string, unknown>);
-    await updateDoc(voucherRef, fireUpdateHydrated as typeof fireUpdate);
+    await updateDoc(firestoreVoucherRef, fireUpdateHydrated as typeof fireUpdate);
     if (!awaitHydrateUpdate) {
       maybeBackgroundSyncPendingAttachmentsAfterFirestoreWrite(fireUpdate as Record<string, unknown>);
     }
   } catch (e) {
+    if (isCompanyNotFoundError(e)) {
+      const { id: _oldId, ...oldRest } = oldData as Record<string, unknown>;
+      const forFs = removeUndefined({
+        id: voucherId!,
+        ...oldRest,
+        ...updatePayload,
+        companyId,
+      }) as Record<string, unknown>;
+      coerceVoucherDocumentDate(forFs);
+      await setFirestoreVoucherFromLocalMirrorWhenMissing(companyId, voucherId!, forFs);
+      return { id: voucherId! };
+    }
     // Static/hybrid: offline queue; APK Firebase company par allowLocalFirestoreFailureQueue false ho to throw
     const queueLocalStale = isLikelyOfflineFirestoreError(e) && (await allowLocalFirestoreFailureQueue(companyId));
     if (!queueLocalStale) throw e;
     const { id: _oldId, ...oldRest } = oldData as Record<string, unknown>;
     const forLocal = removeUndefined({
-      id: voucherRef.id,
+      id: voucherId!,
       ...oldRest,
       ...updatePayload,
     }) as Record<string, unknown>;
     coerceVoucherDocumentDate(forLocal);
-    await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherRef.id, forLocal);
-    await enqueueVoucherOutbox(companyId, "update", voucherRef.id, forLocal);
-    return { id: voucherRef.id };
+    await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId!, forLocal);
+    await enqueueVoucherOutbox(companyId, "update", voucherId!, forLocal);
+    return { id: voucherId! };
   }
-  await mirrorVoucherDocToBrowserDb(companyId, voucherRef.id);
-  return { id: voucherRef.id };
+  await mirrorVoucherDocToBrowserDb(companyId, voucherId!);
+  return { id: voucherId! };
 }
 
 /**

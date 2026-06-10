@@ -17,12 +17,14 @@ import {
 } from "@/lib/attachmentFormatLabel";
 import {
   looksLikeFirebaseStorageObjectPath,
+  normalizeFirebaseStorageObjectPathForSdk,
   tryGetStoragePathFromFirebaseDownloadUrl,
 } from "@/lib/firebaseStorageDownloadUrl";
 import {
   getOfflineCachedAttachmentBlob,
   getOfflineCachedAttachmentNativeRef,
   getRemoteAttachmentBlobPreferOfflineCache,
+  tryOfflineCachedAttachmentBlobMultiKey,
 } from "@/lib/offlineAttachmentUrlCache";
 import {
   getBlobFromLocalFileRef,
@@ -38,6 +40,7 @@ import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucher
 import { tryResolveInterCompanyPeerAttachmentUrl } from "@/lib/interCompany/interCompanyAttachmentPeerResolve";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { usesEmbeddedNativeAttachmentStorage } from "@/lib/usesEmbeddedNativeAttachmentStorage";
 import {
   useAttachmentHoldPointer,
   ATTACHMENT_HOLD_MS_MOBILE,
@@ -49,6 +52,11 @@ import {
   refreshAttachmentHoldSessionBackup,
 } from "@/lib/attachmentHoldClipboard";
 import { toast as sonnerToast } from "sonner";
+import { useCrossCompanyAttachmentAccess } from "@/hooks/useCrossCompanyAttachmentAccess";
+import {
+  collectAccessibleCompanyIdsForAttachmentPolicy,
+  isCrossCompanyAttachmentVisibleToUser,
+} from "@/lib/crossCompanyAttachmentAccess";
 
 /** Forensic: `NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG=1` — FilePreview branch + ATTACHMENT_PREVIEW_DOWNGRADE proof. */
 const FILE_PREVIEW_FORENSIC =
@@ -279,6 +287,8 @@ interface FilePreviewProps {
   attachmentClientFileUrls?: string[];
   /** ~2s hold = clipboard me attachment ref (paste = nayi copy upload). Gallery / nested hover par false. */
   holdAttachmentClipboard?: boolean;
+  /** EXE/SQLite mirror tail (`27e15173%2Fpayment_out%2F…`) → `voucher-files/{companyId}/…` resolve */
+  attachmentCompanyId?: string;
 }
 
 const getCleanName = (name: string) => {
@@ -311,14 +321,69 @@ export function FilePreview({
   attachmentGallery,
   attachmentClientFileUrls,
   holdAttachmentClipboard = true,
+  attachmentCompanyId,
 }: FilePreviewProps) {
   const voucherAttachmentFb = useVoucherAttachmentFallback();
+  const { activeCompanyId, accessibleCompanyIds } = useCrossCompanyAttachmentAccess();
+  const pathCompanyId = attachmentCompanyId ?? voucherAttachmentFb?.companyId;
+  const fileRef = typeof file === "string" ? file.trim() : "";
+  const expandedAccessibleCompanyIds = React.useMemo(() => {
+    const peerId = voucherAttachmentFb?.interCompanyPeer?.peerCompanyId;
+    if (!peerId) return accessibleCompanyIds;
+    return collectAccessibleCompanyIdsForAttachmentPolicy([], [peerId, ...[...accessibleCompanyIds]]);
+  }, [accessibleCompanyIds, voucherAttachmentFb?.interCompanyPeer?.peerCompanyId]);
+  const policyAllowsAttachmentView = React.useMemo(() => {
+    if (!fileRef || isLocalFileRef(fileRef) || isDriveFileRef(fileRef)) return true;
+    if (voucherAttachmentFb?.interCompanyPeer) return true;
+    return isCrossCompanyAttachmentVisibleToUser(fileRef, activeCompanyId, expandedAccessibleCompanyIds);
+  }, [
+    fileRef,
+    activeCompanyId,
+    expandedAccessibleCompanyIds,
+    voucherAttachmentFb?.interCompanyPeer,
+  ]);
+  const [offlineCacheReadable, setOfflineCacheReadable] = React.useState(false);
+  React.useEffect(() => {
+    if (!fileRef || policyAllowsAttachmentView) {
+      setOfflineCacheReadable(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { getOfflineCachedAttachmentBlob } = await import("@/lib/offlineAttachmentUrlCache");
+        const blob = await getOfflineCachedAttachmentBlob(fileRef);
+        if (!cancelled) setOfflineCacheReadable(Boolean(blob && blob.size > 0));
+      } catch {
+        if (!cancelled) setOfflineCacheReadable(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fileRef, policyAllowsAttachmentView]);
+  const attachmentBlockedByCrossCompanyPolicy =
+    Boolean(fileRef) &&
+    !policyAllowsAttachmentView &&
+    !offlineCacheReadable;
+
   // URL-only props (e.g. gallery vouchers) par Firebase SDK se blob — fetch/CORS fail hone par bhi thumb mile
   const resolvedStoragePath = React.useMemo(() => {
     if (storagePath) return storagePath;
-    if (typeof file === "string") return tryGetStoragePathFromFirebaseDownloadUrl(file) ?? undefined;
+    if (typeof file === "string") {
+      const fromUrl = tryGetStoragePathFromFirebaseDownloadUrl(file);
+      if (fromUrl) return fromUrl;
+      const norm = normalizeFirebaseStorageObjectPathForSdk(file, { companyId: pathCompanyId });
+      if (
+        /^voucher-files\//i.test(norm) ||
+        /^companies\//i.test(norm) ||
+        /^entity-files\//i.test(norm)
+      ) {
+        return norm;
+      }
+    }
     return undefined;
-  }, [file, storagePath]);
+  }, [file, storagePath, pathCompanyId]);
 
   /** Voucher attach grid: parent `h-16`/`h-24` + `w-full` — inline 96px style mat lagao (Add box chhota na dikhe) */
   const fillsParentAttachSlot = Boolean(
@@ -481,7 +546,9 @@ export function FilePreview({
             let resolved: Blob | null = null;
             if (pdfUrl.startsWith("http")) {
             // Pehle warm-sync IndexedDB; phir SDK/getBlob path (helper se bytes background cache)
-              resolved = await getRemoteAttachmentBlobPreferOfflineCache(pdfUrl, signal);
+              resolved =
+                (await tryOfflineCachedAttachmentBlobMultiKey(pdfUrl)) ||
+                (await getRemoteAttachmentBlobPreferOfflineCache(pdfUrl, signal));
             }
             if (!resolved) {
               try {
@@ -531,7 +598,9 @@ export function FilePreview({
             pdfFile = await response.blob();
           } else if (pdfUrl.startsWith("http")) {
             // Warm cache → SDK/fetch (timeout wala fallback jab helper null)
-            const hydrated = await getRemoteAttachmentBlobPreferOfflineCache(pdfUrl, signal);
+            const hydrated =
+              (await tryOfflineCachedAttachmentBlobMultiKey(pdfUrl)) ||
+              (await getRemoteAttachmentBlobPreferOfflineCache(pdfUrl, signal));
             pdfFile =
               hydrated && hydrated.size > 0
                 ? hydrated
@@ -610,21 +679,21 @@ export function FilePreview({
       if (typeof file === "string") {
         if (/^https?:\/\//i.test(file) && !file.startsWith(LOCAL_FILE_PREFIX)) {
           let nativeCachedRef: { displayUrl: string; contentType: string | null } | null = null;
-          if (isCapacitorNativeApp()) {
+          if (usesEmbeddedNativeAttachmentStorage()) {
             try {
-              // Native local-first: cache row ho to direct file URI display URL use karo (offline/restart stable preview).
+              // APK/EXE local-first: SQLite+disk cache row → display URL (HTTPS mat).
               nativeCachedRef = await getOfflineCachedAttachmentNativeRef(file);
             } catch {
               nativeCachedRef = null;
             }
           }
-          // Policy: display kabhi raw signed HTTPS `<Image>` par mat — hamesha IndexedDB/native blob (online/offline same pipeline).
-          const warmEarly = await getOfflineCachedAttachmentBlob(file);
+          // Local-first: signed URL + stable object-path + `local:` sab cache keys try karo.
+          const warmEarly = await tryOfflineCachedAttachmentBlobMultiKey(file);
           let probe: Blob | null = warmEarly && warmEarly.size > 0 ? warmEarly : null;
-          // APK: `navigator.onLine` false hone par bhi Storage SDK chal sakta hai — pehla paint yahi block ho raha tha.
+          // APK/EXE: `navigator.onLine` false hone par bhi Storage SDK / warm cache chal sakta hai.
           const navOn =
             typeof navigator !== "undefined" &&
-            (navigator.onLine || isCapacitorNativeApp());
+            (navigator.onLine || isCapacitorNativeApp() || isElectronDesktopApp());
           if (!probe && navOn) {
             probe = await getRemoteAttachmentBlobPreferOfflineCache(file, controller.signal);
           }
@@ -663,7 +732,18 @@ export function FilePreview({
           else if (resolvedType === "image" && (formatLabel === "FILE" || formatLabel === "OTHER"))
             formatLabel = "IMAGE";
 
-          // Blob/native miss + label image: `<Image src="">` broken — generic file icon
+          // Sirf web browser: EXE/APK embedded disk cache miss par HTTPS mat — spinner/blank avoid.
+          const electronServeRemoteFirst =
+            !usesEmbeddedNativeAttachmentStorage() &&
+            !resolvedUrl &&
+            typeof navigator !== "undefined" &&
+            navigator.onLine &&
+            isElectronDesktopApp();
+          if (electronServeRemoteFirst && (resolvedType === "image" || resolvedType === "pdf")) {
+            resolvedUrl = file;
+          }
+
+          // Blob/native miss + label image (non-electron): `<Image src="">` broken — generic file icon
           if (!resolvedUrl && resolvedType === "image") {
             resolvedType = "other";
             logAttachmentPreviewDowngradeToGenericFile(
@@ -755,12 +835,19 @@ export function FilePreview({
           })();
           return;
         }
-        const isStorageObjectPath = looksLikeFirebaseStorageObjectPath(file);
+        const isStorageObjectPath =
+          looksLikeFirebaseStorageObjectPath(file, { companyId: pathCompanyId }) ||
+          Boolean(
+            resolvedStoragePath &&
+              /^voucher-files\//i.test(resolvedStoragePath) &&
+              typeof file === "string" &&
+              !/^https?:\/\//i.test(file)
+          );
         resolvedUrl = isStorageObjectPath ? null : file;
         if (isStorageObjectPath) {
           try {
             // Broken relative path flicker avoid: raw `voucher-files/...` ko pehle offline cache/native ref se resolve karo.
-            const nativeCached = isCapacitorNativeApp()
+            const nativeCached = usesEmbeddedNativeAttachmentStorage()
               ? await getOfflineCachedAttachmentNativeRef(file)
               : null;
             if (nativeCached?.displayUrl) {
@@ -770,9 +857,10 @@ export function FilePreview({
               else if (ct.startsWith("image/")) resolvedType = "image";
             } else {
               // Raw object-path (`voucher-files/...`) ke liye cache miss par SDK fetch + cache write try karo.
-              let cachedBlob = await getOfflineCachedAttachmentBlob(file);
+              const fetchKey = resolvedStoragePath || file;
+              let cachedBlob = await tryOfflineCachedAttachmentBlobMultiKey(fetchKey);
               if ((!cachedBlob || cachedBlob.size === 0) && !controller.signal.aborted) {
-                cachedBlob = await getRemoteAttachmentBlobPreferOfflineCache(file, controller.signal);
+                cachedBlob = await getRemoteAttachmentBlobPreferOfflineCache(fetchKey, controller.signal);
               }
               if (cachedBlob && cachedBlob.size > 0) {
                 const kind = await sniffBlobKindForPreview(cachedBlob);
@@ -808,12 +896,14 @@ export function FilePreview({
         if (file.startsWith(LOCAL_FILE_PREFIX)) {
           try {
             // Native fast-path: sync cache hit ho to zero-await URL set.
-            const localMetaSync = isCapacitorNativeApp() ? getLocalFileRefMetaSync(file) : null;
+            const localMetaSync = usesEmbeddedNativeAttachmentStorage()
+              ? getLocalFileRefMetaSync(file)
+              : null;
             const localMeta =
               localMetaSync ||
-              (isCapacitorNativeApp() ? await getLocalFileRefMeta(file) : null);
+              (usesEmbeddedNativeAttachmentStorage() ? await getLocalFileRefMeta(file) : null);
             const payload =
-              isCapacitorNativeApp()
+              usesEmbeddedNativeAttachmentStorage() && (localMeta?.displayUrl || isCapacitorNativeApp())
                 ? null
                 : localMeta?.displayUrl
                 ? null
@@ -1021,9 +1111,10 @@ export function FilePreview({
               if (peerUrl && !isLocalFileRef(peerUrl)) openUrl = peerUrl;
             }
             if (openUrl) {
-              let probe: Blob | null = await getOfflineCachedAttachmentBlob(openUrl);
+              let probe: Blob | null = await tryOfflineCachedAttachmentBlobMultiKey(openUrl);
               const navOn =
-                typeof navigator !== "undefined" && (navigator.onLine || isCapacitorNativeApp());
+                typeof navigator !== "undefined" &&
+                (navigator.onLine || isCapacitorNativeApp() || isElectronDesktopApp());
               if ((!probe || probe.size === 0) && navOn && !controller.signal.aborted) {
                 probe = await getRemoteAttachmentBlobPreferOfflineCache(openUrl, controller.signal);
               }
@@ -1187,6 +1278,8 @@ export function FilePreview({
     voucherAttachmentFbFingerprint,
     attachmentClientUrlsFingerprint,
     attachmentGalleryFingerprint,
+    pathCompanyId,
+    attachmentCompanyId,
   ]);
 
   /** Thumbnail click + hover portal par double-click = browser / in-app open (same rules) */
@@ -1513,6 +1606,40 @@ export function FilePreview({
         holdAttachmentClipboard={false}
       />
     );
+
+  if (attachmentBlockedByCrossCompanyPolicy) {
+    return (
+      <div
+        className={cn(
+          "relative flex flex-col items-center justify-center rounded-md border border-dashed border-muted-foreground/40 bg-muted/30 p-2 text-center",
+          className
+        )}
+        style={{ width: previewBox?.width ?? size, height: previewBox?.height ?? size }}
+        title="Attachment belongs to another company that is not on your account"
+      >
+        <FileText className="mb-1 h-6 w-6 text-muted-foreground" />
+        <p className="text-[10px] leading-tight text-muted-foreground">
+          Other company file
+          <br />
+          (not available here)
+        </p>
+        {onRemove && !disabled ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="absolute right-0.5 top-0.5 h-6 w-6 text-destructive"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div

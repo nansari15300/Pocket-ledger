@@ -329,8 +329,7 @@ export function EditCompanyForm() {
   }, [company, form]);
 
   const loadExistingLocalUsers = useCallback(async () => {
-    // Local company: sirf company login — existing multi-user list mat dikhao
-    if (!companyId || !isLocalOnlyMode() || (company && isOfflineCompanyStorage(company))) {
+    if (!companyId || !isLocalOnlyMode() || (company && !isOfflineCompanyStorage(company))) {
       setExistingLocalUsers([]);
       return;
     }
@@ -439,6 +438,7 @@ export function EditCompanyForm() {
             } catch {
               /* uid optional */
             }
+            const sharedEmailLower = String(email || "").trim().toLowerCase();
             await updateDoc(companyRef, {
               sharedWith: arrayUnion({
                 name,
@@ -447,7 +447,8 @@ export function EditCompanyForm() {
                 role,
                 password: password || null,
               }),
-              sharedWithEmails: arrayUnion(email),
+              sharedWithEmails: arrayUnion(sharedEmailLower),
+              sharedWithEmailsLower: arrayUnion(sharedEmailLower),
               updatedAt: serverTimestamp(),
             });
           }
@@ -926,8 +927,7 @@ export function EditCompanyForm() {
   const deviceLocalCoForUi = company ? isOfflineCompanyStorage(company) : true;
   // Online cloud company: Protect / Change password UI (local company apna login block use karti hai).
   const hasProtectPassword = !!(company?.password && String(company.password).trim());
-  // Local company: sirf company login (admin username + password) — multi "Add user" nahi
-  const showAddUserCard = !!company && !deviceLocalCoForUi;
+  const showAddUserCard = !!company;
 
   if (companyLoading) {
     return (
@@ -1372,9 +1372,10 @@ export function EditCompanyForm() {
 
               {deviceLocalCoForUi && addCompanyUserEnabled && (
                 <div className="rounded-md border border-dashed bg-muted/30 p-3 text-sm text-muted-foreground">
-                  <strong className="text-foreground">Offline company:</strong> Email / online sharing is not available
-                  here. Use an <strong>online (cloud)</strong> company to invite people by email; they will appear in
-                  Manage Sharing.
+                  <strong className="text-foreground">Local company users</strong> log in with username + password when
+                  opening this company (Select company screen). If you share via{" "}
+                  <strong>local server gate</strong>, give them the same login and a Pocket Ledger access token from
+                  Settings → Server.
                 </div>
               )}
 
@@ -1442,18 +1443,33 @@ export function EditCompanyForm() {
                     name="companyUserUsername"
                     render={({ field }: any) => (
                       <FormItem>
-                        <FormLabel>Share online — login username</FormLabel>
+                        <FormLabel>
+                          {deviceLocalCoForUi ? "Login username" : "Share online — login username"}
+                        </FormLabel>
                         <FormControl>
-                          <Input
-                            readOnly
-                            disabled
-                            className="bg-muted cursor-not-allowed"
-                            placeholder="Same as company user name"
-                            {...field}
-                            value={field.value ?? ""}
-                          />
+                          {deviceLocalCoForUi ? (
+                            <Input
+                              placeholder="e.g. sales_user"
+                              autoComplete="off"
+                              {...field}
+                              value={field.value ?? ""}
+                            />
+                          ) : (
+                            <Input
+                              readOnly
+                              disabled
+                              className="bg-muted cursor-not-allowed"
+                              placeholder="Same as company user name"
+                              {...field}
+                              value={field.value ?? ""}
+                            />
+                          )}
                         </FormControl>
-                        <FormDescription>Automatically the same as company user name.</FormDescription>
+                        <FormDescription>
+                          {deviceLocalCoForUi
+                            ? "Used when this user opens the company on this device or via your local server."
+                            : "Automatically the same as company user name."}
+                        </FormDescription>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -1551,7 +1567,7 @@ export function EditCompanyForm() {
             </div>
             )}
 
-            {!deviceLocalCoForUi && isLocalOnlyMode() && existingLocalUsers.length > 0 && (
+            {deviceLocalCoForUi && isLocalOnlyMode() && existingLocalUsers.length > 0 && (
               <div className="rounded-md border border-black p-3">
                 {/* List ke saath Edit/Remove: turant SQLite update (Save Changes zaroori nahi). */}
                 <p className="text-sm font-medium mb-2">Existing Company Users ({existingLocalUsers.length})</p>

@@ -1,15 +1,23 @@
 /**
- * Ek company ke inter-company masters — Firestore (target column search ke liye).
+ * Ek company ke inter-company masters — Firestore (cloud) ya SQLite (pure local).
  */
 import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import type { InterCompanyEntityDetail } from "@/lib/interCompany/interCompanyEntityTypes";
+import { isPureLocalInterCompanyCompany } from "@/lib/interCompany/localInterCompanyPolicy";
+import {
+  fetchInterCompanyEntitiesFromLocalMirror,
+  fetchInterCompanyBankEntityDetailFromLocalMirror,
+} from "@/lib/interCompany/fetchInterCompanyEntitiesLocal";
 
 /** Company id par saare party/bank/staff/tax/expense rows */
 export async function fetchInterCompanyEntitiesForCompany(
   companyId: string
 ): Promise<InterCompanyEntityDetail[]> {
   if (!companyId) return [];
+  if (await isPureLocalInterCompanyCompany(companyId)) {
+    return fetchInterCompanyEntitiesFromLocalMirror(companyId);
+  }
   const cid = companyId;
   const [banks, parties, staff, taxes, expenses] = await Promise.all([
     getDocs(
@@ -115,6 +123,9 @@ export async function fetchInterCompanyBankEntityDetail(
   const cid = String(companyId || "").trim();
   const bid = String(bankAccountId || "").trim();
   if (!cid || !bid) return null;
+  if (await isPureLocalInterCompanyCompany(cid)) {
+    return fetchInterCompanyBankEntityDetailFromLocalMirror(cid, bid);
+  }
   try {
     const snap = await getDoc(doc(firestore, `companies/${cid}/bank_accounts`, bid));
     if (!snap.exists()) return null;

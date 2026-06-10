@@ -1,5 +1,10 @@
 "use client";
 
+import { collection, getDocs } from "firebase/firestore";
+import { firestore } from "@/lib/firebase";
+import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageDownloadUrl";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
@@ -165,4 +170,53 @@ export function buildCompanyAttachmentCatalogFromVouchers(
   });
 
   return entries.slice(0, limit);
+}
+
+export type CompanyVoucherAttachmentSourceRow = {
+  fileUrls?: unknown;
+  voucherNumber?: unknown;
+  type?: unknown;
+};
+
+/** Reuse picker: kisi bhi accessible company ke vouchers — SQLite pehle, phir Firestore fallback. */
+export async function loadCompanyVoucherAttachmentSources(
+  companyId: string
+): Promise<CompanyVoucherAttachmentSourceRow[]> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return [];
+
+  const fromSqlite = await listCompanyDocsFromBrowserDb(cid, "vouchers");
+  if (fromSqlite.length > 0) {
+    return fromSqlite.map((row) => ({
+      fileUrls: row.fileUrls,
+      voucherNumber: row.voucherNumber,
+      type: row.type,
+    }));
+  }
+
+  try {
+    const reg = await getLocalCompanyById(cid, { includeDeleted: true });
+    if (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) {
+      return [];
+    }
+  } catch {
+    /* Firestore try below */
+  }
+
+  try {
+    const snap = await getDocs(collection(firestore, `companies/${cid}/vouchers`));
+    return snap.docs
+      .map((d) => {
+        const data = d.data() as Record<string, unknown>;
+        if (data.isDeleted === true) return null;
+        return {
+          fileUrls: data.fileUrls,
+          voucherNumber: data.voucherNumber,
+          type: data.type,
+        };
+      })
+      .filter(Boolean) as CompanyVoucherAttachmentSourceRow[];
+  } catch {
+    return [];
+  }
 }

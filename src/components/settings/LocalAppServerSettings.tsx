@@ -13,6 +13,7 @@ import { useLivePlans } from "@/hooks/useLivePlans";
 import { getPlan, type PlanId } from "@/config/plans";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { resolveLocalAppServerAllowed } from "@/lib/localAppServerEntitlement";
+import { isLocalServerShareableCompany } from "@/lib/localServerShareableCompanies";
 import {
   getElectronLocalServerApi,
   isElectronLocalServerApiAvailable,
@@ -23,24 +24,32 @@ import {
 } from "@/lib/electronLocalServer";
 import { isLocalAppServerDevPreview } from "@/lib/localAppServerDevPreview";
 import { persistDevClientAccessToken } from "@/lib/plServerAccessContext";
-import { Copy, Loader2, Server, Trash2 } from "lucide-react";
+import { Copy, Info, Loader2, Plus, Server, Trash2 } from "lucide-react";
 import Link from "next/link";
+import { cn } from "@/lib/utils";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
-type Props = {
-  onBack?: () => void;
-};
+const PL_SELECTED_TOKEN_ID_KEY = "pl_server_settings_selected_token_id";
 
-export function LocalAppServerSettings({ onBack }: Props) {
+const TOKEN_LABEL_FIELD_HELP =
+  "This box is a display name for you only — it is not the access token. " +
+  "Use it to remember who this token is for (for example: Branch staff or Nabiullah – accounts). " +
+  "The real token to give remote users is shown in the selected row above, next to the label, with a copy button. " +
+  "Save changes updates this name and the ticked companies. " +
+  "New token creates a new secret and stops the old one from working.";
+
+export function LocalAppServerSettings() {
   const { toast } = useToast();
   const { user, customUser } = useAuth();
-  const { allCompanies } = useCompany();
+  const { allCompanies, allCompaniesRegistry } = useCompany();
   const livePlansRecord = useLivePlans();
   const [status, setStatus] = useState<LocalAppServerStatus | null>(null);
   const [draft, setDraft] = useState<LocalAppServerConfig | null>(null);
   const [accessTokens, setAccessTokens] = useState<LocalAppServerAccessTokenSummary[]>([]);
   const [newTokenLabel, setNewTokenLabel] = useState("");
   const [tokenCompanyPick, setTokenCompanyPick] = useState<Record<string, boolean>>({});
-  const [lastCreatedToken, setLastCreatedToken] = useState<string | null>(null);
+  const [selectedTokenId, setSelectedTokenId] = useState<string | null>(null);
+  const [selectedTokenSecret, setSelectedTokenSecret] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -88,13 +97,93 @@ export function LocalAppServerSettings({ onBack }: Props) {
     [tokenCompanyPick]
   );
 
+  /** Server tokens: independent of active gate — local-only companies from full registry. */
+  const shareableLocalCompanies = useMemo(
+    () => allCompaniesRegistry.filter((c) => isLocalServerShareableCompany(c)),
+    [allCompaniesRegistry]
+  );
+
   const resolveCompanyNames = useCallback(
     (ids: string[]) => {
-      const names = ids.map((id) => allCompanies.find((c) => c.id === id)?.name || id);
+      const names = ids.map(
+        (id) =>
+          shareableLocalCompanies.find((c) => c.id === id)?.name ||
+          allCompaniesRegistry.find((c) => c.id === id)?.name ||
+          id
+      );
       return names.join(", ");
     },
-    [allCompanies]
+    [allCompaniesRegistry, shareableLocalCompanies]
   );
+
+  const buildCompanyPickFromToken = useCallback(
+    (token: LocalAppServerAccessTokenSummary) => {
+      const pick: Record<string, boolean> = {};
+      const ids = token.allowedCompanyIds || [];
+      const pool = shareableLocalCompanies;
+      if (ids.length === 0) {
+        for (const c of pool) {
+          const id = String(c.id || "");
+          if (id) pick[id] = true;
+        }
+      } else {
+        for (const id of ids) {
+          if (pool.some((c) => c.id === id)) pick[id] = true;
+        }
+      }
+      return pick;
+    },
+    [shareableLocalCompanies]
+  );
+
+  const fetchTokenSecret = useCallback(async (id: string) => {
+    const api = getElectronLocalServerApi();
+    if (!api?.getAccessTokenSecret) {
+      setSelectedTokenSecret(null);
+      return;
+    }
+    try {
+      const res = await api.getAccessTokenSecret(id);
+      if (res?.ok && res.token) setSelectedTokenSecret(res.token);
+      else setSelectedTokenSecret(null);
+    } catch {
+      setSelectedTokenSecret(null);
+    }
+  }, []);
+
+  const selectTokenForEdit = useCallback(
+    (token: LocalAppServerAccessTokenSummary) => {
+      setSelectedTokenId(token.id);
+      try {
+        sessionStorage.setItem(PL_SELECTED_TOKEN_ID_KEY, token.id);
+      } catch {
+        /* ignore */
+      }
+      setNewTokenLabel(token.label);
+      setTokenCompanyPick(buildCompanyPickFromToken(token));
+      void fetchTokenSecret(token.id);
+    },
+    [buildCompanyPickFromToken, fetchTokenSecret]
+  );
+
+  const startNewToken = useCallback(() => {
+    setSelectedTokenId(null);
+    setSelectedTokenSecret(null);
+    setNewTokenLabel("");
+    setTokenCompanyPick({});
+    try {
+      sessionStorage.removeItem(PL_SELECTED_TOKEN_ID_KEY);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const selectedToken = useMemo(
+    () => accessTokens.find((t) => t.id === selectedTokenId) ?? null,
+    [accessTokens, selectedTokenId]
+  );
+
+  const editingExistingToken = selectedTokenId != null;
 
   const refresh = useCallback(async () => {
     const api = getElectronLocalServerApi();
@@ -111,6 +200,26 @@ export function LocalAppServerSettings({ onBack }: Props) {
       setStatus(st);
       setDraft(cfg);
       setAccessTokens(tokens);
+      let restoreId: string | null = null;
+      try {
+        restoreId = sessionStorage.getItem(PL_SELECTED_TOKEN_ID_KEY);
+      } catch {
+        /* ignore */
+      }
+      const pick = tokens.find((t) => t.id === restoreId) ?? tokens[0] ?? null;
+      if (pick) {
+        setSelectedTokenId(pick.id);
+        setNewTokenLabel(pick.label);
+        setTokenCompanyPick(buildCompanyPickFromToken(pick));
+        if (api.getAccessTokenSecret) {
+          const sec = await api.getAccessTokenSecret(pick.id);
+          if (sec?.ok && sec.token) setSelectedTokenSecret(sec.token);
+          else setSelectedTokenSecret(null);
+        }
+      } else {
+        setSelectedTokenId(null);
+        setSelectedTokenSecret(null);
+      }
     } catch (e) {
       toast({
         variant: "destructive",
@@ -120,11 +229,57 @@ export function LocalAppServerSettings({ onBack }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [toast]);
+  }, [buildCompanyPickFromToken, toast]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    try {
+      await fn();
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleNewTokenClick = () => {
+    if (selectedTokenId && accessTokens.some((t) => t.id === selectedTokenId)) {
+      if (selectedTokenCompanyIds.length === 0) {
+        toast({
+          variant: "destructive",
+          title: "Select companies",
+          description: "Pick at least one company before replacing the token.",
+        });
+        return;
+      }
+      void run(async () => {
+        const api = getElectronLocalServerApi();
+        if (!api?.rotateAccessToken) return;
+        const res = await api.rotateAccessToken(selectedTokenId, {
+          label: newTokenLabel.trim() || selectedToken?.label || "Shared user",
+          allowedCompanyIds: selectedTokenCompanyIds,
+        });
+        if (!res.ok || !res.token) {
+          toast({
+            variant: "destructive",
+            title: "Could not replace token",
+            description: "Token may have been revoked.",
+          });
+          return;
+        }
+        setSelectedTokenSecret(res.token);
+        toast({
+          title: "Token replaced",
+          description: "The old token no longer works. Copy the new one for remote users.",
+        });
+      });
+      return;
+    }
+    startNewToken();
+  };
 
   const copyText = async (text: string, label: string) => {
     try {
@@ -176,16 +331,6 @@ export function LocalAppServerSettings({ onBack }: Props) {
     );
   }
 
-  const run = async (fn: () => Promise<void>) => {
-    setBusy(true);
-    try {
-      await fn();
-      await refresh();
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const saveAndRestart = () =>
     void run(async () => {
       const api = getElectronLocalServerApi();
@@ -215,35 +360,6 @@ export function LocalAppServerSettings({ onBack }: Props) {
 
   return (
     <div className="space-y-4">
-      {onBack ? (
-        <Button type="button" variant="ghost" size="sm" className="-ml-2" onClick={onBack}>
-          ← Back
-        </Button>
-      ) : null}
-
-      {devMode ? (
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 space-y-2">
-          <p>
-            <strong>Dev mode (browser):</strong> ye alag Node process hai — PC restart ke baad bhi chal sakta hai agar band
-            na kiya ho. <strong>Next.js</strong> port <strong>3000</strong> par hai; test server ke liye port{" "}
-            <strong>37123</strong> rakhein.
-          </p>
-          <p>
-            <strong>Band kaise karein:</strong> neeche <strong>Stop server</strong>, ya project folder se{" "}
-            <code className="text-xs">npm run dev:server:stop</code>, ya Task Manager me <code className="text-xs">node</code>{" "}
-            (jo aapke server port par listen kar raha ho).
-          </p>
-          <p className="text-xs">
-            Config: <code>.data/pl-dev-server-userdata</code>
-          </p>
-        </div>
-      ) : !devMode ? (
-        <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-950">
-          <strong>Desktop app:</strong> <strong>Stop sharing</strong> sirf doosron ke liye server band karta hai — app khud
-          chalta rahega. Tray icon → Stop sharing / Start sharing. Poora app band karne ke liye Quit.
-        </div>
-      ) : null}
-
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -326,6 +442,14 @@ export function LocalAppServerSettings({ onBack }: Props) {
                           ? `This PC only (sharing off) — port ${status.port}`
                           : "Stopped"}
                     </span>
+                    {status?.port &&
+                    status?.configuredPort &&
+                    status.port !== status.configuredPort ? (
+                      <span className="text-xs text-amber-800">
+                        Running on {status.port} (saved port {status.configuredPort} was busy — Save &amp;
+                        restart again after freeing {status.configuredPort})
+                      </span>
+                    ) : null}
                     <Button
                       type="button"
                       variant="outline"
@@ -375,6 +499,10 @@ export function LocalAppServerSettings({ onBack }: Props) {
                           )
                         }
                       />
+                      <p className="text-xs text-muted-foreground">
+                        Change here, then <strong>Save settings &amp; restart server</strong> below. Status badge
+                        shows the real listening port (use that in Gate / APK).
+                      </p>
                     </div>
                     <div className="space-y-2">
                       <Label>Listen on</Label>
@@ -421,7 +549,9 @@ export function LocalAppServerSettings({ onBack }: Props) {
                     <div>
                       <Label htmlFor="pl-require-token">Require access token (remote users)</Label>
                       <p className="text-xs text-muted-foreground">
-                        Anyone outside this PC must send a token — unknown IPs cannot open company data.
+                        Anyone outside this PC must send a token — unknown IPs cannot open company data. Browser
+                        users see a token paste page (or use{" "}
+                        <code className="text-[11px]">?pl_access=YOUR_TOKEN</code> in the URL).
                       </p>
                     </div>
                     <Switch
@@ -434,7 +564,10 @@ export function LocalAppServerSettings({ onBack }: Props) {
                   <div className="flex items-center justify-between rounded-md border p-3">
                     <div>
                       <Label htmlFor="pl-app-only">App-only (block browsers)</Label>
-                      <p className="text-xs text-muted-foreground">Chrome / Edge cannot open the server URL.</p>
+                      <p className="text-xs text-muted-foreground">
+                        When on, Chrome / Edge cannot open the server URL. When off, browsers can open the server after
+                        entering an access token.
+                      </p>
                     </div>
                     <Switch
                       id="pl-app-only"
@@ -479,13 +612,126 @@ export function LocalAppServerSettings({ onBack }: Props) {
                   <div className="space-y-3 border-t pt-4">
                     <p className="text-sm font-medium">Access tokens (share with users)</p>
                     <p className="text-xs text-muted-foreground">
-                      Select which companies this token may open (e.g. 2 of 10). User still signs in with Google; only
-                      chosen companies appear in the company list.
+                      Only <strong>local device companies</strong> — online/Firebase shared companies are not listed here
+                      (they use Firebase sharing). Remote users will see the selected companies on this P2P server via
+                      their token.
                     </p>
-                    {allCompanies.length > 0 ? (
+
+                    {accessTokens.length > 0 ? (
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs font-medium text-foreground">Existing tokens — click to view companies</p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleNewTokenClick}
+                            title={
+                              selectedTokenId
+                                ? "Generate a new secret (replaces the current token)"
+                                : "Create a new access token"
+                            }
+                          >
+                            <Plus className="mr-1 h-3 w-3" />
+                            New token
+                          </Button>
+                        </div>
+                        <ul className="space-y-2 text-sm">
+                          {accessTokens.map((t) => {
+                            const selected = selectedTokenId === t.id;
+                            const rowToken = selected ? selectedTokenSecret : null;
+                            return (
+                              <li key={t.id}>
+                                <div
+                                  className={cn(
+                                    "flex items-start gap-2 rounded-md border px-3 py-2 transition-colors",
+                                    selected ? "border-primary bg-secondary/40 ring-1 ring-primary/30" : "hover:bg-muted/40"
+                                  )}
+                                >
+                                  <button
+                                    type="button"
+                                    className="min-w-0 flex-1 text-left"
+                                    onClick={() => selectTokenForEdit(t)}
+                                  >
+                                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                      <span className="shrink-0 font-medium">{t.label}</span>
+                                      {rowToken ? (
+                                        <span className="min-w-0 break-all font-mono text-xs text-muted-foreground">
+                                          {rowToken}
+                                        </span>
+                                      ) : (
+                                        <span className="text-xs text-muted-foreground">({t.tokenPreview})</span>
+                                      )}
+                                    </div>
+                                    {t.allowedCompanyIds?.length ? (
+                                      <span className="mt-1 block text-xs text-muted-foreground">
+                                        {t.allowedCompanyIds.length} companies:{" "}
+                                        {resolveCompanyNames(t.allowedCompanyIds)}
+                                      </span>
+                                    ) : (
+                                      <span className="mt-1 block text-xs text-amber-700">
+                                        All companies (legacy token)
+                                      </span>
+                                    )}
+                                  </button>
+                                  <div className="flex shrink-0 items-center gap-0.5">
+                                    {rowToken ? (
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="icon"
+                                        className="h-8 w-8"
+                                        title="Copy access token"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          void copyText(rowToken, "Access token");
+                                        }}
+                                      >
+                                        <Copy className="h-3.5 w-3.5" />
+                                      </Button>
+                                    ) : null}
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      disabled={busy}
+                                      className="h-8 w-8"
+                                      title="Revoke token"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        void run(async () => {
+                                          const api = getElectronLocalServerApi();
+                                          if (!api) return;
+                                          await api.revokeAccessToken(t.id);
+                                          if (selectedTokenId === t.id) {
+                                            setSelectedTokenSecret(null);
+                                            startNewToken();
+                                          }
+                                          toast({ title: "Token revoked" });
+                                        });
+                                      }}
+                                    >
+                                      <Trash2 className="h-4 w-4 text-destructive" />
+                                    </Button>
+                                  </div>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">No active tokens yet.</p>
+                    )}
+
+                    {shareableLocalCompanies.length > 0 ? (
                       <div className="max-h-48 space-y-2 overflow-y-auto rounded-md border p-3">
-                        <p className="text-xs font-medium text-foreground">Companies for this token</p>
-                        {allCompanies.map((c) => {
+                        <p className="text-xs font-medium text-foreground">
+                          {editingExistingToken
+                            ? `Local companies for “${selectedToken?.label || "token"}”`
+                            : "Local companies for new token"}
+                        </p>
+                        {shareableLocalCompanies.map((c) => {
                           const id = String(c.id || "");
                           if (!id) return null;
                           const checked = !!tokenCompanyPick[id];
@@ -507,103 +753,117 @@ export function LocalAppServerSettings({ onBack }: Props) {
                         })}
                       </div>
                     ) : (
-                      <p className="text-xs text-amber-700">Load companies on this server PC first, then create tokens.</p>
+                      <p className="text-xs text-amber-700">
+                        No local-only companies on this PC. Online companies use Firebase sharing — not local server tokens.
+                      </p>
                     )}
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Input
                         className="max-w-xs"
                         placeholder="Label (e.g. Nabiullah – accounts)"
                         value={newTokenLabel}
                         onChange={(e) => setNewTokenLabel(e.target.value)}
+                        aria-label="Token label"
                       />
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => {
-                          if (selectedTokenCompanyIds.length === 0) {
-                            toast({
-                              variant: "destructive",
-                              title: "Select companies",
-                              description: "Pick at least one company for this access token.",
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-9 w-9 shrink-0 text-muted-foreground hover:text-foreground"
+                            aria-label="About token label"
+                          >
+                            <Info className="h-4 w-4" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="max-w-sm text-sm" align="start" side="top">
+                          <p className="text-muted-foreground">{TOKEN_LABEL_FIELD_HELP}</p>
+                        </PopoverContent>
+                      </Popover>
+                      {editingExistingToken ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() => {
+                            if (selectedTokenCompanyIds.length === 0) {
+                              toast({
+                                variant: "destructive",
+                                title: "Select companies",
+                                description: "Pick at least one company for this access token.",
+                              });
+                              return;
+                            }
+                            void run(async () => {
+                              const api = getElectronLocalServerApi();
+                              if (!api || !selectedTokenId) return;
+                              const res = await api.updateAccessToken(selectedTokenId, {
+                                label: newTokenLabel.trim() || selectedToken?.label || "Shared user",
+                                allowedCompanyIds: selectedTokenCompanyIds,
+                              });
+                              if (!res.ok || !res.token) {
+                                toast({
+                                  variant: "destructive",
+                                  title: "Could not save token",
+                                  description: "Token may have been revoked.",
+                                });
+                                return;
+                              }
+                              selectTokenForEdit(res.token);
+                              toast({
+                                title: "Token updated",
+                                description: `${selectedTokenCompanyIds.length} companies saved.`,
+                              });
                             });
-                            return;
-                          }
-                          void run(async () => {
-                            const api = getElectronLocalServerApi();
-                            if (!api) return;
+                          }}
+                        >
+                          Save changes
+                        </Button>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() => {
+                            if (selectedTokenCompanyIds.length === 0) {
+                              toast({
+                                variant: "destructive",
+                                title: "Select companies",
+                                description: "Pick at least one company for this access token.",
+                              });
+                              return;
+                            }
+                            void run(async () => {
+                              const api = getElectronLocalServerApi();
+                              if (!api) return;
                             const created = await api.createAccessToken({
                               label: newTokenLabel.trim() || "Shared user",
                               allowedCompanyIds: selectedTokenCompanyIds,
                             });
-                            setLastCreatedToken(created.token);
-                            setNewTokenLabel("");
-                            setTokenCompanyPick({});
-                            toast({
-                              title: "Token created",
-                              description: `${selectedTokenCompanyIds.length} companies — copy token now.`,
+                            setSelectedTokenSecret(created.token);
+                            setSelectedTokenId(created.id);
+                            try {
+                              sessionStorage.setItem(PL_SELECTED_TOKEN_ID_KEY, created.id);
+                            } catch {
+                              /* ignore */
+                            }
+                            setNewTokenLabel(created.label);
+                            setTokenCompanyPick(
+                              Object.fromEntries(created.allowedCompanyIds.map((id) => [id, true]))
+                            );
+                              toast({
+                                title: "Token created",
+                                description: `${selectedTokenCompanyIds.length} companies — copy token now.`,
+                              });
                             });
-                          });
-                        }}
-                      >
-                        Create token
-                      </Button>
-                    </div>
-                    {lastCreatedToken ? (
-                      <div className="flex items-center gap-2 rounded-md bg-muted p-2 text-xs font-mono break-all">
-                        {lastCreatedToken}
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => void copyText(lastCreatedToken, "Access token")}
+                          }}
                         >
-                          <Copy className="h-3 w-3" />
+                          Create token
                         </Button>
-                      </div>
-                    ) : null}
-                    {accessTokens.length > 0 ? (
-                      <ul className="space-y-2 text-sm">
-                        {accessTokens.map((t) => (
-                          <li
-                            key={t.id}
-                            className="flex items-center justify-between rounded-md border px-3 py-2"
-                          >
-                            <span className="min-w-0">
-                              <span className="font-medium">{t.label}</span>{" "}
-                              <span className="text-xs text-muted-foreground">({t.tokenPreview})</span>
-                              {t.allowedCompanyIds?.length ? (
-                                <span className="mt-0.5 block text-xs text-muted-foreground">
-                                  {t.allowedCompanyIds.length} companies:{" "}
-                                  {resolveCompanyNames(t.allowedCompanyIds)}
-                                </span>
-                              ) : (
-                                <span className="mt-0.5 block text-xs text-amber-700">All companies (legacy token)</span>
-                              )}
-                            </span>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              disabled={busy}
-                              onClick={() =>
-                                void run(async () => {
-                                  const api = getElectronLocalServerApi();
-                                  if (!api) return;
-                                  await api.revokeAccessToken(t.id);
-                                  toast({ title: "Token revoked" });
-                                })
-                              }
-                            >
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">No active tokens.</p>
-                    )}
+                      )}
+                    </div>
                   </div>
                 </div>
               ) : null}

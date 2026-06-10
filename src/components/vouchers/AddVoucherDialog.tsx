@@ -71,6 +71,7 @@ import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { isRecurringVoucherGenerationEnabled } from "@/lib/recurringVoucherSettings";
 import { BTN_SAVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { stripIdsForCrossCompanyClone } from "@/lib/crossCompanyMasterPrefill";
+import { filterVoucherAttachmentsForCompanyContext } from "@/lib/crossCompanyAttachmentAccess";
 import { importVoucherAttachmentsAsFilesForLocalCloudCopy } from "@/lib/voucherLocalAttachmentUpload";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { persistLedgerModalParentFromBrowser } from "@/lib/modalUrlSync";
@@ -1496,7 +1497,8 @@ export function AddVoucherDialog(props: any) {
     if (!isOpen) {
       // Dialog close/reset par copy-flow transient state clear rakho.
       setPostCopyNewFormSeed(null);
-      setCopyMismatchCategories([]);
+      // `[]` har run par naya reference — closed dialogs (header me 7 instances) par infinite re-render.
+      setCopyMismatchCategories((prev) => (prev.length === 0 ? prev : []));
       setCopySourceVoucherSnapshot(null);
       setDeleteOriginalAfterCopySave(false);
       copyOriginalDeleteHandledRef.current = false;
@@ -1514,12 +1516,12 @@ export function AddVoucherDialog(props: any) {
       setAutoMonthlyRateEveryN("1");
       setAutoMonthlyYearlyBaseAnchorAd(undefined);
       setRecurringTemplateLastPeriodKey(null);
-      setRecurringTemplateSuppressedKeys([]);
+      setRecurringTemplateSuppressedKeys((prev) => (prev.length === 0 ? prev : []));
       setRecurringTemplateSnapshot(null);
       setRecurringLastGeneratedAtMs(null);
       setCommittedAutoMonthlyEnabled(null);
       setRecurringSettingsOpen(false);
-      setVoucherFormActiveTab("sale");
+      setVoucherFormActiveTab((prev) => (prev === "sale" ? prev : "sale"));
     }
   }, [isOpen]);
 
@@ -1783,7 +1785,7 @@ export function AddVoucherDialog(props: any) {
         const staleHost = copyButtonHostRef.current;
         if (staleHost?.isConnected) staleHost.remove();
         copyButtonHostRef.current = null;
-        setCopyButtonMountNode(null);
+        setCopyButtonMountNode((prev) => (prev === null ? prev : null));
         return;
       }
       const frame = dialogFrameRef.current;
@@ -1866,7 +1868,7 @@ export function AddVoucherDialog(props: any) {
         savePrintCandidates.find((btn) => btn.offsetParent !== null) ||
         savePrintCandidates[0];
       if (!anchorBtn || !anchorBtn.parentElement) {
-        setCopyButtonMountNode(null);
+        setCopyButtonMountNode((prev) => (prev === null ? prev : null));
         return;
       }
       const parent = anchorBtn.parentElement;
@@ -1889,7 +1891,7 @@ export function AddVoucherDialog(props: any) {
       }
       // Copy host DOM ke baad hi distribute karo — pehle `return` se grid miss hoti thi → Copy full row + 220ms tak flicker (APK).
       applyMobileButtonDistribution(parent);
-      if (createdHost) setCopyButtonMountNode(host);
+      if (createdHost) setCopyButtonMountNode((prev) => (prev === host ? prev : host));
     };
     syncCopyButtonHostInActionRow();
     const intervalId = window.setInterval(syncCopyButtonHostInActionRow, 220);
@@ -1901,7 +1903,7 @@ export function AddVoucherDialog(props: any) {
       const host = copyButtonHostRef.current;
       if (host && host.isConnected) host.remove();
       copyButtonHostRef.current = null;
-      setCopyButtonMountNode(null);
+      setCopyButtonMountNode((prev) => (prev === null ? prev : null));
     };
   }, [isOpen, isMobile, voucher?.id, copyButtonLabel, postCopyNewFormSeed, copyToDisabledForInterCompany]);
 
@@ -2049,7 +2051,17 @@ export function AddVoucherDialog(props: any) {
         return;
       }
       const localLive = (vouchers || []).find((v: any) => v.id === voucher.id) || null;
-      setLiveVoucher(localLive);
+      setLiveVoucher((prev) => {
+        if (!localLive) return prev;
+        if (
+          prev?.id === localLive.id &&
+          JSON.stringify(prev?.fileUrls ?? null) === JSON.stringify(localLive.fileUrls ?? null) &&
+          prev?.updatedAt === localLive.updatedAt
+        ) {
+          return prev;
+        }
+        return localLive;
+      });
       return;
     }
     // Note vouchers: sale/journal jaisi live allocation sync nahi; snapshot har chhoti update par form reset trigger ho sakta tha
@@ -2462,7 +2474,11 @@ export function AddVoucherDialog(props: any) {
         sourceCompanyId,
         voucher: copyPayloadBase,
       });
-      const copyPayload = importedCopy.voucher;
+      const copyPayload = filterVoucherAttachmentsForCompanyContext(
+        importedCopy.voucher as Record<string, unknown>,
+        destinationCompanyId,
+        new Set(allCompanies.map((c) => c.id).filter(Boolean))
+      );
       const nextNewFormSeed = {
         ...copyPayload,
         // New form seed me voucher number fresh auto/entry ke liye blank rakho.
@@ -3922,10 +3938,7 @@ export function AddVoucherDialog(props: any) {
     const link = readInterCompanyLink(row);
     const shared = row.interCompanyShareAttachmentsWithPeer === true;
     const interCompanyPeer =
-      shared &&
-      link?.role === "target" &&
-      link.peerCompanyId &&
-      link.peerVoucherId
+      shared && link?.peerCompanyId && link?.peerVoucherId
         ? {
             peerCompanyId: String(link.peerCompanyId),
             peerVoucherId: String(link.peerVoucherId),

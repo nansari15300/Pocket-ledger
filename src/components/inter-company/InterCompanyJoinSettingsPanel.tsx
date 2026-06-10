@@ -467,9 +467,11 @@ export function InterCompanyJoinSettingsPanel({ companyId, onSettingsChange }: P
         ];
       });
       toast.success(
-        created.localOnly
-          ? "System saved on this device — deploy Firestore rules to sync across devices."
-          : "System created — use View companies to add companies"
+        newSystemVisibility === "local" || created.localOnly
+          ? "Local IC system created — add your local companies via View companies."
+          : created.localOnly
+            ? "System saved on this device — deploy Firestore rules to sync across devices."
+            : "System created — use View companies to add companies"
       );
     } catch (err) {
       toast.error(interCompanyGroupCreateErrorMessage(err));
@@ -761,9 +763,9 @@ export function InterCompanyJoinSettingsPanel({ companyId, onSettingsChange }: P
         <div>
           <Label className="text-sm font-medium">Inter Company centralized system</Label>
           <p className="text-xs text-muted-foreground">
-            Create a system name — with <strong>Public</strong>, any user can search and add it.
-            Use <strong>View companies</strong> on your systems to add companies, then click{" "}
-            <strong>Save</strong>.
+            <strong>Local (device)</strong> — sirf is device ki local companies, SQLite IC (Firebase nahi).
+            <strong> Private</strong> / <strong>Public</strong> — cloud systems (Firebase).
+            Use <strong>View companies</strong> to add companies, then <strong>Save</strong>.
           </p>
         </div>
         {canWriteIc ? (
@@ -782,8 +784,9 @@ export function InterCompanyJoinSettingsPanel({ companyId, onSettingsChange }: P
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="public">Public</SelectItem>
+                <SelectItem value="local">Local (device)</SelectItem>
                 <SelectItem value="private">Private</SelectItem>
+                <SelectItem value="public">Public</SelectItem>
               </SelectContent>
             </Select>
             <Button
@@ -825,7 +828,12 @@ export function InterCompanyJoinSettingsPanel({ companyId, onSettingsChange }: P
           <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {filteredSystems.map((g) => {
               const owned = isOwnedSystem(g);
-              const vis = g.visibility === "public" ? "public" : "private";
+              const vis =
+                g.visibility === "local" || g.localOnly
+                  ? "local"
+                  : g.visibility === "public"
+                    ? "public"
+                    : "private";
               const pendingJoinCount = pendingJoinCountBySystemId.get(g.id) || 0;
               const creator = resolveSystemCreatorDisplay(g);
               const isRenaming = renamingSystemId === g.id;
@@ -869,10 +877,12 @@ export function InterCompanyJoinSettingsPanel({ companyId, onSettingsChange }: P
                             "shrink-0 text-[10px]",
                             vis === "public"
                               ? "border-sky-600/50 bg-sky-50 text-sky-800"
-                              : "border-muted-foreground/30 text-muted-foreground"
+                              : vis === "local"
+                                ? "border-violet-600/50 bg-violet-50 text-violet-900"
+                                : "border-muted-foreground/30 text-muted-foreground"
                           )}
                         >
-                          {vis === "public" ? "Public" : "Private"}
+                          {vis === "public" ? "Public" : vis === "local" ? "Local device" : "Private"}
                         </Badge>
                       ) : (
                         <Badge

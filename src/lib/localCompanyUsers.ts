@@ -345,3 +345,41 @@ export async function localAuthLoginClientOnly(
 
   throw new Error("Invalid username or password");
 }
+
+/** Device SQLite login, ya remote server client par server PC ke SQLite se verify. */
+export async function localAuthLoginForCompanyContext(
+  companyId: string,
+  username: string,
+  password: string
+): Promise<{ token: string; user: { id: string; username: string; displayName?: string; role?: string } }> {
+  const { isPlRemoteServerClientMode } = await import("@/lib/plRemoteServerClient");
+  if (!isPlRemoteServerClientMode()) {
+    return localAuthLoginClientOnly(companyId, username, password);
+  }
+  const { readDevClientAccessToken } = await import("@/lib/plServerAccessContext");
+  const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "application/json" };
+  const accessTok = readDevClientAccessToken();
+  if (accessTok) headers["x-pocket-ledger-access"] = accessTok;
+  const res = await fetch("/__pl_company_login", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      companyId,
+      username: username.trim(),
+      password: password.trim(),
+    }),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    error?: string;
+    token?: string;
+    user?: { id: string; username: string; displayName?: string; role?: string };
+  };
+  if (!res.ok || data.ok !== true || !data.token || !data.user) {
+    throw new Error(data.error || "Invalid username or password");
+  }
+  if (typeof window !== "undefined") {
+    void setBackupEncryptionSessionFromLogin(companyId, username, password);
+  }
+  return { token: data.token, user: data.user };
+}

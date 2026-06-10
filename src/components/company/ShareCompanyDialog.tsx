@@ -256,9 +256,11 @@ export function ShareCompanyDialog({
             } catch {
               // keep optional; sharing should not fail if uid lookup is unavailable
             }
+            const sharedEmailLower = String(values.email || "").trim().toLowerCase();
             await updateDoc(companyRef, {
                 sharedWith: arrayUnion({ name: values.name, email: values.email, uid: sharedUid, role: values.role, password: values.password || null }),
-                sharedWithEmails: arrayUnion(values.email),
+                sharedWithEmails: arrayUnion(sharedEmailLower),
+                sharedWithEmailsLower: arrayUnion(sharedEmailLower),
                 updatedAt: serverTimestamp(),
             });
             toast({

@@ -9,6 +9,8 @@ import {
   getRemoteAttachmentBlobPreferOfflineCache,
 } from "@/lib/offlineAttachmentUrlCache";
 import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageDownloadUrl";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 export const ATTACHMENT_HOLD_CLIPBOARD_PREFIX = "PL_ATTACH_V1:";
 
 export type AttachmentHoldPayloadV1 = {
@@ -26,10 +28,66 @@ export type AttachmentHoldPayloadV1 = {
 };
 
 const SESSION_BACKUP_KEY = "pl_attach_hold_clip_backup";
+/** EXE multi-tab / APK: same origin tabs share last PL copy via localStorage. */
+const LOCAL_CROSS_TAB_BACKUP_KEY = "pl_attach_hold_clip_cross_tab_v1";
 const SAME_TAB_TTL_MS = 15 * 60 * 1000;
 const SAME_TAB_MAX = 8;
 
 const sameTabBlobs = new Map<string, { blob: Blob; createdAt: number }>();
+
+function embeddedSharesAttachmentHoldAcrossTabs(): boolean {
+  if (typeof window === "undefined") return false;
+  return isElectronDesktopApp() || isCapacitorNativeApp();
+}
+
+function writeHoldClipboardBackup(encoded: string): void {
+  if (!encoded.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return;
+  try {
+    sessionStorage.setItem(SESSION_BACKUP_KEY, encoded);
+  } catch {
+    /* private mode */
+  }
+  if (!embeddedSharesAttachmentHoldAcrossTabs()) return;
+  try {
+    localStorage.setItem(LOCAL_CROSS_TAB_BACKUP_KEY, encoded);
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+function readHoldClipboardBackupFromStores(): string | null {
+  try {
+    const session = sessionStorage.getItem(SESSION_BACKUP_KEY);
+    if (session?.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return session;
+  } catch {
+    /* */
+  }
+  if (!embeddedSharesAttachmentHoldAcrossTabs()) return null;
+  try {
+    const local = localStorage.getItem(LOCAL_CROSS_TAB_BACKUP_KEY);
+    if (local?.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return local;
+  } catch {
+    /* */
+  }
+  return null;
+}
+
+/** OS clipboard me sirf HTTPS / local: / drive: link ho to bhi paste payload banao. */
+function encodePayloadFromPlainClipboardLine(text: string): string | null {
+  const trimmed = String(text || "").trim();
+  if (!trimmed || trimmed.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return null;
+  if (
+    trimmed.startsWith("http://") ||
+    trimmed.startsWith("https://") ||
+    isLocalFileRef(trimmed) ||
+    trimmed.startsWith("drive:")
+  ) {
+    const payload = buildHoldPayloadFromPreviewSource({ file: trimmed });
+    if (!payload) return null;
+    return encodePayload(payload);
+  }
+  return null;
+}
 
 function pruneSameTab() {
   const now = Date.now();
@@ -64,11 +122,7 @@ function getSameTabBlob(sid: string): Blob | null {
 
 /** Session backup dubara likho — multi-paste ke baad bhi last copy readable rahe */
 export function refreshAttachmentHoldSessionBackup(payload: AttachmentHoldPayloadV1): void {
-  try {
-    sessionStorage.setItem(SESSION_BACKUP_KEY, encodePayload(payload));
-  } catch {
-    /* private mode */
-  }
+  writeHoldClipboardBackup(encodePayload(payload));
 }
 
 function encodePayload(p: AttachmentHoldPayloadV1): string {
@@ -115,11 +169,7 @@ export async function writeAttachmentHoldClipboard(
   opts?: WriteAttachmentHoldClipboardOpts
 ): Promise<boolean> {
   const encoded = encodePayload(payload);
-  try {
-    sessionStorage.setItem(SESSION_BACKUP_KEY, encoded);
-  } catch {
-    /* private mode */
-  }
+  writeHoldClipboardBackup(encoded);
   const raw = String(opts?.clipboardDisplayUrl || "").trim();
   const usePlain =
     raw.length > 0 &&
@@ -140,23 +190,30 @@ export async function writeAttachmentHoldClipboard(
 }
 
 export async function readAttachmentHoldClipboardText(): Promise<string | null> {
-  /* Pehle session — OS clipboard paste/clear ke baad bhi last PL copy */
-  try {
-    const fb = sessionStorage.getItem(SESSION_BACKUP_KEY);
-    if (fb && fb.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return fb;
-  } catch {
-    /* */
-  }
+  const fromStores = readHoldClipboardBackupFromStores();
+  if (fromStores) return fromStores;
+
   try {
     if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
-      const t = await navigator.clipboard.readText();
-      if (t && t.includes(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return t.trim();
+      const t = (await navigator.clipboard.readText())?.trim();
+      if (!t) return null;
+      if (t.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return t;
+      const idx = t.indexOf(ATTACHMENT_HOLD_CLIPBOARD_PREFIX);
+      if (idx >= 0) {
+        const marker = t.slice(idx).split(/\s/)[0]?.trim();
+        if (marker?.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return marker;
+      }
+      const fromPlain = encodePayloadFromPlainClipboardLine(t);
+      if (fromPlain) return fromPlain;
     }
   } catch {
     /* denied */
   }
   return null;
 }
+
+/** EXE multi-tab: doosri tab me copy hone par Paste chip refresh ke liye. */
+export const ATTACHMENT_HOLD_CROSS_TAB_BACKUP_KEY = LOCAL_CROSS_TAB_BACKUP_KEY;
 
 /** Copy source se Blob — paste ke liye naya File banane me (dubara upload ho). */
 export async function fetchBlobForAttachmentHoldPaste(

@@ -33,7 +33,7 @@ export function StatementCheckModeFooterControls({
   const checkId = `check-mode-${idPrefix}`;
 
   return (
-    <LedgerFooterChromePill active={enabled} className="gap-1 pr-1">
+    <LedgerFooterChromePill className="gap-1 pr-1">
       <Checkbox
         id={checkId}
         checked={enabled}

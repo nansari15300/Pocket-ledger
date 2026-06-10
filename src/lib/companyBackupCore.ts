@@ -22,6 +22,7 @@ import {
   ensureNativeBackupStoragePermission,
 } from "@/lib/backupSaveLocation";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+import { backupPrefersLocalSnapshot } from "@/lib/backupLocalFirst";
 import {
   buildAttachmentZipFromRefs,
   collectAttachmentRefsFromBackupData,
@@ -67,6 +68,8 @@ export const COLLECTIONS_TO_BACKUP = [
 ] as const;
 
 const BACKUP_PAGE_SIZE = 500;
+
+export { backupPrefersLocalSnapshot } from "@/lib/backupLocalFirst";
 
 export type CompanyBackupProgress = {
   phase: string;
@@ -328,7 +331,7 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
 
   try {
     onProgress({ phase: "Reading data", detail: "Loading company records…" });
-    // Nayi `.plbp` = abhi ka snapshot (SQLite + online Firestore); purani backup file se data merge nahi.
+    // Nayi `.plbp` = abhi ka snapshot; static/EXE/APK par SQLite primary, web par Firestore merge.
     const backupData: Record<string, unknown> = {
       companyDetails: [{ ...company, id: companyId }],
     };
@@ -337,33 +340,45 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
       companyId;
     const localOnlyBackup = String(company.storageOption || "").toLowerCase() === "local";
     const onlineForBackup = typeof navigator !== "undefined" && navigator.onLine;
+    const preferLocalSnapshot = backupPrefersLocalSnapshot();
 
     for (const colName of COLLECTIONS_TO_BACKUP) {
       throwIfAborted();
-      onProgress({ phase: "Reading data", detail: `Collection: ${colName.replace(/_/g, " ")}…` });
+      onProgress({
+        phase: "Reading data",
+        detail: preferLocalSnapshot
+          ? `Local SQLite: ${colName.replace(/_/g, " ")}…`
+          : `Collection: ${colName.replace(/_/g, " ")}…`,
+      });
+      const localRows = (await listCompanyDocsFromBrowserDb(companyId, colName, {
+        forBackupMerge: true,
+      })) as Array<Record<string, unknown> & { id: string }>;
+
       let fsRows: Array<Record<string, unknown> & { id: string }> = [];
-      // Online backup: server se ek baar pull — local-only company par bhi taaki Firestore-only rows/refs miss na hon.
-      if (onlineForBackup && fsCompanyId) {
-        try {
-          fsRows = await fetchSubcollectionAllDocsPaginated(fsCompanyId, colName);
-        } catch {
-          fsRows = [];
-        }
-      } else if (!localOnlyBackup) {
-        try {
-          fsRows = await fetchSubcollectionAllDocsPaginated(fsCompanyId, colName);
-        } catch {
-          fsRows = [];
+      const pullFirestore = !preferLocalSnapshot || localRows.length === 0;
+      if (pullFirestore) {
+        if (onlineForBackup && fsCompanyId) {
+          try {
+            fsRows = await fetchSubcollectionAllDocsPaginated(fsCompanyId, colName);
+          } catch {
+            fsRows = [];
+          }
+        } else if (!localOnlyBackup) {
+          try {
+            fsRows = await fetchSubcollectionAllDocsPaginated(fsCompanyId, colName);
+          } catch {
+            fsRows = [];
+          }
         }
       }
-      const localRows = await listCompanyDocsFromBrowserDb(companyId, colName, { forBackupMerge: true });
-      backupData[colName] =
-        localRows.length > 0
-          ? mergeFirestoreRowsWithLocalMirrorForBackup(
-              fsRows,
-              localRows as Array<Record<string, unknown> & { id: string }>
-            )
-          : fsRows;
+
+      if (preferLocalSnapshot && localRows.length > 0) {
+        backupData[colName] = localRows;
+      } else if (localRows.length > 0) {
+        backupData[colName] = mergeFirestoreRowsWithLocalMirrorForBackup(fsRows, localRows);
+      } else {
+        backupData[colName] = fsRows;
+      }
     }
 
     let savedWithAttachments = false;
@@ -397,55 +412,37 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
         });
       }
 
-      // Server prefetch (online) ya verify-only (offline) — sirf nayi / missing refs.
+      // Static/EXE/APK: local verify pehle; web: server prefetch phir verify. Sirf nayi / missing refs.
       if (refsNeedingDownload.length > 0) {
-        if (onlineForBackup) {
-          onProgress({
-            phase: "Syncing with server",
-            detail: "Checking attachment files…",
-            done: 0,
-            total: refs.length,
-          });
-          const preflight = await preflightBackupAttachmentsBeforeEmbed({
-            backupData,
-            incrementalCache: incremental.cache,
-            signal,
-            onProgress: ({ done, total, detail }) => {
-              onProgress({
-                phase: "Syncing with server",
-                detail,
-                done,
-                total,
-              });
-            },
-          });
-          if (preflight.missingRefs.length > 0) {
-            return {
-              ok: false,
-              error: formatBackupAttachmentPreflightError(preflight.missingRefs.length, preflight.totalRefs),
-            };
-          }
-        } else {
-          onProgress({
-            phase: "Checking attachments",
-            detail: "Verifying cached attachment files…",
-            done: 0,
-            total: refs.length,
-          });
-          const preflight = await preflightBackupAttachmentsBeforeEmbed({
-            backupData,
-            incrementalCache: incremental.cache,
-            signal,
-            onProgress: ({ done, total, detail }) => {
-              onProgress({ phase: "Checking attachments", detail, done, total });
-            },
-          });
-          if (preflight.missingRefs.length > 0) {
-            return {
-              ok: false,
-              error: `${preflight.missingRefs.length} attachment file(s) are not on this device. Connect to the internet and try again.`,
-            };
-          }
+        const preferLocal = backupPrefersLocalSnapshot();
+        onProgress({
+          phase: preferLocal ? "Checking attachments" : onlineForBackup ? "Syncing with server" : "Checking attachments",
+          detail: preferLocal ? "Checking local attachment files…" : "Checking attachment files…",
+          done: 0,
+          total: refs.length,
+        });
+        const preflight = await preflightBackupAttachmentsBeforeEmbed({
+          backupData,
+          incrementalCache: incremental.cache,
+          signal,
+          onProgress: ({ done, total, detail }) => {
+            onProgress({
+              phase: preferLocal ? "Checking attachments" : onlineForBackup ? "Syncing with server" : "Checking attachments",
+              detail,
+              done,
+              total,
+            });
+          },
+        });
+        if (preflight.missingRefs.length > 0) {
+          return {
+            ok: false,
+            error: formatBackupAttachmentPreflightError(
+              preflight.missingRefs.length,
+              preflight.totalRefs,
+              preferLocal
+            ),
+          };
         }
       }
 
