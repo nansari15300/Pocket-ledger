@@ -56,6 +56,15 @@ function writeHoldClipboardBackup(encoded: string): void {
 }
 
 function readHoldClipboardBackupFromStores(): string | null {
+  // EXE/APK multi-tab: `localStorage` sab tabs share karta hai — is tab ka purana `sessionStorage` doosri tab ke copy ko block na kare.
+  if (embeddedSharesAttachmentHoldAcrossTabs()) {
+    try {
+      const local = localStorage.getItem(LOCAL_CROSS_TAB_BACKUP_KEY);
+      if (local?.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return local;
+    } catch {
+      /* */
+    }
+  }
   try {
     const session = sessionStorage.getItem(SESSION_BACKUP_KEY);
     if (session?.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return session;
@@ -72,21 +81,65 @@ function readHoldClipboardBackupFromStores(): string | null {
   return null;
 }
 
-/** OS clipboard me sirf HTTPS / local: / drive: link ho to bhi paste payload banao. */
-function encodePayloadFromPlainClipboardLine(text: string): string | null {
+function firstPersistableAttachmentRefInPlainText(text: string): string | null {
   const trimmed = String(text || "").trim();
-  if (!trimmed || trimmed.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return null;
-  if (
-    trimmed.startsWith("http://") ||
-    trimmed.startsWith("https://") ||
-    isLocalFileRef(trimmed) ||
-    trimmed.startsWith("drive:")
-  ) {
-    const payload = buildHoldPayloadFromPreviewSource({ file: trimmed });
-    if (!payload) return null;
-    return encodePayload(payload);
+  if (!trimmed) return null;
+  if (trimmed.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return null;
+
+  const candidates: string[] = [trimmed];
+  const line = trimmed.split(/\r?\n/).map((l) => l.trim()).find(Boolean);
+  if (line && line !== trimmed) candidates.push(line);
+  const urlMatch = trimmed.match(/https?:\/\/[^\s<>"']+/i);
+  if (urlMatch?.[0]) candidates.push(urlMatch[0]);
+  const localMatch = trimmed.match(/local:[^\s<>"']+/i);
+  if (localMatch?.[0]) candidates.push(localMatch[0]);
+  const driveMatch = trimmed.match(/drive:[^\s<>"']+/i);
+  if (driveMatch?.[0]) candidates.push(driveMatch[0]);
+
+  for (const raw of candidates) {
+    const ref = String(raw || "").trim();
+    if (!ref) continue;
+    if (
+      ref.startsWith("http://") ||
+      ref.startsWith("https://") ||
+      isLocalFileRef(ref) ||
+      ref.startsWith("drive:") ||
+      ref.startsWith("companies/") ||
+      ref.startsWith("voucher-files/")
+    ) {
+      return ref;
+    }
   }
   return null;
+}
+
+/** OS clipboard me sirf HTTPS / local: / drive: link ho to bhi paste payload banao. */
+function encodePayloadFromPlainClipboardLine(text: string): string | null {
+  const ref = firstPersistableAttachmentRefInPlainText(text);
+  if (!ref) return null;
+  const payload = buildHoldPayloadFromPreviewSource({ file: ref });
+  if (!payload) return null;
+  return encodePayload(payload);
+}
+
+/** PL marker ya koi bhi plain attachment link / path → paste payload. */
+export function parseAttachmentHoldPayloadFromAnyText(raw: string): AttachmentHoldPayloadV1 | null {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return null;
+  const marker = trimmed.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)
+    ? trimmed
+    : (() => {
+        const idx = trimmed.indexOf(ATTACHMENT_HOLD_CLIPBOARD_PREFIX);
+        if (idx < 0) return null;
+        return trimmed.slice(idx).split(/\s/)[0]?.trim() || null;
+      })();
+  if (marker) {
+    const parsed = parseAttachmentHoldClipboardText(marker);
+    if (parsed) return parsed;
+  }
+  const encoded = encodePayloadFromPlainClipboardLine(trimmed);
+  if (!encoded) return null;
+  return parseAttachmentHoldClipboardText(encoded);
 }
 
 function pruneSameTab() {
@@ -190,24 +243,30 @@ export async function writeAttachmentHoldClipboard(
 }
 
 export async function readAttachmentHoldClipboardText(): Promise<string | null> {
-  const fromStores = readHoldClipboardBackupFromStores();
-  if (fromStores) return fromStores;
+  const payload = await resolveAttachmentHoldPayloadForPaste();
+  return payload ? encodePayload(payload) : null;
+}
 
+/**
+ * Paste button / Ctrl+V: pehle OS clipboard (doosri tab / Notepad se copy), phir session/local backup.
+ */
+export async function resolveAttachmentHoldPayloadForPaste(): Promise<AttachmentHoldPayloadV1 | null> {
   try {
     if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
       const t = (await navigator.clipboard.readText())?.trim();
-      if (!t) return null;
-      if (t.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return t;
-      const idx = t.indexOf(ATTACHMENT_HOLD_CLIPBOARD_PREFIX);
-      if (idx >= 0) {
-        const marker = t.slice(idx).split(/\s/)[0]?.trim();
-        if (marker?.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX)) return marker;
+      if (t) {
+        const fromOs = parseAttachmentHoldPayloadFromAnyText(t);
+        if (fromOs) return fromOs;
       }
-      const fromPlain = encodePayloadFromPlainClipboardLine(t);
-      if (fromPlain) return fromPlain;
     }
   } catch {
-    /* denied */
+    /* permission / insecure context */
+  }
+
+  const fromStores = readHoldClipboardBackupFromStores();
+  if (fromStores) {
+    const parsed = parseAttachmentHoldClipboardText(fromStores);
+    if (parsed) return parsed;
   }
   return null;
 }

@@ -50,7 +50,7 @@ import {
   filterVoucherAttachmentsForCompanyContext,
   getCrossCompanyAttachmentAccessPolicy,
 } from "@/lib/crossCompanyAttachmentAccess";
-import { isSoftDeleteLedgerPatch, purgeGhostLocalCompanyDoc } from "@/lib/purgeGhostLocalCompanyDoc";
+import { isSoftDeleteLedgerPatch } from "@/lib/purgeGhostLocalCompanyDoc";
 import { sendRecycleBinMovedAlert } from "@/lib/writeGateway/legacy/recycleBinAlerts";
 import type { Company } from "@/hooks/useCompany";
 import { LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY, PL_CLIENT_OFFLINE_FIRST_PERSIST_MS } from "@/lib/localMirrorServerMeta";
@@ -71,6 +71,55 @@ import {
   voucherNewAttachmentsAlwaysStageAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
 import { parseAttachmentHoldClipboardText } from "@/lib/attachmentHoldClipboard";
+import { isLocalFileRef } from "@/lib/localPendingFiles";
+import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+
+/** Edit save: transient `blob:` preview URLs ya khali `fileUrls` se `local:` / Drive refs mat hatao. */
+function persistableVoucherAttachmentUrls(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const entry of raw) {
+    const s = typeof entry === "string" ? entry.trim() : "";
+    if (!s || s.startsWith("blob:") || s.startsWith("data:")) continue;
+    out.push(s);
+  }
+  return out;
+}
+
+/** SQLite/outbox edit merge — incoming payload attachments ko accidentally clear na kare. */
+function mergeVoucherEditPayloadPreservingAttachments(
+  existing: Record<string, unknown> | null | undefined,
+  incoming: Record<string, unknown>
+): Record<string, unknown> {
+  const merged = { ...(existing || {}), ...incoming };
+  const existingUrls = persistableVoucherAttachmentUrls(existing?.fileUrls);
+  const incomingUrls = persistableVoucherAttachmentUrls(incoming.fileUrls);
+  if (incomingUrls.length > 0) merged.fileUrls = incomingUrls;
+  else if (existingUrls.length > 0) merged.fileUrls = existingUrls;
+
+  const incomingFiles = incoming.files;
+  const existingFiles = existing?.files;
+  if (
+    (incomingFiles === undefined ||
+      (Array.isArray(incomingFiles) && incomingFiles.length === 0)) &&
+    Array.isArray(existingFiles) &&
+    existingFiles.length > 0
+  ) {
+    merged.files = existingFiles;
+  }
+
+  if (incoming.unassignedFile === undefined && existing?.unassignedFile != null) {
+    merged.unassignedFile = existing.unassignedFile;
+  }
+  return merged;
+}
+
+function isFirebaseStorageAttachmentPath(path: unknown): boolean {
+  const s = String(path || "").trim();
+  if (!s || isLocalFileRef(s) || isDriveFileRef(s)) return false;
+  if (s.startsWith("companies/") || s.startsWith("voucher-files/")) return true;
+  return s.startsWith("http://") || s.startsWith("https://");
+}
 
 /**
  * Firestore offline error ke baad SQLite/outbox fallback — APK par sirf genuinely local-SQLite-first company (`storageOption: local`).
@@ -461,11 +510,9 @@ export async function patchVoucherFields(
   // APK / static mobile: SQLite+outbox ke beech pathname race — `/dashboard` jump se pehle URL + company pin.
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
   if (isSoftDeleteLedgerPatch(partial)) {
+    const localRow = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId).catch(() => null);
     const onServer = await firestoreCompanyDocExists(companyId, "vouchers", voucherId);
-    if (!onServer) {
-      await purgeGhostLocalCompanyDoc(companyId, "vouchers", voucherId);
-      return;
-    }
+    if (!localRow && !onServer) return;
   }
   if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) {
     // Local-first: SQLite turant; online mirror company ke liye Firestore bhi seedha — warna outbox/JSON se delete server pe late/miss, refresh pe voucher wapas.
@@ -516,7 +563,6 @@ export async function patchVoucherFields(
         // setDoc merge se poora local payload likho, warna SalaryForm ka syncSalaryBillWiseLinks throw karke Save success UI / dialog band nahi hota.
         if (isCompanyNotFoundError(e)) {
           if (isSoftDeleteLedgerPatch(partial)) {
-            await purgeGhostLocalCompanyDoc(companyId, "vouchers", voucherId);
             return;
           }
           try {
@@ -568,7 +614,6 @@ export async function patchVoucherFields(
   } catch (e) {
     if (isCompanyNotFoundError(e)) {
       if (isSoftDeleteLedgerPatch(partial)) {
-        await purgeGhostLocalCompanyDoc(companyId, "vouchers", voucherId);
         return;
       }
       const existingRaw = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId).catch(() => null);
@@ -1128,17 +1173,21 @@ export async function saveVoucher(
     const existingLocal = resolvedExisting?.voucher ?? null;
     const writeCompanyIdLocal = resolvedExisting?.writeCompanyId ?? companyId;
     const nowTs = Timestamp.now();
-    const mergedLocal = removeUndefined({
-      ...(existingLocal || {}),
-      ...cleanVoucherData,
-      id: voucherId!,
-      companyId,
-      userId: (existingLocal as any)?.userId ?? userId,
-      lastEditedBy: userId,
-      lastEditedByUserName: auth.currentUser?.displayName || auth.currentUser?.email?.split("@")?.[0] || userId,
-      lastEditedAt: nowTs,
-      updatedAt: nowTs,
-    }) as Record<string, unknown>;
+    const mergedLocal = removeUndefined(
+      mergeVoucherEditPayloadPreservingAttachments(
+        (existingLocal as Record<string, unknown> | null) ?? null,
+        {
+          ...cleanVoucherData,
+          id: voucherId!,
+          companyId,
+          userId: (existingLocal as any)?.userId ?? userId,
+          lastEditedBy: userId,
+          lastEditedByUserName: auth.currentUser?.displayName || auth.currentUser?.email?.split("@")?.[0] || userId,
+          lastEditedAt: nowTs,
+          updatedAt: nowTs,
+        }
+      )
+    ) as Record<string, unknown>;
     coerceVoucherDocumentDate(mergedLocal);
     await upsertCompanyDocInBrowserDb(writeCompanyIdLocal, "vouchers", voucherId!, mergedLocal);
     await enqueueVoucherOutbox(writeCompanyIdLocal, "update", voucherId!, mergedLocal);
@@ -1334,24 +1383,32 @@ export async function saveVoucher(
 
   if (oldStamp && newStamp && oldStamp !== newStamp) {
     const vType = cleanVoucherData?.type || (oldData as any)?.type || "sale";
-    const filesToMove = (oldData as any)?.files || [];
-    if (Array.isArray(filesToMove) && filesToMove.length > 0) {
+    const filesToMove = ((oldData as any)?.files || []).filter(
+      (f: any) => f && isFirebaseStorageAttachmentPath(f.storagePath)
+    );
+    if (filesToMove.length > 0) {
       const companySnap = await getDoc(doc(firestore, "companies", companyId));
       const companyName = companySnap.data()?.name;
       const moveResult = await moveFilesToVoucherDateClient({
         companyId,
         companyName,
         voucherType: vType,
-        voucherDate: newDate,
+        voucherDate: newDate!,
         voucherId: voucherRef.id,
-        files: filesToMove.map((f: any) => ({ oldPath: f.storagePath, fileName: f.name })),
+        files: filesToMove.map((f: any) => ({
+          oldPath: String(f.storagePath),
+          fileName: String(f.name || f.storagePath.split("/").pop() || "file"),
+        })),
       });
       if (moveResult?.success && Array.isArray(moveResult.moved)) {
-        movedFileObjects = moveResult.moved.map((m: any) => ({
-          url: m.url,
-          storagePath: m.newPath ?? "",
-          name: m.newPath ? m.newPath.split("/").pop() : "",
-        }));
+        const moved = moveResult.moved
+          .filter((m: any) => m?.success !== false && (m.url || m.newPath))
+          .map((m: any) => ({
+            url: m.url,
+            storagePath: m.newPath ?? "",
+            name: m.newPath ? m.newPath.split("/").pop() : "",
+          }));
+        if (moved.length > 0) movedFileObjects = moved;
       }
     }
   }
@@ -1371,14 +1428,14 @@ export async function saveVoucher(
   const newEntry = { changedAt: now, changedBy: userId, changes: changedFields };
   const newHistory = historyEnabled ? [newEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
   const localTs = Timestamp.now();
-  const updatePayload: any = {
+  const updatePayload: any = mergeVoucherEditPayloadPreservingAttachments(oldData as Record<string, unknown>, {
     ...cleanVoucherData,
     lastEditedBy: userId,
     lastEditedByUserName: currentUserName,
     lastEditedAt: localTs,
     updatedAt: localTs,
     history: newHistory,
-  };
+  });
   if (approveAfterSave) {
     updatePayload.isApproved = true;
     updatePayload.approvedByUserId = approveAfterSave.approvedByUserId;

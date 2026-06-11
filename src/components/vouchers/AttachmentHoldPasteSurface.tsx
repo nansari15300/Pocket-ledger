@@ -10,8 +10,8 @@ import {
 } from "@/hooks/useAttachmentHoldPointer";
 import { useTapInteractionMode } from "@/components/vouchers/AttachmentHoverPortal";
 import {
-  readAttachmentHoldClipboardText,
-  parseAttachmentHoldClipboardText,
+  resolveAttachmentHoldPayloadForPaste,
+  parseAttachmentHoldPayloadFromAnyText,
   fetchBlobForAttachmentHoldPaste,
   blobToFile,
   refreshAttachmentHoldSessionBackup,
@@ -80,18 +80,17 @@ export function AttachmentHoldPasteSurface({
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  /** Hold + Paste button dono isi path se — ek hi toast / validation. */
-  const runPasteFromHoldClipboard = useCallback(async () => {
-    const text = await readAttachmentHoldClipboardText();
-    if (!text) {
-      sonnerToast.message("No attachment in clipboard", {
-        description: "Copy from a thumbnail first (Copy button or ~1s hold on mobile).",
-      });
-      return;
-    }
-    const payload = parseAttachmentHoldClipboardText(text);
+  /** Hold + Paste button + Ctrl+V — plain https / local: / drive: link bhi chale. */
+  const runPasteFromHoldClipboard = useCallback(async (clipboardTextOverride?: string) => {
+    const payload =
+      (clipboardTextOverride
+        ? parseAttachmentHoldPayloadFromAnyText(clipboardTextOverride)
+        : null) ?? (await resolveAttachmentHoldPayloadForPaste());
     if (!payload) {
-      sonnerToast.error("Clipboard is not a Pocket Ledger attachment");
+      sonnerToast.message("No attachment link in clipboard", {
+        description:
+          "Paste a copied file link (https, local:, or drive:) — from another voucher, tab, or app.",
+      });
       return;
     }
 
@@ -187,7 +186,18 @@ export function AttachmentHoldPasteSurface({
         className="relative flex min-h-0 flex-1 flex-col items-center justify-center touch-manipulation outline-none"
         onClick={() => onShortActivate()}
         onContextMenu={(e) => e.preventDefault()}
+        onPaste={(e) => {
+          if (!enabled) return;
+          const text = e.clipboardData.getData("text/plain");
+          if (!text?.trim()) return;
+          e.preventDefault();
+          e.stopPropagation();
+          void runPasteFromHoldClipboard(text);
+        }}
         onKeyDown={(e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+            return;
+          }
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onShortActivate();

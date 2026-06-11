@@ -230,7 +230,12 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
       req.operation === "update" &&
       isSoftDeleteLedgerPatch(req.data)
     ) {
-      await purgeGhostLocalCompanyDoc(companyId, collectionName, effectiveDocId);
+      const localRow = await getCompanyDocFromBrowserDb(companyId, collectionName, effectiveDocId).catch(
+        () => null
+      );
+      if (!localRow) {
+        await purgeGhostLocalCompanyDoc(companyId, collectionName, effectiveDocId);
+      }
       return { ok: true, docId: effectiveDocId };
     }
     return { ok: false, error: e instanceof Error ? e.message : "firestore write failed" };

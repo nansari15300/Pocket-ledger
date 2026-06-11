@@ -1768,28 +1768,6 @@ export function useTransactions(
         if (context === 'daybook' && dateRange?.from) {
             const today = startOfDay(dateRange.from);
 
-            const calculateBalanceUpTo = (targetDate: Date, accountType?: 'Bank' | 'Cash') => {
-                let balance = 0;
-                const relevantAccounts = accountType ? (entityList as Account[]).filter(a => a.accountType === accountType) : (entityList as Account[]);
-                
-                relevantAccounts.forEach(acc => {
-                    balance += acc.openingBalance || 0;
-                });
-                
-                vouchers.forEach((v: any) => {
-                    if (daybookUserIdFilter && String(v.userId || "") !== String(daybookUserIdFilter)) return;
-                    const transactionDate = safeToDate(v.date);
-                    if (transactionDate && transactionDate < targetDate) {
-                        const accountIsRelevant = relevantAccounts.some(a => a.id === v.accountId || a.id === v.toAccountId || a.id === v.fromAccountId || (v.entries && v.entries.some((e:any) => e.accountId === a.id)));
-                        if(accountIsRelevant) {
-                           const { debit, credit } = getTransactionAmounts(v, "account", { id: relevantAccounts.find(a => a.id === v.accountId || a.id === v.toAccountId || a.id === v.fromAccountId)?.id }, stockView, entityList, processedTaxes);
-                           balance += debit - credit;
-                        }
-                    }
-                });
-                return balance;
-            };
-
             /** Ek bank/cash account ka balance targetDate se pehle (user filter ke saath) */
             const balanceForAccountBefore = (acc: Account, targetDate: Date) => {
                 let balance = acc.openingBalance || 0;
@@ -1797,99 +1775,66 @@ export function useTransactions(
                     if (daybookUserIdFilter && String(v.userId || "") !== String(daybookUserIdFilter)) return;
                     const transactionDate = safeToDate(v.date);
                     if (!transactionDate || transactionDate >= targetDate) return;
-                    const touches =
-                        acc.id === v.accountId ||
-                        acc.id === v.toAccountId ||
-                        acc.id === v.fromAccountId ||
-                        (v.entries && v.entries.some((e: any) => e.accountId === acc.id));
-                    if (!touches) return;
                     const { debit, credit } = getTransactionAmounts(v, "account", acc, stockView, entityList, processedTaxes);
+                    if (!debit && !credit) return;
                     balance += debit - credit;
                 });
                 return balance;
             };
 
-            const yesterdayBankBalance = calculateBalanceUpTo(today, 'Bank');
-            const yesterdayCashBalance = calculateBalanceUpTo(today, 'Cash');
-            
-            let totalBankIn = 0, totalBankOut = 0, totalCashIn = 0, totalCashOut = 0;
-            const bankAccountIds = new Set((entityList as Account[]).filter(a => a.accountType === 'Bank').map(a => a.id));
-            const cashAccountIds = new Set((entityList as Account[]).filter(a => a.accountType === 'Cash').map(a => a.id));
-
-            const addInOutForAccount = (accId: string, v: any) => {
-                const amount = v.total || v.amount || 0;
-                let tin = 0;
-                let tout = 0;
-                if (v.type === "contra") {
-                    if (v.toAccountId === accId) tin += amount;
-                    if (v.fromAccountId === accId) tout += amount;
-                } else if (v.accountId === accId) {
-                    if (["sale", "payment_in", "direct_income"].includes(v.type)) tin += amount;
-                    if (["purchase", "payment_out", "direct_expense"].includes(v.type)) tout += amount;
-                }
-                return { tin, tout };
+            /** Account ledger Dr/Cr → daybook in/out (IC, journal, contra included) */
+            const addInOutForAccount = (acc: Account, v: any) => {
+                const { debit, credit } = getTransactionAmounts(v, "account", acc, stockView, entityList, processedTaxes);
+                return { tin: debit, tout: credit };
             };
-            
-            withBalance.forEach(v => {
-                const amount = v.total || v.amount || 0;
-                if(v.type === 'contra') {
-                    if (bankAccountIds.has(v.toAccountId)) totalBankIn += amount;
-                    if (bankAccountIds.has(v.fromAccountId)) totalBankOut += amount;
-                    if (cashAccountIds.has(v.toAccountId)) totalCashIn += amount;
-                    if (cashAccountIds.has(v.fromAccountId)) totalCashOut += amount;
-                } else if (bankAccountIds.has(v.accountId)) {
-                    if (['sale', 'payment_in', 'direct_income'].includes(v.type)) totalBankIn += amount;
-                    if (['purchase', 'payment_out', 'direct_expense'].includes(v.type)) totalBankOut += amount;
-                } else if (cashAccountIds.has(v.accountId)) {
-                    if (['sale', 'payment_in', 'direct_income'].includes(v.type)) totalCashIn += amount;
-                    if (['purchase', 'payment_out', 'direct_expense'].includes(v.type)) totalCashOut += amount;
-                }
-            });
-
-            const bank = { yesterday: yesterdayBankBalance, in: totalBankIn, out: totalBankOut, today: yesterdayBankBalance + totalBankIn - totalBankOut };
-            const cash = { yesterday: yesterdayCashBalance, in: totalCashIn, out: totalCashOut, today: yesterdayCashBalance + totalCashIn - totalCashOut };
-            const total = { yesterday: bank.yesterday + cash.yesterday, in: bank.in + cash.in, out: bank.out + cash.out, today: bank.today + cash.today };
 
             const allAccounts = (entityList as Account[]) || [];
             const bankAccountsSorted = allAccounts.filter(a => a.accountType === "Bank").slice().sort((a, b) => (a.accountName || "").localeCompare(b.accountName || ""));
             const cashAccountsSorted = allAccounts.filter(a => a.accountType === "Cash").slice().sort((a, b) => (a.accountName || "").localeCompare(b.accountName || ""));
 
-            const bankAccounts = bankAccountsSorted.map((acc) => {
+            const mapAccountDaybookSummary = (acc: Account, fallbackName: string) => {
                 let accIn = 0;
                 let accOut = 0;
                 withBalance.forEach((v) => {
-                    const { tin, tout } = addInOutForAccount(acc.id, v);
+                    const { tin, tout } = addInOutForAccount(acc, v);
                     accIn += tin;
                     accOut += tout;
                 });
                 const y = balanceForAccountBefore(acc, today);
                 return {
                     id: acc.id,
-                    name: acc.accountName || "Bank",
+                    name: acc.accountName || fallbackName,
                     yesterday: y,
                     in: accIn,
                     out: accOut,
                     today: y + accIn - accOut,
                 };
-            });
-            const cashAccounts = cashAccountsSorted.map((acc) => {
-                let accIn = 0;
-                let accOut = 0;
-                withBalance.forEach((v) => {
-                    const { tin, tout } = addInOutForAccount(acc.id, v);
-                    accIn += tin;
-                    accOut += tout;
-                });
-                const y = balanceForAccountBefore(acc, today);
-                return {
-                    id: acc.id,
-                    name: acc.accountName || "Cash",
-                    yesterday: y,
-                    in: accIn,
-                    out: accOut,
-                    today: y + accIn - accOut,
-                };
-            });
+            };
+
+            const bankAccounts = bankAccountsSorted.map((acc) => mapAccountDaybookSummary(acc, "Bank"));
+            const cashAccounts = cashAccountsSorted.map((acc) => mapAccountDaybookSummary(acc, "Cash"));
+
+            const sumField = (rows: { yesterday: number; in: number; out: number; today: number }[], key: "yesterday" | "in" | "out" | "today") =>
+                rows.reduce((s, r) => s + r[key], 0);
+
+            const bank = {
+                yesterday: sumField(bankAccounts, "yesterday"),
+                in: sumField(bankAccounts, "in"),
+                out: sumField(bankAccounts, "out"),
+                today: sumField(bankAccounts, "today"),
+            };
+            const cash = {
+                yesterday: sumField(cashAccounts, "yesterday"),
+                in: sumField(cashAccounts, "in"),
+                out: sumField(cashAccounts, "out"),
+                today: sumField(cashAccounts, "today"),
+            };
+            const total = {
+                yesterday: bank.yesterday + cash.yesterday,
+                in: bank.in + cash.in,
+                out: bank.out + cash.out,
+                today: bank.today + cash.today,
+            };
 
             daybookSummary = { bank, cash, total, bankAccounts, cashAccounts };
         }
