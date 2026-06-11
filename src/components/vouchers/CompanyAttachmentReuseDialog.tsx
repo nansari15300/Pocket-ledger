@@ -31,7 +31,6 @@ import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageD
 import { linkCloudAttachmentRefs } from "@/lib/companyAttachmentRegistry";
 import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 import { useCompany } from "@/hooks/useCompany";
-import { useCrossCompanyAttachmentAccess } from "@/hooks/useCrossCompanyAttachmentAccess";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -39,9 +38,11 @@ import { cn } from "@/lib/utils";
 function ReuseAttachmentLazyThumb({
   url,
   storagePath,
+  attachmentCompanyId,
 }: {
   url: string;
   storagePath?: string;
+  attachmentCompanyId?: string;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [showPreview, setShowPreview] = useState(false);
@@ -71,6 +72,7 @@ function ReuseAttachmentLazyThumb({
         <FilePreview
           file={url}
           storagePath={storagePath}
+          attachmentCompanyId={attachmentCompanyId}
           size={44}
           previewBox={{ width: 44, height: 44 }}
           className="h-11 w-11"
@@ -104,7 +106,6 @@ export function CompanyAttachmentReuseDialog({
   onAddUrls,
 }: Props) {
   const { companyId, allCompaniesRegistry } = useCompany();
-  const { isAttachmentVisible } = useCrossCompanyAttachmentAccess();
   const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [linking, setLinking] = useState<string | null>(null);
@@ -175,14 +176,6 @@ export function CompanyAttachmentReuseDialog({
   const pick = async (url: string) => {
     if (remaining <= 0) {
       toast({ variant: "destructive", title: "Attachment limit reached" });
-      return;
-    }
-    if (!isAttachmentVisible(url)) {
-      toast({
-        variant: "destructive",
-        title: "File not available here",
-        description: "You do not have access to this attachment from the current company.",
-      });
       return;
     }
     setLinking(url);
@@ -340,7 +333,11 @@ export function CompanyAttachmentReuseDialog({
                       linking === entry.url && "opacity-80"
                     )}
                   >
-                    <ReuseAttachmentLazyThumb url={entry.url} storagePath={storagePath} />
+                    <ReuseAttachmentLazyThumb
+                      url={entry.url}
+                      storagePath={storagePath}
+                      attachmentCompanyId={selectedCompanyId || undefined}
+                    />
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium leading-snug" title={entry.label}>
                         {entry.label}

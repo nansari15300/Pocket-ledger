@@ -8,8 +8,8 @@ import {
 } from "@/lib/crossCompanyAttachmentAccess";
 
 /**
- * Same-login company list (owned + shared) → attachment visibility policy.
- * Company A ka file link Company B me tabhi dikhe jab A bhi is user ki list me ho.
+ * Same-login company list → attachment policy registry (local/drive hints).
+ * Firebase Storage HTTPS links: link on voucher = preview/download (see crossCompanyAttachmentAccess).
  */
 export function CrossCompanyAttachmentAccessBridge() {
   const { companyId, allCompaniesRegistry, company } = useCompany();

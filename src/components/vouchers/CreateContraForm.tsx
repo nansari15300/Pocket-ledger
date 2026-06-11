@@ -175,6 +175,8 @@ export function CreateContraForm({
   const initialFilesRef = useRef<string[]>([]);
   const processAndSaveRef = useRef<((data: ContraFormValues, saveAndNew: boolean, onSuccess?: () => void, approveAfterSave?: boolean) => Promise<void>) | null>(null);
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
+  /** Naya contra: voucher no sirf ek baar auto-fetch — `company` ref / parent re-render par dubara mat chalao. */
+  const autoVoucherNumberFetchKeyRef = useRef<string | null>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [linkedPaymentInIds, setLinkedPaymentInIds] = useState<string[]>([]);
@@ -630,7 +632,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const isVoucherEditingAllowed = company?.allowVoucherNumberEditing?.contra ?? false;
   const isPrefixSelectionEnabled = company?.enableVoucherPrefixSelection?.contra ?? false;
 
-  const fetchVoucherNumber = useCallback(async (selectedPrefix?: string) => {
+  const contraVoucherNumberingKey = useMemo(() => {
+    if (!companyId) return "";
+    return `${companyId}|${isAutoVoucherEnabled ? 1 : 0}|${JSON.stringify(company?.voucherPrefixes?.contra ?? null)}`;
+  }, [companyId, isAutoVoucherEnabled, company?.voucherPrefixes?.contra]);
+
+  const fetchVoucherNumber = useCallback(async (selectedPrefix?: string, opts?: { force?: boolean }) => {
     if (!companyId || !company || !isAutoVoucherEnabled) return;
     const prefixes = company?.voucherPrefixes?.contra || [getVoucherPrefix(company.voucherPrefixes as Record<string, string[]> | undefined)];
     const VOUCHER_PREFIX = selectedPrefix || prefixes[0];
@@ -647,9 +654,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         parseVoucherNumberPart(nextNo, VOUCHER_PREFIX) ||
         parseVoucherNumberPart(nextNo, normalizePrefix(VOUCHER_PREFIX));
       const nextNum = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-      form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextNum));
-      form.setValue("voucherNumberOut", formatVoucherNumber(`${base} Out`, nextNum));
-      form.setValue("voucherNumberIn", formatVoucherNumber(`${base} In`, nextNum));
+      const mainVal = formatVoucherNumber(VOUCHER_PREFIX, nextNum);
+      const outVal = formatVoucherNumber(`${base} Out`, nextNum);
+      const inVal = formatVoucherNumber(`${base} In`, nextNum);
+      if (!opts?.force) {
+        const cur = form.getValues();
+        if (cur.voucherNumberOut === outVal && cur.voucherNumberIn === inVal) return;
+      }
+      form.setValue("voucherNumber", mainVal, { shouldDirty: false });
+      form.setValue("voucherNumberOut", outVal, { shouldDirty: false });
+      form.setValue("voucherNumberIn", inVal, { shouldDirty: false });
     } catch (error) {
       console.error("Error fetching voucher count: ", error);
     }
@@ -723,12 +737,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     form.clearErrors("toAccountId");
   }, [toAccountRow, fromAccountId, toAccountId, form]);
 
-  
+
   useEffect(() => {
-    if (!savedVoucherId || isEditingAndConverting) {
-      fetchVoucherNumber();
-    }
-  }, [savedVoucherId, fetchVoucherNumber, isEditingAndConverting, company]);
+    if (!isAutoVoucherEnabled) return;
+    if (savedVoucherId && !isEditingAndConverting) return;
+    const sessionKey = `${contraVoucherNumberingKey}|${savedVoucherId ?? "new"}|${isEditingAndConverting ? "conv" : "create"}`;
+    if (autoVoucherNumberFetchKeyRef.current === sessionKey) return;
+    autoVoucherNumberFetchKeyRef.current = sessionKey;
+    void fetchVoucherNumber(undefined, { force: true });
+  }, [savedVoucherId, fetchVoucherNumber, isEditingAndConverting, isAutoVoucherEnabled, contraVoucherNumberingKey]);
+
+  useEffect(() => {
+    if (!copySaveTargetCompanyId || voucher?.id || !isAutoVoucherEnabled) return;
+    autoVoucherNumberFetchKeyRef.current = null;
+    void fetchVoucherNumber(undefined, { force: true });
+  }, [copySaveTargetCompanyId, voucher?.id, fetchVoucherNumber, isAutoVoucherEnabled]);
 
   const handleAccountCreated = (newAccountId: string) => {
     if (targetFieldForNewAccount) {
@@ -1142,7 +1165,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             setFiles([]);
             setSavePdfAsImage(false);
             setSavedVoucherId(null);
-            await fetchVoucherNumber();
+            autoVoucherNumberFetchKeyRef.current = null;
+            await fetchVoucherNumber(undefined, { force: true });
           }
 
           if (approveAfterSave && voucher?.id) onSuccess?.();
@@ -1388,7 +1412,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const showCopyToAccountFromSource =
     copyDraftAccountHelpersEnabled && hasSourceAccountMismatch && (!String(toAccountId ?? "").trim() || !toAccountRow);
 
-  const voucherPrefixes = useMemo(() => company?.voucherPrefixes?.contra || [getVoucherPrefix()], [company]);
+  const voucherPrefixes = useMemo(
+    () =>
+      company?.voucherPrefixes?.contra ||
+      [getVoucherPrefix(company?.voucherPrefixes as Record<string, string[]> | undefined)],
+    [company?.voucherPrefixes?.contra]
+  );
   
 
   return (

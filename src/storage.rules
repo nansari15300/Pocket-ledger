@@ -12,14 +12,16 @@ service firebase.storage {
       return request.auth != null;
     }
 
-    // Voucher attachments: voucher-files/{companyId}/{voucherType}/{filename}
+    // Voucher attachments: read with download URL / signed-in SDK; write signed-in only.
     match /voucher-files/{companyId}/{allPaths=**} {
-      allow read, write: if isSignedIn();
+      allow read: if true;
+      allow write: if isSignedIn();
     }
 
-    // New structure: companies/{companyIdOrKey}/vouchers|unassigned|avatar|stamp|other/...
+    // companies/{id}__{slug}/vouchers|unassigned|avatar|stamp|other/...
     match /companies/{companyIdOrKey}/{folder}/{allPaths=**} {
-      allow read, write: if isSignedIn();
+      allow read: if true;
+      allow write: if isSignedIn();
     }
 
     // Legacy company logo path (older app builds) — keep read/write for signed-in users.

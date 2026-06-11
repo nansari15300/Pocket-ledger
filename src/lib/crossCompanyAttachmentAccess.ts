@@ -3,6 +3,7 @@
 import type { AttachmentHoldPayloadV1 } from "@/lib/attachmentHoldClipboard";
 import { persistableAttachmentRefFromHoldPayload } from "@/lib/attachmentHoldClipboard";
 import { tryGetStoragePathFromFirebaseDownloadUrl, normalizeFirebaseStorageObjectPathForSdk, looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
+import { looksLikeFirebaseStorageDownloadUrl } from "@/lib/storageGetBlobFromDownloadUrl";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 
@@ -103,6 +104,25 @@ export function extractStorageCompanyFolderFromAttachmentRef(
   return null;
 }
 
+/**
+ * Firebase HTTPS download URL / Storage object path — voucher par link ho to preview/download allow
+ * (reuse another company file; signed-in user + link).
+ */
+export function isLinkShareableFirebaseStorageAttachmentRef(ref: string): boolean {
+  const trimmed = String(ref || "").trim();
+  if (!trimmed) return false;
+  if (isLocalFileRef(trimmed) || isDriveFileRef(trimmed)) return false;
+  if (looksLikeFirebaseStorageDownloadUrl(trimmed)) return true;
+  if (looksLikeFirebaseStorageObjectPath(trimmed)) return true;
+  if (tryGetStoragePathFromFirebaseDownloadUrl(trimmed)) return true;
+  const norm = normalizeFirebaseStorageObjectPathForSdk(trimmed);
+  return (
+    /^voucher-files\//i.test(norm) ||
+    /^companies\//i.test(norm) ||
+    /^entity-files\//i.test(norm)
+  );
+}
+
 export function resolveAttachmentStorageOwnerAmongAccessibleCompanies(
   ref: string,
   accessibleCompanyIds: ReadonlySet<string>,
@@ -117,8 +137,8 @@ export function resolveAttachmentStorageOwnerAmongAccessibleCompanies(
 }
 
 /**
- * Cross-company copy/paste: Company B me Company A ka Storage link tabhi dikhao / prefetch karo
- * jab same login par Company A bhi user ki list (owned/shared) me ho.
+ * Cross-company reuse: Firebase Storage link/path par preview + save allow (same login, link on voucher).
+ * Purana rule (sirf accessible company list) local/drive ke alawa Firebase refs par hata diya.
  */
 export function isCrossCompanyAttachmentVisibleToUser(
   ref: string,
@@ -128,6 +148,7 @@ export function isCrossCompanyAttachmentVisibleToUser(
   const trimmed = String(ref || "").trim();
   if (!trimmed) return false;
   if (isLocalFileRef(trimmed) || isDriveFileRef(trimmed)) return true;
+  if (isLinkShareableFirebaseStorageAttachmentRef(trimmed)) return true;
 
   const activeId = String(activeCompanyId || "").trim();
   const folder = extractStorageCompanyFolderFromAttachmentRef(trimmed, activeId || undefined);
