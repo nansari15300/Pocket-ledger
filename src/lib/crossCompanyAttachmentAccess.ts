@@ -55,12 +55,27 @@ export function getCrossCompanyAttachmentAccessPolicy(): Readonly<{
   return attachmentAccessPolicy;
 }
 
-/** Storage path folder (`voucher-files/{folder}/…`) ↔ full company id (`slug_folder`). */
+/** `companies/{id}__{slug}/…` — Storage folder key se bare company id. */
+export function companyIdFromStorageFolderKey(storageFolder: string): string {
+  const folder = String(storageFolder || "").trim();
+  if (!folder) return "";
+  const sep = folder.indexOf("__");
+  return sep > 0 ? folder.slice(0, sep) : folder;
+}
+
+/**
+ * Storage path folder (`voucher-files/{folder}/…` ya `companies/{id}__{slug}/…`) ↔ company id.
+ * Purana matcher sirf exact / `_` suffix — `abc123__company-name` + `abc123` miss ho kar "Other company file" dikhta tha.
+ */
 export function storageFolderMatchesCompanyId(storageFolder: string, companyId: string): boolean {
   const folder = String(storageFolder || "").trim();
   const cid = String(companyId || "").trim();
   if (!folder || !cid) return false;
   if (folder === cid) return true;
+  if (folder.startsWith(`${cid}__`) || cid.startsWith(`${folder}__`)) return true;
+  const folderId = companyIdFromStorageFolderKey(folder);
+  const cidNorm = companyIdFromStorageFolderKey(cid);
+  if (folderId && cidNorm && folderId === cidNorm) return true;
   if (cid.endsWith(`_${folder}`)) return true;
   if (folder.endsWith(`_${cid}`)) return true;
   return false;

@@ -17,10 +17,11 @@ export function CrossCompanyAttachmentAccessBridge() {
     () => [
       ...collectAccessibleCompanyIdsForAttachmentPolicy(allCompaniesRegistry, [
         companyId,
+        company?.id,
         company?.authoritativeCompanyId,
       ]),
     ],
-    [allCompaniesRegistry, companyId, company?.authoritativeCompanyId]
+    [allCompaniesRegistry, companyId, company?.id, company?.authoritativeCompanyId]
   );
 
   useEffect(() => {

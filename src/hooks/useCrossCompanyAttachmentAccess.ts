@@ -17,9 +17,10 @@ export function useCrossCompanyAttachmentAccess() {
     () =>
       collectAccessibleCompanyIdsForAttachmentPolicy(allCompaniesRegistry, [
         companyId,
+        company?.id,
         company?.authoritativeCompanyId,
       ]),
-    [allCompaniesRegistry, companyId, company?.authoritativeCompanyId]
+    [allCompaniesRegistry, companyId, company?.id, company?.authoritativeCompanyId]
   );
 
   return useMemo(

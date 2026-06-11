@@ -4,6 +4,7 @@ import type { Company } from "@/hooks/useCompany";
 import type { PlServerSharedCompanySummary } from "@/lib/localServerShareableCompanies";
 import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 import { isLocalAppServerHost } from "@/lib/localAppServerDevPreview";
+import { getActiveGate } from "@/lib/gates/gateStore";
 
 const STORAGE_IDS = "pl_server_allowed_company_ids";
 const STORAGE_LABEL = "pl_server_access_label";
@@ -47,15 +48,21 @@ export function persistDevClientAccessToken(token: string): void {
   }
 }
 
+/**
+ * Sirf remote client / local_server gate / loopback dev preview par server access context chahiye.
+ * Public web (pocketledger.com + Online gate) par mat — warna company list [] ho kar auto-select loop.
+ */
 export function shouldFetchPlServerAccessContext(): boolean {
   if (typeof window === "undefined") return false;
   if (isPlRemoteServerClientMode()) return true;
-  if (!isLocalAppHost()) return true;
-  if (readDevClientAccessToken()) return true;
-  try {
-    if (sessionStorage.getItem(STORAGE_COMPANIES) || sessionStorage.getItem(STORAGE_IDS)) return true;
-  } catch {
-    /* ignore */
+  if (getActiveGate().type === "local_server") return true;
+  if (isLocalAppHost()) {
+    if (readDevClientAccessToken()) return true;
+    try {
+      if (sessionStorage.getItem(STORAGE_COMPANIES) || sessionStorage.getItem(STORAGE_IDS)) return true;
+    } catch {
+      /* ignore */
+    }
   }
   return false;
 }
@@ -351,7 +358,7 @@ export function filterCompaniesForPlServerAccess(companies: Company[]): CompanyW
       const set = new Set(shared.map((row) => row.id));
       return merged.filter((c) => set.has(String(c.id || "").trim()));
     }
-    return [];
+    return merged;
   }
   const set = new Set(allowed);
   return merged.filter((c) => set.has(String(c.id || "").trim()));

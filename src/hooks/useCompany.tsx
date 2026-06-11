@@ -57,7 +57,7 @@ import {
 } from "@/lib/plServerAccessContext";
 import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 import { getActiveGate } from "@/lib/gates/gateStore";
-import { filterCompaniesForActiveGate, pickGateAwareAutoSelectCompanyId } from "@/lib/gates/gateRuntime";
+import { filterCompaniesForActiveGate, pickGateAwareAutoSelectCompanyId, isOnlineGate } from "@/lib/gates/gateRuntime";
 import { PL_GATE_CHANGED_EVENT } from "@/lib/gates/gateTypes";
 import { sharedCompanyQueryKey, sharedCompanyQuerySpecs } from "@/lib/sharedWithEmailsQuery";
 import { clearSelectedCompanyId, readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
@@ -585,16 +585,15 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
   const allCompaniesForUi = useMemo(() => {
     allCompaniesUnfilteredLiveRef.current = allCompanies;
-    if (isPlRemoteServerClientMode()) {
-      const filtered = filterCompaniesForPlServerAccess(allCompanies);
+    const activeGate = getActiveGate();
+    const byGate = filterCompaniesForActiveGate(allCompanies, activeGate);
+    if (isPlRemoteServerClientMode() || !isOnlineGate(activeGate)) {
+      const filtered = filterCompaniesForPlServerAccess(byGate);
       allCompaniesLiveRef.current = filtered;
       return filtered;
     }
-    const activeGate = getActiveGate();
-    const byGate = filterCompaniesForActiveGate(allCompanies, activeGate);
-    const filtered = filterCompaniesForPlServerAccess(byGate);
-    allCompaniesLiveRef.current = filtered;
-    return filtered;
+    allCompaniesLiveRef.current = byGate;
+    return byGate;
   }, [allCompanies, serverAccessEpoch, gateEpoch]);
   const [loading, setLoading] = useState(true);
   /** Online mode: company doc / sharing change par listener re-subscribe (light). */
@@ -885,9 +884,10 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         : allCompaniesUnfilteredLiveRef.current;
     if (registrySource.length === 0) return;
     const activeGate = getActiveGate();
-    const allowedForGate = filterCompaniesForPlServerAccess(
-      filterCompaniesForActiveGate(registrySource, activeGate)
-    );
+    const gateFiltered = filterCompaniesForActiveGate(registrySource, activeGate);
+    const allowedForGate = isOnlineGate(activeGate)
+      ? gateFiltered
+      : filterCompaniesForPlServerAccess(gateFiltered);
     if (!allowedForGate.some((c) => c.id === companyId)) {
       if (shouldDeferRefreshBootCompanyClear(companyId, mountedAtRef.current, bootPinnedCompanyIdRef.current)) {
         return;
