@@ -22,14 +22,8 @@ export function isAllowedEmbeddedBillingClientOrigin(origin: string): boolean {
   if (isPocketLedgerAppHostname(host)) return true;
   // Capacitor / Ionic WebView (legacy scheme)
   if (u.protocol === "capacitor:" || u.protocol === "ionic:") return true;
-  // LAN / emulator (optional dev device)
-  if (
-    /^10\.\d+\.\d+\.\d+$/.test(host) ||
-    /^192\.168\.\d+\.\d+$/.test(host) ||
-    /^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(host)
-  ) {
-    return true;
-  }
+  // Raw IPv4 — LAN (192.168.x) ya public WAN (P2P admin http://110.x.x.x:5000) dono embedded client ke liye.
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return true;
   return false;
 }
 
