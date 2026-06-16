@@ -46,6 +46,14 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
+import {
+  incomingVoucherFileUrlsLookStaleVersusSaved,
+  isLocalToRemoteAttachmentUpgrade,
+  resolvePersistedVoucherFileUrlsAfterSave,
+  voucherAttachmentFieldsForSave,
+  materializeVoucherFileUrlsForWebSave,
+  normalizeFormFileUrlsForSave,
+} from "@/lib/voucherFormAttachmentSave";
 import { toast as sonnerToast } from "sonner";
 import { replaceVoucherSaveLoadingWithShortSuccess } from "@/lib/voucherSaveUi";
 import type { CopyMasterDraftRequestPayload } from "./AddVoucherDialog";
@@ -313,6 +321,7 @@ export function CreatePaymentOutForm({
     [allowAttachments, fileAttachmentLimits.maxFileCount, fileAttachmentLimits.allowPDF, files]
   );
   const initialFilesRef = useRef<string[]>([]);
+  const savedFileUrlsSnapshotRef = useRef<string[] | null>(null);
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -1083,7 +1092,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
 }, [voucher, defaultVoucherData, form, isEditingAndConverting]);
 
-  // Outbox flush ke baad `local:` → HTTPS: `voucher.fileUrls` sync; same id par reset skip — stale `local:` preview fix (Payment In jaisa).
+  // Outbox flush ke baad `local:` → HTTPS: parent sync; stale snapshot ignore (EXE remove+add fix).
   useEffect(() => {
     if (!voucher?.id || savedVoucherId !== voucher.id) return;
     const hasUnsavedFilePick = files.some((f) => f instanceof File);
@@ -1091,6 +1100,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     if (_isFileDirty) return;
     const incoming = (voucher.fileUrls || []).filter((u: unknown): u is string => typeof u === "string");
     const cur = files.filter((f): f is string => typeof f === "string");
+    const snap = savedFileUrlsSnapshotRef.current;
+    if (snap) {
+      if (incomingVoucherFileUrlsLookStaleVersusSaved(snap, incoming)) return;
+      if (
+        JSON.stringify(incoming) === JSON.stringify(snap) ||
+        isLocalToRemoteAttachmentUpgrade(snap, incoming)
+      ) {
+        savedFileUrlsSnapshotRef.current = null;
+      }
+    }
     if (JSON.stringify(incoming) === JSON.stringify(cur)) return;
     setFiles(incoming);
     initialFilesRef.current = [...incoming];
@@ -1328,12 +1347,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
       }
       
+      // Web save: PL/local markers ko payload se pehle HTTPS me promote karo (offline/embedded par as-is rehta hai).
+      const fileUrlsForSave = await materializeVoucherFileUrlsForWebSave({
+        companyId,
+        voucherIdHint: idArgForFirestore ?? voucher?.id ?? null,
+        storageFolder: String(voucherType),
+        rawUrls: normalizeFormFileUrlsForSave(filesForSave.filter(f => typeof f === "string") as string[]),
+      });
+
       const submissionData: any = {
         ...restOfData,
         date: date.toISOString(),
         amount: cleanAmount,
         total: cleanAmount,
-        fileUrls: filesForSave.filter(f => typeof f === 'string') as string[],
+        // Save payload me web-online case me HTTPS urls prefer karo.
+        fileUrls: fileUrlsForSave,
         type: voucherType
       };
       if (voucherType === 'payment_out') {
@@ -1379,7 +1407,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           setIsLoading(false);
           return;
         }
-        if (await shouldStageNewVoucherFilesAsLocalPending(companyId)) {
+        // EXE (Electron) ya offline: IndexedDB local stage → syncPendingFiles background me Firebase upload.
+        // Web browser (online): seedha Firebase Storage pe upload → HTTPS URL turant Firestore me.
+        const isElectronExe = typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("electron");
+        const isOffline = typeof navigator !== "undefined" && !navigator.onLine;
+        const useLocalStaging = isElectronExe || isOffline || await shouldStageNewVoucherFilesAsLocalPending(companyId);
+        if (useLocalStaging) {
           // Copy-draft pehli insert: idArgForFirestore null — local placeholder bhi naya doc id (stale pass-through na ho).
           const voucherIdForLocalAttachments =
             isEditingAndConverting && voucher?.id
@@ -1407,6 +1440,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             }
           }
         } else {
+          // Web browser online: direct Firebase HTTPS — Firestore me local/PL URL kabhi nahi.
           for (const file of newFilesToUpload) {
             if (sanitizedData.fileUrls.length >= fileAttachmentLimits.maxFileCount) break;
             const storageRef = ref(storage, `voucher-files/${companyId}/${voucherType}/${Date.now()}_${file.name}`);
@@ -1417,6 +1451,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           }
         }
       }
+
+      Object.assign(
+        sanitizedData,
+        voucherAttachmentFieldsForSave(
+          (Array.isArray(sanitizedData.fileUrls) ? sanitizedData.fileUrls : []).filter(
+            (u: unknown): u is string => typeof u === "string"
+          )
+        )
+      );
 
       const isEdit = !!voucher?.id && !originalVoucherIdToDelete;
       const approverName = customUser?.displayName || user?.displayName || user?.email || user?.uid;
@@ -1462,9 +1505,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           // Refresh baseline after a successful save/sync so next edit can diff/add/remove correctly.
           initialAllocationsRef.current = sanitizedData.allocations.map((a: any) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
         }
-        // Save ke baad string URLs only — `File` rehne par flush/outbox pending delete ke baad preview doosri baar tut-ta tha.
+        // Save ke baad string URLs — sync ke baad `local:` → HTTPS (web edit thumb + EXE stale parent guard).
         {
-          const persistedUrls = (sanitizedData.fileUrls || []).filter((u: unknown): u is string => typeof u === "string");
+          const rawUrls = (sanitizedData.fileUrls || []).filter((u: unknown): u is string => typeof u === "string");
+          const vid = savedDoc.id;
+          const persistedUrls =
+            vid && companyId
+              ? await resolvePersistedVoucherFileUrlsAfterSave(companyId, vid, rawUrls, String(voucherType))
+              : rawUrls;
+          savedFileUrlsSnapshotRef.current = [...persistedUrls];
           setFiles(persistedUrls);
           initialFilesRef.current = persistedUrls;
         }

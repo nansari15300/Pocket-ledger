@@ -9,6 +9,7 @@ import { storage } from "@/lib/firebase";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { generateLocalFileId, LOCAL_FILE_PREFIX, putPendingFile } from "@/lib/localPendingFiles";
+import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 
 /** Local company (`storageOption: local`) — avatar/docs/items Firebase par nahi; `local:` + Google Drive sync. */
 export async function shouldStageEntityProfileFilesLocally(
@@ -61,9 +62,10 @@ export async function stageEntityAvatarAndDocuments(params: {
   const { companyId, collectionSeg, entityId, avatarFile, documentFiles } = params;
   const maxDocuments = params.maxDocuments ?? DEFAULT_MAX_ENTITY_DOCS;
   const documentFileUrls: string[] = [];
-  const basePath = `companies/${companyId}/${collectionSeg}/${entityId}`;
+  const fsCompanyId = await resolveAuthoritativeFirestoreCompanyId(companyId);
+  const basePath = `companies/${fsCompanyId}/${collectionSeg}/${entityId}`;
   // Firebase Storage rules: `companies/{companyId}/{folder}/**` — local pending upload bhi isi tree ke hisaab se.
-  const prefix = `companies/${companyId}/${collectionSeg.replace(/_/g, "-")}-files`;
+  const prefix = `companies/${fsCompanyId}/${collectionSeg.replace(/_/g, "-")}-files`;
 
   let fileUrl: string | null = null;
   if (avatarFile && isProfileAvatarImageFile(avatarFile)) {
@@ -114,7 +116,8 @@ export async function uploadEntityAvatarAndDocumentsRemote(params: {
   const { companyId, collectionSeg, avatarFile, documentFiles } = params;
   const maxDocuments = params.maxDocuments ?? DEFAULT_MAX_ENTITY_DOCS;
   const documentFileUrls: string[] = [];
-  const prefix = `companies/${companyId}/${collectionSeg.replace(/_/g, "-")}-files`;
+  const fsCompanyId = await resolveAuthoritativeFirestoreCompanyId(companyId);
+  const prefix = `companies/${fsCompanyId}/${collectionSeg.replace(/_/g, "-")}-files`;
 
   let fileUrl: string | null = null;
   if (avatarFile && isProfileAvatarImageFile(avatarFile)) {

@@ -53,6 +53,7 @@ import { PlNavDebugOnDeviceOverlay } from "@/components/debug/PlNavDebugOnDevice
 import { DashboardDocumentTitleSync } from "@/components/layout/DashboardDocumentTitleSync";
 import { ElectronTabStripSyncBridge } from "@/components/layout/ElectronTabStripSyncBridge";
 import { RecurringVoucherAutoRunner } from "@/components/vouchers/RecurringVoucherAutoRunner";
+import { PendingAttachmentSyncBridge } from "@/components/vouchers/PendingAttachmentSyncBridge";
 import { BackupRunGlobalBanner } from "@/components/settings/BackupRunGlobalBanner";
 import { AutoBackupScheduler } from "@/components/settings/AutoBackupScheduler";
 import { collection, doc, getDocs, getDoc, onSnapshot, deleteDoc, setDoc, serverTimestamp, query, where } from "firebase/firestore";
@@ -871,6 +872,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
             <AlarmPopup />
             {/* Month-end recurring vouchers: app-open trigger runner (company settings + user scope aware). */}
             <RecurringVoucherAutoRunner />
+            <PendingAttachmentSyncBridge />
             <AutoBackupScheduler />
             <ReportListProvider>
               <SettingsListProvider>

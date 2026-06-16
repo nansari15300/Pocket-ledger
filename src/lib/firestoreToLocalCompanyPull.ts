@@ -44,6 +44,33 @@ function sortMergedByField(merged: any[], orderByField: string): any[] {
  * **Server-hard-delete orphans:** SQLite row jisme `__mirrorBackedByFirestore` aur ab server snapshot me wo id nahin —
  * stale “extra” ghost ban jati thi + mirror usko wapas bake karta tha → hard-delete SQLite row (restore impossible).
  */
+import { isLocalFileRef } from "@/lib/localPendingFiles";
+
+function isHttpsAttachmentRef(u: unknown): boolean {
+  return typeof u === "string" && /^https?:\/\//i.test(u.trim());
+}
+
+/** SQLite mirror row me stale `local:` ho aur Firestore snapshot HTTPS ho — attachment fields remote se. */
+function mergeDocAttachmentFieldsPreferRemote(remote: Record<string, unknown>, local: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...local };
+  for (const key of ["fileUrls", "documentFileUrls"] as const) {
+    const rArr = Array.isArray(remote[key]) ? (remote[key] as unknown[]) : [];
+    const lArr = Array.isArray(local[key]) ? (local[key] as unknown[]) : [];
+    const rHttps = rArr.filter(isHttpsAttachmentRef);
+    const lHttps = lArr.filter(isHttpsAttachmentRef);
+    if (rHttps.length > lHttps.length) out[key] = remote[key];
+    else if (rHttps.length === lHttps.length && rArr.some(isHttpsAttachmentRef) && lArr.some((u) => isLocalFileRef(String(u)))) {
+      out[key] = remote[key];
+    }
+  }
+  for (const key of ["fileUrl", "avatarUrl"] as const) {
+    const r = remote[key];
+    const l = local[key];
+    if (isHttpsAttachmentRef(r) && (isLocalFileRef(String(l || "")) || !l)) out[key] = r;
+  }
+  return out;
+}
+
 export async function mergeRemoteSnapshotWithLocalOnlyDocs(
   localCompanyId: string,
   collectionPath: string,
@@ -92,7 +119,8 @@ export async function mergeRemoteSnapshotWithLocalOnlyDocs(
       for (const c of cached) {
         const id = String(c?.id ?? "");
         if (!id || c?.isDeleted === true) continue;
-        byId.set(id, c);
+        const remoteRow = remoteStamped.find((r: any) => String(r?.id ?? "") === id) as Record<string, unknown> | undefined;
+        byId.set(id, remoteRow ? mergeDocAttachmentFieldsPreferRemote(remoteRow, c as Record<string, unknown>) : c);
       }
       const merged = [...byId.values()];
       if (!orderByField) return merged;

@@ -70,7 +70,10 @@ import {
 import { buildFiscalMergePartitionBannerLabel } from "@/lib/fiscalYearLabel";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
 import { resolveLedgerTransactionUserDisplayName } from "@/lib/ledgerUserColumnDisplay";
-import { prewarmHoverPreviewHttpsUrls } from "@/components/vouchers/attachmentHoverPreviewBody";
+import {
+  prewarmHoverPreviewHttpsUrls,
+  prewarmVisibleAttachmentRefsForInstantOpen,
+} from "@/components/vouchers/attachmentHoverPreviewBody";
 import { updateAttachmentPrefetchPriorityFromVisibleRows } from "@/lib/attachmentPrefetchPriorityBuffer";
 import { statementCheckTxnId } from "@/lib/statementCheckModeStorage";
 
@@ -825,6 +828,8 @@ export function TransactionsTable({
     const runWarm = () => {
       // Idle-time warm keeps row mount responsive while making first hover near-instant.
       void prewarmHoverPreviewHttpsUrls(visibleAttachmentUrls, { signal: ac.signal, maxUrls: 220 });
+      // Tick-click open ko production-jaisa banane ke liye visible row files pehle se instant-open cache me bhejo.
+      void prewarmVisibleAttachmentRefsForInstantOpen(visibleAttachmentUrls, { signal: ac.signal, maxUrls: 220 });
     };
     if (typeof browserWindow.requestIdleCallback === "function") {
       idleHandle = browserWindow.requestIdleCallback(runWarm, { timeout: 450 });

@@ -27,8 +27,14 @@ const HOVER_HTTPS_UI_CACHE_MAX = 80;
 const hoverHttpsBlobUrlByKey = new Map<string, string>();
 const hoverHttpsBlobUrlLru: string[] = [];
 
+/** Same attachment ke signed URL/token different hone par bhi ek hi cache key use ho. */
+function hoverPreviewBlobCacheKey(urlKey: string): string {
+  return normalizeAttachmentUrlForDevicePreview(String(urlKey || "").trim());
+}
+
 function peekHoverCachedBlobUrl(urlKey: string): string | undefined {
-  const k = urlKey.trim();
+  // Stable normalized key se repeat hover/click par cache miss avoid hota hai.
+  const k = hoverPreviewBlobCacheKey(urlKey);
   const ou = hoverHttpsBlobUrlByKey.get(k);
   if (!ou) return undefined;
   const i = hoverHttpsBlobUrlLru.indexOf(k);
@@ -40,7 +46,8 @@ function peekHoverCachedBlobUrl(urlKey: string): string | undefined {
 }
 
 function rememberHoverBlobUrl(urlKey: string, objectUrl: string): void {
-  const k = urlKey.trim();
+  // Stable normalized key ke saath blob URL persist karo taaki same file re-fetch na ho.
+  const k = hoverPreviewBlobCacheKey(urlKey);
   const existing = hoverHttpsBlobUrlByKey.get(k);
   if (existing && existing !== objectUrl) {
     try {
@@ -92,6 +99,14 @@ export async function prewarmHoverPreviewHttpsUrls(
       // Visible-list warm is best-effort; hover open path will still fetch on demand if needed.
     }
   }
+}
+
+export async function prewarmVisibleAttachmentRefsForInstantOpen(
+  urls: readonly string[],
+  options?: { signal?: AbortSignal; maxUrls?: number }
+): Promise<void> {
+  // Instant-open behavior: visible rows ke attachments ko same prewarm pipeline se pehle hydrate karo.
+  await prewarmHoverPreviewHttpsUrls(urls, options);
 }
 
 /**
@@ -157,7 +172,7 @@ function HoverPreviewHttpsAwareImage(props: {
       })();
       return () => {
         cancelled = true;
-        if (blobUrlToRevoke && hoverHttpsBlobUrlByKey.get(u.trim()) !== blobUrlToRevoke) {
+        if (blobUrlToRevoke && hoverHttpsBlobUrlByKey.get(hoverPreviewBlobCacheKey(u)) !== blobUrlToRevoke) {
           try {
             URL.revokeObjectURL(blobUrlToRevoke);
           } catch {
@@ -223,7 +238,7 @@ function HoverPreviewHttpsAwareImage(props: {
 
     return () => {
       cancelled = true;
-      if (blobUrlToRevoke && hoverHttpsBlobUrlByKey.get(u.trim()) !== blobUrlToRevoke) {
+      if (blobUrlToRevoke && hoverHttpsBlobUrlByKey.get(hoverPreviewBlobCacheKey(u)) !== blobUrlToRevoke) {
         try {
           URL.revokeObjectURL(blobUrlToRevoke);
         } catch {

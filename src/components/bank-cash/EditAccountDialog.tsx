@@ -63,6 +63,7 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { useAuth } from "@/hooks/useAuth";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import { syncPendingFiles } from "@/lib/localPendingFiles";
 import { FilePreview } from "../vouchers/FilePreview";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
@@ -431,6 +432,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           const payload: Record<string, unknown> = { ...base, ...updatePayload, id: accountRefSnap.id, companyId };
           await upsertCompanyDocInBrowserDb(companyId, "bank_accounts", accountRefSnap.id, payload);
           await enqueueCompanyDocOutbox(companyId, "bank_accounts", "update", accountRefSnap.id, payload);
+          await syncPendingFiles().catch((e) => console.warn("[EditAccountDialog] syncPendingFiles", e));
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onAccountUpdated({
             id: accountRefSnap.id,
@@ -459,6 +461,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
 
         const accountRef = doc(firestore, `companies/${companyId}/bank_accounts`, accountRefSnap.id);
         await updateDoc(accountRef, updatePayload);
+        await syncPendingFiles().catch((e) => console.warn("[EditAccountDialog] syncPendingFiles", e));
 
         // Automatically balance opening balance change with Capital Account
         if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {

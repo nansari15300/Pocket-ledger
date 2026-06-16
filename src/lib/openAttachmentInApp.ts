@@ -2,6 +2,7 @@
 
 import { shouldUseInAppPdfPreviewOverlay } from "@/lib/shouldUseInAppPdfPreview";
 import { showInAppPdfPreview } from "@/lib/inAppPdfPreview";
+import { normalizeAttachmentUrlForDevicePreview } from "@/lib/attachmentHoldClipboard";
 import {
   openHttpPdfInExternalBrowser,
   openLocalFileUriInExternalViewer,
@@ -102,7 +103,9 @@ export async function openAttachmentInApp(
     serverFallback?: OpenAttachmentServerFallback;
   }
 ): Promise<void> {
-  const u = String(url || "").trim();
+  // PL_ATTACH_V1: clipboard marker aa gaya to underlying src (local:/https) decode karo —
+  // warna isLocalFileRef check miss karta tha aur error dialog dikhta tha.
+  const u = normalizeAttachmentUrlForDevicePreview(String(url || "").trim());
   if (!u) return;
 
   const g = opts?.gallery;

@@ -33,6 +33,7 @@ import type { CloudSyncProviderId } from "@/lib/localCloudSync/types";
 import { getLocalCompanyById, listLocalCompanies } from "@/lib/localCompanyStore";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 
 const STORE = "pendingFiles";
 const ATTACHMENT_HOLD_CLIPBOARD_PREFIX = "PL_ATTACH_V1:";
@@ -65,14 +66,33 @@ async function readCompanyDocForPendingSync(
   const m = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(p);
   if (!m) return null;
   const [, companyId, collection, docId] = m;
-  const reg = await getLocalCompanyById(companyId!, { includeDeleted: true });
-  if (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) {
-    return (await getCompanyDocFromBrowserDb(companyId!, collection!, docId!, {
-      includeDeleted: opts?.includeDeleted === true,
-    })) as Record<string, unknown> | null;
+  const pathsToTry: string[] = [];
+  const seen = new Set<string>();
+  const push = async (cid: string) => {
+    const id = String(cid || "").trim();
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    pathsToTry.push(`companies/${id}/${collection}/${docId}`);
+  };
+  await push(companyId!);
+  await push(await resolveAuthoritativeFirestoreCompanyId(companyId!));
+
+  for (const path of pathsToTry) {
+    const parts = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(path);
+    if (!parts) continue;
+    const [, cid, coll, did] = parts;
+    const reg = await getLocalCompanyById(cid!, { includeDeleted: true });
+    if (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) {
+      const row = (await getCompanyDocFromBrowserDb(cid!, coll!, did!, {
+        includeDeleted: opts?.includeDeleted === true,
+      })) as Record<string, unknown> | null;
+      if (row) return row;
+      continue;
+    }
+    const snap = await getDoc(firestoreDocRefFromPath(path));
+    if (snap.exists()) return snap.data() as Record<string, unknown>;
   }
-  const snap = await getDoc(firestoreDocRefFromPath(p));
-  return snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+  return null;
 }
 
 /**

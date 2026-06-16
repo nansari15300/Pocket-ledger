@@ -97,7 +97,18 @@ export function getVoucherEntryTimeSourceDate(transaction: Record<string, unknow
   if (typeof offlineMs === "number" && Number.isFinite(offlineMs)) {
     return new Date(offlineMs);
   }
-  return parseFirestoreDateFieldToJsDate(transaction["date"]);
+  const fallbackDate = parseFirestoreDateFieldToJsDate(transaction["date"]);
+  if (!fallbackDate) return null;
+  // Sirf calendar date (picker midnight) — asli entry clock nahi; "12:00 AM" misleading hide karo.
+  if (
+    fallbackDate.getHours() === 0 &&
+    fallbackDate.getMinutes() === 0 &&
+    fallbackDate.getSeconds() === 0 &&
+    fallbackDate.getMilliseconds() === 0
+  ) {
+    return null;
+  }
+  return fallbackDate;
 }
 
 /** New voucher save: user-picked calendar day + abhi ka local clock — `date` fallback par 12:00 AM na dikhe. */

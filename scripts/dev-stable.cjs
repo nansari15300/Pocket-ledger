@@ -37,8 +37,8 @@ try {
   console.warn("[dev-stable] Cache cleanup skipped:", error?.message || error);
 }
 
-// Default 3000 — browser dev yahi; packaged EXE static server busy ho to apne fallback ports use karta hai.
-const devPort = String(process.env.PORT || "3000");
+// Force 3000 in dev so preview/cache behavior matches production debugging baseline.
+const devPort = "3000";
 const lanIps = listLanIPv4Addresses();
 // eslint-disable-next-line no-console
 console.log(`[dev-stable] Local dev → http://localhost:${devPort}`);

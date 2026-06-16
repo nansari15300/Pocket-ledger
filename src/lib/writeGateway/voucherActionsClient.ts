@@ -23,7 +23,12 @@ import {
   flushVoucherOutbox,
 } from "@/lib/localVoucherOutbox";
 import { syncPendingFiles } from "@/lib/localPendingFiles";
-import { coerceVoucherDocumentDate, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
+import { classifyAttachmentRef, logAttachmentPipeline } from "@/lib/attachmentPipelineDebug";
+import {
+  coerceVoucherDocumentDate,
+  mergeVoucherCalendarDateWithSaveClock,
+  parseFirestoreDateFieldToJsDate,
+} from "@/lib/voucherDateNormalize";
 import { getPlan, numericEntitlement, companyStorageIsLocal, type Entitlements, type PlanId } from "@/config/plans";
 import { getPlanFromPlans } from "@/hooks/useLivePlans";
 import { readCachedPlansRecord, defaultPlansRecordFallback } from "@/lib/plansCatalogCache";
@@ -73,6 +78,7 @@ import {
 import { parseAttachmentHoldClipboardText } from "@/lib/attachmentHoldClipboard";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 
 /** Edit save: transient `blob:` preview URLs ya khali `fileUrls` se `local:` / Drive refs mat hatao. */
 function persistableVoucherAttachmentUrls(raw: unknown): string[] {
@@ -86,29 +92,48 @@ function persistableVoucherAttachmentUrls(raw: unknown): string[] {
   return out;
 }
 
-/** SQLite/outbox edit merge — incoming payload attachments ko accidentally clear na kare. */
+/** SQLite/outbox edit merge — incoming me `fileUrls` key ho to explicit replace (khali `[]` = user ne hata diya). */
 function mergeVoucherEditPayloadPreservingAttachments(
   existing: Record<string, unknown> | null | undefined,
   incoming: Record<string, unknown>
 ): Record<string, unknown> {
   const merged = { ...(existing || {}), ...incoming };
+  const hasIncomingFileUrls = Object.prototype.hasOwnProperty.call(incoming, "fileUrls");
   const existingUrls = persistableVoucherAttachmentUrls(existing?.fileUrls);
   const incomingUrls = persistableVoucherAttachmentUrls(incoming.fileUrls);
-  if (incomingUrls.length > 0) merged.fileUrls = incomingUrls;
-  else if (existingUrls.length > 0) merged.fileUrls = existingUrls;
 
-  const incomingFiles = incoming.files;
-  const existingFiles = existing?.files;
-  if (
-    (incomingFiles === undefined ||
-      (Array.isArray(incomingFiles) && incomingFiles.length === 0)) &&
-    Array.isArray(existingFiles) &&
-    existingFiles.length > 0
-  ) {
-    merged.files = existingFiles;
+  if (hasIncomingFileUrls) {
+    merged.fileUrls = incomingUrls;
+    // Form save `files: []` bhejta hai; warna purani metadata EXE par removed file dikha deti thi.
+    if (Object.prototype.hasOwnProperty.call(incoming, "files")) {
+      merged.files = incoming.files;
+    } else {
+      merged.files = [];
+    }
+    if (incomingUrls.length === 0) {
+      if (Object.prototype.hasOwnProperty.call(incoming, "unassignedFile")) {
+        merged.unassignedFile = incoming.unassignedFile;
+      } else {
+        merged.unassignedFile = null;
+      }
+    }
+  } else if (existingUrls.length > 0) {
+    merged.fileUrls = existingUrls;
   }
 
-  if (incoming.unassignedFile === undefined && existing?.unassignedFile != null) {
+  const hasIncomingFiles = Object.prototype.hasOwnProperty.call(incoming, "files");
+  if (
+    !hasIncomingFileUrls &&
+    (incoming.files === undefined || (Array.isArray(incoming.files) && incoming.files.length === 0)) &&
+    Array.isArray(existing?.files) &&
+    existing.files.length > 0
+  ) {
+    merged.files = existing.files;
+  } else if (hasIncomingFiles && !hasIncomingFileUrls) {
+    merged.files = incoming.files;
+  }
+
+  if (incoming.unassignedFile === undefined && existing?.unassignedFile != null && !hasIncomingFileUrls) {
     merged.unassignedFile = existing.unassignedFile;
   }
   return merged;
@@ -132,16 +157,6 @@ async function allowLocalFirestoreFailureQueue(companyId: string): Promise<boole
 }
 
 /** Shared / mirror registry id → Firestore `companies/{id}` path (Storage upload + voucher write same id). */
-async function resolveAuthoritativeFirestoreCompanyId(companyId: string): Promise<string> {
-  try {
-    const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
-    const cid = String((reg as Record<string, unknown> | null)?.authoritativeCompanyId ?? "").trim();
-    return cid || companyId;
-  } catch {
-    return companyId;
-  }
-}
-
 async function firestoreCompanyDocExists(
   companyId: string,
   collectionName: string,
@@ -174,12 +189,22 @@ function shouldAwaitBlockingHydrateForFirestorePayload(payload: Record<string, u
   return !recordContainsLocalPendingVoucherFileRef(removeUndefined(payload) as Record<string, unknown>);
 }
 
-/** Firestore pe `local:` likhne ke baad IndexedDB pending → Storage + doc patch background me. */
-function maybeBackgroundSyncPendingAttachmentsAfterFirestoreWrite(wrotePayload: Record<string, unknown>): void {
+/** Firestore pe `local:` likhne ke baad IndexedDB pending → Storage + doc patch — await taaki preview HTTPS URL mile. */
+async function syncPendingAttachmentsAfterFirestoreWrite(wrotePayload: Record<string, unknown>): Promise<void> {
   if (!recordContainsLocalPendingVoucherFileRef(removeUndefined(wrotePayload) as Record<string, unknown>)) return;
-  void syncPendingFiles().catch((e) => {
-    console.warn("[voucherActionsClient] syncPendingFiles after Firestore write failed", e);
+  const urls = Array.isArray(wrotePayload.fileUrls) ? wrotePayload.fileUrls : [];
+  logAttachmentPipeline("save", {
+    step: "before_syncPendingFiles",
+    fileUrlKinds: urls.map(classifyAttachmentRef),
+    fileUrls: urls,
   });
+  try {
+    const result = await syncPendingFiles();
+    logAttachmentPipeline("sync", { step: "after_syncPendingFiles", result });
+  } catch (e) {
+    console.warn("[voucherActionsClient] syncPendingFiles after Firestore write failed", e);
+    logAttachmentPipeline("sync", { step: "syncPendingFiles_failed", error: String(e) });
+  }
 }
 
 /** Firestore company root: `planExpiry` Timestamp ya `planExpiryMs` — tier overlay + cache ke saath expiry compare */
@@ -469,7 +494,7 @@ async function setFirestoreVoucherFromLocalMirrorWhenMissing(
     : (removeUndefined(payload) as Record<string, unknown>);
   await setDoc(doc(firestore, `companies/${fsCompanyId}/vouchers`, voucherId), payloadForFs, { merge: true });
   if (!awaitHydrate) {
-    maybeBackgroundSyncPendingAttachmentsAfterFirestoreWrite(payload);
+    await syncPendingAttachmentsAfterFirestoreWrite(payload);
   }
   try {
     await removeOutboxRowsForCompanyDoc(companyId, "vouchers", voucherId);
@@ -549,7 +574,7 @@ export async function patchVoucherFields(
           : ({ ...partial } as Record<string, unknown>);
         await updateDoc(voucherFsRef, partialForFs);
         if (!awaitHydratePartial) {
-          maybeBackgroundSyncPendingAttachmentsAfterFirestoreWrite(partial as Record<string, unknown>);
+          await syncPendingAttachmentsAfterFirestoreWrite(partial as Record<string, unknown>);
         }
         await removeOutboxRowsForCompanyDoc(companyId, "vouchers", voucherId);
         await mirrorVoucherDocToBrowserDb(companyId, voucherId);
@@ -572,7 +597,7 @@ export async function patchVoucherFields(
               : (removeUndefined(payload) as Record<string, unknown>);
             await setDoc(voucherFsRef, payloadForFs, { merge: true });
             if (!awaitHydrateFull) {
-              maybeBackgroundSyncPendingAttachmentsAfterFirestoreWrite(payload);
+              await syncPendingAttachmentsAfterFirestoreWrite(payload);
             }
             await removeOutboxRowsForCompanyDoc(companyId, "vouchers", voucherId);
             await mirrorVoucherDocToBrowserDb(companyId, voucherId);
@@ -609,7 +634,7 @@ export async function patchVoucherFields(
       : ({ ...partial } as Record<string, unknown>);
     await updateDoc(doc(firestore, `companies/${fsPatchId}/vouchers`, voucherId), partialHydrated);
     if (!awaitHydratePatch) {
-      maybeBackgroundSyncPendingAttachmentsAfterFirestoreWrite(partial as Record<string, unknown>);
+      await syncPendingAttachmentsAfterFirestoreWrite(partial as Record<string, unknown>);
     }
   } catch (e) {
     if (isCompanyNotFoundError(e)) {
@@ -1148,6 +1173,14 @@ export async function saveVoucher(
     }
   }
 
+  // Naya voucher: user-picked calendar day + abhi ka local clock — `createdAt` pending ho to bhi list me 12:00 AM na dikhe.
+  if (!voucherId) {
+    const calendarDate = toJsDateFromVoucherField(cleanVoucherData.date);
+    if (calendarDate) {
+      cleanVoucherData.date = mergeVoucherCalendarDateWithSaveClock(calendarDate);
+    }
+  }
+
   // `Date`/string → `Timestamp`: outbox JSON + bilink partial merge dono mein stable `date` (Payment Out "new" khali column fix).
   coerceVoucherDocumentDate(cleanVoucherData as Record<string, unknown>);
   const voucherRef = voucherId ? doc(firestore, voucherPath, voucherId) : null;
@@ -1233,6 +1266,7 @@ export async function saveVoucher(
 
     const { enabled: historyEnabled } = await getEffectiveHistorySettings(companyId);
     const now = new Date();
+    const nowTs = Timestamp.now();
     const initialHistory = historyEnabled
       ? [
           {
@@ -1260,9 +1294,11 @@ export async function saveVoucher(
       userDisplayName: options?.userDisplayNameOverride ?? creatorDisplayName,
       userEmail: creatorEmail,
       lastEditedByUserName: creatorDisplayName || userId,
-      lastEditedAt: serverTimestamp(),
-      createdAt: serverTimestamp(),
+      // Client `Timestamp.now()` — `serverTimestamp()` pending par list "• 12:00 AM" dikhata tha.
+      lastEditedAt: nowTs,
+      createdAt: nowTs,
       history: initialHistory,
+      [PL_CLIENT_OFFLINE_FIRST_PERSIST_MS]: Date.now(),
     } as Record<string, unknown>;
 
     let awaitHydrateCreate = shouldAwaitBlockingHydrateForFirestorePayload(createPayloadForFs);
@@ -1285,17 +1321,21 @@ export async function saveVoucher(
 
     if (canSetClientVoucherId) {
       newId = preGenCreate;
-      docRef = doc(firestore, "companies", companyId, "vouchers", newId);
+      // `pendingFiles.docPath` authoritative company id use karta hai — `setDoc` bhi wahi path.
+      docRef = doc(firestore, "companies", fsIdCreate, "vouchers", newId);
       const bodyForCreate = removeUndefined({ ...createPayloadHydrated, id: newId }) as Record<string, unknown>;
       await setDoc(docRef, bodyForCreate);
-      maybeBackgroundSyncPendingAttachmentsAfterFirestoreWrite(bodyForCreate);
+      await syncPendingAttachmentsAfterFirestoreWrite(bodyForCreate);
     } else {
       const added = await addDoc(
-        collection(firestore, voucherPath),
+        collection(firestore, `companies/${fsIdCreate}/vouchers`),
         removeUndefined(createPayloadHydrated) as Record<string, unknown>,
       );
       newId = added.id;
       docRef = added;
+      await syncPendingAttachmentsAfterFirestoreWrite(
+        removeUndefined(createPayloadHydrated) as Record<string, unknown>,
+      );
     }
 
     const uf = cleanVoucherData.unassignedFile as { id?: string; url?: string; path?: string; name?: string } | undefined;
@@ -1468,7 +1508,7 @@ export async function saveVoucher(
       : (removeUndefined(fireUpdate) as Record<string, unknown>);
     await updateDoc(firestoreVoucherRef, fireUpdateHydrated as typeof fireUpdate);
     if (!awaitHydrateUpdate) {
-      maybeBackgroundSyncPendingAttachmentsAfterFirestoreWrite(fireUpdate as Record<string, unknown>);
+      await syncPendingAttachmentsAfterFirestoreWrite(fireUpdate as Record<string, unknown>);
     }
   } catch (e) {
     if (isCompanyNotFoundError(e)) {

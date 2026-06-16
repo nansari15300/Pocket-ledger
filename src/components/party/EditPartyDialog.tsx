@@ -56,6 +56,8 @@ import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirro
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import { syncPendingFiles } from "@/lib/localPendingFiles";
+import { useLiveEntityDocAttachments } from "@/hooks/useLiveEntityDocAttachments";
 import { softDeleteCompanySubdocToRecycleBin } from "@/lib/recycleBinEntityLifecycle";
 import { countActiveInterCompanyVouchersForCounterpartyParty, purgeInterCompanyCounterpartyPartyIfUnused } from "@/lib/interCompany/cleanupInterCompanyCounterpartyParty";
 import { isInterCompanyCounterpartyPartyName } from "@/lib/interCompany/interCompanyCounterpartyPartyName";
@@ -138,6 +140,30 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
   const [file, setFile] = useState<File | string | null>(party.fileUrl || null);
   /** PDF / images — File new pick ya existing URL string */
   const [docSlots, setDocSlots] = useState<Array<File | string>>(() => party.documentFileUrls || []);
+  const initialFileRef = useRef<string | null>(party.fileUrl || null);
+  const initialDocUrlsRef = useRef<string[]>(party.documentFileUrls || []);
+  const attachmentsDirty =
+    file instanceof File ||
+    docSlots.some((x) => x instanceof File) ||
+    (typeof file === "string" ? file : null) !== initialFileRef.current ||
+    JSON.stringify(docSlots.filter((x): x is string => typeof x === "string")) !==
+      JSON.stringify(initialDocUrlsRef.current);
+
+  const onLiveAttachmentFields = React.useCallback(
+    (fields: { fileUrl?: string | null; documentFileUrls?: string[] }) => {
+      if (fields.fileUrl !== undefined) setFile(fields.fileUrl || null);
+      if (fields.documentFileUrls) setDocSlots(fields.documentFileUrls);
+    },
+    []
+  );
+  useLiveEntityDocAttachments({
+    enabled: isOpen && !sqliteListsOnlyNoSnapshot,
+    companyId,
+    collection: "parties",
+    entityId: party.id,
+    attachmentsDirty,
+    onFields: onLiveAttachmentFields,
+  });
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const docsInputRef = useRef<HTMLInputElement>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -252,6 +278,8 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
       });
       setFile(party.fileUrl || null);
       setDocSlots(party.documentFileUrls || []);
+      initialFileRef.current = party.fileUrl || null;
+      initialDocUrlsRef.current = party.documentFileUrls || [];
     }
   }, [isOpen, party, form]);
 
@@ -361,6 +389,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           };
           await upsertCompanyDocInBrowserDb(companyId, "parties", partyRefSnap.id, payload);
           await enqueueCompanyDocOutbox(companyId, "parties", "update", partyRefSnap.id, payload);
+          await syncPendingFiles().catch((e) => console.warn("[EditPartyDialog] syncPendingFiles", e));
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onPartyUpdated({
             id: partyRefSnap.id,
@@ -369,6 +398,8 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
             documentFileUrls,
             openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
           });
+          initialFileRef.current = fileUrl || null;
+          initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
           sonnerToast.success(showSyncHint ? "Saved — will sync" : "Updated", {
             duration: PARTY_TOAST_OK_MS,
             description: showSyncHint ? "Background sync" : values.name,
@@ -397,6 +428,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
           groupId: resolvedGroupId,
         });
+        await syncPendingFiles().catch((e) => console.warn("[EditPartyDialog] syncPendingFiles", e));
 
         if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
           await balanceOpeningBalanceWithCapital(companyId, "parties", partyRefSnap.id, oldOpeningBalance, newOpeningBalance);
@@ -409,6 +441,8 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           documentFileUrls,
           openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
         });
+        initialFileRef.current = fileUrl || null;
+        initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
         sonnerToast.success("Updated", { duration: PARTY_TOAST_OK_MS, description: values.name });
       } catch (error) {
         console.error("Error updating party:", error);

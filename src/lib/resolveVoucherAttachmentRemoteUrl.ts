@@ -9,7 +9,8 @@ import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 
-function isRemoteAttachmentUrl(u: string): boolean {
+/** HTTPS / Drive / blob — `local:` staging ke opposite; edit dialog merge me remote prefer karo. */
+export function isRemoteAttachmentUrl(u: string): boolean {
   const s = String(u || "").trim();
   if (!s || s.startsWith(LOCAL_FILE_PREFIX)) return false;
   // Drive sync refs (`drive:...`) bhi remote attachment hi hain; stale local replace me inko accept karo.
@@ -186,4 +187,31 @@ export async function tryResolveRemoteUrlForStaleLocalAttachment(
   }
 
   return resolved;
+}
+
+/**
+ * Edit dialog: `liveVoucher` (onSnapshot) kabhi stale `local:` rakhe, table row / mirror pehle HTTPS patch kar chuka ho.
+ * Sirf empty-live merge pehle tha — isliye tick preview chalta tha, form `local:` + missing pending par FILE icon.
+ */
+export function mergeVoucherFileUrlsForEditDialog(
+  liveUrls: readonly string[],
+  rowUrls: readonly string[]
+): string[] {
+  const live = liveUrls.map((u) => String(u || "").trim()).filter(Boolean);
+  const row = rowUrls.map((u) => String(u || "").trim()).filter(Boolean);
+  if (live.length === 0) return row;
+  if (row.length === 0) return live;
+  if (live.length === row.length) {
+    return live.map((liveRef, i) => {
+      const rowRef = row[i]!;
+      if (isLocalFileRef(liveRef) && isRemoteAttachmentUrl(rowRef)) return rowRef;
+      if (isRemoteAttachmentUrl(liveRef)) return liveRef;
+      return liveRef || rowRef;
+    });
+  }
+  const liveAllLocal = live.every((u) => isLocalFileRef(u));
+  const rowRemotes = row.filter((u) => isRemoteAttachmentUrl(u));
+  if (liveAllLocal && rowRemotes.length === live.length) return row;
+  if (liveAllLocal && rowRemotes.length === 1 && live.length === 1) return rowRemotes;
+  return live;
 }

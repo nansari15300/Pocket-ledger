@@ -16,6 +16,7 @@ import {
 } from "@/lib/entityProfileLocalFiles";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import { syncPendingFiles } from "@/lib/localPendingFiles";
 import { useAuth } from "@/hooks/useAuth";
 import {
   EntityProfilePhotoBlock,
@@ -328,6 +329,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           };
           await upsertCompanyDocInBrowserDb(companyId, "staff", staffRefSnap.id, payload);
           await enqueueCompanyDocOutbox(companyId, "staff", "update", staffRefSnap.id, payload);
+          await syncPendingFiles().catch((e) => console.warn("[EditStaffDialog] syncPendingFiles", e));
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onStaffUpdated({
             id: staffRefSnap.id,
@@ -365,6 +367,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
           groupId: values.groupId || null,
         });
+        await syncPendingFiles().catch((e) => console.warn("[EditStaffDialog] syncPendingFiles", e));
 
         if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
           const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");

@@ -65,6 +65,9 @@ import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { VoucherAttachmentFallbackContext } from "@/contexts/VoucherAttachmentFallbackContext";
 import { readInterCompanyLink } from "@/lib/interCompany/interCompanyVoucherHydrate";
+import { mergeVoucherFileUrlsForEditDialog } from "@/lib/resolveVoucherAttachmentRemoteUrl";
+import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
+import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
@@ -354,12 +357,22 @@ function mergeAttachmentFieldsFromRowForEffectiveVoucher(live: any, row: any): a
   const out = { ...live };
   const liveUrls = Array.isArray(live.fileUrls) ? live.fileUrls.filter(Boolean) : [];
   const rowUrls = Array.isArray(row?.fileUrls) ? row.fileUrls.filter(Boolean) : [];
-  if (liveUrls.length === 0 && rowUrls.length > 0) {
+  const mergedUrls = mergeVoucherFileUrlsForEditDialog(liveUrls, rowUrls);
+  if (mergedUrls.length > 0) {
+    out.fileUrls = mergedUrls;
+  } else if (liveUrls.length === 0 && rowUrls.length > 0) {
     out.fileUrls = rowUrls;
   }
   const liveUn = live.unassignedFile?.url;
   const rowUn = row?.unassignedFile?.url;
   if (!liveUn && rowUn) {
+    out.unassignedFile = row.unassignedFile;
+  } else if (
+    liveUn &&
+    rowUn &&
+    isLocalFileRef(String(liveUn)) &&
+    !isLocalFileRef(String(rowUn))
+  ) {
     out.unassignedFile = row.unassignedFile;
   }
   return out;
@@ -2069,13 +2082,16 @@ export function AddVoucherDialog(props: any) {
       setLiveVoucher(null);
       return;
     }
-    const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucher.id);
-    const unsub = onSnapshot(voucherRef, (snap) => {
-      if (snap.exists()) setLiveVoucher({ id: snap.id, ...snap.data() });
-      else setLiveVoucher(null);
+    let unsub: (() => void) | undefined;
+    void resolveAuthoritativeFirestoreCompanyId(companyId).then((fsCompanyId) => {
+      const ref = doc(firestore, `companies/${fsCompanyId}/vouchers`, voucher.id);
+      unsub = onSnapshot(ref, (snap) => {
+        if (snap.exists()) setLiveVoucher({ id: snap.id, ...snap.data() });
+        else setLiveVoucher(null);
+      });
     });
     return () => {
-      unsub();
+      unsub?.();
       setLiveVoucher(null);
     };
   }, [isOpen, voucher?.id, companyId, postCopyNewFormSeed, voucher?.type, editCompanyId, ctxCompanyId, vouchers, voucherSqlMirrorFirst]);
