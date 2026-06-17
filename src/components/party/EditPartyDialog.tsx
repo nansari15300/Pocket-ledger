@@ -157,11 +157,12 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
     []
   );
   useLiveEntityDocAttachments({
-    enabled: isOpen && !sqliteListsOnlyNoSnapshot,
+    enabled: isOpen,
     companyId,
     collection: "parties",
     entityId: party.id,
     attachmentsDirty,
+    preferSqliteMirror: sqliteListsOnlyNoSnapshot,
     onFields: onLiveAttachmentFields,
   });
   const avatarInputRef = useRef<HTMLInputElement>(null);
@@ -427,6 +428,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           fileUrl: fileUrl ?? null,
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
           groupId: resolvedGroupId,
+          updatedAt: serverTimestamp(),
         });
         await syncPendingFiles().catch((e) => console.warn("[EditPartyDialog] syncPendingFiles", e));
 

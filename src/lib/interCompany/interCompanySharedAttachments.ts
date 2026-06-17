@@ -10,7 +10,7 @@ import { incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { fetchAttachmentRefBlob } from "@/lib/attachmentRefBlobFetch";
 import { interCompanyLinkAttachmentsWithoutCopy } from "@/lib/firebaseBillingOptimization";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
-import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { touchRegistryAfterStorageUpload } from "@/lib/companyAttachmentRegistry";
 import {
   appendLocalOnlyVoucherFilesToUrls,

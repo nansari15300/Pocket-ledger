@@ -12,6 +12,28 @@ export function reconciliationEntityLabel(entityType?: ReconciliationEntityType)
   return RECON_ENTITY_OPTIONS.find((o) => o.value === entityType)?.label ?? "—";
 }
 
+/** Share side ka company id — live company doc name overlay ke liye. */
+export function reconSideCompanyId(
+  share: ReconciliationShare,
+  side: "sender" | "receiver",
+): string | null {
+  const id = side === "sender" ? share.senderCompanyId : share.receiverCompanyId;
+  const trimmed = String(id || "").trim();
+  return trimmed || null;
+}
+
+/** Share snapshot name ko live `companies/{id}.name` se replace — rename par reconcile page turant update. */
+export function withLiveReconCompanyName(
+  meta: ReconSideMeta,
+  companyId: string | null | undefined,
+  liveNames: Record<string, string>,
+): ReconSideMeta {
+  const cid = String(companyId || "").trim();
+  const liveName = cid ? String(liveNames[cid] || "").trim() : "";
+  if (!liveName) return meta;
+  return { ...meta, companyName: liveName };
+}
+
 /** Share doc se sender ya receiver side ka meta. */
 export function buildReconSideMeta(
   share: ReconciliationShare,

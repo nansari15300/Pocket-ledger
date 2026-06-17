@@ -5,7 +5,7 @@ import { persistableAttachmentRefFromHoldPayload } from "@/lib/attachmentHoldCli
 import { tryGetStoragePathFromFirebaseDownloadUrl, normalizeFirebaseStorageObjectPathForSdk, looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
 import { looksLikeFirebaseStorageDownloadUrl } from "@/lib/storageGetBlobFromDownloadUrl";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
-import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 
 /** Active company + same-login accessible companies — FilePreview / warm sync / save filter. */
 let attachmentAccessPolicy: {

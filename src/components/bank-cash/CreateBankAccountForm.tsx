@@ -8,7 +8,8 @@ import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { collection, doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { BankAccountToggleFlagsRow } from "@/components/bank-cash/BankAccountToggleFlagsRow";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
@@ -46,6 +47,8 @@ const formSchema = z.object({
   bankName: z.string().optional(),
   accountNumber: z.string().optional(),
   ifscCode: z.string().optional(),
+  allowVoucherMinusBalance: z.boolean(),
+  isClearing: z.boolean(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -67,6 +70,8 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
       bankName: "",
       accountNumber: "",
       ifscCode: "",
+      allowVoucherMinusBalance: false,
+      isClearing: false,
       // Default to canonical Ungrouped; ensured again at save-time.
       groupId: getUngroupedGroupId("bank"),
     },
@@ -320,6 +325,7 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
                     />
                 </MasterFormTwoColGrid>
             )}
+            <BankAccountToggleFlagsRow control={form.control} />
         </div>
 
         <Button type="submit" className="w-full" disabled={isLoading || !companyId}>

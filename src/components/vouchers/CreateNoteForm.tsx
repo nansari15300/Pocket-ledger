@@ -228,6 +228,8 @@ export function CreateNoteForm({
   // Entity Add Note create-flow should show Save & Approve consistently across all pages.
   const canShowCreateApproveButton = showSaveAndApproveOnCreate || isEntityAddNoteDialog;
   const isAutoVoucherEnabled = company?.autoVoucherNumbering?.note ?? true;
+  /** Edit-convert: source voucher note na ho to naya NOTE prefix/number generate karna hai. */
+  const isEditingAndConverting = Boolean(voucher?.id) && String(voucher?.type || "") !== "note";
   const isVoucherEditingAllowed = company?.allowVoucherNumberEditing?.note ?? false;
   const isPrefixSelectionEnabled = company?.enableVoucherPrefixSelection?.note ?? false;
   const voucherPrefixes = useMemo(() => company?.voucherPrefixes?.note || [getVoucherPrefix(company?.voucherPrefixes as Record<string, string[]> | undefined)], [company]);
@@ -256,7 +258,10 @@ export function CreateNoteForm({
     }
   }, [companyId, company, form, isAutoVoucherEnabled]);
 
-  useEffect(() => { if (!voucher?.id) fetchVoucherNumber(); }, [voucher?.id, fetchVoucherNumber]);
+  useEffect(() => {
+    // Convert mode me `voucher.id` present hota hai, phir bhi target note ka fresh prefix-number chahiye.
+    if (!voucher?.id || isEditingAndConverting) fetchVoucherNumber();
+  }, [voucher?.id, isEditingAndConverting, fetchVoucherNumber]);
 
   useEffect(() => {
     if (!voucher) {

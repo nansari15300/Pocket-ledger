@@ -22,6 +22,7 @@ import { CreateStaffGroupDialog } from "@/components/staff/CreateStaffGroupDialo
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { PermissionButton } from "@/components/permission";
 import { useVouchers } from "@/hooks/useVouchers";
+import { resolveMasterListSelection } from "@/lib/masterEntityLiveUpdate";
 import usePermissions from "@/hooks/usePermissions";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import type { Staff, StaffGroup } from "@/components/staff/types";
@@ -117,8 +118,16 @@ function StaffPageContent() {
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [voucherDefaultTab, setVoucherDefaultTab] = useState<'add_salary' | 'payment_out'>('add_salary');
 
-  const selectedStaff = activeView === 'staff' ? selected as Staff : null;
+  const selectedStaffRaw = activeView === 'staff' ? selected as Staff : null;
+  const selectedStaff = useMemo(
+    () => resolveMasterListSelection(selectedStaffRaw, processedStaff),
+    [selectedStaffRaw, processedStaff]
+  );
   const selectedGroup = activeView === 'groups' ? selected as StaffGroup : null;
+  const handleStaffUpdated = useCallback((patch?: Partial<Staff>) => {
+    if (!patch?.id || !selectedStaffRaw || selectedStaffRaw.id !== patch.id) return;
+    setSelected({ ...selectedStaffRaw, ...patch });
+  }, [setSelected, selectedStaffRaw]);
   const mobileStaffSelectionLabel = useMemo(() => {
     if (!selected) return null;
     const name = (selected as Staff | StaffGroup).name;
@@ -454,7 +463,7 @@ function StaffPageContent() {
       staff={selectedStaff}
       allStaff={processedStaff}
       allGroups={processedStaffGroups}
-      onStaffUpdated={() => {}}
+      onStaffUpdated={handleStaffUpdated}
       onStaffDeleted={() => setSelected(null)}
       dateRange={dateRange}
       onDateRangeChange={setDateRange}
@@ -468,7 +477,7 @@ function StaffPageContent() {
       staff={staffForSelectedGroup}
       onGroupUpdated={() => {}}
       onGroupDeleted={() => setSelected(null)}
-      onStaffUpdated={() => {}}
+      onStaffUpdated={handleStaffUpdated}
       dateRange={dateRange}
       onDateRangeChange={setDateRange}
       userNames={userNames}

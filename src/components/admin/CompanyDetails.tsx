@@ -64,7 +64,6 @@ const ALL_ENTITLEMENT_KEYS = Array.from(
 
 const featureLabels: Record<string, string> = {
     allowCompanyAdminRecycleBin: "Allow Restore Company",
-    allowLocalAppServer: "Desktop local server (EXE)",
 };
 
 const featureDescriptions: Record<string, { en: string; ne: string }> = {
@@ -119,10 +118,6 @@ const featureDescriptions: Record<string, { en: string; ne: string }> = {
     allowCompanyAdminRecycleBin: {
         en: "On: Allows this company to be restored from the recycle bin if deleted.\nOff: The company cannot be restored and would require a plan upgrade to enable restoration.",
         ne: "On: यदि मेटाइयो भने यो कम्पनीलाई रिसाइकल बिनबाट पुनर्स्थापना गर्न अनुमति दिन्छ।\nOff: यदि मेटाइयो भने यो कम्पनीलाई पुनर्स्थापना गर्न सकिँदैन, र पुन: प्राप्ति सक्षम गर्न योजना अपग्रेड गर्न आवश्यक हुनेछ।"
-    },
-    allowLocalAppServer: {
-        en: "On: Owner may use Settings → Server in the desktop EXE (local HTTP server).\nOff: Server settings hidden even if plan tier allows it.",
-        ne: "On: मालिकले डेस्कटप EXE मा Settings → Server प्रयोग गर्न सक्छ।\nOff: योजनामा अनुमति भए पनि Server बन्द।"
     }
 };
 

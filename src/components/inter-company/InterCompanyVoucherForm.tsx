@@ -1187,11 +1187,11 @@ export function InterCompanyVoucherForm({
       return false;
     }
     if (!String(sourceCompanyBankId || "").trim()) {
-      toast.error("Source: select Company bank (Bank/Cash)");
+      toast.error("Source: select clearing account");
       return false;
     }
     if (!String(targetCompanyBankId || "").trim()) {
-      toast.error("Target: select Company bank (Bank/Cash)");
+      toast.error("Target: select clearing account");
       return false;
     }
     return true;
@@ -1789,7 +1789,7 @@ export function InterCompanyVoucherForm({
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Company bank required on both sides. Party account optional — leave blank for bank-to-bank; if selected,
+        Clearing account required on both sides. Party account optional — leave blank for bank-to-bank; if selected,
         target confirms in account as before.
       </p>
     </div>

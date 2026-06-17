@@ -931,14 +931,12 @@ body.theme-colorfull [data-theme-header="view-toggle"]:hover {
   background: hsl(262 40% 86%) !important;
   color: hsl(262 50% 26%) !important;
 }
-body.theme-colorfull [data-theme-header="sidebar-toggle"],
-body.theme-colorfull [data-theme-header="cloud-sync"] {
+body.theme-colorfull [data-theme-header="sidebar-toggle"] {
   background: hsl(199 50% 92%) !important;
   color: hsl(199 55% 28%) !important;
   border-color: hsl(199 45% 75%) !important;
 }
-body.theme-colorfull [data-theme-header="sidebar-toggle"]:hover,
-body.theme-colorfull [data-theme-header="cloud-sync"]:hover {
+body.theme-colorfull [data-theme-header="sidebar-toggle"]:hover {
   background: hsl(199 50% 86%) !important;
   color: hsl(199 55% 22%) !important;
 }

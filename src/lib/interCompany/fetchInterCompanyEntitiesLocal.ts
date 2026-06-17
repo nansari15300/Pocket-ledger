@@ -35,6 +35,7 @@ export async function fetchInterCompanyEntitiesFromLocalMirror(
       accountNumber: d.accountNumber as string | undefined,
       phone: d.phone as string | undefined,
       interCompanyAccountNo: d.interCompanyAccountNo as string | undefined,
+      isClearing: d.isClearing === true,
     });
   }
 
@@ -113,5 +114,6 @@ export async function fetchInterCompanyBankEntityDetailFromLocalMirror(
     accountNumber: d.accountNumber as string | undefined,
     phone: d.phone as string | undefined,
     interCompanyAccountNo: d.interCompanyAccountNo as string | undefined,
+    isClearing: d.isClearing === true,
   };
 }

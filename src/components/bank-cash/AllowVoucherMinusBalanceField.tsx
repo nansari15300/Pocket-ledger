@@ -8,7 +8,7 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 import { cn } from "@/lib/utils";
 import { ALLOW_VOUCHER_MINUS_BALANCE_INFO } from "@/lib/bankAccountMinusBalancePolicy";
 
-/** Bank/Cash master — naam / A/c No ke beech: minus balance par bhi outflow voucher save allow. */
+/** Bank/Cash master — minus balance allow; bordered box + info i icon */
 export function AllowVoucherMinusBalanceField<T extends FieldValues>({
   control,
   name = "allowVoucherMinusBalance" as FieldPath<T>,
@@ -23,35 +23,40 @@ export function AllowVoucherMinusBalanceField<T extends FieldValues>({
       control={control}
       name={name}
       render={({ field }) => (
-        <FormItem className={cn("space-y-1.5", className)}>
-          <TooltipProvider delayDuration={200}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
-                  aria-label="About allowing minus balance on vouchers"
-                >
-                  <Info className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                  <span>Minus balance on vouchers</span>
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-sm text-xs leading-relaxed">
-                {ALLOW_VOUCHER_MINUS_BALANCE_INFO}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <FormItem className="flex flex-row items-start gap-2 space-y-0">
-            <FormControl>
-              <Checkbox
-                checked={field.value === true}
-                onCheckedChange={(checked) => field.onChange(checked === true)}
-              />
-            </FormControl>
-            <FormLabel className="cursor-pointer font-normal leading-snug">
-              Allow to save voucher with minus balance
+        <FormItem
+          className={cn(
+            // Bank form inputs tone match: soft blue bg + blue border.
+            "flex flex-row items-start gap-2.5 rounded-md border border-blue-200 bg-blue-50/60 p-3 space-y-0",
+            className
+          )}
+        >
+          <FormControl>
+            <Checkbox
+              checked={field.value === true}
+              onCheckedChange={(checked) => field.onChange(checked === true)}
+            />
+          </FormControl>
+          <div className="flex min-w-0 flex-1 items-start justify-between gap-2">
+            <FormLabel className="cursor-pointer font-normal text-sm leading-snug">
+              Allow minus balance
             </FormLabel>
-          </FormItem>
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className="shrink-0 text-blue-500 hover:text-blue-700"
+                    aria-label="About allowing minus balance on vouchers"
+                  >
+                    <Info className="h-3.5 w-3.5" aria-hidden />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-sm text-xs leading-relaxed">
+                  {ALLOW_VOUCHER_MINUS_BALANCE_INFO}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
         </FormItem>
       )}
     />

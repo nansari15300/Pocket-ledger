@@ -1,0 +1,7 @@
+﻿# Build outputs — Cursor inhe watch kare to app.asar lock (clean-dist EPERM).
+electron/dist/
+electron/dist-build/
+electron/dist_old_*/
+out/
+.next/
+node_modules/

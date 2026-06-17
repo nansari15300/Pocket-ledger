@@ -4,6 +4,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Trash2, CalendarIcon, Upload } from "lucide-react";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useLiveEntityDocAttachments } from "@/hooks/useLiveEntityDocAttachments";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp, onSnapshot, collection, query, getDoc } from "firebase/firestore";
@@ -78,7 +79,7 @@ import { cnMasterEntityDialogContent, masterEntityDialogHeaderClassName } from "
 import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
 import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
 import { persistLedgerModalParentFromBrowser } from "@/lib/modalUrlSync";
-import { AllowVoucherMinusBalanceField } from "@/components/bank-cash/AllowVoucherMinusBalanceField";
+import { BankAccountToggleFlagsRow } from "@/components/bank-cash/BankAccountToggleFlagsRow";
 
 /** CreateBankAccountDialog jaisa: combobox value `ungrouped_account` jab account Ungrouped bucket mein ho (null / empty legacy). */
 function normalizeBankAccountEditGroupId(groupId: string | null | undefined): string {
@@ -102,6 +103,7 @@ const formSchema = z.object({
   openingBalanceNarration: z.string().optional(),
   isSpecial: z.boolean(),
   allowVoucherMinusBalance: z.boolean(),
+  isClearing: z.boolean(),
   useFor: z.object({
     in: z.array(z.string()),
     out: z.array(z.string()),
@@ -155,6 +157,30 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
   /** Profile — image / saved URL / local: */
   const [file, setFile] = useState<File | string | null>(account.fileUrl || null);
   const [docSlots, setDocSlots] = useState<Array<File | string>>(() => account.documentFileUrls || []);
+  const initialFileRef = useRef<string | null>(account.fileUrl || null);
+  const initialDocUrlsRef = useRef<string[]>(account.documentFileUrls || []);
+  const attachmentsDirty =
+    file instanceof File ||
+    docSlots.some((x) => x instanceof File) ||
+    (typeof file === "string" ? file : null) !== initialFileRef.current ||
+    JSON.stringify(docSlots.filter((x): x is string => typeof x === "string")) !==
+      JSON.stringify(initialDocUrlsRef.current);
+  const onLiveAttachmentFields = useCallback(
+    (fields: { fileUrl?: string | null; documentFileUrls?: string[] }) => {
+      if (fields.fileUrl !== undefined) setFile(fields.fileUrl || null);
+      if (fields.documentFileUrls) setDocSlots(fields.documentFileUrls);
+    },
+    []
+  );
+  useLiveEntityDocAttachments({
+    enabled: isOpen,
+    companyId,
+    collection: "bank_accounts",
+    entityId: account.id,
+    attachmentsDirty,
+    preferSqliteMirror: sqliteListsOnlyNoSnapshot,
+    onFields: onLiveAttachmentFields,
+  });
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const docsInputRef = useRef<HTMLInputElement>(null);
   const { can, canAddAvatar, canAddFileImagePdf } = usePermissions();
@@ -182,7 +208,8 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         groupId: normalizeBankAccountEditGroupId(account.groupId),
         isSpecial: account.isSpecial || false,
         allowVoucherMinusBalance: account.allowVoucherMinusBalance === true,
-        useFor: account.useFor || { 
+        isClearing: account.isClearing === true,
+        useFor: account.useFor || {
             in: company?.ownerEmail ? [company.ownerEmail] : [], 
             out: company?.ownerEmail ? [company.ownerEmail] : [] 
         },
@@ -308,7 +335,8 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         groupId: normalizeBankAccountEditGroupId(account.groupId),
         isSpecial: account.isSpecial || false,
         allowVoucherMinusBalance: account.allowVoucherMinusBalance === true,
-        useFor: account.useFor || { 
+        isClearing: account.isClearing === true,
+        useFor: account.useFor || {
             in: company?.ownerEmail ? [company.ownerEmail] : [], 
             out: company?.ownerEmail ? [company.ownerEmail] : [] 
         },
@@ -316,6 +344,8 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
       });
       setFile(account.fileUrl || null);
       setDocSlots(account.documentFileUrls || []);
+      initialFileRef.current = account.fileUrl || null;
+      initialDocUrlsRef.current = account.documentFileUrls || [];
     }
   }, [isOpen, account, form, company]); // added company dep
 
@@ -412,9 +442,11 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           groupId: values.groupId || null,
           isSpecial: values.isSpecial,
           allowVoucherMinusBalance: values.allowVoucherMinusBalance === true,
+          isClearing: values.isClearing === true,
           useFor: values.useFor ?? { in: [], out: [] },
           fileUrl,
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+          updatedAt: serverTimestamp(),
         };
 
         // Static / APK local lane: IndexedDB + outbox — hybrid Firestore company par `updateDoc` neeche
@@ -445,6 +477,8 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
               out: values.useFor?.out || [],
             } as { in: string[]; out: string[] },
           });
+          initialFileRef.current = fileUrl || null;
+          initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
             id: toastId,
             description: showSyncHint ? `"${values.accountName}" saved locally.` : `"${values.accountName}" has been successfully updated.`,
@@ -480,6 +514,8 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
             out: values.useFor?.out || [],
           } as { in: string[]; out: string[] },
         });
+        initialFileRef.current = fileUrl || null;
+        initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
         sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.accountName}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating account:", error);
@@ -672,7 +708,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                   entityId={account.id}
                   mode="edit"
                   betweenNameAndAcNoRow={
-                    <AllowVoucherMinusBalanceField control={form.control} />
+                    <BankAccountToggleFlagsRow control={form.control} />
                   }
                   nameField={
                     <FormField

@@ -30,10 +30,8 @@ import {
   sendRecycleBinMovedAlert,
 } from "@/lib/writeGateway/legacy/recycleBinAlerts";
 import { auth } from "@/lib/firebase";
-import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
-import { getPlServerAllowedCompanyIds } from "@/lib/plServerAccessContext";
-import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
 import { isSoftDeleteLedgerPatch, purgeGhostLocalCompanyDoc } from "@/lib/purgeGhostLocalCompanyDoc";
+import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
 
 export type WriteEntityOperation = "create" | "update" | "delete";
 
@@ -87,18 +85,7 @@ async function mergeWithExistingLocalDoc(
  * UI optimistic: yahan await ke baad caller apna state pehle hi update kar sakta tha — is function ko await karo.
  */
 export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityResult> {
-  if (isPlRemoteServerClientMode()) {
-    return {
-      ok: false,
-      error:
-        "Remote client mode: save changes on the server PC only. This device is view-only for shared server access.",
-    };
-  }
   const companyId = String(req.companyId || "").trim();
-  const serverAllowed = getPlServerAllowedCompanyIds();
-  if (serverAllowed?.length && companyId && !serverAllowed.includes(companyId)) {
-    return { ok: false, error: "This company is not allowed for your server access token." };
-  }
   const collectionName = String(req.collectionName || "").trim();
   const rawOpts = req.options ?? {};
   const { useFirestoreAutoId: useAutoId, merge: mergeSetDoc, ...upsertOpts } = rawOpts;

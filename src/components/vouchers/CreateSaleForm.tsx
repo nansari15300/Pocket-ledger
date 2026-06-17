@@ -120,6 +120,10 @@ import {
   convertPdfAttachmentsToJpegIfEnabled,
   shouldSuggestPdfAsImage,
 } from "@/lib/voucherAttachmentPdfAsImage";
+import {
+  dispatchVoucherAttachmentSaved,
+  voucherAttachmentFieldsForSave,
+} from "@/lib/voucherFormAttachmentSave";
 import { CreateBankAccountDialog } from "../bank-cash/CreateBankAccountDialog";
 import { AddVoucherDialog } from "./AddVoucherDialog";
 import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDialog";
@@ -455,7 +459,9 @@ export function CreateSaleForm({
   // Keep "Read me" help controlled from this form so sale link section can open the shared multilingual guide.
   const [linkSectionInfoOpen, setLinkSectionInfoOpen] = useState(false);
   const isEditing = !!voucher?.id;
-  const isEditingAndConverting = voucher && voucher.type !== "sale";
+  // Use preserved source type so edit convert (Purchase -> Sale) correctly triggers voucher-no refresh.
+  const isEditingAndConverting =
+    Boolean(voucher?.id) && String((voucher as any)?._sourceVoucherType || voucher?.type || "") !== "sale";
   
   const form = useForm<SaleFormValues>({
     resolver: zodResolver(formSchema) as Resolver<SaleFormValues>,
@@ -847,7 +853,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   );
 
   useEffect(() => {
-    if ((!savedVoucherId || isEditingAndConverting) && isAutoVoucherEnabled && !voucher?.id) {
+    // Edit-convert par bhi naya type prefix/number turant regenerate karo (voucher.id hone par bhi).
+    if ((!savedVoucherId || isEditingAndConverting) && isAutoVoucherEnabled) {
       fetchVoucherNumber();
     }
   }, [voucher?.id, savedVoucherId, isEditingAndConverting, fetchVoucherNumber, primaryLineItemType, company, isAutoVoucherEnabled]);
@@ -1290,7 +1297,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
         let finalData = {
           ...submissionData,
-          fileUrls: existingFileUrls,
+          ...voucherAttachmentFieldsForSave(existingFileUrls),
           unassignedFile: data.unassignedFile || voucher?.unassignedFile || null,
           isApproved: isCompanyAdmin ? true : (data.isApproved ?? voucher?.isApproved ?? false),
         };
@@ -1342,6 +1349,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             : "Sale invoice saved successfully.";
         replaceVoucherSaveLoadingWithShortSuccess(toastId, "Success", successDescription);
         if (isMounted.current) setIsLoading(false);
+        if (docId && companyId) {
+          dispatchVoucherAttachmentSaved(
+            companyId,
+            docId,
+            (finalData.fileUrls as string[]) || existingFileUrls
+          );
+        }
 
         // Baaki linkage / alerts / print background — Save & Close par dialog turant band (Firestore row already persisted).
         const postSaveTail = async () => {
@@ -1781,7 +1795,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
     const missing: string[] = [];
     const pid = String(partyId || "").trim();
-    if (pid && !processedParties.some((p: any) => p.id === pid)) {
+    // Customer clear tabhi jab party list hydrate ho chuki ho; partial load me false missing avoid.
+    if (pid && processedParties.length > 0 && !processedParties.some((p: any) => p.id === pid)) {
       if (pendingPartyIdUntilInPartiesListRef.current !== pid) {
         missing.push("customer");
         form.setValue("partyId", "");

@@ -87,7 +87,6 @@ import {
   preferLocalLedgerReads,
 } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
-import { shouldUseLocalCloudSync } from "@/lib/localCloudSync/companyConfig";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { useDate } from "@/hooks/useDate";
 import { recurringAutoVoucherLabels } from "@/lib/calendarDisplayLabels";
@@ -250,8 +249,12 @@ function canEditConvertBetween(stored: VoucherType, active: VoucherType): boolea
 function shapeVoucherForActiveEditTab(voucher: Record<string, unknown> | undefined, activeTab: VoucherType): Record<string, unknown> | undefined {
   if (!voucher?.id) return voucher;
   const stored = (String(voucher.type || "sale") as VoucherType);
-  if (!canEditConvertBetween(stored, activeTab)) return { ...voucher };
-  const next: Record<string, unknown> = { ...voucher, type: activeTab };
+  if (!canEditConvertBetween(stored, activeTab)) {
+    // Preserve original saved type so child forms can reliably detect edit-convert transitions.
+    return { ...voucher, _sourceVoucherType: stored };
+  }
+  // Keep active tab as editable type, but also preserve original persisted type for conversion-aware effects.
+  const next: Record<string, unknown> = { ...voucher, type: activeTab, _sourceVoucherType: stored };
 
   const isCashflowIn = (t: VoucherType) => t === "payment_in" || t === "direct_income";
   const isCashflowOut = (t: VoucherType) => t === "payment_out" || t === "direct_expense";
@@ -328,14 +331,15 @@ function getRestrictedEnabledTabs(
   isEditing: boolean,
   restrictSalePurchaseForCopyDraft?: boolean
 ): VoucherType[] | null {
+  // New Trxn: user can switch to any voucher tab (Add New behavior always unrestricted).
+  if (!isEditing) return null;
   // Inter Company: alag voucher — tab switch / copy-to remap meaningful nahi
   if (activeTab === "inter_company") return ["inter_company"];
   if ((CASHFLOW_QUARTET as readonly string[]).includes(activeTab)) {
     return [...CASHFLOW_QUARTET];
   }
   const convertiblePairWhileCopy = Boolean(restrictSalePurchaseForCopyDraft) && Boolean(getConvertTarget(activeTab));
-  // Naya txn (bina copy-target) unrestricted; copy-draft par sirf current convertible pair allow.
-  if (!isEditing && !convertiblePairWhileCopy) return null;
+  // Edit mode me copy-draft pair-lock preserve rakho (Sale↔Purchase / Journal↔Contra).
   const target = getConvertTarget(activeTab);
   if (target && (isEditing || convertiblePairWhileCopy)) return [activeTab, target];
   return [activeTab];
@@ -433,6 +437,8 @@ export type CopyMasterDraftRequestPayload = {
   sourceName: string;
   /** Source company में मौजूद stripped row — child forms को सारे fields + URL attachments hydrate करने हैं. */
   sourceRowPayload?: Record<string, unknown>;
+  /** Target company me naam match — create dialog ke bajay is id ko form field par lagao. */
+  existingTargetMasterId?: string;
   /** Save ke baad naya master isi journal line / contra field par lagao — async race me bhi sahi row. */
   applyTarget?: CopyMissingMasterOpts;
 };
@@ -572,12 +578,8 @@ async function copyRemapShouldReadSqliteMasters(
 ): Promise<boolean> {
   if (apkEntityWriteUsesLocalSqliteMirror(laneCompany)) return true;
   if (apkCloudEntityMasterReadFromSqliteMirror(laneCompany)) return true;
-  if (laneCompany && isOfflineCompanyStorage(laneCompany)) return true;
-  try {
-    return await shouldUseLocalCloudSync(companyId);
-  } catch {
+    if (laneCompany && isOfflineCompanyStorage(laneCompany)) return true;
     return false;
-  }
 }
 
 async function loadCollectionRows(
@@ -2618,11 +2620,44 @@ export function AddVoucherDialog(props: any) {
           });
           return;
         }
+        // Target par naam pehle se hai — dubara create mat kholo; matched row ki id form par lagao.
+        const matchedTargetRow = (targetRows as Record<string, any>[]).find(
+          (row) => normalizeMasterMatchKey(masterRowCanonicalName(row)) === lower
+        );
+        if (matchedTargetRow?.id && applyTarget) {
+          setCopyMasterDraftRequest({
+            category,
+            targetCompanyName: targetCompanyNameResolved,
+            sourceCollection: collectionName,
+            sourceName: sourceNameCanon,
+            existingTargetMasterId: String(matchedTargetRow.id),
+            applyTarget,
+          });
+          return;
+        }
         if (!chosenAnyFallback) chosenAnyFallback = sourceRow as Record<string, any>;
       }
 
       if (chosenAnyFallback) {
         const nm = masterRowCanonicalName(chosenAnyFallback as Record<string, unknown>);
+        const lower = normalizeMasterMatchKey(nm);
+        // Fallback path: target me naam mila to create dialog band — sirf existing id apply.
+        if (lower && targetNameSet.has(lower) && applyTarget) {
+          const matchedTargetRow = (targetRows as Record<string, any>[]).find(
+            (row) => normalizeMasterMatchKey(masterRowCanonicalName(row)) === lower
+          );
+          if (matchedTargetRow?.id) {
+            setCopyMasterDraftRequest({
+              category,
+              targetCompanyName: targetCompanyNameResolved,
+              sourceCollection: collectionName,
+              sourceName: nm,
+              existingTargetMasterId: String(matchedTargetRow.id),
+              applyTarget,
+            });
+            return;
+          }
+        }
         const payloadClean = stripIdsForCrossCompanyClone(chosenAnyFallback as Record<string, unknown>);
         setCopyMasterDraftRequest({
           category,

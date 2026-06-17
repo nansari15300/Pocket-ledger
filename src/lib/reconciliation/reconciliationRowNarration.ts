@@ -1,6 +1,6 @@
 import { ledgerNarrationFromVoucher } from "@/lib/copyLedgerCrossCompany";
 import type { ReconciliationSideContext } from "@/lib/reconciliation/buildSyncVoucherDraft";
-import { buildReconciliationLedgerSnapshot, loadCompanyVouchers, mergeReconciliationLedgerRows } from "@/lib/reconciliation/ledgerSnapshot";
+import { buildReconciliationLedgerSnapshot, inferOpeningBalanceFromLedgerRows, loadCompanyVouchers, mergeReconciliationLedgerRows } from "@/lib/reconciliation/ledgerSnapshot";
 import {
   getReconciliationShare,
   refreshReconciliationSideSnapshot,
@@ -126,7 +126,15 @@ export async function resolveRemoteReconciliationRows(params: {
 
   const live = await buildLiveReconciliationSideRows(remoteCtx);
   let rows = applySnapshotRowDisplayNarration(snapshotRows);
-  const openingBalance = live?.openingBalance ?? snapshotOpening;
+  // Static/APK: live opening 0 aata tha (SQLite miss) — snapshot ya baked rows se fallback
+  let openingBalance = 0;
+  if (live?.openingBalance != null && live.openingBalance !== 0) {
+    openingBalance = live.openingBalance;
+  } else if (snapshotOpening !== 0) {
+    openingBalance = snapshotOpening;
+  } else {
+    openingBalance = inferOpeningBalanceFromLedgerRows(snapshotRows);
+  }
 
   if (live && live.rows.length > 0) {
     // Live + share snapshot union — sender company se dekhe to remote/other side poora aaye

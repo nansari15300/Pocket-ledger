@@ -18,7 +18,7 @@ import {
   useSidebar
 } from '../ui/sidebar'
 import { cn } from '@/lib/utils'
-import { isAdminPanelDevPreview } from '@/lib/localAppServerDevPreview'
+import { isAdminPanelDevPreview } from '@/lib/adminDevPreview'
 
 export default function AdminShell({ children }: { children: React.ReactNode }) {
   const devPreview = isAdminPanelDevPreview();

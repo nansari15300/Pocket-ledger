@@ -37,7 +37,7 @@ import {
   offlineCacheKeyForAttachmentRef,
 } from "@/lib/attachmentRefBlobFetch";
 import { getBlobFromLocalFileRef, isLocalFileRef } from "@/lib/localPendingFiles";
-import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 
 /** Forensic: build par `NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG=1` — cache HIT/MISS / stable-key proof (temporary trace only). */
 function offlineAttachmentForensicEnabled(): boolean {

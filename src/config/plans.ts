@@ -102,11 +102,7 @@ export type EntitlementKey =
   /** Local company → cloud upload: max attachment payload (MB); 0 = unlimited. */
   | "maxLocalToOnlineAttachmentMB"
   /** Online Firestore companies (`storageOption: firebase`) — off = create/edit me local/online choice hide. */
-  | "allowFirebaseOnlineCompanies"
-  /** Local company cloud sync — voucher JSON / ops to Google Drive. */
-  | "allowGoogleDriveCloudSync"
-  /** EXE/Linux desktop: built-in local HTTP server (Settings → Server). */
-  | "allowLocalAppServer";
+  | "allowFirebaseOnlineCompanies";
 
 export type Entitlements = Record<EntitlementKey, number | boolean>;
 
@@ -175,8 +171,6 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxLocalToOnlineAttachmentMB: 0,
       savedAccountSwitchEnabled: false,
       allowFirebaseOnlineCompanies: false,
-      allowGoogleDriveCloudSync: true,
-      allowLocalAppServer: false,
     },
     features: [
       "Unlimited local (offline) companies",
@@ -230,8 +224,6 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxLocalToOnlineAttachmentMB: 500,
       savedAccountSwitchEnabled: true,
       allowFirebaseOnlineCompanies: true,
-      allowGoogleDriveCloudSync: true,
-      allowLocalAppServer: true,
     },
     features: [
       "1 online company + unlimited offline",
@@ -287,8 +279,6 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxLocalToOnlineAttachmentMB: 2000,
       savedAccountSwitchEnabled: true,
       allowFirebaseOnlineCompanies: true,
-      allowGoogleDriveCloudSync: true,
-      allowLocalAppServer: true,
     },
     features: [
       "3 online companies + unlimited offline",
@@ -343,8 +333,6 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxLocalToOnlineAttachmentMB: 5000,
       savedAccountSwitchEnabled: true,
       allowFirebaseOnlineCompanies: true,
-      allowGoogleDriveCloudSync: true,
-      allowLocalAppServer: true,
     },
     features: [
       "10 online companies + unlimited offline",

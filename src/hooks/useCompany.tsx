@@ -47,17 +47,8 @@ import {
 import { getLocalFiscalSplitOrDefaults, LOCAL_FISCAL_SPLIT_CHANGED_EVENT } from "@/lib/localFiscalSplitStore";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
-import {
-  filterCompaniesForPlServerAccess,
-  getPlServerAllowedCompanyIds,
-  getPlServerSharedCompanies,
-  isPlServerSharedCompanyRow,
-  companyStubFromPlServerShared,
-  PL_SERVER_ACCESS_CONTEXT_EVENT,
-} from "@/lib/plServerAccessContext";
-import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
-import { getActiveGate } from "@/lib/gates/gateStore";
-import { filterCompaniesForActiveGate, pickGateAwareAutoSelectCompanyId, isOnlineGate } from "@/lib/gates/gateRuntime";
+import { getActiveGate, writeActiveGateId } from "@/lib/gates/gateStore";
+import { filterCompaniesForActiveGate, pickGateAwareAutoSelectCompanyId } from "@/lib/gates/gateRuntime";
 import { PL_GATE_CHANGED_EVENT } from "@/lib/gates/gateTypes";
 import { sharedCompanyQueryKey, sharedCompanyQuerySpecs } from "@/lib/sharedWithEmailsQuery";
 import { clearSelectedCompanyId, readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
@@ -567,13 +558,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const allCompaniesUnfilteredLiveRef = useRef<Company[]>([]);
   /** Mount par session/local se read — refresh boot grace me isi id ko clear mat karo. */
   const bootPinnedCompanyIdRef = useRef<string>("");
-  const [serverAccessEpoch, setServerAccessEpoch] = useState(0);
   const [gateEpoch, setGateEpoch] = useState(0);
-  useEffect(() => {
-    const onCtx = () => setServerAccessEpoch((n) => n + 1);
-    window.addEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, onCtx);
-    return () => window.removeEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, onCtx);
-  }, []);
   useEffect(() => {
     const onGate = () => setGateEpoch((n) => n + 1);
     window.addEventListener(PL_GATE_CHANGED_EVENT, onGate);
@@ -587,14 +572,14 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     allCompaniesUnfilteredLiveRef.current = allCompanies;
     const activeGate = getActiveGate();
     const byGate = filterCompaniesForActiveGate(allCompanies, activeGate);
-    if (isPlRemoteServerClientMode() || !isOnlineGate(activeGate)) {
-      const filtered = filterCompaniesForPlServerAccess(byGate);
-      allCompaniesLiveRef.current = filtered;
-      return filtered;
-    }
-    allCompaniesLiveRef.current = byGate;
-    return byGate;
-  }, [allCompanies, serverAccessEpoch, gateEpoch]);
+    const visibleAll = allCompanies.filter(
+      (c) => c.isDeleted !== true && c.movedToAdminRecycleAt == null
+    );
+    const useGateFallback = byGate.length === 0 && visibleAll.length > 0;
+    const baseForUi = useGateFallback ? visibleAll : byGate;
+    allCompaniesLiveRef.current = baseForUi;
+    return baseForUi;
+  }, [allCompanies, gateEpoch]);
   const [loading, setLoading] = useState(true);
   /** Online mode: company doc / sharing change par listener re-subscribe (light). */
   const [registryVersion, setRegistryVersion] = useState(0);
@@ -863,17 +848,6 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   useEffect(() => {
-    const allowed = getPlServerAllowedCompanyIds();
-    if (!allowed?.length || !companyId) return;
-    if (!allowed.includes(companyId)) {
-      if (shouldDeferRefreshBootCompanyClear(companyId, mountedAtRef.current, bootPinnedCompanyIdRef.current)) {
-        return;
-      }
-      clearCompanyId();
-    }
-  }, [companyId, serverAccessEpoch, clearCompanyId]);
-
-  useEffect(() => {
     if (!companyId) return;
     if (loading) return;
     // Refresh boot: list / gate filter settle hone se pehle stored company mat clear karo.
@@ -884,10 +858,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         : allCompaniesUnfilteredLiveRef.current;
     if (registrySource.length === 0) return;
     const activeGate = getActiveGate();
-    const gateFiltered = filterCompaniesForActiveGate(registrySource, activeGate);
-    const allowedForGate = isOnlineGate(activeGate)
-      ? gateFiltered
-      : filterCompaniesForPlServerAccess(gateFiltered);
+    const allowedForGate = filterCompaniesForActiveGate(registrySource, activeGate);
     if (!allowedForGate.some((c) => c.id === companyId)) {
       if (shouldDeferRefreshBootCompanyClear(companyId, mountedAtRef.current, bootPinnedCompanyIdRef.current)) {
         return;
@@ -2028,18 +1999,6 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       setCompany(null);
       listRecoverySyncForIdRef.current = null;
       clearCompanyId();
-      return;
-    }
-
-    if (!companyFromList && isPlServerSharedCompanyRow({ id: companyId } as Company)) {
-      const shared =
-        getPlServerSharedCompanies().find((r) => r.id === companyId) ??
-        ({ id: companyId, name: companyId, storageOption: "local" as const, ownerEmail: null });
-      const stub = companyStubFromPlServerShared(shared);
-      plDbgCompanyRecovery("listRecovery:plServerSharedStub", { companyId });
-      setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, stub));
-      setAllCompanies((prev) => (prev.some((c) => c.id === companyId) ? prev : [...prev, stub]));
-      listRecoverySyncForIdRef.current = companyId;
       return;
     }
 

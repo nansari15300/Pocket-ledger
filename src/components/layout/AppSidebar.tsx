@@ -86,10 +86,8 @@ import { collectStaffIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesS
 import { collectInterCompanyIdsForPendingApproval } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
-import { isAdminPanelNavVisible } from "@/lib/localAppServerDevPreview";
+import { isAdminPanelNavVisible } from "@/lib/adminDevPreview";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
-import { useGate } from "@/contexts/GateContext";
-import { gateSidebarTypeLabel } from "@/lib/gates/gateStore";
 
 
 type MenuItem = {
@@ -112,7 +110,6 @@ const allMenuItems: MenuItem[] = [
   { id: 'items', href: "/items", label: "Items & Service", icon: BookText },
   { id: 'reports', href: "/reports", label: "Reports", icon: FilePieChart, permission: "export_data" },
   { id: 'gallery', href: "/gallery", label: "Gallery", icon: ImageIcon },
-  { id: 'gate', href: "/gate", label: "Gate", icon: DoorOpen },
   { id: 'production', href: "/production", label: "Production", icon: Factory },
   { id: 'sale-note', href: "/sale-note", label: "Sale Note", icon: FileText },
   { id: 'purchase-note', href: "/purchase-note", label: "Purchase Note", icon: FileText },
@@ -121,8 +118,6 @@ const allMenuItems: MenuItem[] = [
 
 const bottomMenuItems: MenuItem[] = [
     { id: 'messages', href: "/messages", label: "Messages", icon: Mail },
-    // Sab builds — sidebar se seedha Drive connect / join (Settings ke andar bhi same page).
-    { id: 'drive-sync', href: settingsViewHref("local_cloud_sync"), label: "Cloud sync", icon: Cloud },
     { id: 'billing', href: "/billing", label: "Billing & Plans", icon: CreditCard, permission: "configure_company_settings" },
     { id: 'distributor-signup', href: "/distributor-signup", label: "Be a Distributor", icon: UserPlus },
     { id: 'backup', href: "/backup", label: "Backup & Restore", icon: Database, permissionAny: ["export_data", "import_data"] },
@@ -170,8 +165,6 @@ const SIDEBAR_PENDING_BADGE_HARD_CAP = 1200;
 export function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { activeGate } = useGate();
-  const activeGateSidebarLabel = gateSidebarTypeLabel(activeGate.type);
   const { user, customUser } = useAuth();
   const { requestEmbeddedLogout } = useEmbeddedLogout();
   const { can } = usePermissions();
@@ -557,10 +550,8 @@ export function AppSidebar() {
       ? (pendingCountByEntity[item.id] ?? 0)
       : 0;
     const showPendingBadge = pendingCount > 0;
-    const gateTooltip =
-      item.id === "gate" && activeGateSidebarLabel ? `${item.label} · ${activeGateSidebarLabel}` : item.label;
     const tooltipText =
-      pendingCount > 0 ? `${item.label} (${pendingCount} pending approval)` : gateTooltip;
+      pendingCount > 0 ? `${item.label} (${pendingCount} pending approval)` : item.label;
     return (
       <SidebarMenuItem key={item.href}>
         <Link prefetch={false} href={appNavHref(item.href)} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
@@ -576,9 +567,6 @@ export function AppSidebar() {
             {isOpen && (
               <span className="flex min-w-0 flex-1 items-center gap-1">
                 <span className="truncate">{item.label}</span>
-                {item.id === "gate" && activeGateSidebarLabel ? (
-                  <span className="shrink-0 text-xs text-muted-foreground">· {activeGateSidebarLabel}</span>
-                ) : null}
                 {item.id === "reports" ? (
                   <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] leading-none">
                     Experimental

@@ -20,7 +20,7 @@ import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { normalizeAttachmentUrlForDevicePreview } from "@/lib/attachmentHoldClipboard";
 import { getBlobFromAttachmentRefPreferLocalFirst } from "@/lib/attachmentPreviewResolve";
-import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 
 /** Dubara hover par turant — blob URL session `Map` (static/APK me repeat IndexedDB + decode kam) */
 const HOVER_HTTPS_UI_CACHE_MAX = 80;

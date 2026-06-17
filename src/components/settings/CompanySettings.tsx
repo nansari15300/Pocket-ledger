@@ -12,7 +12,6 @@ import { EditCompanyForm } from "@/components/company/EditCompanyForm";
 import { useCompany } from "@/hooks/useCompany";
 import { useRouter } from "next/navigation";
 import { Card, CardHeader, CardTitle, CardDescription } from "../ui/card";
-import { UploadCompanyToCloudCard } from "@/components/company/UploadCompanyToCloudCard";
 import {
   companyProfileChromeRoot,
   companyProfileGreenZone,
@@ -58,7 +57,6 @@ export function CompanySettings() {
         </div>
       </CardHeader>
       <div className="px-6 pb-4 space-y-4">
-        <UploadCompanyToCloudCard />
       </div>
       <Tabs defaultValue="edit_company" className="w-full px-6 pb-6 pt-0">
         <TabsList className={companyProfileTabsList}>

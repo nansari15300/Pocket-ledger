@@ -21,7 +21,7 @@ type Props = {
 };
 
 export function InterCompanyCompanyBankPicker({
-  label = "Company bank (Bank/Cash)",
+  label = "Clearing account",
   entities,
   bankAccountId,
   onBankAccountIdChange,

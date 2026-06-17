@@ -10,7 +10,6 @@ import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { getLocalAuthToken, getLocalAuthUser, LOCAL_AUTH_CHANGED_EVENT } from "@/lib/localApiClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { resolvePlanIdForActiveCompany } from "@/lib/accountPlanForOwner";
-import { readCloudSyncDriveShareUsers } from "@/lib/localCloudSync/companyConfig";
 
 
 export type UserRole = "viewer" | "data-entry" | "accountant" | "editor" | "manager" | "owner";
@@ -132,19 +131,7 @@ const usePermissions = () => {
                         role = normalizedRole as UserRole;
                     }
                 } else if (isLocalStorageCompany(company) && normalizedEmail) {
-                    // Drive Gmail share list — app role (Drive par hamesha writer).
-                    const driveShareUsers = readCloudSyncDriveShareUsers(company as Record<string, unknown>);
-                    const driveShare = driveShareUsers.find((u) => u.email === normalizedEmail);
-                    if (driveShare?.appRole) {
-                        const normalizedRole = String(driveShare.appRole)
-                          .toLowerCase()
-                          .trim()
-                          .replace(/_/g, "-")
-                          .replace(/\s+/g, "-");
-                        if (["viewer", "data-entry", "accountant", "editor", "manager", "owner"].includes(normalizedRole)) {
-                            role = normalizedRole as UserRole;
-                        }
-                    }
+                    // Cloud Drive share list removed — local users use sharedWith / localCompanyUsers only.
                 }
             }
             }

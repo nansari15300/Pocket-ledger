@@ -25,6 +25,7 @@ import {
   interCompanyVoucherRowCompanyClass,
   interCompanyVoucherSideRowsClass,
 } from "@/lib/interCompany/interCompanyVoucherChrome";
+import { filterInterCompanyClearingBankEntities } from "@/lib/interCompany/interCompanyEntityLookup";
 import { cn } from "@/lib/utils";
 import { useMemo } from "react";
 import { useStickyInterCompanyCompanyCode } from "@/components/inter-company/useStickyInterCompanyCompanyCode";
@@ -73,7 +74,15 @@ export function InterCompanySourcePaySection({
   const companyAc = readCompanyInterCompanyAcNo(company);
   const companyCode = useStickyInterCompanyCompanyCode(company);
   const companyMob = normalizeInterCompanyPhone(company?.phone);
-  const bankEntities = useMemo(() => entities.filter((e) => e.kind === "bank"), [entities]);
+  const bankEntities = useMemo(
+    () => filterInterCompanyClearingBankEntities(entities, companyBankAccountId),
+    [entities, companyBankAccountId]
+  );
+  // Optional source account row: clearing bank ko hide rakho (sirf clearing row me dikhna chahiye).
+  const optionalSourceEntities = useMemo(
+    () => entities.filter((e) => !(e.kind === "bank" && e.isClearing === true)),
+    [entities]
+  );
   // Edit locked: Firestore se accounts load — phir read-only UI (disabled par sirf hint mat dikhao)
   const showReadOnlyAccounts = fieldsDisabled && !entitiesLoading;
 
@@ -154,7 +163,7 @@ export function InterCompanySourcePaySection({
 
       <div className={interCompanyVoucherRowBankClass}>
         <InterCompanyAccountLookupSection
-          sectionTitle="Company bank (Bank/Cash)"
+          sectionTitle="Clearing account"
           entities={bankEntities}
           entitiesLoading={entitiesLoading}
           activeCompanyId={company?.id ?? ""}
@@ -180,7 +189,7 @@ export function InterCompanySourcePaySection({
       <div className={interCompanyVoucherRowAccountClass}>
         <InterCompanyAccountLookupSection
           sectionTitle="Source account (optional)"
-          entities={entities}
+          entities={optionalSourceEntities}
           entitiesLoading={entitiesLoading}
           activeCompanyId={company?.id ?? ""}
           autoEnsureInterCoAcNo

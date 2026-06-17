@@ -31,7 +31,7 @@ import {
   getLocalFileRefMeta,
   getLocalFileRefMetaSync,
 } from "@/lib/localPendingFiles";
-import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { usesEmbeddedNativeAttachmentStorage } from "@/lib/usesEmbeddedNativeAttachmentStorage";
 import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";

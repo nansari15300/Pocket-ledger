@@ -76,8 +76,9 @@ import {
   voucherNewAttachmentsAlwaysStageAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
 import { parseAttachmentHoldClipboardText } from "@/lib/attachmentHoldClipboard";
+import { materializeVoucherAttachmentsInSavePayload } from "@/lib/voucherFormAttachmentSave";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
-import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 
 /** Edit save: transient `blob:` preview URLs ya khali `fileUrls` se `local:` / Drive refs mat hatao. */
@@ -1134,6 +1135,17 @@ export async function saveVoucher(
     deleteUndefinedTopLevelFields(cleanVoucherData as Record<string, unknown>);
   }
   const sqliteFirst = sqliteFirstEarly;
+
+  // Web online + Firestore company: production jaisa — `local:` / clipboard marker ko HTTPS me badal kar hi persist karo.
+  if (!sqliteFirst) {
+    await materializeVoucherAttachmentsInSavePayload({
+      companyId,
+      voucherId: voucherId ?? null,
+      data: cleanVoucherData as Record<string, unknown>,
+    });
+    normalizeVoucherAttachmentFieldsForPersistence(cleanVoucherData as Record<string, unknown>, companyId);
+    deleteUndefinedTopLevelFields(cleanVoucherData as Record<string, unknown>);
+  }
 
   // Edit: form/outbox se `date` key missing ho to purani voucher date merge — static/APK offline me pehla `getDoc` hang/slow kar sakta tha (“Saving…” chipka)
   if (voucherId) {

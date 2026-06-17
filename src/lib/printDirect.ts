@@ -155,30 +155,82 @@ export type PrintPayload = {
 // ------------ LOGO CACHE (preload for instant print) ------------
 const logoCache = new Map<string, string>();
 
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ""));
+    r.onerror = () => reject(r.error ?? new Error("blob read failed"));
+    r.readAsDataURL(blob);
+  });
+}
+
+/** HTTP/Firebase logo → pdfmake data URL. EXE static me `/api/image-proxy` nahi — Storage SDK + localhost proxy. */
 async function fetchLogoAsDataUrl(logoUrl: string): Promise<string | null> {
   if (typeof window === "undefined") return null;
+  const url = String(logoUrl || "").trim();
+  if (!url) return null;
+  if (url.startsWith("data:")) return url;
+
+  if (url.startsWith("http")) {
+    try {
+      const { tryGetBlobFromFirebaseStorageDownloadUrl } = await import(
+        "@/lib/storageGetBlobFromDownloadUrl"
+      );
+      const blob = await tryGetBlobFromFirebaseStorageDownloadUrl(url);
+      if (blob && blob.size > 0) {
+        return await blobToDataUrl(blob);
+      }
+    } catch (e) {
+      console.warn("Could not load company logo via Storage:", e);
+    }
+  }
+
+  // Next dev / hosted web — server proxy (CORS-safe); static export me route 404 ho sakta hai
   try {
     const baseUrl = window.location.origin;
-    const res = await fetch(
-      `${baseUrl}/api/image-proxy?url=${encodeURIComponent(logoUrl)}`
-    );
+    const res = await fetch(`${baseUrl}/api/image-proxy?url=${encodeURIComponent(url)}`);
     if (res.ok) {
       const { dataUrl } = await res.json();
-      return dataUrl;
+      if (dataUrl) return dataUrl;
     }
   } catch (e) {
-    console.warn("Could not load company logo:", e);
+    console.warn("Could not load company logo via image-proxy:", e);
   }
   return null;
+}
+
+async function resolveLogoDataUrl(logoUrl: string): Promise<string | null> {
+  const url = String(logoUrl || "").trim();
+  if (!url) return null;
+  if (url.startsWith("data:")) return url;
+  if (!url.startsWith("http")) return null;
+  const cached = logoCache.get(url);
+  if (cached) return cached;
+  const dataUrl = await fetchLogoAsDataUrl(url);
+  if (dataUrl) logoCache.set(url, dataUrl);
+  return dataUrl;
+}
+
+/** Print/PDF se pehle logo resolve — cache miss par bhi await (EXE me pehle skip ho jata tha). */
+async function applyLogoToPrintPayload(payload: PrintPayload): Promise<PrintPayload> {
+  if (payload.printIncludeLogo === false) {
+    return { ...payload, company: { ...payload.company, logoUrl: undefined } };
+  }
+  const raw = payload.company.logoUrl;
+  if (!raw || raw.startsWith("data:")) return payload;
+  if (!raw.startsWith("http")) return payload;
+  const dataUrl = await resolveLogoDataUrl(raw);
+  if (!dataUrl) {
+    return { ...payload, company: { ...payload.company, logoUrl: undefined } };
+  }
+  return { ...payload, company: { ...payload.company, logoUrl: dataUrl } };
 }
 
 /** Preload company logo so print opens instantly. Call when company has logoUrl. */
 export function preloadCompanyLogo(logoUrl: string | null | undefined): void {
   if (!logoUrl || !logoUrl.startsWith("http")) return;
   if (logoCache.has(logoUrl)) return;
-  fetchLogoAsDataUrl(logoUrl).then((dataUrl) => {
-    if (dataUrl) logoCache.set(logoUrl, dataUrl);
-  });
+  void resolveLogoDataUrl(logoUrl);
 }
 
 // ------------ PUBLIC ------------
@@ -241,27 +293,8 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
     };
   }
 
-  // Logo: unchecked ya HTTP cache — pdfmake ke liye data URL preferred
-  let processedPayload = effectivePayload;
-  if (effectivePayload.printIncludeLogo === false) {
-    processedPayload = {
-      ...effectivePayload,
-      company: { ...effectivePayload.company, logoUrl: undefined },
-    };
-  } else if (effectivePayload.company.logoUrl && effectivePayload.company.logoUrl.startsWith("http")) {
-    const cached = logoCache.get(effectivePayload.company.logoUrl);
-    if (cached) {
-      processedPayload = {
-        ...effectivePayload,
-        company: { ...effectivePayload.company, logoUrl: cached },
-      };
-    } else {
-      processedPayload = { ...effectivePayload, company: { ...effectivePayload.company, logoUrl: undefined } };
-      fetchLogoAsDataUrl(effectivePayload.company.logoUrl).then((dataUrl) => {
-        if (dataUrl) logoCache.set(effectivePayload.company.logoUrl!, dataUrl);
-      }).catch(() => {});
-    }
-  }
+  // Logo: pdfmake ke liye data URL — EXE/APK static me Storage fetch await (cache miss par skip na ho)
+  const processedPayload = await applyLogoToPrintPayload(effectivePayload);
 
   // Print masters tick = skip current screen report; PDF is masters list only (4 columns per page).
   const mastersOnly = (printMasterTypes?.length ?? 0) > 0;
@@ -406,24 +439,7 @@ function escapeHtml(s: string): string {
 export async function getPdfBlob(payload: PrintPayload): Promise<Blob | null> {
   if (typeof window === "undefined") return null;
 
-  // Use logo only if cached so PDF builds immediately; otherwise proceed without logo and cache in background
-  let processedPayload = payload;
-  if (payload.printIncludeLogo === false) {
-    processedPayload = {
-      ...payload,
-      company: { ...payload.company, logoUrl: undefined },
-    };
-  } else if (payload.company.logoUrl && payload.company.logoUrl.startsWith("http")) {
-    const cached = logoCache.get(payload.company.logoUrl);
-    if (cached) {
-      processedPayload = { ...payload, company: { ...payload.company, logoUrl: cached } };
-    } else {
-      processedPayload = { ...payload, company: { ...payload.company, logoUrl: undefined } };
-      fetchLogoAsDataUrl(payload.company.logoUrl).then((dataUrl) => {
-        if (dataUrl) logoCache.set(payload.company.logoUrl!, dataUrl);
-      }).catch(() => {});
-    }
-  }
+  const processedPayload = await applyLogoToPrintPayload(payload);
 
   const docDefinition = buildDocDefinition(processedPayload);
   const pdfDoc = pdfMake.createPdf(docDefinition);

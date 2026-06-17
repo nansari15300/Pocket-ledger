@@ -35,10 +35,5 @@ export const config = {
     "/api/company/repair-stripe-plan-expiry",
     "/api/company/billing-auto-renew",
     "/api/company/billing-payments-statement",
-    // Local company Drive sync — static/APK cross-origin (billingApiCors.ts paths).
-    "/api/auth/google/drive-auth-url",
-    "/api/auth/google/drive-disconnect",
-    "/api/auth/cloud-account-status",
-    "/api/local-cloud-sync/drive/:path*",
   ],
 };

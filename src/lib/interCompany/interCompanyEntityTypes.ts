@@ -17,4 +17,6 @@ export type InterCompanyEntityDetail = {
   accountNumber?: string;
   /** P/B/S/T/E prefixed Inter Co. A/c No */
   interCompanyAccountNo?: string;
+  /** IC voucher clearing account picker — sirf isClearing banks */
+  isClearing?: boolean;
 };

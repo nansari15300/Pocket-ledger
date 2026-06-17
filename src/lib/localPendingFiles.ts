@@ -23,13 +23,7 @@ import {
   listAttachmentFileRefs,
   upsertAttachmentFileRef,
 } from "@/lib/attachmentFileRefStore";
-import {
-  isGoogleDriveCloudSyncCompany,
-  uploadPendingAttachmentPayloadToDrive,
-  downloadCloudAttachmentBlob,
-} from "@/lib/localCloudSync/driveCloudSyncClient";
-import { isDriveFileRef, remotePathFromDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
-import type { CloudSyncProviderId } from "@/lib/localCloudSync/types";
+import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { getLocalCompanyById, listLocalCompanies } from "@/lib/localCompanyStore";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
@@ -179,56 +173,8 @@ function resolvePendingPayloadCompanyId(item: {
   return companyIdFromDocPath(String(item.docPath || "")) ?? companyIdFromStoragePrefix(item.storagePathPrefix);
 }
 
-/** Local cloud-sync provider detect — Firebase Storage fallback ko local company par block/reroute karne ke liye. */
-export async function resolvePendingAttachmentCloudSyncProvider(
-  companyId: string
-): Promise<CloudSyncProviderId | null> {
-  const cid = String(companyId || "").trim();
-  if (!cid) return null;
-  if (await isGoogleDriveCloudSyncCompany(cid)) return "google_drive";
-  const reg = await getLocalCompanyById(cid, { includeDeleted: true });
-  const auth = String((reg as Record<string, unknown> | null)?.authoritativeCompanyId ?? "").trim();
-  // Registry id vs authoritative id mismatch: pending row kisi bhi alias se aaye to selected provider detect hona chahiye.
-  const aliases = new Set<string>([cid]);
-  if (auth) aliases.add(auth);
-  try {
-    const all = await listLocalCompanies({ includeDeleted: true });
-    for (const row of all) {
-      const rid = String(row.id || "").trim();
-      const rauth = String((row as Record<string, unknown>).authoritativeCompanyId ?? "").trim();
-      if (
-        aliases.has(rid) ||
-        (rauth && aliases.has(rauth)) ||
-        (rid && auth && rid === auth) ||
-        (rauth && rauth === cid)
-      ) {
-        aliases.add(rid);
-        if (rauth) aliases.add(rauth);
-      }
-    }
-  } catch {
-    /* alias expansion best-effort */
-  }
-  for (const alias of aliases) {
-    if (await isGoogleDriveCloudSyncCompany(alias)) return "google_drive";
-    const r = await getLocalCompanyById(alias, { includeDeleted: true });
-    if (!r || !isOfflineCompanyStorage(r as { storageOption?: string })) continue;
-    const provider = String((r as Record<string, unknown>).cloudSyncProvider ?? "").trim().toLowerCase();
-    const enabled = (r as Record<string, unknown>).cloudSyncEnabled === true;
-    if (!enabled) continue;
-    const dataP = String((r as Record<string, unknown>).cloudSyncDataProvider ?? "").trim().toLowerCase();
-    const filesP = String((r as Record<string, unknown>).cloudSyncFilesProvider ?? "").trim().toLowerCase();
-    const legacyP = String((r as Record<string, unknown>).cloudSyncProvider ?? "").trim().toLowerCase();
-    const pickFiles =
-      filesP === "google_drive" || filesP === "drive"
-        ? "google_drive"
-        : legacyP === "google_drive" || legacyP === "drive"
-          ? "google_drive"
-          : dataP === "google_drive" || dataP === "drive"
-            ? "google_drive"
-            : null;
-    if (pickFiles) return pickFiles;
-  }
+/** Cloud sync removed — pending attachments always use Firebase Storage / native paths. */
+export async function resolvePendingAttachmentCloudSyncProvider(_companyId: string): Promise<null> {
   return null;
 }
 
@@ -528,13 +474,8 @@ export async function getBlobFromLocalFileRef(
   options?: LocalFileReadOptions
 ): Promise<Blob | null> {
   if (isDriveFileRef(url)) {
-    const remotePath = remotePathFromDriveFileRef(url);
-    if (!remotePath) return null;
-    try {
-      return await downloadCloudAttachmentBlob(remotePath, options?.companyId);
-    } catch {
-      return null;
-    }
+    // Legacy drive refs after cloud sync removal — no remote fetch.
+    return null;
   }
   if (!isLocalFileRef(url)) return null;
   const localId = url.slice(LOCAL_FILE_PREFIX.length);
@@ -570,33 +511,8 @@ export async function uploadPendingLocalFileRef(
 
   const docMatch = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(String(item.docPath || "").trim());
   const targetCompanyId = resolvePendingPayloadCompanyId(item);
-  const provider = targetCompanyId ? await resolvePendingAttachmentCloudSyncProvider(targetCompanyId) : null;
-  if (targetCompanyId && provider === "google_drive") {
-    const collection = docMatch?.[2] || "vouchers";
-    const docId = docMatch?.[3] || item.id;
-    const reg = await getLocalCompanyById(targetCompanyId, { includeDeleted: true });
-    const driveRef = await uploadPendingAttachmentPayloadToDrive({
-      companyId: targetCompanyId,
-      companyName: reg?.name,
-      company: reg,
-      collection,
-      docId,
-      field: item.field,
-      blob: item.blob,
-      contentType: item.contentType,
-      fileName: item.fileName,
-    });
-    await patchPendingFileTargetField(item.docPath, item.field, item.id, driveRef);
-    await removePendingFile(item.id);
-    return driveRef;
-  }
-
-  const reg = targetCompanyId ? await getLocalCompanyById(targetCompanyId, { includeDeleted: true }) : null;
-  if (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) {
-    throw new Error(
-      "Local company files must sync via Google Drive. Enable cloud sync — not Firebase Storage."
-    );
-  }
+  void docMatch;
+  void targetCompanyId;
 
   // Upload one local file ref and return its final public URL for caller-side payload replacement.
   const storagePath = `${storagePathPrefix}/${Date.now()}_${item.fileName || "file"}`;
@@ -786,34 +702,6 @@ export async function syncOnePendingFile(
   item: PendingFilePayload
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const targetCompanyId = resolvePendingPayloadCompanyId(item);
-    const provider = targetCompanyId ? await resolvePendingAttachmentCloudSyncProvider(targetCompanyId) : null;
-    // Local company + cloud sync — Firebase Storage ki jagah selected provider route.
-    if (targetCompanyId && provider === "google_drive") {
-      const uploaded = await uploadPendingLocalFileRef(
-        `${LOCAL_FILE_PREFIX}${item.id}`,
-        item.storagePathPrefix,
-        item
-      );
-      if (isLocalFileRef(uploaded)) {
-        const label = "Google Drive";
-        return {
-          success: false,
-          error: `Pending attachment was not uploaded to ${label}. Re-attach the file and try sync again.`,
-        };
-      }
-      return { success: true };
-    }
-
-    const reg = targetCompanyId ? await getLocalCompanyById(targetCompanyId, { includeDeleted: true }) : null;
-    if (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) {
-      return {
-        success: false,
-        error:
-          "Local company: enable Google Drive sync to upload files. Firebase Storage is not used.",
-      };
-    }
-
     const storagePath = `${item.storagePathPrefix}/${Date.now()}_${item.fileName || "file"}`;
     const storageRef = ref(storage, storagePath);
     await uploadBytes(storageRef, item.blob, { contentType: item.contentType || "application/octet-stream" });

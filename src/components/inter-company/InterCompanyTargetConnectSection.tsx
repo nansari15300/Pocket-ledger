@@ -16,6 +16,7 @@ import {
   type InterCompanyEntityKind,
 } from "@/components/inter-company/InterCompanyEntitySide";
 import type { InterCompanyEntityDetail } from "@/lib/interCompany/interCompanyEntityTypes";
+import { filterInterCompanyClearingBankEntities } from "@/lib/interCompany/interCompanyEntityLookup";
 import {
   INTER_COMPANY_AC_NO_LENGTH,
   isValidInterCompanyAcNo,
@@ -511,7 +512,15 @@ export function InterCompanyTargetConnectSection({
   const companyAcForEntity = targetCompanyId ? acNoForCompanyId(targetCompanyId) : "";
   const companyPanDisplay = targetCompanyId ? panForCompanyId(targetCompanyId) : "";
   const companyMobDisplay = targetCompanyId ? mobileForCompanyId(targetCompanyId) : "";
-  const bankEntities = useMemo(() => entities.filter((e) => e.kind === "bank"), [entities]);
+  const bankEntities = useMemo(
+    () => filterInterCompanyClearingBankEntities(entities, companyBankAccountId),
+    [entities, companyBankAccountId]
+  );
+  // Optional target account row: clearing bank ko hide rakho (sirf clearing row me dikhna chahiye).
+  const optionalTargetEntities = useMemo(
+    () => entities.filter((e) => !(e.kind === "bank" && e.isClearing === true)),
+    [entities]
+  );
   const showReadOnlyAccounts = fieldsDisabled && !entitiesLoading;
   const companyNameDisplay =
     targetCompanyDisplayName ||
@@ -706,7 +715,7 @@ export function InterCompanyTargetConnectSection({
 
       <div className={interCompanyVoucherRowBankClass}>
         <InterCompanyAccountLookupSection
-          sectionTitle="Company bank (Bank/Cash)"
+          sectionTitle="Clearing account"
           entities={bankEntities}
           entitiesLoading={!!targetCompanyId && entitiesLoading}
           lockEntityKind="bank"
@@ -734,7 +743,7 @@ export function InterCompanyTargetConnectSection({
       <div className={interCompanyVoucherRowAccountClass}>
         <InterCompanyAccountLookupSection
           sectionTitle="Target account (optional)"
-          entities={entities}
+          entities={optionalTargetEntities}
           entitiesLoading={!!targetCompanyId && entitiesLoading}
           enableCrossCompanyLookup={lookupPartners.length > 0}
           partners={lookupPartners}

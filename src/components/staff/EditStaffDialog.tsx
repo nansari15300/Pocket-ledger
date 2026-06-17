@@ -1,6 +1,6 @@
-
 "use client";
 
+import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Trash2, CalendarIcon } from "lucide-react";
 import { useState, useEffect, useRef, useMemo } from "react";
@@ -61,6 +61,7 @@ import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@
 import { toast as sonnerToast } from "sonner";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import { useLiveEntityDocAttachments } from "@/hooks/useLiveEntityDocAttachments";
 import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
 import {
   MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS,
@@ -132,6 +133,30 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [file, setFile] = useState<File | string | null>(staff.fileUrl || null);
   const [docSlots, setDocSlots] = useState<Array<File | string>>(() => staff.documentFileUrls || []);
+  const initialFileRef = useRef<string | null>(staff.fileUrl || null);
+  const initialDocUrlsRef = useRef<string[]>(staff.documentFileUrls || []);
+  const attachmentsDirty =
+    file instanceof File ||
+    docSlots.some((x) => x instanceof File) ||
+    (typeof file === "string" ? file : null) !== initialFileRef.current ||
+    JSON.stringify(docSlots.filter((x): x is string => typeof x === "string")) !==
+      JSON.stringify(initialDocUrlsRef.current);
+  const onLiveAttachmentFields = React.useCallback(
+    (fields: { fileUrl?: string | null; documentFileUrls?: string[] }) => {
+      if (fields.fileUrl !== undefined) setFile(fields.fileUrl || null);
+      if (fields.documentFileUrls) setDocSlots(fields.documentFileUrls);
+    },
+    []
+  );
+  useLiveEntityDocAttachments({
+    enabled: dialogOpen,
+    companyId,
+    collection: "staff",
+    entityId: staff.id,
+    attachmentsDirty,
+    preferSqliteMirror: sqliteListsOnlyNoSnapshot,
+    onFields: onLiveAttachmentFields,
+  });
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const docsInputRef = useRef<HTMLInputElement>(null);
 
@@ -178,6 +203,8 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
     });
       setFile(staff.fileUrl || null);
       setDocSlots(staff.documentFileUrls || []);
+      initialFileRef.current = staff.fileUrl || null;
+      initialDocUrlsRef.current = staff.documentFileUrls || [];
     }
   }, [dialogOpen, staff, form]);
   
@@ -338,6 +365,8 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
             documentFileUrls,
             openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
           });
+          initialFileRef.current = fileUrl || null;
+          initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Staff Updated!", {
             id: toastId,
             description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
@@ -366,6 +395,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           fileUrl,
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
           groupId: values.groupId || null,
+          updatedAt: serverTimestamp(),
         });
         await syncPendingFiles().catch((e) => console.warn("[EditStaffDialog] syncPendingFiles", e));
 
@@ -381,6 +411,8 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           documentFileUrls,
           openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
         });
+        initialFileRef.current = fileUrl || null;
+        initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
         sonnerToast.success("Staff Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating staff:", error);

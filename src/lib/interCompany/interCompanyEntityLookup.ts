@@ -130,4 +130,19 @@ export function classifyAccountAcInput(
   return "invalid";
 }
 
+/** IC voucher clearing row — sirf isClearing bank/cash; saved id edit par hamesha include */
+export function filterInterCompanyClearingBankEntities(
+  entities: InterCompanyEntityDetail[],
+  selectedBankId?: string
+): InterCompanyEntityDetail[] {
+  const banks = entities.filter((e) => e.kind === "bank");
+  const clearing = banks.filter((e) => e.isClearing === true);
+  const sid = String(selectedBankId || "").trim();
+  if (sid && !clearing.some((e) => e.id === sid)) {
+    const saved = banks.find((e) => e.id === sid);
+    if (saved) return [...clearing, saved];
+  }
+  return clearing;
+}
+
 export { isSearchableInterCompanyPhone, normalizeInterCompanyPhone, interCompanyPhonesMatch };

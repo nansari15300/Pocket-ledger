@@ -34,7 +34,7 @@ import {
   isLocalFileRef,
   LOCAL_FILE_PREFIX,
 } from "@/lib/localPendingFiles";
-import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { useVoucherAttachmentFallback } from "@/contexts/VoucherAttachmentFallbackContext";
 import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";
 import { getBlobFromAttachmentRefPreferLocalFirst } from "@/lib/attachmentPreviewResolve";

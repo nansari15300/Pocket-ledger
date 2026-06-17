@@ -28,6 +28,8 @@ export type Account = {
   isOwnerAccount?: boolean;
   /** ON: Payment Out / Direct Expense / Contra — balance se zyada amount save allowed (account minus ho sakta hai). */
   allowVoucherMinusBalance?: boolean;
+  /** ON: Inter Company voucher clearing account dropdown me dikhe */
+  isClearing?: boolean;
 };
 
 export type AccountGroup = {

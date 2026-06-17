@@ -31,6 +31,7 @@ import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccoun
 import { CreateAccountGroupDialog } from "@/components/bank-cash/CreateAccountGroupDialog";
 import { PermissionButton } from "@/components/permission";
 import { useVouchers } from "@/hooks/useVouchers";
+import { resolveMasterListSelection } from "@/lib/masterEntityLiveUpdate";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
@@ -140,12 +141,21 @@ function BankCashPageContent() {
   /** Mobile: AccountDetails se voucher count — master-detail title row me dikhane ke liye */
   const [bankMobileVoucherStats, setBankMobileVoucherStats] = useState<{ showing: number; total: number } | null>(null);
 
-  const selectedAccount = activeView === 'accounts' ? selected as Account : null;
+  // `clearing` tab bhi account detail use karta hai.
+  const selectedAccountRaw = activeView !== 'groups' ? selected as Account : null;
+  const selectedAccount = useMemo(
+    () => resolveMasterListSelection(selectedAccountRaw, processedAccounts),
+    [selectedAccountRaw, processedAccounts]
+  );
   const selectedGroup = activeView === 'groups' ? selected as AccountGroup : null;
+  const handleAccountUpdated = useCallback((patch?: Partial<Account>) => {
+    if (!patch?.id || !selectedAccountRaw || selectedAccountRaw.id !== patch.id) return;
+    setSelected({ ...selectedAccountRaw, ...patch });
+  }, [setSelected, selectedAccountRaw]);
   // Account row = `accountName`; group row = `name` — sirf `.name` se bank detail header khali rehta tha
   const mobileBankCashSelectionLabel = useMemo(() => {
     if (!selected) return null;
-    if (activeView === "accounts") {
+    if (activeView !== "groups") {
       const nm = (selected as Account).accountName;
       return nm && String(nm).trim() ? String(nm).trim() : null;
     }
@@ -160,7 +170,7 @@ function BankCashPageContent() {
   useSyncMasterDetailHeaderId("bank-cash", selectedAccount?.id ?? selectedGroup?.id ?? null);
 
   useEffect(() => {
-    if (!isMobile || activeView !== "accounts") setBankMobileVoucherStats(null);
+    if (!isMobile || activeView === "groups") setBankMobileVoucherStats(null);
   }, [isMobile, activeView, selectedAccount?.id]);
 
   const mobileBankDetailHeaderEnd = useMemo(() => {
@@ -168,7 +178,7 @@ function BankCashPageContent() {
     const selectedEntity = selected as Account | AccountGroup;
     // Union-safe label: account uses `accountName`, group uses `name`.
     const name =
-      activeView === "accounts"
+      activeView !== "groups"
         ? (String((selectedEntity as Account).accountName || "").trim() || "Account")
         : (String((selectedEntity as AccountGroup).name || "").trim() || "Account");
     const attachmentUrl = trimEntityFileUrlForPreview((selectedEntity as any).fileUrl);
@@ -255,7 +265,7 @@ function BankCashPageContent() {
     setActiveView,            
     selected,                 
     setSelected,              
-    activeView === 'accounts' ? processedAccounts : processedAccountGroups, 
+    activeView === 'groups' ? processedAccountGroups : processedAccounts, 
     vouchersLoading,
     isMobile, // static PC: pehli account auto-select — `useQueryNav` URL sync ke liye alag
     selectedIdFromUrl
@@ -276,9 +286,15 @@ function BankCashPageContent() {
   }, [activeView]);
 
   const accountsForAccountList = useMemo(() => {
-    if (!showOnlyAccountsWithPendingApproval || !showApproveOnList) return processedAccounts;
-    return processedAccounts.filter((a) => (pendingApprovalByAccountId[a.id] ?? 0) > 0);
+    // Accounts tab: clearing accounts ko yahan hide rakho (wo sirf Clearing A/c tab me dikhte hain).
+    const nonClearingAccounts = processedAccounts.filter((a) => a.isClearing !== true);
+    if (!showOnlyAccountsWithPendingApproval || !showApproveOnList) return nonClearingAccounts;
+    return nonClearingAccounts.filter((a) => (pendingApprovalByAccountId[a.id] ?? 0) > 0);
   }, [processedAccounts, showOnlyAccountsWithPendingApproval, showApproveOnList, pendingApprovalByAccountId]);
+  // Clearing tab: sirf bank/cash accounts jinke form me `isClearing` tick hai.
+  const clearingAccountsForList = useMemo(() => {
+    return processedAccounts.filter((a) => a.isClearing === true);
+  }, [processedAccounts]);
   // Header count: `AccountList` jaisa — search + special-account permission
   const filteredAccountListCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
@@ -288,19 +304,25 @@ function BankCashPageContent() {
       return !!(account.accountName && account.accountName.toLowerCase().includes(searchLower));
     }).length;
   }, [accountsForAccountList, searchTerm, can]);
+  const filteredClearingAccountListCount = useMemo(() => {
+    const searchLower = (searchTerm || "").toLowerCase();
+    const canViewSpecialAccount = can("view_special_bank_accounts");
+    return clearingAccountsForList.filter((account) => {
+      if (account.isSpecial && !canViewSpecialAccount) return false;
+      return !!(account.accountName && account.accountName.toLowerCase().includes(searchLower));
+    }).length;
+  }, [clearingAccountsForList, searchTerm, can]);
 
-  // Restore selection when returning from details (e.g. /bank-cash?selected=xyz or /bank-cash?view=groups&selected=xyz)
+  // Restore selection from URL once; tab switch ko force-reset mat karo.
   useEffect(() => {
     if (!selectedIdFromUrl) return;
     if (vouchersLoading) return;
     const groupItem = processedAccountGroups.find((i) => i.id === selectedIdFromUrl);
     const accountItem = processedAccounts.find((i) => i.id === selectedIdFromUrl);
-    if (groupItem && accountItem) {
-      if (viewFromUrl === "groups") setActiveView("groups");
-      else setActiveView("accounts");
-    } else if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
-    else if (accountItem) setActiveView("accounts");
-    else if (groupItem) setActiveView("groups");
+    // URL me explicit `view` ho tabhi tab change karo; warna user ka current tab preserve.
+    if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
+    else if (viewFromUrl === "accounts" && accountItem) setActiveView("accounts");
+    else if (viewFromUrl === "clearing" && accountItem) setActiveView("clearing");
     const item =
       groupItem && accountItem
         ? viewFromUrl === "groups"
@@ -311,7 +333,9 @@ function BankCashPageContent() {
     const canonical =
       viewFromUrl === "groups"
         ? `/bank-cash?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
-        : `/bank-cash?selected=${encodeURIComponent(selectedIdFromUrl)}`;
+        : viewFromUrl === "clearing"
+          ? `/bank-cash?view=clearing&selected=${encodeURIComponent(selectedIdFromUrl)}`
+          : `/bank-cash?selected=${encodeURIComponent(selectedIdFromUrl)}`;
     if (shouldReplaceWithMasterDetailCanonical(canonical)) {
       router.replace(canonical, { scroll: false });
     }
@@ -327,7 +351,7 @@ function BankCashPageContent() {
   const totalBalance = useMemo(() => {
     const canViewSpecialBalance = can('view_special_account_balance');
     
-    if (activeView === 'accounts') {
+    if (activeView !== 'groups') {
         const accountsToSum = processedAccounts.filter(acc => !acc.isSpecial || canViewSpecialBalance);
         return accountsToSum.reduce((acc, account) => acc + account.balance, 0);
     } 
@@ -419,7 +443,7 @@ function BankCashPageContent() {
         {/* `min-w-0`: flex row me search shrink ho sake; badge Add ke beech party/staff page jaisa */}
         <div className={mlc.searchWrap}>
           <Search className={mlc.searchIcon} />
-          <Input placeholder={activeView === 'accounts' ? 'Search accounts...' : 'Search groups...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
+          <Input placeholder={activeView === 'groups' ? 'Search groups...' : 'Search accounts...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
         </div>
         {activeView === "accounts" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
           <PendingApprovalListFilterBadge compact
@@ -443,18 +467,18 @@ function BankCashPageContent() {
             ariaLabelShowAll="Show all groups"
           />
         ) : null}
-        {activeView === "accounts" ? (
-          <CreateBankAccountDialog onAccountCreated={(id) => handleSelect({ id, accountName: "" } as Account)} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
-            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateAccountOpen(true)}>
-              + Add Account
-            </PermissionButton>
-          </CreateBankAccountDialog>
-        ) : (
+        {activeView === "groups" ? (
           <CreateAccountGroupDialog onGroupCreated={(id) => handleSelect({ id, name: "" } as AccountGroup)} groups={processedAccountGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
             <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
               + Add Group
             </PermissionButton>
           </CreateAccountGroupDialog>
+        ) : (
+          <CreateBankAccountDialog onAccountCreated={(id) => handleSelect({ id, accountName: "" } as Account)} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
+            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateAccountOpen(true)}>
+              + Add Account
+            </PermissionButton>
+          </CreateBankAccountDialog>
         )}
       </div>
        {activeView === 'accounts' ? (
@@ -465,6 +489,16 @@ function BankCashPageContent() {
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
                 <AccountList accounts={accountsForAccountList} onSelectAccount={handleSelect as any} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByAccountId} getItemHref={useQueryNav ? getAccountItemHref : undefined} />
+              </div>
+            </>
+        ) : activeView === 'clearing' ? (
+            <>
+              <div className={mlc.sectionLabelRow}>
+                <Landmark className={mlc.sectionIcon} />
+                <span>Clearing A/c ({filteredClearingAccountListCount})</span>
+              </div>
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <AccountList accounts={clearingAccountsForList} onSelectAccount={handleSelect as any} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByAccountId} getItemHref={useQueryNav ? getAccountItemHref : undefined} />
               </div>
             </>
         ) : (
@@ -483,11 +517,11 @@ function BankCashPageContent() {
 
   const detailView = (
     <>
-      {activeView === 'accounts' && selectedAccount && (
+      {activeView !== 'groups' && selectedAccount && (
         <AccountDetails 
             account={selectedAccount} 
             allAccounts={processedAccounts}
-            onAccountUpdated={() => {}}
+            onAccountUpdated={handleAccountUpdated}
             onAccountDeleted={() => setSelected(null)} 
             dateRange={accountDetailsDateRange}
             onDateRangeChange={setAccountDetailsDateRange}
@@ -502,7 +536,7 @@ function BankCashPageContent() {
           accounts={accountsForSelectedGroup}
           onGroupUpdated={() => {}}
           onGroupDeleted={() => setSelected(null)}
-          onAccountUpdated={() => {}}
+          onAccountUpdated={handleAccountUpdated}
           dateRange={groupDetailsDateRange}
           onDateRangeChange={setGroupDetailsDateRange}
           userNames={userNames}
@@ -532,6 +566,8 @@ function BankCashPageContent() {
           <TabsList listChrome>
             <TabsTrigger listChrome value="accounts" className="flex-1">Accounts</TabsTrigger>
             <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
+            {/* Clearing tab: form me tick `isClearing=true` wale accounts */}
+            <TabsTrigger listChrome value="clearing" className="flex-1">Clearing A/c</TabsTrigger>
           </TabsList>
         </Tabs>
       }

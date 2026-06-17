@@ -50,6 +50,7 @@ import {
   incomingVoucherFileUrlsLookStaleVersusSaved,
   isLocalToRemoteAttachmentUpgrade,
   resolvePersistedVoucherFileUrlsAfterSave,
+  dispatchVoucherAttachmentSaved,
   voucherAttachmentFieldsForSave,
   materializeVoucherFileUrlsForWebSave,
   normalizeFormFileUrlsForSave,
@@ -377,7 +378,9 @@ export function CreatePaymentOutForm({
     isCopiedDraftFirstInsert,
   } = useCopyDraftFirstSave(copySaveTargetCompanyId);
 
-  const isEditingAndConverting = voucher && (voucher.type !== 'payment_out' && voucher.type !== 'direct_expense');
+  /** Source voucher type snapshot — tab switch par target type compare karke convert detect. */
+  // Prefer original persisted type from dialog shaping so edit tab-switch can trigger voucher-no refresh.
+  const sourceVoucherType = String((voucher as any)?._sourceVoucherType || voucher?.type || "");
   
   const form = useForm<PaymentOutFormValues>({
     resolver: zodResolver(formSchema) as Resolver<PaymentOutFormValues>,
@@ -570,7 +573,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
     const missing: string[] = [];
     const pid = String(partyId || "").trim();
-    if (pid && !processedParties.some((p: any) => p.id === pid)) {
+    // Party clear tabhi jab party list hydrate ho chuki ho; partial load window me false missing avoid.
+    if (pid && processedParties.length > 0 && !processedParties.some((p: any) => p.id === pid)) {
       // Abhi list me nahi = deleted **ya** abhi-abhi create (listener pending) — sirf pehle case me clear.
       if (pendingPartyIdUntilInPartiesListRef.current !== pid) {
         missing.push("party");
@@ -578,35 +582,40 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
     }
     const sid = String(staffId || "").trim();
-    if (sid && !processedStaff.some((s: any) => s.id === sid)) {
+    // Staff clear tabhi jab staff list hydrate ho.
+    if (sid && processedStaff.length > 0 && !processedStaff.some((s: any) => s.id === sid)) {
       if (pendingStaffIdUntilInStaffListRef.current !== sid) {
         missing.push("staff");
         form.setValue("staffId", "");
       }
     }
     const tid = String(taxAccountId || "").trim();
-    if (tid && !processedTaxes.some((t: any) => t.id === tid)) {
+    // Tax clear tabhi jab tax list hydrate ho.
+    if (tid && processedTaxes.length > 0 && !processedTaxes.some((t: any) => t.id === tid)) {
       if (pendingTaxIdUntilInTaxesListRef.current !== tid) {
         missing.push("tax");
         form.setValue("taxAccountId", "");
       }
     }
     const aid = String(accountId || "").trim();
-    if (aid && !processedAccounts.some((a: any) => a.id === aid)) {
+    // Bank/cash clear tabhi jab account list hydrate ho.
+    if (aid && processedAccounts.length > 0 && !processedAccounts.some((a: any) => a.id === aid)) {
       if (pendingAccountIdUntilInAccountsListRef.current !== aid) {
         missing.push("bank/cash account");
         form.setValue("accountId", "");
       }
     }
     const eid = String(expenseAccountId || "").trim();
-    if (eid && !expenseAccounts.some((e: any) => e.id === eid)) {
+    // Ledger clear tabhi jab expense account list hydrate ho.
+    if (eid && expenseAccounts.length > 0 && !expenseAccounts.some((e: any) => e.id === eid)) {
       if (pendingExpenseAccountIdUntilInListRef.current !== eid) {
         missing.push("ledger");
         form.setValue("expenseAccountId", "");
       }
     }
     const toAcc = String(toAccountId || "").trim();
-    if (payeeType === "other" && toAcc && !expenseAccounts.some((e: any) => e.id === toAcc)) {
+    // "Other" ledger clear tabhi jab expense account list hydrate ho.
+    if (payeeType === "other" && toAcc && expenseAccounts.length > 0 && !expenseAccounts.some((e: any) => e.id === toAcc)) {
       if (pendingToAccountIdUntilInListRef.current !== toAcc) {
         missing.push("ledger");
         form.setValue("toAccountId", "");
@@ -765,6 +774,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const highlightPayToLabelCopyMismatch = showCopyPayeeMasterFromSource;
 
   const voucherType = defaultTab === 'direct_expense' ? 'direct_expense' : 'payment_out';
+  /** Edit dialog me tab click (Payment Out <-> Direct Expense) par bhi voucher number regenerate karo. */
+  const isEditingAndConverting = Boolean(voucher?.id) && sourceVoucherType !== voucherType;
   const spendWiseOppositeEditable =
     (company as { spendWiseOppositeVoucherEditable?: boolean } | null)?.spendWiseOppositeVoucherEditable === true;
   const spendWiseEnabled = (company as { spendWiseEnabled?: boolean } | null)?.spendWiseEnabled === true;
@@ -1516,6 +1527,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           savedFileUrlsSnapshotRef.current = [...persistedUrls];
           setFiles(persistedUrls);
           initialFilesRef.current = persistedUrls;
+          if (vid && companyId) {
+            dispatchVoucherAttachmentSaved(companyId, vid, persistedUrls);
+          }
         }
         if (shouldAutoFlushOutboxAfterEnqueue()) {
           void flushVoucherOutbox().catch((err) => {
@@ -1817,8 +1831,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const isOwner = user?.uid === company?.ownerId;
   const availableAccounts = processedAccounts.filter(acc => {
     if (!acc.isSpecial) return true;
-    if (isOwner || can('manage_special_bank_accounts') || can('view_special_bank_accounts')) {
-        return acc.useFor?.out.includes(user?.email || "") ?? true;
+    // Owner/manage can always see special accounts; view-only follows optional `useFor.out` allow-list.
+    if (isOwner || can('manage_special_bank_accounts')) return true;
+    if (can('view_special_bank_accounts')) {
+      const outAllow = (acc as any)?.useFor?.out;
+      if (Array.isArray(outAllow)) return outAllow.includes(user?.email || "");
+      if (typeof outAllow === "string") return outAllow.includes(user?.email || "");
+      return true;
     }
     return false;
   });

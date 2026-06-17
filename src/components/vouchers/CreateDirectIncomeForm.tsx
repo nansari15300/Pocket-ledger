@@ -209,7 +209,8 @@ export function CreatePaymentInForm({
 
     }, [vouchersLoading, companyId]);
 
-  const isEditingAndConverting = voucher && (voucher.type !== 'payment_in' && voucher.type !== 'direct_income');
+  /** Source voucher type snapshot — tab switch par target type compare karke convert detect. */
+  const sourceVoucherType = String(voucher?.type || "");
   
   const form = useForm<PaymentInFormValues>({
     resolver: zodResolver(formSchema) as Resolver<PaymentInFormValues>,
@@ -234,6 +235,8 @@ export function CreatePaymentInForm({
   const incomeAccountId = form.watch("incomeAccountId");
   
   const voucherType = defaultTab === 'direct_income' ? 'direct_income' : 'payment_in';
+  /** Edit dialog me tab click (Payment In <-> Direct Income) par voucher number auto-refresh. */
+  const isEditingAndConverting = Boolean(voucher?.id) && sourceVoucherType !== voucherType;
 
   const payeeBalance = useMemo(() => {
     if (payeeType === 'party' && partyId) return processedParties.find(p => p.id === partyId)?.balance;

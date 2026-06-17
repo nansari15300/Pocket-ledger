@@ -76,6 +76,7 @@ import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { EditPartyDialog } from "@/components/party/EditPartyDialog";
 import { useVouchers } from "@/hooks/useVouchers";
+import { useMasterEntityLivePatch } from "@/hooks/useMasterEntityLivePatch";
 import {
   Table,
   TableBody,
@@ -230,7 +231,7 @@ export function PartyDetails({
   party: Party & { saleTotal?: number; purchaseTotal?: number };
   allParties?: Party[];
   transactions?: any[];
-  onPartyUpdated: () => void;
+  onPartyUpdated: (updated?: Partial<Party>) => void;
   onPartyDeleted: (deletedId: string) => void;
   onShowAll?: () => void;
   dateRange: DateRange | undefined;
@@ -249,6 +250,11 @@ export function PartyDetails({
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } =
     useDate();
   const { vouchers, processedParties, journalAccountNames: voucherJournalAccountNames } = useVouchers();
+  const handlePartyUpdated = useMasterEntityLivePatch<Party>({
+    collection: "parties",
+    entityId: initialParty.id,
+    onUpdated: onPartyUpdated,
+  });
   const resolvedJournalAccountNames = journalAccountNames ?? voucherJournalAccountNames;
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();
@@ -942,7 +948,7 @@ export function PartyDetails({
               {!hideReportPartyPicker && party.id !== "all" && !(party as any).isSystemAccount && (
                 <EditPartyDialog
                   party={party}
-                  onPartyUpdated={onPartyUpdated}
+                  onPartyUpdated={handlePartyUpdated}
                   onPartyDeleted={() => onPartyDeleted(party.id)}
                   hasTransactions={processedTransactions.length > 0}
                 >
@@ -1304,7 +1310,7 @@ export function PartyDetails({
                   {party.id !== 'all' && !(party as any).isSystemAccount && (
                     <EditPartyDialog
                       party={party}
-                      onPartyUpdated={onPartyUpdated}
+                      onPartyUpdated={handlePartyUpdated}
                       onPartyDeleted={() => onPartyDeleted(party.id)}
                       hasTransactions={processedTransactions.length > 0}
                     >
@@ -1465,7 +1471,7 @@ export function PartyDetails({
                 party.id !== "all" && !(party as any).isSystemAccount ? (
                   <EditPartyDialog
                     party={party}
-                    onPartyUpdated={onPartyUpdated}
+                    onPartyUpdated={handlePartyUpdated}
                     onPartyDeleted={() => onPartyDeleted(party.id)}
                     hasTransactions={processedTransactions.length > 0}
                   >

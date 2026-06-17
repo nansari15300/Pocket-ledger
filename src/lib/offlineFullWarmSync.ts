@@ -42,8 +42,7 @@ import {
   normalizeAttachmentUrlForDevicePreview,
 } from "@/lib/attachmentHoldClipboard";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
-import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
-import { readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConfig";
+import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { auth } from "@/lib/firebase";
 import { markEmbeddedFullWarmSucceeded } from "@/lib/embeddedWarmBootstrapFlags";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
@@ -66,14 +65,9 @@ export function isCloudBackedCompanyShape(c: Company | null): boolean {
   return false;
 }
 
-/** APK/EXE: Firebase cloud companies + local company jisme Google Drive sync on ho. */
+/** APK/EXE: Firebase cloud companies only (local Drive sync removed). */
 export function shouldPrefetchAttachmentsForCompany(c: Company | null): boolean {
-  if (!c) return false;
-  if (isCloudBackedCompanyShape(c)) return true;
-  const so = String((c as { storageOption?: string }).storageOption || "").toLowerCase();
-  if (so !== "local") return false;
-  const cfg = readCloudSyncConfigFromCompany(c as Record<string, unknown>);
-  return cfg.cloudSyncEnabled === true && cfg.cloudSyncProvider === "google_drive";
+  return isCloudBackedCompanyShape(c);
 }
 
 const SCRAPE_SKIP_KEYS = new Set([

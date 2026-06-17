@@ -11,6 +11,7 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 
 /**
  * Voucher/attachment pipeline: `navigator.onLine === false` par Storage `uploadBytes` / `getDownloadURL` await mat karo —
@@ -57,6 +58,20 @@ export function apkCloudFirestoreMasterWriteFromCompanyShape(company: { storageO
  */
 export async function apkCloudCompanyUsesSqliteFirstWrites(companyId: string): Promise<boolean> {
   if (apkEmbeddedSqliteFirstWritesPreferred()) return true;
+  const cid = String(companyId || "").trim();
+  // Web browser (`npm run dev` / production): online Firebase company = seedha Firestore — `dataSourceMode=local` dev pe bhi `local:` mat likho.
+  const isWebShell =
+    !isCapacitorNativeApp() && !isStaticAppBuild() && !isElectronDesktopApp();
+  if (isWebShell && cid) {
+    try {
+      const row = await getLocalCompanyById(cid);
+      if (row && !isOfflineCompanyStorage(row as { storageOption?: string })) {
+        return false;
+      }
+    } catch {
+      /* registry miss — niche rules */
+    }
+  }
   if (!isLocalOnlyMode()) return false;
   if (!isCapacitorNativeApp()) return true;
   try {

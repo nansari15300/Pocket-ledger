@@ -82,6 +82,27 @@ export function applyClientDateRangeFilter(
   return { rows: withRunningBalances(inRange, opening), openingBalance: opening };
 }
 
+/** Snapshot rows se opening infer — share doc me `*OpeningBalance` 0/missing ho par baked balance se. */
+export function inferOpeningBalanceFromLedgerRows(rows: ReconciliationLedgerRow[] | undefined): number {
+  const list = rows ?? [];
+  if (list.length === 0) return 0;
+  const sorted = [...list].sort((a, b) => {
+    const ta = a.rawDate ? new Date(a.rawDate).getTime() : 0;
+    const tb = b.rawDate ? new Date(b.rawDate).getTime() : 0;
+    return ta - tb;
+  });
+  for (const r of sorted) {
+    if (r.balance === undefined || r.balance === null) continue;
+    const bal = Number(r.balance);
+    if (Number.isNaN(bal)) continue;
+    const dr = Number(r.debit) || 0;
+    const cr = Number(r.credit) || 0;
+    // Reverse: bal = opening + dr - cr  =>  opening = bal - dr + cr
+    return bal - dr + cr;
+  }
+  return 0;
+}
+
 /** Account doc se opening balance — live ledger / recon opening row. */
 export async function loadAccountOpeningBalance(
   companyId: string,
@@ -92,7 +113,18 @@ export async function loadAccountOpeningBalance(
   try {
     if (isLocalOnlyMode()) {
       const row = await getCompanyDocFromBrowserDb(companyId, collectionName, accountId);
-      return Number((row as { openingBalance?: unknown })?.openingBalance) || 0;
+      const localOpening = Number((row as { openingBalance?: unknown })?.openingBalance) || 0;
+      if (localOpening !== 0) return localOpening;
+      // Static/APK: other party account mirror me nahi — Firestore try (loadCompanyVouchers jaisa)
+      try {
+        const snap = await getDoc(doc(firestore, `companies/${companyId}/${collectionName}`, accountId));
+        if (snap.exists()) {
+          return Number(snap.data()?.openingBalance) || 0;
+        }
+      } catch {
+        /* permission / offline — niche 0 */
+      }
+      return 0;
     }
     const snap = await getDoc(doc(firestore, `companies/${companyId}/${collectionName}`, accountId));
     if (!snap.exists()) return 0;
@@ -255,7 +287,12 @@ export function rowsWithOpeningFromSnapshot(
   openingBalance: number | undefined
 ): { rows: ReconciliationLedgerRow[]; openingBalance: number } {
   const base = rows ?? [];
-  const opening = openingBalance ?? 0;
+  let opening = openingBalance ?? 0;
+  // Purane share: opening field 0 ho par snapshot rows me running balance baked ho
+  if (opening === 0) {
+    const inferred = inferOpeningBalanceFromLedgerRows(base);
+    if (inferred !== 0) opening = inferred;
+  }
   const needsBalance = base.some((r) => r.balance === undefined || r.balance === null);
   return {
     rows: needsBalance ? withRunningBalances(base, opening) : base,

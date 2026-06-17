@@ -7,7 +7,7 @@ import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageDownloadUrl";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
-import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 
 export type CompanyAttachmentCatalogEntry = {
   url: string;

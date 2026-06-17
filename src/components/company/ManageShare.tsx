@@ -45,7 +45,6 @@ import usePermissions, { type PermissionConfig, type UserRole, initialPermission
 import { cn } from "@/lib/utils";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
-import { LocalDriveShareManagePanel } from "@/components/company/LocalDriveShareManagePanel";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { updateCompanyDocRoot } from "@/lib/companyDocsClient";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
@@ -827,14 +826,9 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
     <div className="space-y-8">
         {isDeviceLocalCompany && companyData && companyId ? (
           <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
-            <CardContent className="p-4">
-              <LocalDriveShareManagePanel
-                variant="full"
-                companyId={companyId}
-                companyName={companyData.name}
-                company={companyData as Record<string, unknown>}
-                onUsersChanged={reloadLocalCompanyRegistry}
-              />
+            <CardContent className="p-4 text-sm text-muted-foreground">
+              Local company login users are managed in{" "}
+              <strong>Settings → Company Profile</strong> (Add company user section).
             </CardContent>
           </Card>
         ) : (

@@ -38,6 +38,7 @@ import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
 import { CreateGroupDialog } from "@/components/party/CreateGroupDialog";
 import { PermissionButton } from "@/components/permission";
 import { useVouchers } from "@/hooks/useVouchers";
+import { resolveMasterListSelection } from "@/lib/masterEntityLiveUpdate";
 import usePermissions from "@/hooks/usePermissions";
 import type { Party, Group } from "@/components/party/types";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
@@ -275,8 +276,16 @@ function PartyPageContent() {
     }
   });
 
-  const selectedParty = activeView === 'parties' ? selected as Party : null;
+  const selectedPartyRaw = activeView === 'parties' ? selected as Party : null;
+  const selectedParty = useMemo(
+    () => resolveMasterListSelection(selectedPartyRaw, processedPartiesForSelection),
+    [selectedPartyRaw, processedPartiesForSelection]
+  );
   const selectedGroup = activeView === 'groups' ? selected as Group : null;
+  const handlePartyUpdated = useCallback((patch?: Partial<Party>) => {
+    if (!patch?.id || !selectedPartyRaw || selectedPartyRaw.id !== patch.id) return;
+    setSelected({ ...selectedPartyRaw, ...patch });
+  }, [setSelected, selectedPartyRaw]);
   const mobilePartyGroupSelectionLabel = useMemo(() => {
     if (!selected) return null;
     const name = (selected as Party | Group).name;
@@ -986,7 +995,7 @@ function PartyPageContent() {
         />
       )}
       {activeView === 'parties' && selectedParty && selectedParty.id !== OVERDUE_ACCOUNT_ID && (
-        <PartyDetails party={selectedParty} allParties={processedParties} onPartyUpdated={() => {}} onPartyDeleted={() => setSelected(null)} dateRange={partyDetailsDateRange} onDateRangeChange={setPartyDetailsDateRange} userNames={mergedUserNames} />
+        <PartyDetails party={selectedParty} allParties={processedParties} onPartyUpdated={handlePartyUpdated} onPartyDeleted={() => setSelected(null)} dateRange={partyDetailsDateRange} onDateRangeChange={setPartyDetailsDateRange} userNames={mergedUserNames} />
       )}
       {activeView === 'groups' && selectedGroup && (
         <GroupDetails group={selectedGroup} allGroups={processedGroups} allParties={partiesForSelectedGroup} onGroupUpdated={() => {}} onGroupDeleted={() => setSelected(null)} onPartyUpdated={() => {}} dateRange={groupDetailsDateRange} onDateRangeChange={setGroupDetailsDateRange} userNames={mergedUserNames} />

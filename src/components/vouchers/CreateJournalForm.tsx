@@ -98,6 +98,11 @@ import {
   convertPdfAttachmentsToJpegIfEnabled,
   shouldSuggestPdfAsImage,
 } from "@/lib/voucherAttachmentPdfAsImage";
+import {
+  dispatchVoucherAttachmentSaved,
+  incomingVoucherFileUrlsLookStaleVersusSaved,
+  voucherAttachmentFieldsForSave,
+} from "@/lib/voucherFormAttachmentSave";
 import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
 import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccountDialog";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
@@ -409,6 +414,8 @@ export function CreateJournalForm({
     [allowAttachments, fileAttachmentLimits.maxFileCount, fileAttachmentLimits.allowPDF, files]
   );
   const initialFilesRef = useRef<string[]>([]);
+  /** Save ke baad stale parent `voucher.fileUrls` form overwrite na kare (delete+add fix). */
+  const savedFileUrlsSnapshotRef = useRef<string[] | null>(null);
   // Track initial allocations when voucher loads so link/unlink changes are detected for isFormDirty.
   const initialJournalAllocationsRef = useRef<{ debit: Allocation[]; credit: Allocation[] }>({ debit: [], credit: [] });
   /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
@@ -452,7 +459,11 @@ export function CreateJournalForm({
 
   // Sirf saved doc edit — sync/copy draft me `voucher` bina `id` ke aata hai; tab next voucher no auto fetch chahiye
   const isEditing = !!voucher?.id;
-  const isEditingAndConverting = voucher && voucher.type !== 'journal';
+  /** Journal tab me `Add Salary` source aane par bhi convert treat karo taaki fresh journal number bane. */
+  const isEditingAndConverting =
+    Boolean(voucher) &&
+    // Preserve original saved type from dialog shaping so Contra -> Journal edit switch refreshes voucher no.
+    (String((voucher as any)?._sourceVoucherType || voucher?.type || "") !== "journal" || String(voucher?.subType || "") === "add_salary");
   // Sync draft: voucher hai par id nahi — fields editable rehne chahiye (account + narration manually bhar sake)
   const isFormEditing = !voucher?.id || isEditing;
 
@@ -604,7 +615,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
 }, [voucher, form, isEditingAndConverting, isFormDirty, allAccountsWithEntity]);
 
-  // Outbox flush / Firestore snapshot: `local:` → HTTPS parent `voucher.fileUrls` update; same id par upar reset skip — dev browser preview fix (Payment In jaisa).
+  // Outbox flush / Firestore snapshot: `local:` → HTTPS parent `voucher.fileUrls` update; stale snapshot ignore.
   useEffect(() => {
     if (!voucher?.id || savedVoucherId !== voucher.id) return;
     const hasUnsavedFilePick = files.some((f) => f instanceof File);
@@ -614,6 +625,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       ? [voucher.unassignedFile.url]
       : (voucher.fileUrls || []).filter((u: unknown): u is string => typeof u === "string");
     const cur = files.filter((f): f is string => typeof f === "string");
+    const snap = savedFileUrlsSnapshotRef.current;
+    if (snap) {
+      if (incomingVoucherFileUrlsLookStaleVersusSaved(snap, incoming)) return;
+      if (JSON.stringify(incoming) === JSON.stringify(snap)) {
+        savedFileUrlsSnapshotRef.current = null;
+      }
+    }
     if (JSON.stringify(incoming) === JSON.stringify(cur)) return;
     setFiles(incoming);
     initialFilesRef.current = [...incoming];
@@ -1611,7 +1629,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         })),
         // Persist links made from Journal debit/credit bill-wise cards.
         allocations: effectiveJournalAllocations,
-        fileUrls,
+        ...voucherAttachmentFieldsForSave(fileUrls),
       };
 
       if (!idArgForFirestore) delete (submissionData as { id?: string }).id;
@@ -1658,6 +1676,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           );
         }
         if (isMounted.current) setIsLoading(false);
+
+        savedFileUrlsSnapshotRef.current = [...fileUrls];
+        setFiles(fileUrls);
+        initialFilesRef.current = [...fileUrls];
+        if (companyId && docId) {
+          dispatchVoucherAttachmentSaved(companyId, docId, fileUrls);
+        }
 
         const postSaveTail = async () => {
           if (approveBanner && !isEditForApprove) {

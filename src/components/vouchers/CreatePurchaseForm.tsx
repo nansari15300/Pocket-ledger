@@ -401,7 +401,9 @@ export function CreatePurchaseForm({
   // Keep "Read me" help controlled from this form so purchase link section can open the shared multilingual guide.
   const [linkSectionInfoOpen, setLinkSectionInfoOpen] = useState(false);
   const isEditing = !!voucher?.id;
-  const isEditingAndConverting = voucher && voucher.type !== "purchase";
+  // Use preserved source type so edit convert (Sale -> Purchase) correctly triggers voucher-no refresh.
+  const isEditingAndConverting =
+    Boolean(voucher?.id) && String((voucher as any)?._sourceVoucherType || voucher?.type || "") !== "purchase";
   
   const form = useForm<PurchaseFormValues>({
     resolver: zodResolver(formSchema) as Resolver<PurchaseFormValues>,
@@ -777,7 +779,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   );
 
   useEffect(() => {
-    if ((!savedVoucherId || isEditingAndConverting) && isAutoVoucherEnabled && !voucher?.id) {
+    // Edit-convert par bhi naya type prefix/number turant regenerate karo (voucher.id hone par bhi).
+    if ((!savedVoucherId || isEditingAndConverting) && isAutoVoucherEnabled) {
       fetchVoucherNumber();
     }
   }, [voucher?.id, savedVoucherId, isEditingAndConverting, fetchVoucherNumber, primaryLineItemType, company, isAutoVoucherEnabled]);
@@ -1597,7 +1600,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
     const missing: string[] = [];
     const pid = String(partyId || "").trim();
-    if (pid && !processedParties.some((p: any) => p.id === pid)) {
+    // Supplier clear tabhi jab party list hydrate ho chuki ho; partial load me false missing avoid.
+    if (pid && processedParties.length > 0 && !processedParties.some((p: any) => p.id === pid)) {
       if (pendingPartyIdUntilInPartiesListRef.current !== pid) {
         missing.push("supplier");
         form.setValue("partyId", "");

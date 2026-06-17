@@ -17,7 +17,6 @@ import { firestore } from "@/lib/firebase";
 import { clearBrowserDbCache, getBrowserDb } from "@/lib/localSqlite";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
-import { shouldUseLocalCloudSync } from "@/lib/localCloudSync/companyConfig";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { decryptFirestoreCompanyDocIfNeeded, isEncryptedServerBackupDoc } from "@/lib/serverBackupEncryption";
 import { stampLocalMirrorBackedByFirestore } from "@/lib/localMirrorServerMeta";
@@ -53,12 +52,7 @@ async function shouldPersistCompanyDocToBrowserDb(
   options?: UpsertCompanyBrowserOptions
 ): Promise<boolean> {
   if (options?.force === true) return true;
-  if (shouldMirrorToBrowserDb()) return true;
-  try {
-    return await shouldUseLocalCloudSync(companyId);
-  } catch {
-    return false;
-  }
+  return shouldMirrorToBrowserDb();
 }
 
 /** Read gate — upsert jahan allowed hai wahi par SQLite se padho (local + Drive web mode). */
@@ -71,24 +65,15 @@ async function canReadCompanyDocsFromBrowserDb(
   return shouldPersistCompanyDocToBrowserDb(companyId);
 }
 
-/** SQLite write ke baad cloud_sync_outbox — retry path me bhi call karo. */
-async function enqueueCloudSyncDeltaAfterMirrorWrite(input: {
+/** Cloud sync removed — no-op (signature kept for mirror write callers). */
+async function enqueueCloudSyncDeltaAfterMirrorWrite(_input: {
   companyId: string;
   collectionName: string;
   docId: string;
   data: Record<string, unknown>;
   skipCloudSyncEnqueue?: boolean;
 }): Promise<void> {
-  if (input.skipCloudSyncEnqueue === true) return;
-  const { maybeEnqueueLocalCloudSyncFromWrite } = await import("@/lib/localCloudSync/enqueueFromWrite");
-  const { inferCloudSyncActionFromPayload } = await import("@/lib/localCloudSync/conflict");
-  await maybeEnqueueLocalCloudSyncFromWrite({
-    companyId: input.companyId,
-    collectionName: input.collectionName,
-    docId: input.docId,
-    data: input.data,
-    operation: inferCloudSyncActionFromPayload(input.data, "update"),
-  });
+  return;
 }
 
 const MIRROR_SQLITE_ERROR_WINDOW_MS = 30_000;

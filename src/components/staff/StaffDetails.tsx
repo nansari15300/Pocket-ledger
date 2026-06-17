@@ -119,6 +119,7 @@ import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useVouchers } from "@/hooks/useVouchers";
+import { useMasterEntityLivePatch } from "@/hooks/useMasterEntityLivePatch";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { useDateRangeTimestamps } from "@/hooks/useLedgerDetailDateRange";
 import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
@@ -211,6 +212,12 @@ export function StaffDetails({
     if (!processedStaff) return initialStaff;
     return processedStaff.find(s => s.id === initialStaff.id) || initialStaff;
   }, [processedStaff, initialStaff]);
+
+  const handleStaffUpdated = useMasterEntityLivePatch<Staff>({
+    collection: "staff",
+    entityId: initialStaff.id,
+    onUpdated: onStaffUpdated,
+  });
 
   const staffHeaderAttachmentUrl = useMemo(
     () => trimEntityFileUrlForPreview(staff.fileUrl),
@@ -909,7 +916,7 @@ export function StaffDetails({
             <EditStaffDialog
               staff={staff}
               allGroups={allGroups}
-              onStaffUpdated={onStaffUpdated}
+              onStaffUpdated={handleStaffUpdated}
               onStaffDeleted={() => onStaffDeleted(staff.id)}
               isOpen={isEditStaffDialogOpen}
               onOpenChange={(open: boolean) => {
@@ -1302,7 +1309,7 @@ export function StaffDetails({
                 <EditStaffDialog
                   staff={staff}
                   allGroups={allGroups}
-                  onStaffUpdated={onStaffUpdated}
+                  onStaffUpdated={handleStaffUpdated}
                   onStaffDeleted={() => onStaffDeleted(staff.id)}
                 >
                   {/* All-vouchers mode safety: disable edit for aggregate view. */}
@@ -1452,7 +1459,7 @@ export function StaffDetails({
                       staff={staff}
                       allGroups={allGroups}
                       allStaff={allStaff}
-                      onStaffUpdated={onStaffUpdated}
+                      onStaffUpdated={handleStaffUpdated}
                       onStaffDeleted={() => onStaffDeleted(staff.id)}
                       hasTransactions={processedTransactions.length > 0}
                     >

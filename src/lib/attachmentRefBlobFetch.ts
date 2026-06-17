@@ -7,7 +7,7 @@ import {
   isLocalFileRef,
   LOCAL_FILE_PREFIX,
 } from "@/lib/localPendingFiles";
-import { isDriveFileRef, remotePathFromDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { isDriveFileRef, remotePathFromDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
 
 /** IndexedDB/native offline cache key — `PL_ATTACH` ko decode karke stable `drive:`/`local:`/https ref. */

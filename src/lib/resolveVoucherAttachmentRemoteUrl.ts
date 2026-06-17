@@ -7,7 +7,7 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
-import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 
 /** HTTPS / Drive / blob — `local:` staging ke opposite; edit dialog merge me remote prefer karo. */
 export function isRemoteAttachmentUrl(u: string): boolean {

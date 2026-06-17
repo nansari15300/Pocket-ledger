@@ -21,7 +21,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "../ui/textarea";
 import { Separator } from "../ui/separator";
-import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Combobox } from "@/components/ui/combobox";
 import { cn } from "@/lib/utils";
@@ -55,17 +54,10 @@ import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { countOnlineCompanySlotsForOwner, maxOnlineCompaniesForPlan } from "@/lib/companyOnlineSlots";
 import { listLocalCompanies } from "@/lib/localCompanyStore";
 import { getFiscalRangeForCountry } from "@/lib/fiscalRange";
-import { isForceLocalCompanyCreationBuild } from "@/lib/localMode";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { upsertLocalCompany } from "@/lib/localCompanyStore";
 import { type LocalCompanyUserRecord, upsertUserInList } from "@/lib/localCompanyUsers";
-import {
-  CloudSyncProviderPickers,
-  cloudSyncFieldsFromChoices,
-  type CloudSyncProviderChoice,
-} from "@/components/company/CloudSyncProviderPickers";
 import { planAllowsFirebaseOnline } from "@/lib/planSyncEntitlements";
-import { useGate } from "@/contexts/GateContext";
 
 const MAX_FILE_SIZE_MB = 0.5;
 
@@ -121,17 +113,11 @@ export function CreateCompanyForm({
   const [queuedCompanyUsers, setQueuedCompanyUsers] = useState<LocalCompanyUserDraft[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileToUpload, setFileToUpload] = useState<{ file: File; preview: string } | null>(null);
-  /** User must explicitly pick — save disabled until selected (static/APK). */
-  const [creationMode, setCreationMode] = useState<"" | "local" | "online">("");
-  const [cloudSyncDataProvider, setCloudSyncDataProvider] = useState<CloudSyncProviderChoice>("none");
-  const [cloudSyncFilesProvider, setCloudSyncFilesProvider] = useState<CloudSyncProviderChoice>("none");
-
   const router = useRouter();
   const { toast } = useToast();
   const { user, customUser } = useAuth();
   // `company` = abhi selected company (plan hint); owned list se highest tier — pehle hamesha "basic" plan check tha
   const { setCompanyId, allCompanies, company } = useCompany();
-  const { activeGate, canCreateCompanyOnActiveGate, activeGateCreateHintText } = useGate();
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const livePlans = useLivePlans();
   const accountPlanId = useMemo(
@@ -155,21 +141,10 @@ export function CreateCompanyForm({
     () => (user?.uid ? countOnlineCompanySlotsForOwner(allCompanies, user.uid) : 0),
     [allCompanies, user?.uid]
   );
-  /** Plan online allow kare + slot bachi ho → user offline/online choose kar sake */
+  /** Online company creation only; slot guard still applies. */
   const hasFreeOnlineSlot = allowFirebaseOnline && maxOnlineSlots > 0 && usedOnlineSlots < maxOnlineSlots;
-  /** Sirf static APK / NEXT_PUBLIC_LOCAL_ONLY_MODE: browse "local" mode se alag (warna option kabhi dikhta hi nahi) */
-  const forceLocalCompanyCreation = isForceLocalCompanyCreationBuild();
-  /** Web/browser: local company create band — sirf static/APK device-only path */
-  const staticBuildAllowsLocalCompany = isStaticAppBuild();
-  const showStorageChoice = staticBuildAllowsLocalCompany && !forceLocalCompanyCreation;
-  const storageChoiceRequired = showStorageChoice;
-  const storageChoiceMade =
-    !storageChoiceRequired ||
-    creationMode === "local" ||
-    (creationMode === "online" && hasFreeOnlineSlot);
-  const willCreateAsLocal =
-    staticBuildAllowsLocalCompany &&
-    (forceLocalCompanyCreation || !hasFreeOnlineSlot || creationMode === "local");
+  const storageChoiceMade = true;
+  const willCreateAsLocal = false;
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -264,18 +239,7 @@ export function CreateCompanyForm({
     const maxO = maxOnlineCompaniesForPlan(planIdForSlots, getPlanFromPlans(livePlans, planIdForSlots));
     const usedO = user?.uid ? countOnlineCompanySlotsForOwner(allCompanies, user.uid) : 0;
     const freeOnlineSlotNow = maxO > 0 && usedO < maxO;
-    if (isStaticAppBuild() && showStorageChoice && !storageChoiceMade) {
-      toast({
-        variant: "destructive",
-        title: "Choose how to save",
-        description: "Select Local or Online before creating the company.",
-      });
-      return;
-    }
-
-    const createAsLocalOnly =
-      isStaticAppBuild() &&
-      (isForceLocalCompanyCreationBuild() || !freeOnlineSlotNow || creationMode === "local");
+    const createAsLocalOnly = false;
 
     if (!user?.uid) {
       toast({
@@ -287,15 +251,15 @@ export function CreateCompanyForm({
       return;
     }
 
-    // Web: online slot ke bina local company mat banao — device-only static build par hi
-    if (!isStaticAppBuild() && !freeOnlineSlotNow) {
+    // Company creation is online-only across app UI.
+    if (!freeOnlineSlotNow) {
       toast({
         variant: "destructive",
-        title: "Online company required on web",
+        title: "Online company required",
         description:
           maxO === 0
-            ? "Your plan does not include cloud companies on the browser. Upgrade at Billing, or use the Pocket Ledger app on your device for offline-only companies."
-            : `All ${maxO} online slot${maxO === 1 ? "" : "s"} are in use. Free a slot, upgrade, or create an offline company in the mobile app.`,
+            ? "Your plan does not include cloud companies. Upgrade at Billing to create a company."
+            : `All ${maxO} online slot${maxO === 1 ? "" : "s"} are in use. Free a slot or upgrade your plan.`,
       });
       return;
     }
@@ -465,7 +429,6 @@ export function CreateCompanyForm({
         }
         const currencyRow = getDefaultCurrencyForCountry(values.billingCurrencyCountry);
         // Static local-first: company root doc local table me store karo; Firebase write skip.
-        const cloudSyncPatch = cloudSyncFieldsFromChoices(cloudSyncDataProvider, cloudSyncFilesProvider);
         await upsertLocalCompany({
           id: companyId,
           name: values.companyName,
@@ -500,7 +463,6 @@ export function CreateCompanyForm({
           adminUsername:
             passwordEnabled && (values.password || "").trim() ? adminLoginUsername : null,
           localCompanyUsers,
-          ...cloudSyncPatch,
         });
       } else {
         const currencyRowOnline = getDefaultCurrencyForCountry(values.billingCurrencyCountry);
@@ -632,15 +594,6 @@ export function CreateCompanyForm({
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6" autoComplete="off">
-        <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-950">
-          <strong>Active gate:</strong> {activeGate.label} — {activeGateCreateHintText}
-        </div>
-        {!canCreateCompanyOnActiveGate ? (
-          <p className="text-sm text-destructive">
-            Switch to <strong>This device</strong> or <strong>Online</strong> gate (sidebar → Gate) to create a
-            company here.
-          </p>
-        ) : null}
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-4">
           <FormField
             control={form.control}
@@ -798,55 +751,10 @@ export function CreateCompanyForm({
           />
         </div>
 
-        {/* Sirf static/APK: Local + Online choice — web par ye section nahi */}
-        {showStorageChoice && (
-          <div className="space-y-2 rounded-md border border-black bg-muted/30 p-3">
-            <FormLabel className="text-xs sm:text-sm">Save company as *</FormLabel>
-            <FormDescription className="text-xs">
-              {!allowFirebaseOnline
-                ? "Your plan does not include online (Firebase) companies. Select Local for this device."
-                : hasFreeOnlineSlot
-                  ? "Required: pick cloud sync or keep data only on this device."
-                  : maxOnlineSlots === 0
-                    ? "Your plan has no online company slots. Select Local, or upgrade at Billing."
-                    : `All ${maxOnlineSlots} online slot${maxOnlineSlots === 1 ? " is" : "s are"} in use (${usedOnlineSlots}/${maxOnlineSlots}). Select Local to continue.`}
-            </FormDescription>
-            <RadioGroup
-              value={creationMode}
-              onValueChange={(v) => setCreationMode(v as "local" | "online")}
-              className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:gap-6"
-            >
-              {allowFirebaseOnline && hasFreeOnlineSlot ? (
-                <label className="flex cursor-pointer items-center gap-2">
-                  <RadioGroupItem value="online" id="create-company-online" />
-                  <span className="text-xs sm:text-sm">Online (Firebase sync across devices)</span>
-                </label>
-              ) : null}
-              <label className="flex cursor-pointer items-center gap-2">
-                <RadioGroupItem value="local" id="create-company-local" />
-                <span className="text-xs sm:text-sm">Local (this device / offline)</span>
-              </label>
-            </RadioGroup>
-            {!storageChoiceMade ? (
-              <p className="text-xs text-amber-700 dark:text-amber-400">Select an option above to enable Create.</p>
-            ) : null}
-          </div>
-        )}
-        {showStorageChoice && (creationMode === "local" || willCreateAsLocal) ? (
-          <CloudSyncProviderPickers
-            planId={accountPlanId}
-            livePlan={accountPlan}
-            dataProvider={cloudSyncDataProvider}
-            filesProvider={cloudSyncFilesProvider}
-            onDataProviderChange={setCloudSyncDataProvider}
-            onFilesProviderChange={setCloudSyncFilesProvider}
-            disabled={isLoading}
-          />
-        ) : null}
-        {!staticBuildAllowsLocalCompany && !hasFreeOnlineSlot && (
+        {!hasFreeOnlineSlot && (
           <p className="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 p-2 text-xs text-muted-foreground">
             {maxOnlineSlots === 0
-              ? "On web, companies must sync to the cloud. Upgrade your plan at Billing to create a company here."
+              ? "Companies are cloud-sync only. Upgrade your plan at Billing to create a company."
               : `All ${maxOnlineSlots} online slot${maxOnlineSlots === 1 ? " is" : "s are"} in use (${usedOnlineSlots}/${maxOnlineSlots}). Upgrade or remove an online company first.`}
           </p>
         )}

@@ -450,6 +450,11 @@ export function SalaryForm({
   const [activeLineIndex, setActiveLineIndex] = React.useState<number | null>(null);
   /** Tab-switch / remount par stale `copyMasterDraftRequest` se create dialog auto-open na ho — sirf nayi request par. */
   const hasInitializedCopyRequestRef = useRef(false);
+  /** Copy/create ke baad `processedExpenseAccounts` listener sync se pehle — Copy chip + combobox placeholder na dikhe. */
+  const pendingDebitAccountIdUntilInListRef = useRef<string | null>(null);
+  const pendingDebitAccountLabelRef = useRef<string>("");
+  const pendingStaffIdUntilInStaffListRef = useRef<string | null>(null);
+  const pendingTaxIdUntilInTaxesListRef = useRef<string | null>(null);
 
   const openCreateStaffDialog = React.useCallback((lineIndex: number, newName?: string) => {
     setActiveLineIndex(lineIndex);
@@ -592,8 +597,9 @@ export function SalaryForm({
     });
   };
   
-  const handleTaxCreated = (newTaxId: string) => {
+   const handleTaxCreated = (newTaxId: string) => {
     if(activeLineIndex !== null) {
+      pendingTaxIdUntilInTaxesListRef.current = newTaxId;
       form.setValue(`lineItems.${activeLineIndex}.taxAccountId`, newTaxId);
     }
     setIsCreateTaxOpen(false);
@@ -602,6 +608,7 @@ export function SalaryForm({
 
   const handleStaffCreated = (newStaffId: string) => {
     if (activeLineIndex !== null) {
+      pendingStaffIdUntilInStaffListRef.current = newStaffId;
       const createdStaff = processedStaff.find((s) => s.id === newStaffId);
       // Keep narration aligned with the selected/created staff account name.
       update(activeLineIndex, {
@@ -615,6 +622,7 @@ export function SalaryForm({
   };
   
    const handleExpenseAccountCreated = (newAccountId: string) => {
+    pendingDebitAccountIdUntilInListRef.current = newAccountId;
     form.setValue("debitAccountId", newAccountId);
     setIsCreateExpenseOpen(false);
     void onRefreshCopyMismatch?.();
@@ -1114,14 +1122,66 @@ export function SalaryForm({
     return processedExpenseAccounts.find(a => a.id === debitAccountId)?.balance;
   }, [debitAccountId, processedExpenseAccounts]);
 
+  /** Copy create / target naam-match: list sync se pehle combobox me selected id dikhane ke liye synthetic option. */
+  const debitAccountComboboxOptions = useMemo(() => {
+    const base = processedExpenseAccounts
+      .filter((a) => a.id !== "sales_account" && a.id !== "purchase_account")
+      .map((a) => ({ value: a.id, label: a.name }));
+    const id = String(debitAccountId || "").trim();
+    if (!id || base.some((o) => o.value === id)) return base;
+    const label =
+      processedExpenseAccounts.find((a) => a.id === id)?.name ||
+      pendingDebitAccountLabelRef.current ||
+      copyMasterDraftRequest?.sourceName ||
+      id;
+    return [{ value: id, label }, ...base];
+  }, [processedExpenseAccounts, debitAccountId, copyMasterDraftRequest?.sourceName]);
+
   /** Copy-To: chip tab dikhao jab save-target company par id resolve na ho — sirf `copyMismatchCategories` pe mat rely karo ( naam match par wo [] reh sakta hai ). */
   const copyDraftMasterHelpersEnabled = Boolean(copySaveTargetCompanyId && onCopyMissingCategory);
   const debitNeedsCopyChip = useCallback(() => {
     if (!copyDraftMasterHelpersEnabled) return false;
     const id = String(form.getValues("debitAccountId") || "");
     if (!id) return true;
+    // Naya create / target match: listener aane tak Copy chip mat dikhao.
+    if (pendingDebitAccountIdUntilInListRef.current === id) return false;
     return !processedExpenseAccounts.some((a) => a.id === id);
   }, [copyDraftMasterHelpersEnabled, form, processedExpenseAccounts]);
+
+  /** Pending debit ab expense list me aa gaya — ref clear. */
+  useEffect(() => {
+    const pend = pendingDebitAccountIdUntilInListRef.current;
+    if (!pend) return;
+    if (processedExpenseAccounts.some((a) => a.id === pend)) {
+      pendingDebitAccountIdUntilInListRef.current = null;
+      pendingDebitAccountLabelRef.current = "";
+    }
+  }, [processedExpenseAccounts]);
+
+  useEffect(() => {
+    const pend = pendingDebitAccountIdUntilInListRef.current;
+    const id = String(debitAccountId || "").trim();
+    if (pend && id && id !== pend) {
+      pendingDebitAccountIdUntilInListRef.current = null;
+      pendingDebitAccountLabelRef.current = "";
+    }
+  }, [debitAccountId]);
+
+  useEffect(() => {
+    const pend = pendingStaffIdUntilInStaffListRef.current;
+    if (!pend) return;
+    if (processedStaff.some((s) => s.id === pend)) {
+      pendingStaffIdUntilInStaffListRef.current = null;
+    }
+  }, [processedStaff]);
+
+  useEffect(() => {
+    const pend = pendingTaxIdUntilInTaxesListRef.current;
+    if (!pend) return;
+    if (processedTaxes.some((t) => t.id === pend)) {
+      pendingTaxIdUntilInTaxesListRef.current = null;
+    }
+  }, [processedTaxes]);
 
   const staffLineNeedsCopyChip = useCallback(
     (index: number) => {
@@ -1129,6 +1189,7 @@ export function SalaryForm({
       const id = String(form.getValues(`lineItems.${index}.staffId`) || "");
       // Khali staff: sirf tab Copy chip jab remap ne mismatch bataya ho — warna nayi blank row par galat chip na dikhe.
       if (!id) return Boolean(copyMismatchCategories?.includes("staff"));
+      if (pendingStaffIdUntilInStaffListRef.current === id) return false;
       return !processedStaff.some((s) => s.id === id);
     },
     [copyDraftMasterHelpersEnabled, copyMismatchCategories, form, processedStaff]
@@ -1142,7 +1203,7 @@ export function SalaryForm({
       const salaryVal = Number(form.getValues(`lineItems.${index}.salary`) || 0);
       const staffId = String(form.getValues(`lineItems.${index}.staffId`) || "");
       const staffUnresolved =
-        (staffId && !processedStaff.some((s) => s.id === staffId)) ||
+        (staffId && !processedStaff.some((s) => s.id === staffId) && pendingStaffIdUntilInStaffListRef.current !== staffId) ||
         (!staffId && Boolean(copyMismatchCategories?.includes("staff")));
       if (!id) {
         if (taxAmt > 0) return true;
@@ -1151,6 +1212,7 @@ export function SalaryForm({
         if (salaryVal > 0 && staffUnresolved) return true;
         return false;
       }
+      if (pendingTaxIdUntilInTaxesListRef.current === id) return false;
       return !processedTaxes.some((t) => t.id === id);
     },
     [copyDraftMasterHelpersEnabled, copyMismatchCategories, form, processedTaxes, processedStaff]
@@ -1177,6 +1239,35 @@ export function SalaryForm({
   }, [copyDraftMasterHelpersEnabled, watchedLineItems, taxLineNeedsCopyChip]);
 
   /** Parent `copyMasterDraftRequest` → full master create dialog (files ke saath jahan lagta hai). */
+  const applyCopyMasterTargetId = useCallback(
+    (req: CopyMasterDraftRequestPayload) => {
+      const targetId = String(req.existingTargetMasterId || "").trim();
+      if (!targetId || !req.applyTarget) return;
+      const at = req.applyTarget;
+      if (at.addSalaryField === "debitAccountId") {
+        pendingDebitAccountIdUntilInListRef.current = targetId;
+        pendingDebitAccountLabelRef.current = String(req.sourceName || "").trim();
+        form.setValue("debitAccountId", targetId);
+        sonnerToast.message(`Debit account linked to existing "${req.sourceName}" in target company.`);
+        void onRefreshCopyMismatch?.();
+        return;
+      }
+      if (typeof at.addSalaryLineIndex === "number") {
+        setActiveLineIndex(at.addSalaryLineIndex);
+        if (at.addSalaryField === "staffId") {
+          pendingStaffIdUntilInStaffListRef.current = targetId;
+          form.setValue(`lineItems.${at.addSalaryLineIndex}.staffId`, targetId);
+        } else if (at.addSalaryField === "taxAccountId") {
+          pendingTaxIdUntilInTaxesListRef.current = targetId;
+          form.setValue(`lineItems.${at.addSalaryLineIndex}.taxAccountId`, targetId);
+        }
+        sonnerToast.message(`Linked existing "${req.sourceName}" in target company.`);
+        void onRefreshCopyMismatch?.();
+      }
+    },
+    [form, onRefreshCopyMismatch]
+  );
+
   useEffect(() => {
     if (!hasInitializedCopyRequestRef.current) {
       hasInitializedCopyRequestRef.current = true;
@@ -1184,6 +1275,11 @@ export function SalaryForm({
     }
     if (!copyMasterDraftRequest) return;
     const req = copyMasterDraftRequest;
+    // Target par naam pehle se — create dialog ke bajay matched id apply.
+    if (req.existingTargetMasterId) {
+      applyCopyMasterTargetId(req);
+      return;
+    }
     const at = req.applyTarget;
     if (typeof at?.addSalaryLineIndex === "number") setActiveLineIndex(at.addSalaryLineIndex);
     const targetLabel = req.targetCompanyName || "company";
@@ -1192,6 +1288,7 @@ export function SalaryForm({
     const nm = String(req.sourceName || "").trim();
 
     if (payload && sc === "expense_accounts") {
+      pendingDebitAccountLabelRef.current = nm;
       setIsCreateExpenseOpen(true);
       setTimeout(() => {
         document.dispatchEvent(new CustomEvent("prefill-create-expense-account-full", { detail: { rowPayload: payload } }));
@@ -1228,6 +1325,7 @@ export function SalaryForm({
         sonnerToast.message(`Tax prefilled -> save adds to "${targetLabel}".`);
         return;
       case "account_expense":
+        pendingDebitAccountLabelRef.current = nm;
         setIsCreateExpenseOpen(true);
         setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-expense-account-name", { detail: nm })), 80);
         sonnerToast.message(`Expense account prefilled -> save adds to "${targetLabel}".`);
@@ -1235,7 +1333,7 @@ export function SalaryForm({
       default:
         break;
     }
-  }, [copyMasterDraftRequest]);
+  }, [copyMasterDraftRequest, applyCopyMasterTargetId]);
 
   const transactionDates = useMemo(() => {
     if (!allVouchers?.length) return [];
@@ -2012,12 +2110,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                     <div className={cn(isMobile && "[&_button]:h-9 [&_button]:text-xs")}>
                       <Combobox
                         triggerClassName={cn(debitNeedsCopyChip() && "!border-red-400 !bg-red-100/80 !text-red-700")}
-                        options={processedExpenseAccounts
-                          .filter((a) => a.id !== "sales_account" && a.id !== "purchase_account")
-                          .map((a) => ({
-                            value: a.id,
-                            label: a.name,
-                          }))}
+                        options={debitAccountComboboxOptions}
                         value={field.value}
                         onChange={(val, newName) => {
                             if (val === "add-new") {

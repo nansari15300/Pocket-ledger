@@ -12,8 +12,6 @@ import { registerDeviceAndCheckLimit, replaceMyOtherDevicesAndRegister, getOrCre
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { isCloudBackedCompanyShape } from "@/lib/offlineFullWarmSync";
-import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
-
 const runCheckRef = { current: (() => Promise.resolve()) as () => void | Promise<void> };
 
 export function useDeviceLimit() {
@@ -54,13 +52,6 @@ export function useDeviceLimit() {
     }
     if (!companyId || !user?.uid || !company) {
       setResult(null);
-      myDeviceWasInListRef.current = null;
-      return;
-    }
-
-    // Remote server client (Gate → Connect): device slots register on server PC, not this viewer.
-    if (isPlRemoteServerClientMode()) {
-      setResult({ allowed: true, count: 0, limit: 1 });
       myDeviceWasInListRef.current = null;
       return;
     }

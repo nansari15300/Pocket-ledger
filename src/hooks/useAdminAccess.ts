@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "./useAuth";
 import { canAccess, type Role } from "@/utils/rbac";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
-import { isAdminPanelDevPreview } from "@/lib/localAppServerDevPreview";
+import { isAdminPanelDevPreview } from "@/lib/adminDevPreview";
 
 export function useAdminAccess(allowed: Array<Role>) {
   const { customUser, loading: authLoading } = useAuth();

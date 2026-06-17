@@ -32,6 +32,7 @@ import {
   getInterCompanyLedgerAmounts,
   hideUnapprovedTargetInterCompanyEntityLedger,
   interCompanyKindForContext,
+  interCompanyPaymentDirection,
   interCompanyVoucherTouchesEntity,
   keepUnapprovedInterCompanyLedgerPlaceholderRow,
 } from "@/lib/interCompany/interCompanyLedgerAmounts";
@@ -90,6 +91,47 @@ const getParticularsText = (t: any, names: Record<string, string> = {}) => {
     }
     
     return particulars.join(', ');
+};
+
+/** Voucher me jitne accountId / ledger ids hain — daybook account search ke liye */
+const collectVoucherLedgerAccountIds = (t: any): string[] => {
+    const ids = new Set<string>();
+    const push = (id: unknown) => {
+        if (id != null && String(id).trim()) ids.add(String(id));
+    };
+    push(t.accountId);
+    push(t.fromAccountId);
+    push(t.toAccountId);
+    push(t.expenseAccountId);
+    push(t.incomeAccountId);
+    push(t.taxAccountId);
+    if (Array.isArray(t.entries)) {
+        t.entries.forEach((e: any) => push(e?.accountId));
+    }
+    return Array.from(ids);
+};
+
+/** Bank/Cash naam search → matched account ids par voucher touch check */
+const daybookAccountSearchMatchesVoucher = (
+    t: any,
+    rawSearchTerm: string,
+    names: Record<string, string>,
+    entityList?: any[]
+): boolean => {
+    if (!rawSearchTerm) return true;
+    const particularsOnly = getParticularsText(t, names).toLowerCase();
+    if (particularsOnly.includes(rawSearchTerm)) return true;
+    const bankCashAccounts = (entityList || []).filter(
+        (a: any) => a?.accountType === "Bank" || a?.accountType === "Cash"
+    );
+    const matchedIds = new Set(
+        bankCashAccounts
+            .filter((a: any) => (a.accountName || "").toLowerCase().includes(rawSearchTerm))
+            .map((a: any) => String(a.id))
+    );
+    if (matchedIds.size === 0) return false;
+    const voucherIds = collectVoucherLedgerAccountIds(t);
+    return voucherIds.some((id) => matchedIds.has(id));
 };
 
 export const getTransactionAmounts = (
@@ -752,6 +794,31 @@ export const getTaxTransactionAmounts = (transaction: any, taxAccountId: string,
     return { debit, credit, taxableAmount, taxAmount, taxRate, quantity };
 };
 
+/** Daybook Daily Summary — IC clearing legs par Dr+Cr dono; cash-flow me sirf ek side (In ya Out) */
+const getDaybookAccountCashFlowInOut = (
+  v: any,
+  acc: Account,
+  stockView: StockView,
+  entityList: any[] | undefined,
+  processedTaxes: any
+): { tin: number; tout: number } => {
+  const { debit, credit } = getTransactionAmounts(v, "account", acc, stockView, entityList, processedTaxes);
+  if (String(v?.type || "") !== "inter_company" || (!debit && !credit)) {
+    return { tin: debit, tout: credit };
+  }
+  if (debit > 0 && credit > 0) {
+    const amt = Math.max(debit, credit);
+    const dir = interCompanyPaymentDirection(v);
+    if (dir === "out") return { tin: 0, tout: amt };
+    if (dir === "in") return { tin: amt, tout: 0 };
+    const side = interCompanyVoucherViewerSide(v);
+    if (side === "source") return { tin: 0, tout: amt };
+    if (side === "target") return { tin: amt, tout: 0 };
+    return { tin: Math.max(0, debit - credit), tout: Math.max(0, credit - debit) };
+  }
+  return { tin: debit, tout: credit };
+};
+
 export function useTransactions(
     entity: Entity | null | undefined,
     context: Context,
@@ -1006,6 +1073,12 @@ export function useTransactions(
                 }
 
                 const rawSearchTerm = String(value).toLowerCase().trim();
+
+                // Daybook account search — particulars + bank/cash account id match
+                if (key === "accounts") {
+                  const nameMap = { ...journalAccountNames, ...userNames };
+                  return daybookAccountSearchMatchesVoucher(t, rawSearchTerm, nameMap, entityList);
+                }
                 
                 const d = safeToDate(t.date);
         
@@ -1782,10 +1855,9 @@ export function useTransactions(
                 return balance;
             };
 
-            /** Account ledger Dr/Cr → daybook in/out (IC, journal, contra included) */
+            /** Account ledger Dr/Cr → daybook in/out; IC clearing double-entry ko single-sided cash flow */
             const addInOutForAccount = (acc: Account, v: any) => {
-                const { debit, credit } = getTransactionAmounts(v, "account", acc, stockView, entityList, processedTaxes);
-                return { tin: debit, tout: credit };
+                return getDaybookAccountCashFlowInOut(v, acc, stockView, entityList, processedTaxes);
             };
 
             const allAccounts = (entityList as Account[]) || [];

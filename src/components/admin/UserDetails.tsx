@@ -436,45 +436,6 @@ export function UserDetails({ user, currentUser, allUsers, onUpdate, ownedCompan
                             </div>
                         )}
                     </div>
-                    {currentUser?.role === "SuperAdmin" ? (
-                        <div className="mt-4 flex items-center justify-between rounded-lg border border-border bg-background p-3">
-                            <div className="pr-4">
-                                <Label htmlFor="pl-admin-user-local-server">Desktop local server (EXE)</Label>
-                                <p className="text-xs text-muted-foreground">
-                                    Overrides plan: ON = user can open Settings → Server; OFF = blocked even on Pro.
-                                </p>
-                            </div>
-                            <Switch
-                                id="pl-admin-user-local-server"
-                                checked={(user as { allowLocalAppServer?: boolean }).allowLocalAppServer === true}
-                                disabled={isUpdating}
-                                onCheckedChange={async (on) => {
-                                    setIsUpdating(true);
-                                    try {
-                                        await updateDoc(doc(db, "users", user.id), {
-                                            allowLocalAppServer: on,
-                                        });
-                                        onUpdate({ ...user, allowLocalAppServer: on });
-                                        toast({
-                                            title: "Updated",
-                                            description: on
-                                                ? "Local server allowed for this user."
-                                                : "Local server blocked for this user.",
-                                        });
-                                    } catch (e) {
-                                        console.error(e);
-                                        toast({
-                                            variant: "destructive",
-                                            title: "Error",
-                                            description: "Could not update user server setting.",
-                                        });
-                                    } finally {
-                                        setIsUpdating(false);
-                                    }
-                                }}
-                            />
-                        </div>
-                    ) : null}
                 </div>
                  <div className="space-y-4">
                     {ownedCompanies.length > 0 && (

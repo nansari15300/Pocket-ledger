@@ -35,6 +35,14 @@ import {
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { decryptFirestoreCompanyDocIfNeeded } from "@/lib/serverBackupEncryption";
 import { stripLocalMirrorMetaForUiRow } from "@/lib/localMirrorServerMeta";
+import {
+  masterEntityProfileUiFields,
+  type MasterEntityPatchCollection,
+} from "@/lib/masterEntityLiveUpdate";
+import {
+  VOUCHER_ATTACHMENT_SAVED_EVENT,
+  voucherAttachmentUiFingerprint,
+} from "@/lib/voucherFormAttachmentSave";
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { getBillWiseAllocatedToTarget, getPaymentStatus as getPaymentStatusResult, isSaleOrPurchaseBillVoucherType } from "@/lib/payment-allocation-utils";
 import { shouldSuppressTransientCompanyClear } from "@/lib/apkLedgerRouteShield";
@@ -109,6 +117,12 @@ type VoucherContextType = {
   /** Overdue sale/purchase transactions across all parties (for "Overdue Vouchers" view). */
   overdueTransactions: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; overdueImportant?: boolean; userId?: string; userName?: string; narration?: string; createdAt?: any; lastEditedAt?: any; updatedAt?: any }>;
   hasOverdueTransactions: boolean;
+  /** Entity profile edit save — turant list/detail UI update (Firestore snapshot se pehle). */
+  patchMasterEntity: (
+    collection: MasterEntityPatchCollection,
+    id: string,
+    patch: Record<string, unknown>
+  ) => void;
 };
 
 /** Browser SQLite se aaye vouchers ko Firestore jaisa `date` order mein lao. */
@@ -224,6 +238,18 @@ function rowMissingResolvedTimestamp(prevRow: any, mergedRow: any): boolean {
   );
 }
 
+/** Profile/attachment edit par purani row na rakho jab merge fingerprint timestamps same ho. */
+function rowMissingProfileFields(prevRow: any, mergedRow: any): boolean {
+  if (!prevRow || !mergedRow) return false;
+  return masterEntityProfileUiFields(prevRow) !== masterEntityProfileUiFields(mergedRow);
+}
+
+/** Voucher `fileUrls` delete/replace par purani row na rakho. */
+function rowMissingVoucherAttachmentFields(prevRow: any, mergedRow: any): boolean {
+  if (!prevRow || !mergedRow) return false;
+  return voucherAttachmentUiFingerprint(prevRow) !== voucherAttachmentUiFingerprint(mergedRow);
+}
+
 /** Parties/items/… — local cache merge; optional date sort sirf vouchers ke liye. */
 function mergeEntityListsById(prev: any[], cached: any[], orderByField?: string): any[] {
   if (!cached.length) return prev.filter(isAliveDoc);
@@ -255,11 +281,12 @@ function entityListUiFingerprint(rows: readonly any[]): string {
     };
     parts += `\x1f${id}\x1e${tsField(r.updatedAt)}\x1e${tsField(r.lastEditedAt)}\x1e${tsField(r.createdAt)}\x1e${tsField(r.date)}\x1e${
       r.isApproved === true ? 1 : 0
-    }\x1e${tsField(r.approvedAt)}`;
+    }\x1e${tsField(r.approvedAt)}\x1e${masterEntityProfileUiFields(r)}`;
     if (String(r.type || "") === "inter_company") {
       const legs = Array.isArray(r.interCompanyLegs) ? r.interCompanyLegs.length : 0;
       parts += `\x1e${legs}\x1e${r.interCompanySourceApproved === true ? 1 : 0}`;
     }
+    parts += `\x1e${voucherAttachmentUiFingerprint(r)}`;
   }
   return `${alive}|${parts}`;
 }
@@ -278,7 +305,11 @@ function mergeEntityListsByIdOrKeepPrev(prev: any[], cached: any[], orderByField
   const upgraded = merged.map((row) => {
     const old = prevById.get(String(row.id));
     if (!old) return row;
-    if (rowMissingResolvedTimestamp(old, row)) {
+    if (
+      rowMissingResolvedTimestamp(old, row) ||
+      rowMissingProfileFields(old, row) ||
+      rowMissingVoucherAttachmentFields(old, row)
+    ) {
       needsUpgrade = true;
       return row;
     }
@@ -305,7 +336,7 @@ function processedMasterUiFingerprint(
     if (!r || r.isDeleted) continue;
     s += `\x1f${String(r.id ?? "")}\x1e${Number(r.balance) || 0}\x1e${Number(r.debit) || 0}\x1e${
       Number(r.credit) || 0
-    }\x1e${String(r.name || r.accountName || "")}`;
+    }\x1e${String(r.name || r.accountName || "")}\x1e${masterEntityProfileUiFields(r as Record<string, unknown>)}`;
   }
   return s;
 }
@@ -406,6 +437,7 @@ const VoucherContext = createContext<VoucherContextType>({
   userNames: {},
   overdueTransactions: [],
   hasOverdueTransactions: false,
+  patchMasterEntity: () => {},
 });
 
 // Helper for generic state setters
@@ -415,11 +447,47 @@ const isAliveDoc = (row: any) => row?.isDeleted !== true;
 const HEAVY_LEDGER_SKIP_ROUTE_PREFIXES = ["/company", "/admin", "/distributor-signup"] as const;
 const HEAVY_LEDGER_SKIP_ROUTES = new Set(["/", ""]);
 
+/** Master collections config — prefetch/listener/filter sab jagah same source. */
+type MasterCollectionConfig = {
+  path: string;
+  setter: StateSetter<any>;
+  isGroup?: boolean;
+  orderByField?: string;
+};
+
 function shouldSkipHeavyVoucherBootstrap(pathname: string): boolean {
   const route = String(pathname || "").trim().toLowerCase();
   // Keep voucher provider idle on non-ledger routes so startup/select-company clicks stay responsive.
   if (HEAVY_LEDGER_SKIP_ROUTES.has(route)) return true;
   return HEAVY_LEDGER_SKIP_ROUTE_PREFIXES.some((prefix) => route.startsWith(prefix));
+}
+
+/** Active page route → sirf required collections live listen/prefetch; baki page inactive par idle. */
+function activeMasterCollectionPathsForRoute(pathname: string): Set<string> {
+  const route = String(pathname || "").trim().toLowerCase();
+  const all = new Set([
+    "vouchers",
+    "parties",
+    "staff",
+    "bank_accounts",
+    "taxes",
+    "expense_accounts",
+    "items",
+    "item_groups",
+    "groups",
+    "account_groups",
+    "staff_groups",
+    "tax_groups",
+    "expense_groups",
+  ]);
+  if (route.startsWith("/bank-cash")) return new Set(["vouchers", "bank_accounts", "account_groups"]);
+  if (route.startsWith("/party")) return new Set(["vouchers", "parties", "groups", "expense_accounts"]);
+  if (route.startsWith("/staff")) return new Set(["vouchers", "staff", "staff_groups"]);
+  if (route.startsWith("/tax")) return new Set(["vouchers", "taxes", "tax_groups"]);
+  if (route.startsWith("/items")) return new Set(["vouchers", "items", "item_groups"]);
+  if (route.startsWith("/incomes")) return new Set(["vouchers", "expense_accounts", "expense_groups"]);
+  // Voucher/reports/dashboard/reconciliation jaise shared pages par full master dataset chahiye.
+  return all;
 }
 
 export const VoucherProvider = ({ children }: { children: ReactNode }) => {
@@ -517,6 +585,78 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   const [expenseGroups, setExpenseGroups] = useState<ExpenseGroup[]>([]);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [journalAccountNames, setJournalAccountNames] = useState<Record<string, string>>({});
+
+  /** Voucher attachment save — turant vouchers cache patch (ledger/dialog live). */
+  const patchVoucherInCache = useCallback((voucherId: string, patch: Record<string, unknown>) => {
+    if (!voucherId?.trim()) return;
+    setVouchers((prev) => {
+      const idx = prev.findIndex((v) => String(v?.id) === String(voucherId));
+      if (idx < 0) return prev;
+      const merged = { ...prev[idx], ...patch, id: voucherId };
+      const next = prev.slice();
+      next[idx] = merged;
+      return next;
+    });
+  }, []);
+
+  // Voucher form save: attachment patch event — ledger/dialog bina refresh update.
+  useEffect(() => {
+    if (!companyId) return;
+    const onAttachmentSaved = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{
+          companyId: string;
+          voucherId: string;
+          patch: Record<string, unknown>;
+        }>
+      ).detail;
+      if (!detail || detail.companyId !== companyId) return;
+      patchVoucherInCache(detail.voucherId, detail.patch);
+    };
+    window.addEventListener(VOUCHER_ATTACHMENT_SAVED_EVENT, onAttachmentSaved);
+    return () => window.removeEventListener(VOUCHER_ATTACHMENT_SAVED_EVENT, onAttachmentSaved);
+  }, [companyId, patchVoucherInCache]);
+
+  /** Entity edit save — turant raw masters state patch (list fingerprint + processed recompute). */
+  const patchMasterEntity = useCallback(
+    (collection: MasterEntityPatchCollection, id: string, patch: Record<string, unknown>) => {
+      if (!id?.trim()) return;
+      const applyPatch = <T extends { id: string }>(setter: StateSetter<T>) => {
+        setter((prev) => {
+          const idx = prev.findIndex((row) => String(row.id) === String(id));
+          if (idx < 0) return prev;
+          const merged = { ...prev[idx], ...patch, id } as T;
+          const next = prev.slice();
+          next[idx] = merged;
+          return next;
+        });
+      };
+      switch (collection) {
+        case "parties":
+          applyPatch(setParties);
+          break;
+        case "staff":
+          applyPatch(setStaff);
+          break;
+        case "bank_accounts":
+          applyPatch(setAccounts);
+          break;
+        case "taxes":
+          applyPatch(setTaxes);
+          break;
+        case "items":
+          applyPatch(setItems);
+          break;
+        case "expense_accounts":
+          applyPatch(setUnprocessedExpenseAccounts);
+          break;
+        default:
+          break;
+      }
+    },
+    []
+  );
+
   /** Stale-deps se effect storm na ho: async name fetch closure me fresh cache (plan limits unrelated hang fix). */
   const journalAccountNamesRef = useRef<Record<string, string>>({});
   journalAccountNamesRef.current = journalAccountNames;
@@ -573,6 +713,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       hasOverdueTransactions: false,
       journalAccountNames: {},
       userNames: {},
+      patchMasterEntity: () => {},
     };
     lastCompanyIdRef.current = companyId ?? null;
   }, [companyId]);
@@ -605,6 +746,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       hasOverdueTransactions: false,
       journalAccountNames: {},
       userNames: {},
+      patchMasterEntity: () => {},
   });
 
   /** Har render par latest company — snapshot decrypt / pull me stale closure na ho */
@@ -620,8 +762,12 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     // companyId aur company row sync hone se pehle bhi listener dubara bind ho.
     if (!company || company.id !== companyId) return `pending|${companyId}`;
     const c = company as CloudBackedCompanyShape;
+    // Local/EXE restore me `sharedWithEmails` non-array ho sakta hai; listener key build me spread crash mat hone do.
+    const sharedList = Array.isArray((company as any)?.sharedWithEmails)
+      ? ((company as any).sharedWithEmails as unknown[])
+      : [];
     const shared = JSON.stringify(
-      [...(company.sharedWithEmails ?? [])].map((e) => String(e).toLowerCase().trim()).sort()
+      sharedList.map((e) => String(e).toLowerCase().trim()).sort()
     );
     return [
       companyId,
@@ -678,8 +824,12 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     const shouldUseLocalCompanyData = isLocalCompanySelected;
     const emailNorm = (e: string) => String(e || "").toLowerCase().trim();
     const userEmailNorm = user?.email ? emailNorm(user.email) : "";
+    // EXE/local restore me `sharedWithEmails` kabhi array ke bajay object/string aa sakta hai; `.some` crash avoid.
+    const sharedWithEmails = Array.isArray((company as any)?.sharedWithEmails)
+      ? ((company as any).sharedWithEmails as unknown[])
+      : [];
     const sharedEmailOk =
-      !!userEmailNorm && (company?.sharedWithEmails ?? []).some((e) => emailNorm(String(e)) === userEmailNorm);
+      !!userEmailNorm && sharedWithEmails.some((e) => emailNorm(String(e)) === userEmailNorm);
     const hasLocalUnlockedSession =
       shouldUseLocalCompanyData && !!companyId && !!getLocalAuthToken(companyId);
     const isCompanyReady =
@@ -701,7 +851,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
           (company as CloudBackedCompanyShape)?.authoritativeCompanyId || companyId || ""
         ).trim() || companyId;
 
-    const collectionsToPrefetch: Array<{ path: string; setter: StateSetter<any>; orderByField?: string }> = [
+    const allCollectionsToPrefetch: MasterCollectionConfig[] = [
       { path: "vouchers", setter: setVouchers, orderByField: "date" },
       { path: "parties", setter: setParties },
       { path: "staff", setter: setStaff },
@@ -716,6 +866,9 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       { path: "tax_groups", setter: setTaxGroups },
       { path: "expense_groups", setter: setExpenseGroups },
     ];
+    /** Active page collections hi prefetch/listen — inactive pages ke listeners band rakho. */
+    const activeCollectionPaths = activeMasterCollectionPathsForRoute(pathname);
+    const collectionsToPrefetch = allCollectionsToPrefetch.filter((c) => activeCollectionPaths.has(c.path));
 
     // Pure offline row: Firestore try mat karo — warna getDoc fail / empty se web jaisa reset ho sakta hai
     const isExplicitLocalRegistryRow =
@@ -904,12 +1057,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
 
       const attachListeners = () => {
         if (cancelled) return;
-      const collectionsToFetch: { 
-        path: string; 
-        setter: StateSetter<any>; 
-        isGroup?: boolean; 
-        orderByField?: string 
-    }[] = [
+      const allCollectionsToFetch: MasterCollectionConfig[] = [
       { path: 'vouchers', setter: setVouchers, isGroup: false, orderByField: 'date' },
       { path: 'parties', setter: setParties },
       { path: 'staff', setter: setStaff },
@@ -924,6 +1072,8 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       { path: 'tax_groups', setter: setTaxGroups },
       { path: 'expense_groups', setter: setExpenseGroups },
     ];
+      /** Listener sirf active page collections par bind — route switch par cleanup + naya bind. */
+      const collectionsToFetch = allCollectionsToFetch.filter((c) => activeCollectionPaths.has(c.path));
 
       /** Full-collection listener — web cloud par bhi poori voucher list (50-cap window hataya). */
       const collectionListenerQuery = (path: string, isGroup: boolean | undefined) => {
@@ -1145,9 +1295,11 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
           const docOwnerId = data?.ownerId ?? "";
           const docOwnerEmail = (data?.ownerEmail ?? "").toString().toLowerCase().trim();
           const userEmail = (user?.email ?? "").toLowerCase().trim();
-          const sharedEmails: string[] = (data?.sharedWithEmails ?? []).map((e: string) =>
-            String(e).toLowerCase().trim()
-          );
+          // Company doc me malformed `sharedWithEmails` aaye to `.map` crash se loading loop avoid.
+          const sharedRaw = Array.isArray((data as any)?.sharedWithEmails)
+            ? ((data as any).sharedWithEmails as unknown[])
+            : [];
+          const sharedEmails: string[] = sharedRaw.map((e) => String(e).toLowerCase().trim());
           const isOwner = docOwnerId === user?.uid || docOwnerEmail === userEmail;
           const isShared = userEmail && sharedEmails.includes(userEmail);
           if (!isOwner && !isShared) {
@@ -1210,7 +1362,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       (isLocalOnlyMode() ||
         String(co?.storageOption || "").toLowerCase() === "local" ||
         isCloudBackedCompany(co));
-    if (shouldSkipHeavyVoucherBootstrap(pathname)) return;
+      if (shouldSkipHeavyVoucherBootstrap(pathname)) return;
     if (!shouldListenSqliteBump) return;
 
     const mergeCollectionFromSqliteBump = (coll: string) => {
@@ -1271,6 +1423,8 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       const d = (ev as CustomEvent<BrowserDbCollectionBumpDetail>).detail;
       if (!d || d.companyId !== companyId || !d.collection) return;
       const coll = d.collection;
+      // Active page ke bahar collection bump ignore — unnecessary background merge avoid.
+      if (!activeMasterCollectionPathsForRoute(pathname).has(coll)) return;
       if (
         embeddedClientPrefersQuietBackgroundSync() &&
         !sqliteBumpCollectionNeededOnLedgerRoute(pathname, coll)
@@ -2004,6 +2158,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
         userNames,
         overdueTransactions,
         hasOverdueTransactions,
+        patchMasterEntity,
     };
     
     return currentData;
@@ -2012,7 +2167,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     processedTaxes, expenseAccounts, processedItems, processedItemGroups, 
     processedGroups, processedAccountGroups, processedStaffGroups, processedTaxGroups,
     processedExpenseAccounts, processedExpenseGroups, journalAccountNamesMerged, userNames,
-    overdueTransactions, hasOverdueTransactions
+    overdueTransactions, hasOverdueTransactions, patchMasterEntity
   ]);
 
   /** Jis company ka data last stable render me dikha (same-company refresh vs company switch alag karte hain). */

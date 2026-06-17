@@ -18,29 +18,6 @@ export function planAllowsFirebaseOnline(
   return entitlementBool(plan.entitlements, "allowFirebaseOnlineCompanies");
 }
 
-export function planAllowsGoogleDriveSync(
-  planId: PlanId | string | null | undefined,
-  livePlan?: Plan | null
-): boolean {
-  const plan = livePlan ?? getPlan((planId as PlanId) || "basic");
-  return entitlementBool(plan.entitlements, "allowGoogleDriveCloudSync");
-}
-
-export function planAllowsLocalAppServer(
-  planId: PlanId | string | null | undefined,
-  livePlan?: Plan | null
-): boolean {
-  const plan = livePlan ?? getPlan((planId as PlanId) || "basic");
-  return entitlementBool(plan.entitlements, "allowLocalAppServer");
-}
-
-export function planAllowsAnyCloudFileSync(
-  planId: PlanId | string | null | undefined,
-  livePlan?: Plan | null
-): boolean {
-  return planAllowsGoogleDriveSync(planId, livePlan);
-}
-
 /** Online Firestore company slots — plan Firebase off ho to 0. */
 export function maxOnlineSlotsRespectingPlan(
   planId: PlanId | string | null | undefined,

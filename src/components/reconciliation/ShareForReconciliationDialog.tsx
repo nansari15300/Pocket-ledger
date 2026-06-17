@@ -48,7 +48,6 @@ import {
   isSenderAccountAlreadyLinked,
 } from "@/lib/reconciliation/linkedAccountFilter";
 import { ReconShareListSearchBar } from "@/components/reconciliation/ReconShareListSearchBar";
-import { DriveLocalReconciliationLinkPanel } from "@/components/reconciliation/DriveLocalReconciliationLinkPanel";
 import {
   EMPTY_RECON_SHARE_LIST_FILTERS,
   filterReconciliationSharesForSearch,
@@ -878,11 +877,6 @@ export function ShareForReconciliationDialog({
                     Share
                   </Button>
                 </DialogFooter>
-                <DriveLocalReconciliationLinkPanel
-                  className="mt-2"
-                  dialogComboboxProps={dialogComboboxProps}
-                  onLinked={() => setTab("list")}
-                />
               </>
             )}
           </TabsContent>

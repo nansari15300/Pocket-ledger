@@ -120,6 +120,7 @@ import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachm
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { getTaxTransactionAmounts, useTransactions } from "@/hooks/use-transactions";
 import { useVouchers } from "@/hooks/useVouchers";
+import { useMasterEntityLivePatch } from "@/hooks/useMasterEntityLivePatch";
 import { NotificationBell } from "../vouchers/NotificationBell";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
@@ -143,7 +144,7 @@ interface TaxDetailsProps {
   tax: Tax;
   allTaxes: Tax[];
   transactions?: any[];
-  onTaxUpdated: () => void;
+  onTaxUpdated: (updated?: Partial<Tax>) => void;
   onTaxDeleted: (id: string) => void;
   dateRange: DateRange | undefined;
   onDateRangeChange: (dateRange: DateRange | undefined) => void;
@@ -187,6 +188,12 @@ export function TaxDetails({
     if (!initialTax) return undefined;
     return allTaxes.find((t) => t.id === initialTax.id) || initialTax;
   }, [allTaxes, initialTax]);
+
+  const handleTaxUpdated = useMasterEntityLivePatch<Tax>({
+    collection: "taxes",
+    entityId: initialTax.id,
+    onUpdated: onTaxUpdated,
+  });
 
   const taxHeaderAttachmentUrl = useMemo(
     () => (tax ? trimEntityFileUrlForPreview(tax.fileUrl) : null),
@@ -666,7 +673,7 @@ export function TaxDetails({
               <EditTaxDialog
                 tax={tax}
                 allTaxes={allTaxes}
-                onTaxUpdated={onTaxUpdated}
+                onTaxUpdated={handleTaxUpdated}
                 onTaxDeleted={() => onTaxDeleted(tax.id)}
                 hasTransactions={processedTransactions.length > 0}
               >
@@ -1003,7 +1010,7 @@ export function TaxDetails({
                   <EditTaxDialog
                     tax={tax}
                     allTaxes={allTaxes}
-                    onTaxUpdated={onTaxUpdated}
+                    onTaxUpdated={handleTaxUpdated}
                     onTaxDeleted={() => onTaxDeleted(tax.id)}
                     hasTransactions={processedTransactions.length > 0}
                   >
@@ -1129,7 +1136,7 @@ export function TaxDetails({
                     <EditTaxDialog
                       tax={tax}
                       allTaxes={allTaxes}
-                      onTaxUpdated={onTaxUpdated}
+                      onTaxUpdated={handleTaxUpdated}
                       onTaxDeleted={() => onTaxDeleted(tax.id)}
                       hasTransactions={processedTransactions.length > 0}
                     >

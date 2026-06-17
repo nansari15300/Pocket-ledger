@@ -8,12 +8,7 @@
 import { Timestamp, deleteDoc, doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { firestore, auth } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { shouldUseLocalCloudSync } from "@/lib/localCloudSync/companyConfig";
-import { postDriveJsonViaClient } from "@/lib/localCloudSync/driveApiClient";
-import { isGoogleDriveCloudSyncCompany } from "@/lib/localCloudSync/driveCloudSyncClient";
-import { enqueueLocalCloudSyncOp } from "@/lib/localCloudSync/queue";
-import { remotePathFromDriveFileRef, isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
-import { collectCloudSyncFileRefsFromValue } from "@/lib/localCloudSync/syncSummaryAttachments";
+import { remotePathFromDriveFileRef, isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import type { DeletedItem } from "@/components/recycle-bin/RecycleBinItem";
 import {
   deleteCompanyDocFromBrowserDb,
@@ -25,7 +20,6 @@ import { coerceDeletedAtToDate } from "@/lib/coerceDeletedAt";
 import { isLocalFileRef, removePendingFile } from "@/lib/localPendingFiles";
 import { writeEntity, type WriteEntityResult } from "@/lib/writeGateway";
 import { patchVoucherFields, softDeleteVoucherMoveToRecycleBin } from "@/lib/writeGateway/voucherActionsClient";
-import { CLOUD_SYNC_POKE_EVENT } from "@/lib/localCloudSync/types";
 import { purgeInterCompanyCounterpartyPartyIfUnused } from "@/lib/interCompany/cleanupInterCompanyCounterpartyParty";
 
 /** Drive/cloud_sync permanent delete marker — remote device SQLite row hard-remove kare. */
@@ -45,11 +39,6 @@ export async function companyUsesSqliteRecycleBinSource(companyId: string): Prom
   const cid = String(companyId || "").trim();
   if (!cid) return false;
   if (isLocalOnlyMode()) return true;
-  try {
-    if (await shouldUseLocalCloudSync(cid)) return true;
-  } catch {
-    /* ignore */
-  }
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
   return String((reg as { storageOption?: string } | null)?.storageOption || "").toLowerCase() === "local";
 }
@@ -236,33 +225,32 @@ export async function deleteFirebaseStorageFilesForDoc(
   }
 }
 
-/** `drive:` refs — company shared folder se file delete API. */
-export async function deleteDriveAttachmentRefsForDoc(companyId: string, data: Record<string, unknown>): Promise<void> {
-  if (!(await isGoogleDriveCloudSyncCompany(companyId))) return;
-  const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
-  const driveSharedFolderId =
-    typeof reg?.cloudSyncDriveFolderId === "string" ? reg.cloudSyncDriveFolderId.trim() : undefined;
-  const refs = new Set<string>();
-  collectCloudSyncFileRefsFromValue(data, refs);
-  for (const refStr of refs) {
-    if (!isDriveFileRef(refStr)) continue;
-    const remotePath = remotePathFromDriveFileRef(refStr);
-    if (!remotePath) continue;
-    try {
-      await postDriveJsonViaClient("/api/local-cloud-sync/drive/delete-file", {
-        driveSharedFolderId,
-        remotePath,
-      });
-    } catch {
-      /* missing file OK */
+/** Walk doc payload for `local:` / legacy `drive:` attachment refs. */
+function collectAttachmentFileRefsFromValue(value: unknown, bucket: Set<string>): void {
+  if (typeof value === "string") {
+    if (isLocalFileRef(value) || isDriveFileRef(value)) bucket.add(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const v of value) collectAttachmentFileRefsFromValue(v, bucket);
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const v of Object.values(value as Record<string, unknown>)) {
+      collectAttachmentFileRefsFromValue(v, bucket);
     }
   }
+}
+
+/** Cloud sync removed — legacy drive refs are not deleted remotely. */
+export async function deleteDriveAttachmentRefsForDoc(_companyId: string, _data: Record<string, unknown>): Promise<void> {
+  return;
 }
 
 /** Pending `local:` attachment bytes — permanent delete par cleanup. */
 export async function removeLocalPendingRefsFromDoc(data: Record<string, unknown>): Promise<void> {
   const refs = new Set<string>();
-  collectCloudSyncFileRefsFromValue(data, refs);
+  collectAttachmentFileRefsFromValue(data, refs);
   for (const refStr of refs) {
     if (!isLocalFileRef(refStr)) continue;
     const localId = refStr.slice("local:".length).trim();
@@ -273,11 +261,6 @@ export async function removeLocalPendingRefsFromDoc(data: Record<string, unknown
       /* ignore */
     }
   }
-}
-
-function pokeCloudSync(companyId: string): void {
-  if (typeof window === "undefined") return;
-  window.dispatchEvent(new CustomEvent(CLOUD_SYNC_POKE_EVENT, { detail: { companyId } }));
 }
 
 /**
@@ -313,25 +296,6 @@ export async function permanentDeleteCompanySubdocFromRecycleBin(
     await deleteDoc(doc(firestore, `companies/${fsId}/${collectionPath}`, id));
   } catch {
     /* pure local row */
-  }
-
-  if (await shouldUseLocalCloudSync(cid)) {
-    const updatedAt = Date.now();
-    const purgePayload: Record<string, unknown> = {
-      id,
-      updatedAt,
-      [PL_PERMANENT_PURGE_KEY]: true,
-    };
-    collectCloudSyncFileRefsFromValue(data, new Set());
-    await enqueueLocalCloudSyncOp({
-      companyId: cid,
-      table: collectionPath,
-      action: "delete",
-      rowId: id,
-      payload: purgePayload,
-      updatedAt,
-    });
-    pokeCloudSync(cid);
   }
 
   if (collectionPath === "vouchers" && String(data.type || "") === "inter_company") {

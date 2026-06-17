@@ -20,6 +20,7 @@ import { CreateTaxDialog } from "@/components/tax/CreateTaxDialog";
 import { CreateTaxGroupDialog } from "@/components/tax/CreateTaxGroupDialog";
 import { PermissionButton } from "@/components/permission";
 import { useVouchers } from "@/hooks/useVouchers";
+import { resolveMasterListSelection } from "@/lib/masterEntityLiveUpdate";
 import usePermissions from "@/hooks/usePermissions";
 import type { Tax, TaxGroup } from "@/components/tax/types";
 import { collectInterCompanyIdsForPendingApproval } from "@/lib/interCompany/interCompanyVoucherHydrate";
@@ -137,8 +138,16 @@ function TaxPageContent() {
   const [taxDetailsDateRange, setTaxDetailsDateRange] = useState<DateRange | undefined>(undefined);
   const [groupDetailsDateRange, setGroupDetailsDateRange] = useState<DateRange | undefined>(undefined);
 
-  const selectedTax = activeView === 'taxes' ? selected as Tax : null;
+  const selectedTaxRaw = activeView === 'taxes' ? selected as Tax : null;
+  const selectedTax = useMemo(
+    () => resolveMasterListSelection(selectedTaxRaw, processedTaxes),
+    [selectedTaxRaw, processedTaxes]
+  );
   const selectedGroup = activeView === 'groups' ? selected as TaxGroup : null;
+  const handleTaxUpdated = useCallback((patch?: Partial<Tax>) => {
+    if (!patch?.id || !selectedTaxRaw || selectedTaxRaw.id !== patch.id) return;
+    setSelected({ ...selectedTaxRaw, ...patch });
+  }, [setSelected, selectedTaxRaw]);
   const mobileTaxSelectionLabel = useMemo(() => {
     if (!selected) return null;
     const name = (selected as Tax | TaxGroup).name;
@@ -485,10 +494,10 @@ function TaxPageContent() {
   const detailView = (
     <>
       {activeView === 'taxes' && selectedTax && (
-        <TaxDetails tax={selectedTax} allTaxes={processedTaxes} onTaxUpdated={() => {}} onTaxDeleted={() => setSelected(null)} dateRange={taxDetailsDateRange} onDateRangeChange={setTaxDetailsDateRange} userNames={{ ...vouchersUserNames, ...userNames }} />
+        <TaxDetails tax={selectedTax} allTaxes={processedTaxes} onTaxUpdated={handleTaxUpdated} onTaxDeleted={() => setSelected(null)} dateRange={taxDetailsDateRange} onDateRangeChange={setTaxDetailsDateRange} userNames={{ ...vouchersUserNames, ...userNames }} />
       )}
       {activeView === 'groups' && selectedGroup && (
-        <TaxGroupDetails group={selectedGroup} allGroups={processedTaxGroups} taxes={taxesForSelectedGroup} onGroupUpdated={() => {}} onGroupDeleted={() => setSelected(null)} onTaxUpdated={() => {}} dateRange={groupDetailsDateRange} onDateRangeChange={setGroupDetailsDateRange} userNames={{ ...vouchersUserNames, ...userNames }} />
+        <TaxGroupDetails group={selectedGroup} allGroups={processedTaxGroups} taxes={taxesForSelectedGroup} onGroupUpdated={() => {}} onGroupDeleted={() => setSelected(null)} onTaxUpdated={handleTaxUpdated} dateRange={groupDetailsDateRange} onDateRangeChange={setGroupDetailsDateRange} userNames={{ ...vouchersUserNames, ...userNames }} />
       )}
       {!selected && <div className="p-6 text-center text-muted-foreground">Select an item to see details</div>}
     </>

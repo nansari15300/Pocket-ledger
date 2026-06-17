@@ -1,7 +1,6 @@
 import type { Company } from "@/hooks/useCompany";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
-import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 
 /** Company row jisme selector `isOwned` set karta hai */
 export type CompanyUnlockRow = Company & { isOwned?: boolean };
@@ -51,7 +50,6 @@ export function shouldPromptCompanyUnlock(company: CompanyUnlockRow, userEmail?:
     return !!company.password || onlineSharedHasPerUserPassword(company, userEmail);
   }
   if (isOfflineCompanyStorage(company)) {
-    if (isPlRemoteServerClientMode()) return true;
     if (company.password) return true;
     if (offlineCompanyHasLocalLoginUsers(company)) return true;
     const se = getShareEntryForEmail(company, userEmail || undefined);
@@ -67,7 +65,6 @@ export async function shouldPromptCompanyUnlockAsync(
   userEmail?: string | null
 ): Promise<boolean> {
   if (shouldPromptCompanyUnlock(company, userEmail)) return true;
-  if (isPlRemoteServerClientMode() && isOfflineCompanyStorage(company)) return true;
   if (!isOfflineCompanyStorage(company) || !company.id) return false;
   try {
     const doc = await getLocalCompanyById(company.id, { includeDeleted: true });

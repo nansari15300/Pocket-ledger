@@ -23,7 +23,7 @@ import {
 import { ReconciliationRowCommentDialog } from "@/components/reconciliation/ReconciliationRowCommentDialog";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { toast } from "sonner";
-import { collection, onSnapshot } from "firebase/firestore";
+import { collection, doc, onSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import {
@@ -48,7 +48,13 @@ import {
   reconciliationLedgerRowNarrationLabel,
 } from "@/lib/reconciliation/reconciliationRowNarration";
 import type { ReconciliationLedgerRow, ReconciliationShare } from "@/lib/reconciliation/types";
-import { buildReconSideMeta, reconciliationViewerSide, type ReconSideMeta } from "@/lib/reconciliation/sideMeta";
+import {
+  buildReconSideMeta,
+  reconciliationViewerSide,
+  reconSideCompanyId,
+  withLiveReconCompanyName,
+  type ReconSideMeta,
+} from "@/lib/reconciliation/sideMeta";
 import type { TransactionSortBy, TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
@@ -456,6 +462,9 @@ function ReconciliationLedgerPairGrid({
   const rightBodyRef = React.useRef<HTMLTableSectionElement>(null);
   const scrollHostRef = React.useRef<HTMLDivElement>(null);
   useReconPairRowHeightSync(leftBodyRef, rightBodyRef, pairCount, syncKey);
+  /** Bottom fixed closing row ke liye balance values table props se alag nikaale. */
+  const { closingBalance: leftClosingBalance, ...leftTableProps } = left;
+  const { closingBalance: rightClosingBalance, ...rightTableProps } = right;
 
   /** Space — selected row par scroll; refresh/height sync par manual scroll position safe */
   React.useEffect(() => {
@@ -495,7 +504,7 @@ function ReconciliationLedgerPairGrid({
             embedded
             tbodyRef={leftBodyRef}
             title=""
-            {...left}
+            {...leftTableProps}
             selectedRowKey={selectedRowKey}
             onRowSelect={onRowSelectPair ? (pairIndex) => onRowSelectPair("left", pairIndex) : undefined}
             onSyncTransaction={onSyncTransaction}
@@ -505,12 +514,63 @@ function ReconciliationLedgerPairGrid({
             tbodyRef={rightBodyRef}
             shellClassName="border-l"
             title=""
-            {...right}
+            {...rightTableProps}
             selectedRowKey={selectedRowKey}
             onRowSelect={onRowSelectPair ? (pairIndex) => onRowSelectPair("right", pairIndex) : undefined}
           />
         </div>
       </div>
+      {/* Closing balance fixed row — scroll area ke bahar same ledger box ke niche pin rahe. */}
+      <div className="grid grid-cols-2 border-t border-blue-300/80 bg-blue-100/80">
+        <ReconLedgerFixedClosingRow
+          dateSystem={leftTableProps.dateSystem}
+          decimalPlaces={leftTableProps.decimalPlaces}
+          closingBalance={leftClosingBalance}
+        />
+        <ReconLedgerFixedClosingRow
+          dateSystem={rightTableProps.dateSystem}
+          decimalPlaces={rightTableProps.decimalPlaces}
+          closingBalance={rightClosingBalance}
+          className="border-l border-blue-300/80"
+        />
+      </div>
+    </div>
+  );
+}
+
+/** Same ledger box ka non-scroll closing row (blue tone), table columns ke saath aligned. */
+function ReconLedgerFixedClosingRow({
+  dateSystem,
+  decimalPlaces = 2,
+  closingBalance,
+  className,
+}: {
+  dateSystem: ReconDateSystem;
+  decimalPlaces?: number;
+  closingBalance: number;
+  className?: string;
+}) {
+  const layout = React.useMemo(() => getReconTableLayout(dateSystem), [dateSystem]);
+  return (
+    <div className={cn("min-w-0 w-full", className)}>
+      <table className={RECON_LEDGER_TABLE_CLASS}>
+        <ReconTableColGroup layout={layout} />
+        <tbody>
+          <tr className="border-b border-blue-300/80 bg-blue-100/65">
+            {layout.showBsDate ? <td className={RECON_TABLE_DATA_CLASS}>&nbsp;</td> : null}
+            {layout.showAdDate ? <td className={RECON_TABLE_DATA_CLASS}>&nbsp;</td> : null}
+            <td className={cn(RECON_TABLE_DATA_CLASS, "font-semibold text-blue-900")}>Closing Balance</td>
+            <td className={RECON_TABLE_DATA_CLASS}>&nbsp;</td>
+            <td className={RECON_TABLE_DATA_CLASS}>&nbsp;</td>
+            <ReconBalanceCommentCell
+              balanceContent={
+                <ReconLedgerAmount amount={closingBalance} column="balance" decimalPlaces={decimalPlaces} />
+              }
+              readOnly
+            />
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -539,6 +599,8 @@ function LedgerSideTable({
   /** Same pair index — dono column par matched row green */
   matchedPairIndices,
   openingBalance,
+  /** Pair-grid fixed bottom row ke liye carry prop; is table body me render nahi hota. */
+  closingBalance: _closingBalance,
   formatDate,
   formatDateBS,
   dateSystem,
@@ -566,6 +628,8 @@ function LedgerSideTable({
   side: "left" | "right";
   matchedPairIndices: Set<number>;
   openingBalance: number;
+  /** Fixed closing row parent pair-grid me render hota hai; yahan type compatibility ke liye. */
+  closingBalance?: number;
   formatDate: (d: Date) => string;
   formatDateBS: (d: Date) => string;
   /** System date — AD / BS / Both columns show/hide */
@@ -881,7 +945,7 @@ export default function ReconciliationPage() {
   });
   const router = useRouter();
   const { user } = useAuth();
-  const { companyId, company } = useCompany();
+  const { companyId, company, allCompaniesRegistry } = useCompany();
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const calendarMonths = useCalendarMonths();
   const { canView, enabled, canSyncTrxn } = useReconciliationFeature();
@@ -1004,6 +1068,14 @@ export default function ReconciliationPage() {
 
   /** Background live sync — save/delete + Firestore listener; full-page loader nahi */
   const liveRefreshTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Live listeners (share doc + vouchers): burst updates ko debounce karke silent reload. */
+  const scheduleLiveSilentReload = React.useCallback((runner: () => void) => {
+    if (liveRefreshTimerRef.current) clearTimeout(liveRefreshTimerRef.current);
+    liveRefreshTimerRef.current = setTimeout(() => {
+      liveRefreshTimerRef.current = null;
+      runner();
+    }, 700);
+  }, []);
   const refreshMySideSilent = React.useCallback(async () => {
     if (!shareId || !user?.uid) return;
     try {
@@ -1080,6 +1152,18 @@ export default function ReconciliationPage() {
     [pairs]
   );
 
+  /** Footer fixed closing balance: last running balance, warna opening fallback. */
+  const leftClosingBalance = React.useMemo(() => {
+    const last = myRows[myRows.length - 1];
+    return typeof last?.balance === "number" ? last.balance : myOpeningBalance;
+  }, [myRows, myOpeningBalance]);
+
+  /** Footer fixed closing balance: remote side ka latest visible running balance. */
+  const rightClosingBalance = React.useMemo(() => {
+    const last = remoteRows[remoteRows.length - 1];
+    return typeof last?.balance === "number" ? last.balance : remoteOpeningBalance;
+  }, [remoteRows, remoteOpeningBalance]);
+
   const pairFooterCounts = React.useMemo(
     () => ({
       before: pagination.sliceStart,
@@ -1117,25 +1201,42 @@ export default function ReconciliationPage() {
     [myDateRange, dateSystem, formatDate, formatDateBS]
   );
 
+  /** Live company names — share doc snapshot stale ho to bhi rename turant dikhe. */
+  const [liveReconCompanyNames, setLiveReconCompanyNames] = React.useState<Record<string, string>>({});
+
   const mySideMeta = React.useMemo((): ReconLedgerSideMeta => {
     if (!share || !user?.uid) {
       return { companyName: "—", entityName: "—", accountName: "—" };
     }
     const viewerSide = reconciliationViewerSide(share, user.uid, companyId ?? undefined);
-    if (viewerSide === "sender") return buildReconSideMeta(share, "sender");
-    if (viewerSide === "receiver") return buildReconSideMeta(share, "receiver");
-    return buildReconSideMeta(share, share.senderUserId === user.uid ? "sender" : "receiver");
-  }, [share, user?.uid, companyId]);
+    const ownedSide: "sender" | "receiver" =
+      viewerSide === "sender"
+        ? "sender"
+        : viewerSide === "receiver"
+          ? "receiver"
+          : share.senderUserId === user.uid
+            ? "sender"
+            : "receiver";
+    const meta = buildReconSideMeta(share, ownedSide);
+    return withLiveReconCompanyName(meta, reconSideCompanyId(share, ownedSide), liveReconCompanyNames);
+  }, [share, user?.uid, companyId, liveReconCompanyNames]);
 
   const remoteSideMeta = React.useMemo((): ReconLedgerSideMeta => {
     if (!share || !user?.uid) {
       return { companyName: "—", entityName: "—", accountName: "—" };
     }
     const viewerSide = reconciliationViewerSide(share, user.uid, companyId ?? undefined);
-    if (viewerSide === "sender") return buildReconSideMeta(share, "receiver");
-    if (viewerSide === "receiver") return buildReconSideMeta(share, "sender");
-    return buildReconSideMeta(share, share.senderUserId === user.uid ? "receiver" : "sender");
-  }, [share, user?.uid, companyId]);
+    const remoteSide: "sender" | "receiver" =
+      viewerSide === "sender"
+        ? "receiver"
+        : viewerSide === "receiver"
+          ? "sender"
+          : share.senderUserId === user.uid
+            ? "receiver"
+            : "sender";
+    const meta = buildReconSideMeta(share, remoteSide);
+    return withLiveReconCompanyName(meta, reconSideCompanyId(share, remoteSide), liveReconCompanyNames);
+  }, [share, user?.uid, companyId, liveReconCompanyNames]);
 
   const handleRefreshMySide = async () => {
     if (!share || !user?.uid || refreshing) return;
@@ -1182,6 +1283,52 @@ export default function ReconciliationPage() {
     return getRemoteReconciliationSideContext(share, user.uid, companyId ?? "")?.companyId ?? null;
   }, [share, user?.uid, companyId]);
 
+  /** Company rename — `companies/{id}.name` live overlay (share doc me purana naam reh sakta hai). */
+  React.useEffect(() => {
+    const ids = [myReconCompanyId, remoteReconCompanyId].filter(Boolean) as string[];
+    const uniqueIds = [...new Set(ids)];
+    if (!uniqueIds.length || !enabled || !canView || isLocalOnlyMode()) return;
+
+    const unsubs = uniqueIds.map((cid) =>
+      onSnapshot(
+        doc(firestore, `companies/${cid}`),
+        (snap) => {
+          const name = String(snap.data()?.name || "").trim();
+          if (!name) return;
+          setLiveReconCompanyNames((prev) => (prev[cid] === name ? prev : { ...prev, [cid]: name }));
+        },
+        () => {
+          /* Permission fail — registry fallback effect niche handle karega. */
+        }
+      )
+    );
+    return () => unsubs.forEach((u) => u());
+  }, [myReconCompanyId, remoteReconCompanyId, enabled, canView]);
+
+  /** Local/APK: Firestore company listener skip — registry + selected company se naam sync. */
+  React.useEffect(() => {
+    const ids = [myReconCompanyId, remoteReconCompanyId].filter(Boolean) as string[];
+    if (!ids.length) return;
+    setLiveReconCompanyNames((prev) => {
+      let next: Record<string, string> | null = null;
+      for (const cid of ids) {
+        let name = "";
+        if (cid === companyId && company?.name) {
+          name = String(company.name).trim();
+        } else {
+          const found = allCompaniesRegistry.find((c) => c.id === cid);
+          if (found?.name) name = String(found.name).trim();
+        }
+        if (!name) continue;
+        const bucket = next ?? prev;
+        if (bucket[cid] === name) continue;
+        if (!next) next = { ...prev };
+        next[cid] = name;
+      }
+      return next ?? prev;
+    });
+  }, [myReconCompanyId, remoteReconCompanyId, companyId, company?.name, allCompaniesRegistry]);
+
   /** Owned company vouchers change → debounced background refresh (live row add/remove) */
   React.useEffect(() => {
     const cid = myReconCompanyId;
@@ -1193,11 +1340,9 @@ export default function ReconciliationPage() {
         skipInitial = false;
         return;
       }
-      if (liveRefreshTimerRef.current) clearTimeout(liveRefreshTimerRef.current);
-      liveRefreshTimerRef.current = setTimeout(() => {
-        liveRefreshTimerRef.current = null;
+      scheduleLiveSilentReload(() => {
         void refreshMySideSilent();
-      }, 700);
+      });
     };
 
     const unsub = onSnapshot(collection(firestore, `companies/${cid}/vouchers`), schedule);
@@ -1205,7 +1350,7 @@ export default function ReconciliationPage() {
       unsub();
       if (liveRefreshTimerRef.current) clearTimeout(liveRefreshTimerRef.current);
     };
-  }, [myReconCompanyId, enabled, canView, refreshMySideSilent]);
+  }, [myReconCompanyId, enabled, canView, refreshMySideSilent, scheduleLiveSilentReload]);
 
   /** Other party vouchers change → poori table silent reload (super admin sender company se dekhe) */
   React.useEffect(() => {
@@ -1218,18 +1363,55 @@ export default function ReconciliationPage() {
         skipInitial = false;
         return;
       }
-      if (liveRefreshTimerRef.current) clearTimeout(liveRefreshTimerRef.current);
-      liveRefreshTimerRef.current = setTimeout(() => {
-        liveRefreshTimerRef.current = null;
+      scheduleLiveSilentReload(() => {
         void load({ silent: true });
-      }, 700);
+      });
     };
 
     const unsub = onSnapshot(collection(firestore, `companies/${cid}/vouchers`), schedule);
     return () => {
       unsub();
     };
-  }, [remoteReconCompanyId, myReconCompanyId, enabled, canView, load]);
+  }, [remoteReconCompanyId, myReconCompanyId, enabled, canView, load, scheduleLiveSilentReload]);
+
+  /** Reconciliation share doc/index live listener — comment/link/snapshot updates turant lane ke liye. */
+  React.useEffect(() => {
+    if (!shareId || !enabled || !canView || isLocalOnlyMode()) return;
+    let skipInitial = true;
+    const schedule = () => {
+      if (skipInitial) {
+        skipInitial = false;
+        return;
+      }
+      scheduleLiveSilentReload(() => {
+        void load({ silent: true });
+      });
+    };
+    const unsubs: Array<() => void> = [];
+    unsubs.push(
+      onSnapshot(
+        doc(firestore, "reconciliation_shares", shareId),
+        schedule,
+        () => {
+          /* Top-level permission fail ho sakta hai; company index listener niche fallback hai. */
+        }
+      )
+    );
+    if (companyId) {
+      unsubs.push(
+        onSnapshot(
+          doc(firestore, `companies/${companyId}/reconciliation_shares`, shareId),
+          schedule,
+          () => {
+            /* Ignore: fallback listener best-effort. */
+          }
+        )
+      );
+    }
+    return () => {
+      unsubs.forEach((u) => u());
+    };
+  }, [shareId, companyId, enabled, canView, load, scheduleLiveSilentReload]);
 
   /** You-side row double-click — voucher edit dialog (share wali company se load). */
   const handleEditMyVoucher = React.useCallback(
@@ -1426,6 +1608,8 @@ export default function ReconciliationPage() {
           side: "left",
           matchedPairIndices,
           openingBalance: myOpeningBalance,
+          // Left table ke bottom me closing balance row.
+          closingBalance: leftClosingBalance,
           formatDate,
           formatDateBS,
           dateSystem,
@@ -1441,6 +1625,8 @@ export default function ReconciliationPage() {
           side: "right",
           matchedPairIndices,
           openingBalance: remoteOpeningBalance,
+          // Right table ke bottom me closing balance row.
+          closingBalance: rightClosingBalance,
           formatDate,
           formatDateBS,
           dateSystem,

@@ -3,7 +3,8 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Trash2, CalendarIcon } from "lucide-react";
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useLiveEntityDocAttachments } from "@/hooks/useLiveEntityDocAttachments";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp, onSnapshot, query, collection } from "firebase/firestore";
@@ -87,7 +88,7 @@ const MAX_FILE_SIZE_MB = 0.5;
 export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, children, hasTransactions }: {
   tax: Tax;
   allTaxes: Tax[];
-  onTaxUpdated: () => void;
+  onTaxUpdated: (updated?: Partial<Tax>) => void;
   onTaxDeleted: (id: string) => void;
   children: React.ReactNode;
   hasTransactions: boolean;
@@ -122,6 +123,30 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
   const docsInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | string | null>(tax.fileUrl || null);
   const [docSlots, setDocSlots] = useState<Array<File | string>>(() => tax.documentFileUrls || []);
+  const initialFileRef = useRef<string | null>(tax.fileUrl || null);
+  const initialDocUrlsRef = useRef<string[]>(tax.documentFileUrls || []);
+  const attachmentsDirty =
+    file instanceof File ||
+    docSlots.some((x) => x instanceof File) ||
+    (typeof file === "string" ? file : null) !== initialFileRef.current ||
+    JSON.stringify(docSlots.filter((x): x is string => typeof x === "string")) !==
+      JSON.stringify(initialDocUrlsRef.current);
+  const onLiveAttachmentFields = useCallback(
+    (fields: { fileUrl?: string | null; documentFileUrls?: string[] }) => {
+      if (fields.fileUrl !== undefined) setFile(fields.fileUrl || null);
+      if (fields.documentFileUrls) setDocSlots(fields.documentFileUrls);
+    },
+    []
+  );
+  useLiveEntityDocAttachments({
+    enabled: isOpen,
+    companyId,
+    collection: "taxes",
+    entityId: tax.id,
+    attachmentsDirty,
+    preferSqliteMirror: sqliteListsOnlyNoSnapshot,
+    onFields: onLiveAttachmentFields,
+  });
 
 
   const form = useForm<FormValues>({
@@ -160,6 +185,8 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
       });
       setFile(tax.fileUrl || null);
       setDocSlots(tax.documentFileUrls || []);
+      initialFileRef.current = tax.fileUrl || null;
+      initialDocUrlsRef.current = tax.documentFileUrls || [];
     }
   }, [isOpen, tax, form]);
   
@@ -287,6 +314,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
           fileUrl,
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
           openingBalanceNarration: narrationClean,
+          updatedAt: serverTimestamp(),
         };
 
         if (localSqlMirror) {
@@ -305,7 +333,15 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
           await enqueueCompanyDocOutbox(companyId, "taxes", "update", taxRefSnap.id, payload);
           await syncPendingFiles().catch((e) => console.warn("[EditTaxDialog] syncPendingFiles", e));
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
-          onTaxUpdated();
+          onTaxUpdated({
+            id: taxRefSnap.id,
+            ...values,
+            fileUrl: fileUrl || "",
+            documentFileUrls,
+            openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
+          });
+          initialFileRef.current = fileUrl || null;
+          initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Tax Updated!", {
             id: toastId,
             description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
@@ -329,7 +365,15 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
           await balanceOpeningBalanceWithCapital(companyId, "taxes", taxRefSnap.id, oldOpeningBalance, newOpeningBalance);
         }
 
-        onTaxUpdated();
+        onTaxUpdated({
+          id: taxRefSnap.id,
+          ...values,
+          fileUrl: fileUrl || "",
+          documentFileUrls,
+          openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
+        });
+        initialFileRef.current = fileUrl || null;
+        initialDocUrlsRef.current = documentFileUrls.filter((u): u is string => typeof u === "string");
         sonnerToast.success("Tax Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating tax:", error);

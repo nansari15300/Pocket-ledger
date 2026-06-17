@@ -14,7 +14,7 @@ import {
 } from "@/lib/localPendingFiles";
 import { apkCloudCompanyUsesSqliteFirstWrites, isClientNavigatorOffline } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { getRemoteAttachmentBlobPreferOfflineCache } from "@/lib/offlineAttachmentUrlCache";
-import { isDriveFileRef } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageDownloadUrl";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
@@ -37,6 +37,11 @@ export function voucherAttachmentFirestoreImmediateUploadEnabled(): boolean {
 
 /** Single product gate: immediate Storage upload on save off unless legacy env above. */
 export function voucherNewAttachmentsAlwaysStageAsLocalPending(): boolean {
+  // Web online: hamesha Firebase-immediate semantics treat karo; `local:` sirf offline/embedded flows me.
+  if (typeof navigator !== "undefined" && navigator.onLine && !isElectronDesktopApp() && !isCapacitorNativeApp() && !isStaticAppBuild()) {
+    return false;
+  }
+  // Embedded/offline ya explicit legacy toggle par pending-stage policy allow rahe.
   return !voucherAttachmentFirestoreImmediateUploadEnabled();
 }
 

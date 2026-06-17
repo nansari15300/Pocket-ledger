@@ -39,6 +39,7 @@ export async function fetchInterCompanyEntitiesForCompany(
       accountNumber?: string;
       phone?: string;
       interCompanyAccountNo?: string;
+      isClearing?: boolean;
     };
     rows.push({
       id: d.id,
@@ -48,6 +49,7 @@ export async function fetchInterCompanyEntitiesForCompany(
       accountNumber: data.accountNumber,
       phone: data.phone,
       interCompanyAccountNo: data.interCompanyAccountNo,
+      isClearing: data.isClearing === true,
     });
   });
   parties.docs.forEach((d) => {
@@ -135,6 +137,7 @@ export async function fetchInterCompanyBankEntityDetail(
       accountNumber?: string;
       phone?: string;
       interCompanyAccountNo?: string;
+      isClearing?: boolean;
     };
     return {
       id: snap.id,
@@ -144,6 +147,7 @@ export async function fetchInterCompanyBankEntityDetail(
       accountNumber: data.accountNumber,
       phone: data.phone,
       interCompanyAccountNo: data.interCompanyAccountNo,
+      isClearing: data.isClearing === true,
     };
   } catch {
     return null;

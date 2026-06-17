@@ -19,7 +19,6 @@ import {
 import { DeleteCompanyDialog } from "./DeleteCompanyDialog";
 import { ShareCompanyDialog } from "./ShareCompanyDialog";
 import { AddLocalCompanyUserDialog } from "./AddLocalCompanyUserDialog";
-import { JoinSharedLocalCompanyDialog } from "./JoinSharedLocalCompanyDialog";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useCompany } from "@/hooks/useCompany";
 import type { Company as CompanyData } from "@/hooks/useCompany";
@@ -57,7 +56,6 @@ import {
 } from "@/lib/onlineSharedUnlockRememberUsername";
 import { localAuthLoginForCompanyContext } from "@/lib/localCompanyUsers";
 import { clearLocalAuth, getLocalAuthToken, setLocalAuthToken } from "@/lib/localApiClient";
-import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import {
   OFFLINE_UNLOCK_REMEMBER_NEVER_DAYS,
@@ -77,11 +75,8 @@ import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
 import { usePathname } from "next/navigation";
 import { useGate } from "@/contexts/GateContext";
-import { CompanyPickerGateBar } from "@/components/company/CompanyPickerGateBar";
-import { isDeviceGate, isLocalServerGate, pickGateAwareAutoSelectCompanyId } from "@/lib/gates/gateRuntime";
-import { isPlServerSharedCompanyRow } from "@/lib/plServerAccessContext";
+import { pickGateAwareAutoSelectCompanyId } from "@/lib/gates/gateRuntime";
 import { PL_GATE_CHANGED_EVENT } from "@/lib/gates/gateTypes";
-import { PL_SERVER_ACCESS_CONTEXT_EVENT } from "@/lib/plServerAccessContext";
 
 /** Company picker visibility: admin-hidden rows (`movedToAdminRecycleAt`) normal app me na dikhao. */
 function isCompanyVisibleInSelector(c: CompanyData): boolean {
@@ -172,24 +167,20 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   const isSuperAdminUser = customUser?.role === "SuperAdmin" || isSuperAdminByEmail;
   // Local mode: list useCompany context se (local DB + mirror) — alag listLocalCompanies se sab ko isOwned true galat tha.
   const { setCompanyId, allCompanies: contextCompanies, loading: contextCompanyLoading, triggerSync, reloadLocalCompanyRegistry } = useCompany();
-  const { filterCompanies, canCreateCompanyOnActiveGate, activeGate, connectLocalServerGate } = useGate();
+  const { filterCompanies, activeGate } = useGate();
   const [gateFilterEpoch, setGateFilterEpoch] = useState(0);
 
   useEffect(() => {
     const bump = () => setGateFilterEpoch((n) => n + 1);
-    window.addEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, bump);
     window.addEventListener(PL_GATE_CHANGED_EVENT, bump);
     return () => {
-      window.removeEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, bump);
       window.removeEventListener(PL_GATE_CHANGED_EVENT, bump);
     };
   }, []);
-  const showJoinSharedLocal = isDeviceGate(activeGate);
   const [dialogState, setDialogState] = useState<{
     type: "share" | "addLocalUser" | "delete" | null;
     company: CompanyData | null;
   }>({ type: null, company: null });
-  const [joinSharedOpen, setJoinSharedOpen] = useState(false);
   const [companies, setCompanies] = useState<CompanyData[]>(() =>
     (initialCompanies ?? []).filter(isCompanyVisibleInSelector)
   );
@@ -218,7 +209,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   const remoteAutoUnlockAttemptedRef = useRef(false);
 
   useEffect(() => {
-    if (!isPlRemoteServerClientMode() || remoteAutoUnlockAttemptedRef.current) return;
+    if (remoteAutoUnlockAttemptedRef.current) return;
     const preselect = readSelectedCompanyId()?.trim();
     if (!preselect || getLocalAuthToken(preselect)) return;
     const co = companies.find((c) => c.id === preselect);
@@ -287,14 +278,6 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
 
 
   const handleSelectCompany = async (company: CompanyData) => {
-    if (
-      isLocalServerGate(activeGate) &&
-      !isPlRemoteServerClientMode() &&
-      isPlServerSharedCompanyRow(company, activeGate.id)
-    ) {
-      connectLocalServerGate(activeGate.id, company.id);
-      return;
-    }
     if (isOfflineCompanyStorage(company)) {
       const remembered =
         readStoredOfflineUnlockSession(user?.uid, company.id) ||
@@ -575,18 +558,15 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
             </div>
           </CardHeader>
           <CardContent className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain pr-1">
-            <CompanyPickerGateBar />
             {!hasAnyCompany && (
               <div className="rounded-lg border border-dashed bg-muted/30 px-4 py-10 text-center space-y-4">
                 <p className="text-sm text-muted-foreground">
-                  No companies on this gate yet. Switch gate above or create one to get started.
+                  No companies found yet. Create one to get started.
                 </p>
-                {canCreateCompanyOnActiveGate ? (
-                  <Button type="button" className="w-full sm:w-auto" onClick={() => router.push("/company/create")}>
-                    <PlusCircle className="mr-2 h-4 w-4" />
-                    Create New Company
-                  </Button>
-                ) : null}
+                <Button type="button" className="w-full sm:w-auto" onClick={() => router.push("/company/create")}>
+                  <PlusCircle className="mr-2 h-4 w-4" />
+                  Create New Company
+                </Button>
               </div>
             )}
             {/* Order: 1) owned local 2) shared local 3) owned online 4) shared online — user-requested labels */}
@@ -633,18 +613,10 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
           </CardContent>
           {hasAnyCompany ? (
             <CardFooter className="shrink-0 flex flex-col sm:flex-row gap-2 justify-center border-t bg-card pt-4">
-              {canCreateCompanyOnActiveGate ? (
-                <Button type="button" variant="outline" onClick={() => router.push("/company/create")}>
-                  <PlusCircle className="mr-2 h-4 w-4" />
-                  Create New Company
-                </Button>
-              ) : null}
-              {showJoinSharedLocal ? (
-                <Button type="button" variant="secondary" onClick={() => setJoinSharedOpen(true)}>
-                  <Share2 className="mr-2 h-4 w-4" />
-                  Join shared local company
-                </Button>
-              ) : null}
+              <Button type="button" variant="outline" onClick={() => router.push("/company/create")}>
+                <PlusCircle className="mr-2 h-4 w-4" />
+                Create New Company
+              </Button>
             </CardFooter>
           ) : null}
         </Card>
@@ -893,14 +865,6 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <JoinSharedLocalCompanyDialog
-        open={joinSharedOpen}
-        onOpenChange={setJoinSharedOpen}
-        onJoined={() => {
-          reloadLocalCompanyRegistry();
-          triggerSync();
-        }}
-      />
     </>
   );
 }
@@ -918,12 +882,11 @@ export function CompanyActions({
   const router = useRouter();
   const { user } = useAuth();
   const { companyId, setCompanyId, triggerSync, reloadLocalCompanyRegistry } = useCompany();
-  const { activeGate, connectLocalServerGate } = useGate();
+  const { activeGate } = useGate();
   const [dialogState, setDialogState] = useState<{
     type: "share" | "addLocalUser" | "delete" | null;
     company: CompanyData | null;
   }>({ type: null, company: null });
-  const [joinSharedOpen, setJoinSharedOpen] = useState(false);
   const [companyToUnlock, setCompanyToUnlock] = useState<CompanyData | null>(null);
   const [usernameInput, setUsernameInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
@@ -947,14 +910,6 @@ export function CompanyActions({
   }, [companyId, companies, setCompanyId, activeGate]);
 
   const handleSelectCompany = async (selectedCompany: CompanyData) => {
-    if (
-      isLocalServerGate(activeGate) &&
-      !isPlRemoteServerClientMode() &&
-      isPlServerSharedCompanyRow(selectedCompany, activeGate.id)
-    ) {
-      connectLocalServerGate(activeGate.id, selectedCompany.id);
-      return;
-    }
     if (isOfflineCompanyStorage(selectedCompany)) {
       const remembered =
         readStoredOfflineUnlockSession(user?.uid, selectedCompany.id) ||
@@ -1230,10 +1185,6 @@ export function CompanyActions({
                 <PlusCircle className="mr-2 h-4 w-4" />
                 <span>Add Company</span>
              </DropdownMenuItem>
-             <DropdownMenuItem onSelect={() => setJoinSharedOpen(true)}>
-                <Share2 className="mr-2 h-4 w-4" />
-                <span>Join shared local company</span>
-             </DropdownMenuItem>
               {activeCompany && activeCompany.isOwned && (
                 <DropdownMenuItem
                   onSelect={() =>
@@ -1494,15 +1445,6 @@ export function CompanyActions({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <JoinSharedLocalCompanyDialog
-        open={joinSharedOpen}
-        onOpenChange={setJoinSharedOpen}
-        onJoined={() => {
-          reloadLocalCompanyRegistry();
-          triggerSync();
-          onCompanyCreated();
-        }}
-      />
     </>
   );
 }

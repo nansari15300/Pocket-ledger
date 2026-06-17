@@ -10,8 +10,10 @@
     "build:web": "cd .. && npm run build:static",
     "gen-icon": "node scripts/gen-win-icon.mjs",
     "clean-dist": "node scripts/clean-dist.cjs",
+    "force-clean": "powershell -ExecutionPolicy Bypass -File scripts/force-clean-dist.ps1",
     "build": "npm run clean-dist && npm run gen-icon && electron-builder --win --projectDir .",
     "build:win": "npm run clean-dist && npm run gen-icon && electron-builder --win --projectDir .",
+    "build:win:alt": "npm run gen-icon && electron-builder --win --projectDir . --config.directories.output=dist-build",
     "build:linux": "electron-builder --linux --projectDir ."
   },
   "build": {
@@ -24,8 +26,7 @@
     "files": [
       "main.js",
       "googleAuthExternal.js",
-      "localAppServer.js",
-      "localAppServerAccessTokens.js",
+      "staticAppServer.js",
       "tab-strip.html",
       "tab-strip.js",
       "tab-strip-preload.js",

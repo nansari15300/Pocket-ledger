@@ -83,21 +83,8 @@ import {
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { generateEncryptServerBackupSaltBase64, setBackupEncryptionSessionFromLogin } from "@/lib/serverBackupEncryption";
-import { ensureCloudSyncDriveEncryptionSalt } from "@/lib/localCloudSync/driveEncryption";
-import {
-  readCloudSyncConfigFromCompany,
-  syncCompanyRegistryStateToDriveManifest,
-} from "@/lib/localCloudSync/companyConfig";
-import {
-  CloudSyncProviderPickers,
-  cloudSyncFieldsFromChoices,
-  type CloudSyncProviderChoice,
-} from "@/components/company/CloudSyncProviderPickers";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
-import { backfillLocalDocsToCloudSyncOutbox } from "@/lib/localCloudSync/backfillOutbox";
-import { settingsViewHref } from "@/lib/appNavHref";
-import { runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { generateLocalFileId, LOCAL_FILE_PREFIX, putPendingFile } from "@/lib/localPendingFiles";
 import { flushBrowserDbToIndexedDB } from "@/lib/localSqlite";
@@ -181,10 +168,6 @@ export function EditCompanyForm() {
   const [removeLogo, setRemoveLogo] = useState(false);
   /** Firebase company: Firestore mirror AES — login username+password session. */
   const [encryptCompanyEnabled, setEncryptCompanyEnabled] = useState(false);
-  /** Local company: Google Drive delta ops encrypt — company password ya login key. */
-  const [encryptDriveEnabled, setEncryptDriveEnabled] = useState(false);
-  const [cloudSyncDataProvider, setCloudSyncDataProvider] = useState<CloudSyncProviderChoice>("none");
-  const [cloudSyncFilesProvider, setCloudSyncFilesProvider] = useState<CloudSyncProviderChoice>("none");
   const livePlans = useLivePlans();
   const [addCompanyUserEnabled, setAddCompanyUserEnabled] = useState(false);
   const [showCompanyUserPassword, setShowCompanyUserPassword] = useState(false);
@@ -315,10 +298,6 @@ export function EditCompanyForm() {
             companyUserPassword: "",
         });
         setEncryptCompanyEnabled(company.encryptServerBackup === true);
-        const cloudCfg = readCloudSyncConfigFromCompany(company as Record<string, unknown>);
-        setEncryptDriveEnabled(cloudCfg.cloudSyncEncryptDriveData || cloudCfg.cloudSyncEncryptDriveFiles);
-        setCloudSyncDataProvider(cloudCfg.cloudSyncDataProvider ?? cloudCfg.cloudSyncProvider ?? "none");
-        setCloudSyncFilesProvider(cloudCfg.cloudSyncFilesProvider ?? cloudCfg.cloudSyncProvider ?? "none");
         // Saved password ho to toggle ON; nahi to user edit se naya password add kar sake.
         setPasswordEnabled(!!(company.password && String(company.password).trim()));
         currencyPickedManuallyRef.current = false;
@@ -596,25 +575,11 @@ export function EditCompanyForm() {
         if (!encryptCompanyEnabled) {
           delete localUpdatePayload.encryptServerBackupSalt;
         }
-        // Local company: Google Drive sync encryption (Firebase server-backup alag field hai).
-        const driveEncSalt = encryptDriveEnabled
-          ? ensureCloudSyncDriveEncryptionSalt(
-              String((existingLocal as { cloudSyncDriveEncryptionSalt?: string }).cloudSyncDriveEncryptionSalt ?? "")
-            )
-          : String((existingLocal as { cloudSyncDriveEncryptionSalt?: string }).cloudSyncDriveEncryptionSalt ?? "").trim() ||
-            null;
-        // `as any`: merge shape LocalCompanyDoc se match karti hai (name/ownerId existing row se aate hain).
-        const cloudSyncPatch = cloudSyncFieldsFromChoices(cloudSyncDataProvider, cloudSyncFilesProvider);
         await upsertLocalCompany({
           ...(existingLocal as any),
           ...localUpdatePayload,
           id: companyId,
           localCompanyUsers: nextUsers,
-          ...cloudSyncPatch,
-          cloudSyncEncryptDrive: encryptDriveEnabled,
-          cloudSyncEncryptDriveData: encryptDriveEnabled,
-          cloudSyncEncryptDriveFiles: encryptDriveEnabled,
-          ...(driveEncSalt ? { cloudSyncDriveEncryptionSalt: driveEncSalt } : {}),
           fiscalYearStart: values.fiscalYearStart ? values.fiscalYearStart.toISOString() : null,
           fiscalYearEnd: values.fiscalYearEnd ? values.fiscalYearEnd.toISOString() : null,
           updatedAt: Date.now(),
@@ -697,16 +662,7 @@ export function EditCompanyForm() {
       setFileToUpload(null);
       setRemoveLogo(false);
       
-      if (localOnly && deviceLocalCo && encryptDriveEnabled) {
-        const au = (values.adminUsername || "").trim();
-        const pw = (values.password || "").trim() || (company.password || "");
-        if (au && pw) {
-          void setBackupEncryptionSessionFromLogin(companyId, au, pw);
-        }
-        void backfillLocalDocsToCloudSyncOutbox(companyId).then(() =>
-          runLocalCloudSyncCycle(companyId, { force: true })
-        );
-      } else if (localOnly && !deviceLocalCo && encryptCompanyEnabled) {
+      if (localOnly && !deviceLocalCo && encryptCompanyEnabled) {
         const au = (values.adminUsername || "").trim();
         const pw = (values.password || "").trim() || (company.password || "");
         if (au && pw) {
@@ -846,19 +802,6 @@ export function EditCompanyForm() {
         }
       }
     }
-    if (isLocalOnlyMode() && deviceLocalCoForUi && encryptDriveEnabled) {
-      const adminUsername = (values.adminUsername || "").trim();
-      const adminPw = (values.password || "").trim() || (company.password || "");
-      if (!adminUsername || !adminPw) {
-        toast({
-          variant: "destructive",
-          title: "Credentials required",
-          description:
-            "When Drive encryption is on, set company login username and password (or keep your existing company password).",
-        });
-        return;
-      }
-    }
     if (isLocalOnlyMode() && !deviceLocalCoForUi && encryptCompanyEnabled) {
       const adminUsername = (values.adminUsername || "").trim();
       const adminPw = (values.password || "").trim() || (company.password || "");
@@ -913,8 +856,6 @@ export function EditCompanyForm() {
       toast({ title: "Company Moved to Bin", description: `"${company?.name}" has been moved.` });
       reloadLocalCompanyRegistry();
       clearCompanyId();
-      // Local company delete sirf is device par tha — Drive manifest se doosre devices ko bhi bin status.
-      void syncCompanyRegistryStateToDriveManifest(companyId);
     } catch (error) {
       console.error("Error moving to bin:", error);
       toast({ variant: "destructive", title: "Error", description: isCompanyNotFoundError(error) ? COMPANY_NOT_SYNCED_MESSAGE : "Failed to move company to bin." });
@@ -1277,43 +1218,6 @@ export function EditCompanyForm() {
               )}
             </div>
 
-            {deviceLocalCoForUi && (
-            <div className="space-y-4 rounded-md border border-black bg-muted/25 p-3 dark:border-black dark:bg-muted/15">
-                <CloudSyncProviderPickers
-                  planId={resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId)}
-                  livePlan={getPlanFromPlans(livePlans, resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId))}
-                  dataProvider={cloudSyncDataProvider}
-                  filesProvider={cloudSyncFilesProvider}
-                  onDataProviderChange={setCloudSyncDataProvider}
-                  onFilesProviderChange={setCloudSyncFilesProvider}
-                  disabled={isLoading}
-                />
-                {/* Local company: Google Drive sync encrypt — web / EXE / APK sab builds par dikhe. */}
-                <FormItem>
-                  <div className="flex items-center justify-between rounded-md border border-black p-3">
-                    <div>
-                      <FormLabel>Encrypt Google Drive sync</FormLabel>
-                      <FormDescription>
-                        When enabled, data synced to Google Drive is encrypted before upload (same folder
-                        paths). Unlock uses the company password above, or the username and password you use to open
-                        this company. Configure provider and sync in{" "}
-                        <Link href={settingsViewHref("local_cloud_sync")} className="underline font-medium hover:no-underline">
-                          Cloud sync
-                        </Link>
-                        . Log in again after enabling if sync does not run.
-                      </FormDescription>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={encryptDriveEnabled}
-                      onChange={(e) => setEncryptDriveEnabled(e.target.checked)}
-                      className="h-4 w-4 rounded border-input"
-                    />
-                  </div>
-                </FormItem>
-            </div>
-            )}
-
             {!deviceLocalCoForUi && isLocalOnlyMode() && (
             <div className="space-y-4 rounded-md border border-black bg-muted/25 p-3 dark:border-black dark:bg-muted/15">
                 {/* Firebase / online company: Firestore mirror backup encrypt. */}
@@ -1374,7 +1278,7 @@ export function EditCompanyForm() {
                 <div className="rounded-md border border-dashed bg-muted/30 p-3 text-sm text-muted-foreground">
                   <strong className="text-foreground">Local company users</strong> log in with username + password when
                   opening this company (Select company screen). If you share via{" "}
-                  <strong>local server gate</strong>, give them the same login and a Pocket Ledger access token from
+                  <strong>local server</strong>, give them the same login and a Pocket Ledger access token from
                   Settings → Server.
                 </div>
               )}

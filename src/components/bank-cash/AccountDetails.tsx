@@ -129,6 +129,7 @@ import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { useVouchers } from "@/hooks/useVouchers";
+import { useMasterEntityLivePatch } from "@/hooks/useMasterEntityLivePatch";
 import usePermissions from "@/hooks/usePermissions";
 import { useAuth } from "@/hooks/useAuth";
 import {
@@ -246,6 +247,12 @@ export function AccountDetails({
     if (!allAccounts) return initialAccount;
     return allAccounts.find(p => p.id === initialAccount.id) || initialAccount;
   }, [allAccounts, initialAccount]);
+
+  const handleAccountUpdated = useMasterEntityLivePatch<Account>({
+    collection: "bank_accounts",
+    entityId: initialAccount.id,
+    onUpdated: onAccountUpdated,
+  });
 
   const accountHeaderAttachmentUrl = useMemo(
     () => trimEntityFileUrlForPreview(account.fileUrl),
@@ -1303,7 +1310,7 @@ export function AccountDetails({
             <EditAccountDialog
               account={account}
               allAccounts={allAccounts}
-              onAccountUpdated={onAccountUpdated}
+              onAccountUpdated={handleAccountUpdated}
               onAccountDeleted={onAccountDeleted}
               hasTransactions={processedTransactions.length > 0}
               isOpen={isEditAccountDialogOpen}
@@ -1531,7 +1538,7 @@ export function AccountDetails({
                     <EditAccountDialog
                       account={account}
                       allAccounts={allAccounts}
-                      onAccountUpdated={onAccountUpdated}
+                      onAccountUpdated={handleAccountUpdated}
                       onAccountDeleted={onAccountDeleted}
                       hasTransactions={processedTransactions.length > 0}
                     >
@@ -1678,7 +1685,7 @@ export function AccountDetails({
                   <EditAccountDialog
                     account={account}
                     allAccounts={allAccounts}
-                    onAccountUpdated={onAccountUpdated}
+                    onAccountUpdated={handleAccountUpdated}
                     onAccountDeleted={onAccountDeleted}
                     hasTransactions={processedTransactions.length > 0}
                   >

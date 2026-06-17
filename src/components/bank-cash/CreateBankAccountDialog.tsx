@@ -67,7 +67,7 @@ import {
   masterEntityDialogFormWrapperClassName,
 } from "@/lib/masterEntityDialogClasses";
 import { MasterFormTwoColGrid } from "@/components/inter-company/MasterFormLayout";
-import { AllowVoucherMinusBalanceField } from "@/components/bank-cash/AllowVoucherMinusBalanceField";
+import { BankAccountToggleFlagsRow } from "@/components/bank-cash/BankAccountToggleFlagsRow";
 import {
   masterFormRadioGroupClassName,
   masterSpecialAccountPanelClassName,
@@ -123,6 +123,7 @@ const formSchema = z.object({
   openingBalanceNarration: z.string().optional(),
   isSpecial: z.boolean(),
   allowVoucherMinusBalance: z.boolean(),
+  isClearing: z.boolean(),
   useFor: z.object({
     in: z.array(z.string()),
     out: z.array(z.string()),
@@ -178,7 +179,8 @@ export function CreateBankAccountDialog({
       groupId: "",
       isSpecial: false,
       allowVoucherMinusBalance: false,
-      useFor: { 
+      isClearing: false,
+      useFor: {
           in: company?.ownerEmail ? [company.ownerEmail] : [], 
           out: company?.ownerEmail ? [company.ownerEmail] : [] 
       },
@@ -534,7 +536,7 @@ export function CreateBankAccountDialog({
         });
         onAccountCreated(localId);
         if (saveAndNew) {
-          form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false, allowVoucherMinusBalance: false });
+          form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
           clearUploads();
         }
         return;
@@ -626,7 +628,7 @@ export function CreateBankAccountDialog({
       onAccountCreated(newAccountId);
 
       if (saveAndNew) {
-        form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false, allowVoucherMinusBalance: false });
+        form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
         clearUploads();
       }
     } catch (error) {
@@ -678,7 +680,7 @@ export function CreateBankAccountDialog({
           });
           onAccountCreated(localId);
           if (saveAndNew) {
-            form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false, allowVoucherMinusBalance: false });
+            form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
             clearUploads();
           }
         } catch (offlineErr) {
@@ -732,7 +734,7 @@ export function CreateBankAccountDialog({
           });
           onAccountCreated(localId);
           if (saveAndNew) {
-            form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false, allowVoucherMinusBalance: false });
+            form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false, allowVoucherMinusBalance: false, isClearing: false });
             clearUploads();
           }
         } catch {
@@ -824,7 +826,7 @@ export function CreateBankAccountDialog({
                   )}
                 />
               </MasterFormTwoColGrid>
-              <AllowVoucherMinusBalanceField control={form.control} />
+              <BankAccountToggleFlagsRow control={form.control} />
 
               {/* Group | Bank name */}
               <MasterFormTwoColGrid>

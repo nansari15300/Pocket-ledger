@@ -3,6 +3,7 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useVouchers } from "@/hooks/useVouchers";
+import { useMasterEntityLivePatch } from "@/hooks/useMasterEntityLivePatch";
 import { TransactionsTable, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
@@ -193,7 +194,7 @@ export default function ItemDetails({
   transactions,
 }: {
   item?: Item;
-  onItemUpdated: () => void;
+  onItemUpdated: (updated?: Partial<Item>) => void;
   onItemDeleted: (id: string) => void;
   onShowAll?: () => void;
   stockView?: StockView;
@@ -325,6 +326,12 @@ export default function ItemDetails({
     previousItemRef.current = initialItem;
     return initialItem;
   }, [processedItems, initialItem]);
+
+  const handleItemUpdated = useMasterEntityLivePatch<Item>({
+    collection: "items",
+    entityId: initialItem.id,
+    onUpdated: onItemUpdated,
+  });
 
   useEffect(() => {
     setCurrentPage(1);
@@ -845,7 +852,7 @@ export default function ItemDetails({
           {currentItem?.id !== "all" && (
             <EditItemDialog
               item={currentItem}
-              onItemUpdated={onItemUpdated}
+              onItemUpdated={handleItemUpdated}
               onItemDeleted={() => onItemDeleted(currentItem!.id)}
               hasTransactions={processedTransactions.length > 0}
             >
@@ -1004,7 +1011,7 @@ export default function ItemDetails({
               {currentItem.id !== 'all' && (
                 <EditItemDialog
                   item={currentItem}
-                  onItemUpdated={onItemUpdated}
+                  onItemUpdated={handleItemUpdated}
                   onItemDeleted={() => onItemDeleted(currentItem.id)}
                   hasTransactions={processedTransactions.length > 0}
                 >

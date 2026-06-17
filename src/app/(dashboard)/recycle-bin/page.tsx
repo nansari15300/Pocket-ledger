@@ -51,7 +51,7 @@ import {
 import {
   permanentDeleteDriveFolderHint,
   permanentDeleteLocalCompanyWithDriveCleanup,
-} from "@/lib/localCloudSync/driveCompanyFolderLifecycle";
+} from "@/lib/localCompanyPermanentDelete";
 import { coerceDeletedAtToDate } from "@/lib/coerceDeletedAt";
 import { finalizeCompanyPermanentDeleteOnServer } from "@/lib/recycleBinCompanyFirestoreFinalize";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
@@ -876,9 +876,6 @@ function RecycleBinContent() {
             }
             if (isCompany) {
               reloadLocalCompanyRegistry();
-              void import("@/lib/localCloudSync/companyConfig").then(({ syncCompanyRegistryStateToDriveManifest }) =>
-                syncCompanyRegistryStateToDriveManifest(resolvedItem.id)
-              );
             }
             toast({ title: "Restored!", description: `"${resolvedItem.name}" has been restored.` });
         } catch (error) {

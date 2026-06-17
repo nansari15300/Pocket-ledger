@@ -220,7 +220,8 @@ export function CreateContraForm({
   }, [allVouchers]);
 
   const isEditing = !!voucher;
-  const isEditingAndConverting = voucher && voucher.type !== 'contra';
+  // Preserve original saved type from dialog shaping so Journal -> Contra edit switch refreshes voucher no.
+  const isEditingAndConverting = voucher && String((voucher as any)?._sourceVoucherType || voucher.type || "") !== 'contra';
   
   const form = useForm<ContraFormValues>({
     resolver: zodResolver(formSchema) as Resolver<ContraFormValues>,
@@ -1347,16 +1348,26 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   const availableFromAccounts = allProcessedAccounts.filter(acc => {
     if (!acc.isSpecial) return true;
-    if (isOwner || can('manage_special_bank_accounts') || can('view_special_bank_accounts')) {
-      return acc.useFor?.out.includes(user?.email || "") ?? true;
+    // Owner/manage can always see special accounts; view-only follows optional `useFor.out` allow-list.
+    if (isOwner || can('manage_special_bank_accounts')) return true;
+    if (can('view_special_bank_accounts')) {
+      const outAllow = (acc as any)?.useFor?.out;
+      if (Array.isArray(outAllow)) return outAllow.includes(user?.email || "");
+      if (typeof outAllow === "string") return outAllow.includes(user?.email || "");
+      return true;
     }
     return false;
   });
 
   const availableToAccounts = allProcessedAccounts.filter(acc => {
     if (!acc.isSpecial) return true;
-    if (isOwner || can('manage_special_bank_accounts') || can('view_special_bank_accounts')) {
-        return acc.useFor?.in.includes(user?.email || "") ?? true;
+    // Owner/manage can always see special accounts; view-only follows optional `useFor.in` allow-list.
+    if (isOwner || can('manage_special_bank_accounts')) return true;
+    if (can('view_special_bank_accounts')) {
+      const inAllow = (acc as any)?.useFor?.in;
+      if (Array.isArray(inAllow)) return inAllow.includes(user?.email || "");
+      if (typeof inAllow === "string") return inAllow.includes(user?.email || "");
+      return true;
     }
     return false;
   });

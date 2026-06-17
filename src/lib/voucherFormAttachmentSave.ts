@@ -28,6 +28,38 @@ export function normalizeFormFileUrlsForSave(rawUrls: string[]): string[] {
     .filter((u): u is string => Boolean(u));
 }
 
+/** Standard web (non-Electron/APK/static) — production jaisa Firebase HTTPS upload path. */
+export function isStandardWebBrowserClient(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return !isElectronDesktopApp() && !isCapacitorNativeApp() && !isStaticAppBuild();
+}
+
+/**
+ * `saveVoucher` Firestore path: form se aaye `local:` / `PL_ATTACH_V1:` ko save se pehle HTTPS me badlo.
+ * Har voucher type par kaam kare (sirf Payment In/Out forms par depend na ho).
+ */
+export async function materializeVoucherAttachmentsInSavePayload(params: {
+  companyId: string;
+  voucherId?: string | null;
+  data: Record<string, unknown>;
+}): Promise<void> {
+  if (!isStandardWebBrowserClient()) return;
+  if (typeof navigator !== "undefined" && !navigator.onLine) return;
+  const cid = String(params.companyId || "").trim();
+  if (!cid) return;
+  const rawUrls = Array.isArray(params.data.fileUrls)
+    ? params.data.fileUrls.filter((u): u is string => typeof u === "string")
+    : [];
+  if (rawUrls.length === 0) return;
+  const storageFolder = String(params.data.type || "attachments").trim() || "attachments";
+  params.data.fileUrls = await materializeVoucherFileUrlsForWebSave({
+    companyId: cid,
+    voucherIdHint: params.voucherId ?? null,
+    storageFolder,
+    rawUrls: normalizeFormFileUrlsForSave(rawUrls),
+  });
+}
+
 /**
  * Web save path: payload banne se pehle `local:` refs ko Firebase HTTPS me promote karo.
  * Isse Firestore row me `PL/local` marker persist hone ke chances kam hote hain.
@@ -144,21 +176,72 @@ export function isLocalToRemoteAttachmentUpgrade(saved: readonly string[], incom
   });
 }
 
-/** Parent `voucher.fileUrls` outbox lag — sirf EXE/desktop par stale ignore; web listener updates hamesha apply. */
+/** Voucher row fingerprint — `fileUrls`/`files` change par vouchers context live update. */
+export function voucherAttachmentUiFingerprint(row: Record<string, unknown> | null | undefined): string {
+  if (!row) return "";
+  const urls = Array.isArray(row.fileUrls)
+    ? row.fileUrls.filter((u): u is string => typeof u === "string").map((u) => u.trim()).filter(Boolean).join("\x1e")
+    : "";
+  const filesMeta = Array.isArray(row.files) ? row.files.length : 0;
+  const uf =
+    row.unassignedFile && typeof row.unassignedFile === "object"
+      ? String((row.unassignedFile as { url?: string }).url || "").trim()
+      : "";
+  return `${urls}\x1d${filesMeta}\x1d${uf}`;
+}
+
+/** Post-save vouchers cache patch — `files: []` taaki purani metadata UI me na dikhe. */
+export function buildVoucherAttachmentLivePatch(fileUrls: readonly string[]): {
+  fileUrls: string[];
+  files: [];
+  unassignedFile: null;
+} {
+  return voucherAttachmentFieldsForSave(
+    fileUrls.filter((u): u is string => typeof u === "string" && Boolean(String(u).trim()))
+  );
+}
+
+export const VOUCHER_ATTACHMENT_SAVED_EVENT = "pocket-ledger-voucher-attachment-saved";
+
+/** Save ke turant baad `useVouchers` cache update — har voucher form se (Payment/Sale/Journal…). */
+export function dispatchVoucherAttachmentSaved(
+  companyId: string,
+  voucherId: string,
+  fileUrls: readonly string[]
+): void {
+  if (typeof window === "undefined" || !companyId?.trim() || !voucherId?.trim()) return;
+  window.dispatchEvent(
+    new CustomEvent(VOUCHER_ATTACHMENT_SAVED_EVENT, {
+      detail: {
+        companyId: companyId.trim(),
+        voucherId: voucherId.trim(),
+        patch: buildVoucherAttachmentLivePatch(fileUrls),
+      },
+    })
+  );
+}
+
+/**
+ * Post-save snapshot authoritative: parent `voucher.fileUrls` listener lag se purani zyada list form/ledger overwrite na kare.
+ * Web + EXE dono — delete+add ke baad refresh ki zarurat kam.
+ */
 export function incomingVoucherFileUrlsLookStaleVersusSaved(
   saved: readonly string[],
   incoming: readonly string[]
 ): boolean {
-  if (!isElectronDesktopApp()) return false;
   const snap = saved.map((u) => String(u || "").trim()).filter(Boolean);
   const inc = incoming.map((u) => String(u || "").trim()).filter(Boolean);
   if (snap.length === 0 && inc.length === 0) return false;
   if (JSON.stringify(snap) === JSON.stringify(inc)) return false;
   if (isLocalToRemoteAttachmentUpgrade(snap, inc)) return false;
-  // User ne replace kiya: saved me naya `local:`/HTTPS hai par parent ab bhi purana URL bhej raha hai.
-  if (snap.length > 0 && inc.length > 0 && snap.length === inc.length) {
+  // User ne file hata kar nayi add ki: parent ab bhi purani URLs ke saath aata hai.
+  if (snap.length > 0 && inc.length > snap.length && snap.every((u) => inc.includes(u))) return true;
+  if (snap.length > 0 && inc.length > 0) {
     const overlap = snap.filter((u) => inc.includes(u)).length;
     if (overlap === 0) return true;
+    if (snap.length !== inc.length && snap.some((u) => !inc.includes(u)) && inc.some((u) => !snap.includes(u))) {
+      return true;
+    }
   }
   if (snap.length < inc.length && snap.every((u) => inc.includes(u))) return true;
   if (snap.length > inc.length && snap.some((u) => !inc.includes(u))) return true;
