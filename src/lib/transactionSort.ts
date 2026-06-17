@@ -115,6 +115,21 @@ export function sortTransactions<T = any>(
   return [...list].sort(compare);
 }
 
+/**
+ * Sirf current page ki rows par sort — poori list ka paging window same rahe (tail page 46–55 wahi rahe).
+ * Running balance page opening se dubara compute hota hai display order me.
+ */
+export function sortAndRebalancePageTransactions<T = any>(
+  pageRows: T[],
+  openingForPage: number,
+  sortBy: TransactionSortBy,
+  sortOrder: TransactionSortOrder
+): T[] {
+  if (!pageRows?.length) return pageRows ?? [];
+  const sorted = sortTransactions(pageRows, sortBy, sortOrder);
+  return recomputeRunningBalanceTopToBottom(sorted, openingForPage);
+}
+
 /** Merge divider ke liye din — fiscalPartitionRows.rowSortTime jaisa (segment split). */
 function transactionDayStartMs(t: any): number | null {
   if (!t || t.type === "opening_balance") return null;

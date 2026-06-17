@@ -743,10 +743,10 @@ export function GroupDetails({
     () =>
       recomputeRunningBalanceTopToBottom(
         sortTransactionsWithFiscalMergeForCompany(
-          filterByUnapprovedOnly(statusFilteredTransactions), sortBy, sortOrder, undefined, company),
+          filterByUnapprovedOnly(statusFilteredTransactions), "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
         openingBalanceForPeriod
       ),
-    [statusFilteredTransactions, filterByUnapprovedOnly, sortBy, sortOrder, openingBalanceForPeriod, company]
+    [statusFilteredTransactions, filterByUnapprovedOnly, openingBalanceForPeriod, company]
   );
 
   // Statement check mode + desktop tail paging (PartyDetails jaisa)
@@ -764,6 +764,8 @@ export function GroupDetails({
     rowsPerPage,
     currentPage,
     ledgerOpeningForRunning: openingBalanceForPeriod,
+    pageSortBy: sortBy,
+    pageSortOrder: sortOrder,
   });
 
   /** Desktop table: Book OB sirf jab slice chronological shuru se (PartyDetails jaisa). */

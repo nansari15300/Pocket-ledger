@@ -480,10 +480,10 @@ export function StaffDetails({
     () =>
       recomputeRunningBalanceTopToBottom(
         sortTransactionsWithFiscalMergeForCompany(
-          filterByUnapprovedOnly(displayTransactions), sortBy, sortOrder, undefined, company),
+          filterByUnapprovedOnly(displayTransactions), "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
         ledgerOpeningForRunning
       ),
-    [displayTransactions, filterByUnapprovedOnly, sortBy, sortOrder, ledgerOpeningForRunning, company]
+    [displayTransactions, filterByUnapprovedOnly, ledgerOpeningForRunning, company]
   );
   
   // Statement check mode + desktop tail paging (PartyDetails jaisa)
@@ -501,6 +501,8 @@ export function StaffDetails({
     rowsPerPage,
     currentPage,
     ledgerOpeningForRunning,
+    pageSortBy: sortBy,
+    pageSortOrder: sortOrder,
   });
 
   const buildDateRangeText = () => {

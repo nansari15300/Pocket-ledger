@@ -569,17 +569,17 @@ export function PartyDetails({
     [displayTransactions, statusFilter]
   );
 
-  // Sort state for footer dropdown (Statement / Bill wise); applied after status filter, before search/pagination
+  // Sort state: footer dropdown — sirf current page par apply (paging hook); list chronological rahe
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
         sortTransactionsWithFiscalMergeForCompany(
-          filterByUnapprovedOnly(statusFilteredTransactions), sortBy, sortOrder, undefined, company),
+          filterByUnapprovedOnly(statusFilteredTransactions), "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
         ledgerOpeningForRunning
       ),
-    [statusFilteredTransactions, filterByUnapprovedOnly, sortBy, sortOrder, ledgerOpeningForRunning, company]
+    [statusFilteredTransactions, filterByUnapprovedOnly, ledgerOpeningForRunning, company]
   );
 
   const searchFilteredTransactions = useMemo(() => {
@@ -620,6 +620,8 @@ export function PartyDetails({
     rowsPerPage,
     currentPage,
     ledgerOpeningForRunning,
+    pageSortBy: sortBy,
+    pageSortOrder: sortOrder,
   });
 
   /** Tail window: `before` = purane txn (kam index) abhi slice me nahi; `after` = naye (zyada index) hidden — MobileTransactionsPager ke count */

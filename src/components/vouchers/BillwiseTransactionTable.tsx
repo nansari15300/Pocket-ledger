@@ -33,7 +33,7 @@ import {
   TransactionRow,
   getConversionFactor,
   formatQuantity,
-  LinkedVouchersColored,
+  BillWiseLinkedDetailCells,
   type Transaction,
   type Context,
 } from "./transactionTableShared";
@@ -254,6 +254,12 @@ export function BillwiseTransactionTable({
     (showCol("runningBalance") && !hideBalanceColumn ? 1 : 0) +
     1;
   const showOpeningBalance = ["party", "account", "staff", "tax", "item", "expense", "group"].includes(context);
+  /** Cols before Status — linked-voucher sub-row ke liye empty left span */
+  const openingBalanceLinkedLeftColSpan =
+    openingBalanceColSpan +
+    (showCol("dr") && !hideDebitColumn ? 1 : 0) +
+    (showCol("cr") && !hideCreditColumn ? 1 : 0);
+  const hasObLinkedVoucherDetail = showNarration && (openingBalanceLinkedVoucherNos?.length ?? 0) > 0;
 
   const renderHeaderWithFilter = (key: string, label: string, isNumeric: boolean = false, minWidthPx?: number) => {
     const isFiltered = !!(filters && filters[key]) || (key === "type" && voucherTypes && voucherTypes.length > 0 && !voucherTypes.includes("all"));
@@ -455,9 +461,6 @@ export function BillwiseTransactionTable({
                         >
                           {obStatusLabel}
                         </Badge>
-                        {openingBalanceLinkedVoucherNos?.length ? (
-                          <LinkedVouchersColored vouchers={openingBalanceLinkedVoucherNos} align="center" billWisePink />
-                        ) : null}
                       </div>
                     ) : (
                       <span className="font-semibold">-</span>
@@ -486,6 +489,20 @@ export function BillwiseTransactionTable({
                   )}
                 </TableCell>
               </motion.tr>
+            )}
+            {showOpeningBalance && hasObLinkedVoucherDetail && (
+              <tr data-row="opening-balance-linked" className="narration-row border-b [&>td]:!pt-0 [&>td]:!pb-0">
+                <TableCell colSpan={openingBalanceLinkedLeftColSpan} className="py-0" />
+                <BillWiseLinkedDetailCells
+                  vouchers={openingBalanceLinkedVoucherNos ?? []}
+                  billWisePink
+                  showStatus={showCol("status")}
+                  showBalance={showCol("runningBalance")}
+                  hideBalanceColumn={hideBalanceColumn}
+                  ensureMinGaps={ensureMinGaps}
+                />
+                <TableCell className="w-10 p-0" />
+              </tr>
             )}
             {displayTransactions.length > 0 ? (
               displayTransactions.map((t: any, rowIndex: number) => (

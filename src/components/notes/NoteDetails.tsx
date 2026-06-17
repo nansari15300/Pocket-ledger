@@ -22,7 +22,7 @@ import { MobileTransactionsPager } from "@/components/vouchers/MobileTransaction
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
 
-import { sortTransactionsWithFiscalMergeForCompany, DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
+import { sortTransactionsWithFiscalMergeForCompany, sortTransactions, DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
 import { useDate } from "@/hooks/useDate";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -171,8 +171,8 @@ export function NoteDetails({
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
-    () => sortTransactionsWithFiscalMergeForCompany(currentTransactions, sortBy, sortOrder, undefined, company),
-    [currentTransactions, sortBy, sortOrder, company]
+    () => sortTransactionsWithFiscalMergeForCompany(currentTransactions, "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
+    [currentTransactions, company]
   );
 
   const searchFilteredTransactions = useMemo(() => {
@@ -205,27 +205,29 @@ export function NoteDetails({
     const totalPagesLocal = rowsPerPage > 0 ? Math.max(1, Math.ceil(total / rowsPerPage)) : 1;
     const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
     if (rowsPerPage <= 0) {
-      return { totalPages: 1, pageTransactions: list, before: 0, after: 0 };
+      return { totalPages: 1, pageTransactions: sortTransactions(list, sortBy, sortOrder), before: 0, after: 0 };
     }
     if (useTailPaging) {
       const end = total - (safePage - 1) * rowsPerPage;
       const start = Math.max(0, end - rowsPerPage);
+      const pageSlice = list.slice(start, end);
       return {
         totalPages: totalPagesLocal,
-        pageTransactions: list.slice(start, end),
+        pageTransactions: sortTransactions(pageSlice, sortBy, sortOrder),
         before: start,
         after: Math.max(0, total - end),
       };
     }
     const start = (safePage - 1) * rowsPerPage;
     const end = Math.min(start + rowsPerPage, total);
+    const pageSlice = list.slice(start, end);
     return {
       totalPages: totalPagesLocal,
-      pageTransactions: list.slice(start, end),
+      pageTransactions: sortTransactions(pageSlice, sortBy, sortOrder),
       before: start,
       after: Math.max(0, total - end),
     };
-  }, [searchFilteredTransactions, currentPage, rowsPerPage, useTailPaging]);
+  }, [searchFilteredTransactions, currentPage, rowsPerPage, useTailPaging, sortBy, sortOrder]);
 
   const totalPages = notePagingWindow.totalPages;
   const paginatedTransactions = notePagingWindow.pageTransactions;

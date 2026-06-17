@@ -393,14 +393,14 @@ export function TaxDetails({
       recomputeRunningBalanceTopToBottom(
         sortTransactionsWithFiscalMergeForCompany(
           filterByUnapprovedOnly(statusFilteredTransactions),
-          sortBy,
-          sortOrder,
+          "date",
+          DEFAULT_TRANSACTION_SORT_ORDER,
           undefined,
           company
         ),
         openingBalanceForPeriod
       ),
-    [statusFilteredTransactions, filterByUnapprovedOnly, sortBy, sortOrder, openingBalanceForPeriod, company]
+    [statusFilteredTransactions, filterByUnapprovedOnly, openingBalanceForPeriod, company]
   );
 
   const searchFilteredTransactions = useMemo(() => {
@@ -470,6 +470,8 @@ export function TaxDetails({
     rowsPerPage,
     currentPage,
     ledgerOpeningForRunning: openingBalanceForPeriod,
+    pageSortBy: sortBy,
+    pageSortOrder: sortOrder,
   });
 
 

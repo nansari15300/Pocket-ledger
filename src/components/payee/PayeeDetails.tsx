@@ -282,10 +282,10 @@ export function PayeeDetails({
     () =>
       recomputeRunningBalanceTopToBottom(
         sortTransactionsWithFiscalMergeForCompany(
-          filterByUnapprovedOnly(displayTransactions), sortBy, sortOrder, undefined, company),
+          filterByUnapprovedOnly(displayTransactions), "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
         openingBalanceForPeriod
       ),
-    [displayTransactions, filterByUnapprovedOnly, sortBy, sortOrder, openingBalanceForPeriod, company]
+    [displayTransactions, filterByUnapprovedOnly, openingBalanceForPeriod, company]
   );
 
   // Statement check + tail paging (LedgerDesktopFooter ke saath align)
@@ -303,6 +303,8 @@ export function PayeeDetails({
     rowsPerPage,
     currentPage,
     ledgerOpeningForRunning: openingBalanceForPeriod,
+    pageSortBy: sortBy,
+    pageSortOrder: sortOrder,
   });
   const { selectValue: rowsPerPageSelectValue, onSelectValueChange: handleRowsPerPageChange } =
     useRowsPerPageSelectControl(rowsPerPage, setRowsPerPage, setCurrentPage, ROWS_PER_PAGE_OPTIONS_DEFAULT, "20");

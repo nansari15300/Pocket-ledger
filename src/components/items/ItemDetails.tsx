@@ -1,4 +1,4 @@
-﻿
+
 "use client";
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
@@ -143,7 +143,7 @@ const getConversionFactor = (item: Item | undefined, displayUnit: string | undef
     return factor > 0 ? factor : 1;
 };
 
-/** Master book opening — party `openingBalance` jaisa; date filter / pagination se independent. */
+/** Master book opening - party `openingBalance` jaisa; date filter / pagination se independent. */
 const getItemMasterBooksOpening = (item: Item | undefined, view: StockView): number => {
   if (!item) return 0;
   if (view === "amount") {
@@ -453,7 +453,7 @@ export default function ItemDetails({
   const conversions = (currentItem?.unitConversions || []) as any[];
   const smallestUnit = conversions.length > 0 ? conversions[conversions.length - 1].toUnit : ((currentItem as any).openingBalanceUnit || '');
   const displayUnit = itemDisplayUnits && currentItem ? itemDisplayUnits[currentItem.id] || smallestUnit : smallestUnit;
-  // Unit Select: value list me honi chahiye â€” warna Radix setRef loop (ScrollArea ke saath dikhta hai).
+  // Unit Select: value list me honi chahiye — warna Radix setRef loop (ScrollArea ke saath dikhta hai).
   const displayUnitSelectValue = useMemo(() => {
     if (!displayUnit) return unitOptions[0] ?? "";
     if (unitOptions.includes(displayUnit)) return displayUnit;
@@ -566,10 +566,10 @@ export default function ItemDetails({
     () =>
       recomputeRunningBalanceTopToBottom(
         sortTransactionsWithFiscalMergeForCompany(
-          filterByUnapprovedOnly(displayTransactions), sortBy, sortOrder, undefined, company),
+          filterByUnapprovedOnly(displayTransactions), "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
         openingBalanceForPeriod
       ),
-    [displayTransactions, filterByUnapprovedOnly, sortBy, sortOrder, openingBalanceForPeriod, company]
+    [displayTransactions, filterByUnapprovedOnly, openingBalanceForPeriod, company]
   );
 
   const filteredMobileTransactions = useMemo(() => {
@@ -626,6 +626,8 @@ export default function ItemDetails({
     rowsPerPage,
     currentPage,
     ledgerOpeningForRunning,
+    pageSortBy: sortBy,
+    pageSortOrder: sortOrder,
   });
 
   /** Book OB row: slice list ke shuru par; Dated OB = slice se pehle txn ki date (party jaisa). */
@@ -815,7 +817,7 @@ export default function ItemDetails({
             </button>
           )}
         </div>
-        {/* Balance â€” party jaisa center line (unit dropdown same row, h-8) */}
+        {/* Balance — party jaisa center line (unit dropdown same row, h-8) */}
         <div className="flex flex-shrink-0 items-center justify-center gap-2 border-b bg-background px-2 py-1">
           <p className={cn("text-center text-lg font-bold leading-tight", headerStockValue >= 0 ? "text-green-600" : "text-red-600")}>
             {balanceText}{" "}
@@ -999,7 +1001,7 @@ export default function ItemDetails({
 
   const renderDesktopView = () => (
      <div className="h-full flex flex-col">
-      {/* Header: Part 1 (nameâ†’balance/unit) and Part 2 (dateâ†’print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
+      {/* Header: Part 1 (name→balance/unit) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
       <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
           <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim">
@@ -1143,7 +1145,7 @@ export default function ItemDetails({
             </div>
             <ScrollBar orientation="horizontal" />
         </ScrollArea>
-         {/* Footer — global PC shell LedgerDesktopFooter */}
+         {/* Footer - global PC shell LedgerDesktopFooter */}
          <LedgerDesktopFooter
            left={
              <>

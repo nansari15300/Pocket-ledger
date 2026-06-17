@@ -2,20 +2,31 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useStatementCheckMode } from "@/hooks/useStatementCheckMode";
-import { recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
+import {
+  DEFAULT_TRANSACTION_SORT_ORDER,
+  recomputeRunningBalanceTopToBottom,
+  sortAndRebalancePageTransactions,
+} from "@/lib/transactionSort";
 import { statementCheckTxnId } from "@/lib/statementCheckModeStorage";
 import type { StatementCheckViewMode } from "@/hooks/useStatementCheckMode";
+import type {
+  TransactionSortBy,
+  TransactionSortOrder,
+} from "@/components/vouchers/TransactionTableSortDropdown";
 
 type Args = {
   companyId: string | undefined;
   context: string;
   contextId: string | undefined;
   viewMode: StatementCheckViewMode;
-  /** Sorted + filtered list (before paging). */
+  /** Ledger chronological order (date asc) — paging is slice; user sort sirf page par. */
   searchFilteredTransactions: ReadonlyArray<{ id?: string; _rowKey?: string; debit?: unknown; credit?: unknown; balance?: number; runningBalance?: number }>;
   rowsPerPage: number;
   currentPage: number;
   ledgerOpeningForRunning: number;
+  /** Footer sort: sirf current page rows par apply — poori list reorder nahi. */
+  pageSortBy?: TransactionSortBy;
+  pageSortOrder?: TransactionSortOrder;
 };
 
 /**
@@ -31,6 +42,8 @@ export function useStatementLedgerCheckModePaging({
   rowsPerPage,
   currentPage,
   ledgerOpeningForRunning,
+  pageSortBy = "date",
+  pageSortOrder = DEFAULT_TRANSACTION_SORT_ORDER,
 }: Args) {
   // Current page rows — ↑↓/Space isi list par (paging ke baad sync; hook order circular na ho).
   const [keyboardNavList, setKeyboardNavList] = useState<
@@ -64,11 +77,12 @@ export function useStatementLedgerCheckModePaging({
       const pageDr = list.reduce((sum, t) => sum + (Number(t?.debit) || 0), 0);
       const pageCr = list.reduce((sum, t) => sum + (Number(t?.credit) || 0), 0);
       const openingForPage = ledgerOpeningForRunning;
-      const adjusted = statementCheck.adjustPeriodTotals(list, openingForPage);
+      const displayAll = sortAndRebalancePageTransactions(list, openingForPage, pageSortBy, pageSortOrder);
+      const adjusted = statementCheck.adjustPeriodTotals(displayAll, openingForPage);
       const totalPagesLocal = 1;
       return {
         totalPages: totalPagesLocal,
-        pageTransactions: list,
+        pageTransactions: displayAll,
         beforeCount: 0,
         afterCount: 0,
         sliceStart: 0,
@@ -96,10 +110,17 @@ export function useStatementLedgerCheckModePaging({
       typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)
         ? previousRunningBalance
         : ledgerOpeningForRunning;
-    let periodDrForPage = pageTransactions.reduce((sum, t) => sum + (Number(t?.debit) || 0), 0);
-    let periodCrForPage = pageTransactions.reduce((sum, t) => sum + (Number(t?.credit) || 0), 0);
+    // User sort sirf is page ki rows par — slice window (46–55) same rahe.
+    const displayPageTransactions = sortAndRebalancePageTransactions(
+      pageTransactions,
+      openingForPage,
+      pageSortBy,
+      pageSortOrder
+    );
+    let periodDrForPage = displayPageTransactions.reduce((sum, t) => sum + (Number(t?.debit) || 0), 0);
+    let periodCrForPage = displayPageTransactions.reduce((sum, t) => sum + (Number(t?.credit) || 0), 0);
     let closingForPage = openingForPage + periodDrForPage - periodCrForPage;
-    const adjusted = statementCheck.adjustPeriodTotals(pageTransactions, openingForPage);
+    const adjusted = statementCheck.adjustPeriodTotals(displayPageTransactions, openingForPage);
     if (adjusted) {
       periodDrForPage = adjusted.periodDrForPage;
       periodCrForPage = adjusted.periodCrForPage;
@@ -107,7 +128,7 @@ export function useStatementLedgerCheckModePaging({
     }
     return {
       totalPages: totalPagesLocal,
-      pageTransactions,
+      pageTransactions: displayPageTransactions,
       beforeCount: start,
       afterCount: Math.max(0, total - end),
       sliceStart: start,
@@ -122,6 +143,8 @@ export function useStatementLedgerCheckModePaging({
     currentPage,
     ledgerOpeningForRunning,
     statementCheck.adjustPeriodTotals,
+    pageSortBy,
+    pageSortOrder,
   ]);
 
   const totalPages =

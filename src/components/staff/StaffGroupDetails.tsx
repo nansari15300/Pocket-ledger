@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import * as React from "react";
 import type { Staff, StaffGroup } from "@/components/staff/types";
@@ -379,10 +379,10 @@ export function StaffGroupDetails({
     () =>
       recomputeRunningBalanceTopToBottom(
         sortTransactionsWithFiscalMergeForCompany(
-          filterByUnapprovedOnly(displayTransactions), sortBy, sortOrder, undefined, company),
+          filterByUnapprovedOnly(displayTransactions), "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
         openingBalanceForPeriod
       ),
-    [displayTransactions, filterByUnapprovedOnly, sortBy, sortOrder, openingBalanceForPeriod, company]
+    [displayTransactions, filterByUnapprovedOnly, openingBalanceForPeriod, company]
   );
 
   const filteredMobileTransactions = useMemo(() => {
@@ -450,6 +450,8 @@ export function StaffGroupDetails({
     rowsPerPage,
     currentPage,
     ledgerOpeningForRunning: openingBalanceForPeriod,
+    pageSortBy: sortBy,
+    pageSortOrder: sortOrder,
   });
 
   const handleOpenNoteDialog = (staffId?: string) => {
@@ -647,7 +649,7 @@ export function StaffGroupDetails({
           </div>
         </div>
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
-          {/* Mobile: header jaisa pill â€” active mode par green border */}
+          {/* Mobile: header jaisa pill — active mode par green border */}
           <LedgerViewModePills
             className="flex-1 min-w-0"
             buttonClassName="h-6 flex-1 min-w-0 px-1 text-xs"
@@ -1048,7 +1050,7 @@ export function StaffGroupDetails({
             )}
           </div>
         </div>
-        {/* Footer — global PC shell LedgerDesktopFooter */}
+        {/* Footer - global PC shell LedgerDesktopFooter */}
         <LedgerDesktopFooter
           left={
             <>

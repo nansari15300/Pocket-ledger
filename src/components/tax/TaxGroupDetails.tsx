@@ -347,10 +347,10 @@ export function TaxGroupDetails({
     () =>
       recomputeRunningBalanceTopToBottom(
         sortTransactionsWithFiscalMergeForCompany(
-          filterByUnapprovedOnly(displayTransactions), sortBy, sortOrder, undefined, company),
+          filterByUnapprovedOnly(displayTransactions), "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
         openingBalanceForPeriod
       ),
-    [displayTransactions, filterByUnapprovedOnly, sortBy, sortOrder, openingBalanceForPeriod, company]
+    [displayTransactions, filterByUnapprovedOnly, openingBalanceForPeriod, company]
   );
 
   const filteredMobileTransactions = useMemo(() => {
@@ -437,6 +437,8 @@ export function TaxGroupDetails({
     rowsPerPage,
     currentPage,
     ledgerOpeningForRunning: openingBalanceForPeriod,
+    pageSortBy: sortBy,
+    pageSortOrder: sortOrder,
   });
   // Radix rows Select — value list me honi chahiye (LedgerDesktopFooter pagination)
   const { selectValue: rowsPerPageSelectValue, onSelectValueChange: handleRowsPerPageChange } =

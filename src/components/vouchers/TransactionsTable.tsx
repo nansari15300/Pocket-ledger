@@ -44,6 +44,7 @@ import {
   getStatusDetail,
   getStatusDetailVouchers,
   LinkedVouchersColored,
+  BillWiseLinkedDetailCells,
   voucherTypePillClassName,
   type TxnDrCrSide,
 } from "./transactionTableShared";
@@ -1006,6 +1007,10 @@ export function TransactionsTable({
     </>
   );
 
+  /** Bill-wise OB linked voucher detail — narration sub-row ya alag linked-only row par */
+  const hasObLinkedVoucherDetail =
+    isBillWiseMode && showNarration && (openingBalanceLinkedVoucherNos?.length ?? 0) > 0;
+
   const openingBalanceNarrationRow =
     hasOpeningBalanceNarrationSubRow ? (
       <tr
@@ -1029,12 +1034,52 @@ export function TransactionsTable({
             <span className="whitespace-pre-wrap">{openingBalanceNarrationTrimmed}</span>
           </span>
         </TableCell>
-        {showCol("status") && !hideStatusColumn && (
-          <TableCell className={cn("text-center align-top py-0", ensureMinGaps && "min-w-[95px] px-[5px]")} />
+        {/* Bill-wise OB: linked vouchers Status+Balance span; warna empty status/balance cells */}
+        {isBillWiseMode && hasObLinkedVoucherDetail ? (
+          <BillWiseLinkedDetailCells
+            vouchers={openingBalanceLinkedVoucherNos ?? []}
+            billWisePink
+            showStatus={showCol("status")}
+            hideStatusColumn={hideStatusColumn}
+            showBalance={showCol("runningBalance")}
+            hideBalanceColumn={hideBalanceColumn}
+            ensureMinGaps={ensureMinGaps}
+          />
+        ) : (
+          <>
+            {showCol("status") && !hideStatusColumn && (
+              <TableCell className={cn("text-center align-top py-0", ensureMinGaps && "min-w-[95px] px-[5px]")} />
+            )}
+            {showCol("runningBalance") && !hideBalanceColumn && (
+              <TableCell className={cn("text-right", ensureMinGaps && "min-w-[115px] px-[5px]")} />
+            )}
+          </>
         )}
-        {showCol("runningBalance") && !hideBalanceColumn && (
-          <TableCell className={cn("text-right", ensureMinGaps && "min-w-[115px] px-[5px]")} />
+        <TableCell className="w-10 p-0" />
+      </tr>
+    ) : null;
+
+  const openingBalanceLinkedOnlyRow =
+    hasObLinkedVoucherDetail && !hasOpeningBalanceNarrationSubRow ? (
+      <tr
+        data-row="opening-balance-linked"
+        data-pl-spend-wise-opening={useSpendWiseOpeningBalanceCard ? "" : undefined}
+        className={cn(
+          "narration-row border-b",
+          useSpendWiseOpeningBalanceCard && "bg-blue-50/50 dark:bg-blue-950/20",
+          "[&>td]:!pt-0 [&>td]:!pb-0"
         )}
+      >
+        <TableCell colSpan={openingBalanceNarrationColSpan} className="py-0" />
+        <BillWiseLinkedDetailCells
+          vouchers={openingBalanceLinkedVoucherNos ?? []}
+          billWisePink
+          showStatus={showCol("status")}
+          hideStatusColumn={hideStatusColumn}
+          showBalance={showCol("runningBalance")}
+          hideBalanceColumn={hideBalanceColumn}
+          ensureMinGaps={ensureMinGaps}
+        />
         <TableCell className="w-10 p-0" />
       </tr>
     ) : null;
@@ -1339,9 +1384,6 @@ export function TransactionsTable({
                     {hl(statusLabel)}
                   </Badge>
                 ) : null}
-                {showStatusDetailInCard ? (
-                  <LinkedVouchersColored vouchers={statusDetailVouchers} align="end" />
-                ) : null}
                 {overdueDaysInCard > 0 ? (
                   <span className="text-[10px] font-medium text-red-600">
                     {hl(
@@ -1362,6 +1404,18 @@ export function TransactionsTable({
               </Badge>
             ) : null}
           </div>
+          {/* Bill-wise mobile: linked vouchers Status→Balance width par wrap (print parity) */}
+          {showStatusDetailInCard ? (
+            <div className="mt-0.5 w-full min-w-0 flex justify-end">
+              <LinkedVouchersColored
+                vouchers={statusDetailVouchers}
+                wrapInline
+                align="start"
+                billWisePink
+                className="max-w-full"
+              />
+            </div>
+          ) : null}
           <div className="flex justify-between items-end gap-2 min-w-0 mt-0.5">
             <div className="min-w-0 flex-1 overflow-hidden">
               {groupAccountName ? (
@@ -1521,10 +1575,6 @@ export function TransactionsTable({
                       >
                         {obStatusLabel}
                       </Badge>
-                      {/* Keep opening-balance status voucher-link text in sync with narration toggle. */}
-                      {(showNarration && openingBalanceLinkedVoucherNos?.length) ? (
-                        <LinkedVouchersColored vouchers={openingBalanceLinkedVoucherNos} align="end" />
-                      ) : null}
                       <Badge
                         variant="secondary"
                         className={cn(
@@ -1535,6 +1585,18 @@ export function TransactionsTable({
                         Bal:{formatCurrency(Math.abs(displayOpeningBalanceForRow), { noSuffix: true, context: "transaction", noAnimation: true })}{displayOpeningBalanceForRow >= 0 ? " Dr" : " Cr"}
                       </Badge>
                     </div>
+                    {/* Bill-wise OB mobile: linked vouchers Status→Balance wrap */}
+                    {showNarration && openingBalanceLinkedVoucherNos?.length ? (
+                      <div className="mt-0.5 w-full min-w-0 flex justify-end">
+                        <LinkedVouchersColored
+                          vouchers={openingBalanceLinkedVoucherNos}
+                          wrapInline
+                          align="start"
+                          billWisePink
+                          className="max-w-full"
+                        />
+                      </div>
+                    ) : null}
                   </>
                 ) : (
                   <>
@@ -1549,12 +1611,20 @@ export function TransactionsTable({
                             return `${formatCurrency(Math.abs(ob), { noSuffix: true, context: "transaction", noAnimation: true })} ${ob >= 0 ? "Dr" : "Cr"}`;
                           })()}
                     </span>
-                    {/* Keep opening-balance status voucher-link text in sync with narration toggle. */}
-                    {isBillWiseCardContext && showNarration && openingBalanceLinkedVoucherNos?.length && obOutstandingDisplay == null ? (
-                      <LinkedVouchersColored vouchers={openingBalanceLinkedVoucherNos} align="start" />
-                    ) : null}
                   </>
                 )}
+                {/* Bill-wise OB (no outstanding split): linked vouchers full-width wrap */}
+                {isBillWiseCardContext && showNarration && openingBalanceLinkedVoucherNos?.length && obOutstandingDisplay == null ? (
+                  <div className="mt-0.5 w-full min-w-0 flex justify-end">
+                    <LinkedVouchersColored
+                      vouchers={openingBalanceLinkedVoucherNos}
+                      wrapInline
+                      align="start"
+                      billWisePink
+                      className="max-w-full"
+                    />
+                  </div>
+                ) : null}
               </div>
               </div>
             {!showBookOpeningAboveDatedRow && showNarration && openingBalanceNarrationTrimmed ? (
@@ -1814,8 +1884,8 @@ export function TransactionsTable({
                             >
                               {openingBalanceOutstanding <= 0 ? "Paid" : openingBalanceOutstanding >= obAmount ? "Unpaid" : "Partial"}
                             </Badge>
-                            {/* Opening balance: list all linked voucher nos in 2–3 lines (from voucher data). */}
-                                    {showNarration && openingBalanceLinkedVoucherNos?.length ? (
+                            {/* Bill-wise: linked vouchers narration/linked sub-row par — yahan sirf badge */}
+                            {showNarration && openingBalanceLinkedVoucherNos?.length && !isBillWiseMode ? (
                                       <LinkedVouchersColored vouchers={openingBalanceLinkedVoucherNos} align="center" />
                                     ) : null}
                           </div>
@@ -1846,6 +1916,7 @@ export function TransactionsTable({
                     </TableCell>
                   </tr>
                   {!showBookOpeningAboveDatedRow && openingBalanceNarrationRow}
+                  {openingBalanceLinkedOnlyRow}
                   {/* Spend-wise bank/account view: keep visual gap between OB and first group. */}
                   <tr data-row="opening-balance-gap" aria-hidden="true" className="spend-wise-gap-row">
                     <td
@@ -1959,7 +2030,7 @@ export function TransactionsTable({
                             >
                               {openingBalanceOutstanding <= 0 ? "Paid" : openingBalanceOutstanding >= obAmount ? "Unpaid" : "Partial"}
                             </Badge>
-                            {showNarration && openingBalanceLinkedVoucherNos?.length ? (
+                            {showNarration && openingBalanceLinkedVoucherNos?.length && !isBillWiseMode ? (
                               <LinkedVouchersColored vouchers={openingBalanceLinkedVoucherNos} align="center" />
                             ) : null}
                           </div>
@@ -1989,6 +2060,7 @@ export function TransactionsTable({
                     </TableCell>
                   </tr>
                   {!showBookOpeningAboveDatedRow && openingBalanceNarrationRow}
+                  {openingBalanceLinkedOnlyRow}
                 </>
               )
             )}

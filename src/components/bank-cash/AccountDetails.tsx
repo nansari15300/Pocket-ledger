@@ -111,6 +111,7 @@ import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode, use
 import {
   sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
+  sortAndRebalancePageTransactions,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
 import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
@@ -654,10 +655,10 @@ export function AccountDetails({
     const rows = filterByUnapprovedOnly(displayTransactions);
     if (spendWiseView) return rows;
     return recomputeRunningBalanceTopToBottom(
-      sortTransactionsWithFiscalMergeForCompany(rows, sortBy, sortOrder, undefined, company),
+      sortTransactionsWithFiscalMergeForCompany(rows, "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
       openingBalanceForPeriod
     );
-  }, [displayTransactions, filterByUnapprovedOnly, spendWiseView, sortBy, sortOrder, openingBalanceForPeriod, company]);
+  }, [displayTransactions, filterByUnapprovedOnly, spendWiseView, openingBalanceForPeriod, company]);
 
   // Check mode: hide/mark rows; statement view par running balance dubara (spend-wise par filter only)
   const [statementKeyboardNav, setStatementKeyboardNav] = useState<
@@ -687,7 +688,7 @@ export function AccountDetails({
   const statementListForCounts = useMemo(() => {
     if (!spendWiseView) return ledgerSortedTransactions as any[];
     const rows = filterByUnapprovedOnly(baseTransactions);
-    const sorted = sortTransactionsWithFiscalMergeForCompany(rows, sortBy, sortOrder, undefined, company);
+    const sorted = sortTransactionsWithFiscalMergeForCompany(rows, "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company);
     const filtered = statementCheck.filterTransactions([...sorted]);
     if (statementCheck.checkModeActive) {
       return recomputeRunningBalanceTopToBottom(filtered, openingBalanceForPeriod);
@@ -698,8 +699,6 @@ export function AccountDetails({
     ledgerSortedTransactions,
     baseTransactions,
     filterByUnapprovedOnly,
-    sortBy,
-    sortOrder,
     company,
     openingBalanceForPeriod,
     statementCheck.filterTransactions,
@@ -714,10 +713,23 @@ export function AccountDetails({
 
   // Tail-window: statement = last N blocks first; spend-wise = packFlatListByDataLineBudgetFromEnd (Party/bank pager jaisa).
   const { totalPages, paginatedTransactions, desktopLedgerSliceFlatStart } = useMemo(() => {
+    const openingBeforeFlatIndex = (list: any[], flatStart: number) => {
+      if (flatStart <= 0) return openingBalanceForPeriod;
+      const prev = list[flatStart - 1];
+      if (!prev || (prev as any)._spendWiseSpacer) return openingBalanceForPeriod;
+      const prevBal =
+        typeof prev.balance === "number"
+          ? prev.balance
+          : typeof prev.runningBalance === "number"
+            ? prev.runningBalance
+            : undefined;
+      return typeof prevBal === "number" && !Number.isNaN(prevBal) ? prevBal : openingBalanceForPeriod;
+    };
     if (rowsPerPage <= 0) {
+      const all = ledgerSortedTransactions as any[];
       return {
         totalPages: 1,
-        paginatedTransactions: ledgerSortedTransactions,
+        paginatedTransactions: sortAndRebalancePageTransactions(all, openingBalanceForPeriod, sortBy, sortOrder),
         desktopLedgerSliceFlatStart: 0,
       };
     }
@@ -732,9 +744,11 @@ export function AccountDetails({
       const endB = n - (safePage - 1) * rowsPerPage;
       const startB = Math.max(0, endB - rowsPerPage);
       const flatStart = startB > 0 ? blocks.slice(0, startB).reduce((acc, b) => acc + b.length, 0) : 0;
+      const pageFlat = blocks.slice(startB, endB).flat() as any[];
+      const openingForPage = openingBeforeFlatIndex(ledgerSortedTransactions as any[], flatStart);
       return {
         totalPages,
-        paginatedTransactions: blocks.slice(startB, endB).flat() as any[],
+        paginatedTransactions: sortAndRebalancePageTransactions(pageFlat, openingForPage, sortBy, sortOrder),
         desktopLedgerSliceFlatStart: flatStart,
       };
     }
@@ -752,7 +766,7 @@ export function AccountDetails({
       paginatedTransactions: list as any[],
       desktopLedgerSliceFlatStart: start,
     };
-  }, [sortedTransactions, displayBlocks, spendWiseView, rowsPerPage, currentPage]);
+  }, [ledgerSortedTransactions, displayBlocks, spendWiseView, rowsPerPage, currentPage, sortBy, sortOrder, openingBalanceForPeriod]);
 
   // Statement jaisa voucher-based footer counts — spend-wise linked rows alag na gino
   const ledgerFooterPagingCounts = useMemo(() => {

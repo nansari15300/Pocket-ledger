@@ -28,7 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
-import { sortTransactionsWithFiscalMergeForCompany, DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
+import { sortTransactionsWithFiscalMergeForCompany, sortTransactions, DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AlertCircle, Filter, MoreVertical, Pencil, Printer, History } from "lucide-react";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
@@ -250,8 +250,8 @@ export function OverdueAccountView({
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedRows = useMemo(
-    () => sortTransactionsWithFiscalMergeForCompany(filteredRows, sortBy, sortOrder, undefined, company),
-    [filteredRows, sortBy, sortOrder, company]
+    () => sortTransactionsWithFiscalMergeForCompany(filteredRows, "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
+    [filteredRows, company]
   );
 
   // Tail paging — page 1 = latest overdue (Party ledger / global footer jaisa)
@@ -260,17 +260,18 @@ export function OverdueAccountView({
     const totalPagesLocal = rowsPerPage > 0 ? Math.max(1, Math.ceil(total / rowsPerPage)) : 1;
     const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
     if (rowsPerPage <= 0) {
-      return { totalPages: 1, pageRows: sortedRows, beforeCount: 0, afterCount: 0 };
+      return { totalPages: 1, pageRows: sortTransactions(sortedRows, sortBy, sortOrder), beforeCount: 0, afterCount: 0 };
     }
     const end = total - (safePage - 1) * rowsPerPage;
     const start = Math.max(0, end - rowsPerPage);
+    const pageSlice = sortedRows.slice(start, end);
     return {
       totalPages: totalPagesLocal,
-      pageRows: sortedRows.slice(start, end),
+      pageRows: sortTransactions(pageSlice, sortBy, sortOrder),
       beforeCount: start,
       afterCount: Math.max(0, total - end),
     };
-  }, [sortedRows, currentPage, rowsPerPage]);
+  }, [sortedRows, currentPage, rowsPerPage, sortBy, sortOrder]);
 
   const totalPages = overduePaging.totalPages;
   const paginatedRows = overduePaging.pageRows;

@@ -710,6 +710,8 @@ export function LinkedVouchersColored({
   className,
   align = "center",
   billWisePink = false,
+  /** Print parity: inline " + " separators with flex-wrap across Status+Balance width. */
+  wrapInline = false,
 }: {
   vouchers: string[];
   vouchersPerLine?: number;
@@ -717,8 +719,28 @@ export function LinkedVouchersColored({
   align?: "start" | "center" | "end";
   /** Bill-wise: use pink instead of gray for voucher details below status. */
   billWisePink?: boolean;
+  wrapInline?: boolean;
 }) {
   if (!vouchers?.length) return null;
+  if (wrapInline) {
+    const justifyClass =
+      align === "end" ? "justify-end" : align === "start" ? "justify-start" : "justify-center";
+    return (
+      <div className={cn("flex flex-wrap items-center gap-y-[1px] text-[10px]", justifyClass, className)}>
+        {vouchers.map((v, globalIdx) => {
+          const colorClass = billWisePink
+            ? LINKED_VOUCHER_COLOR_CLASSES_BILLWISE[globalIdx % 3]
+            : getLinkedVoucherColorClass(globalIdx);
+          return (
+            <React.Fragment key={globalIdx}>
+              {globalIdx > 0 ? <span className="text-black"> + </span> : null}
+              <span className={colorClass}>{v}</span>
+            </React.Fragment>
+          );
+        })}
+      </div>
+    );
+  }
   const lines: string[][] = [];
   for (let i = 0; i < vouchers.length; i += vouchersPerLine) {
     lines.push(vouchers.slice(i, i + vouchersPerLine));
@@ -741,6 +763,62 @@ export function LinkedVouchersColored({
         </span>
       ))}
     </div>
+  );
+}
+
+/** Bill-wise print parity: linked voucher / overdue detail spans Status + Balance columns in narration sub-rows. */
+export function BillWiseLinkedDetailCells({
+  vouchers,
+  overdueText,
+  billWisePink = true,
+  showStatus,
+  hideStatusColumn,
+  showBalance,
+  hideBalanceColumn,
+  ensureMinGaps,
+}: {
+  vouchers: string[];
+  overdueText?: React.ReactNode;
+  billWisePink?: boolean;
+  showStatus: boolean;
+  hideStatusColumn?: boolean;
+  showBalance: boolean;
+  hideBalanceColumn?: boolean;
+  ensureMinGaps?: boolean;
+}) {
+  const hasDetail = (vouchers?.length ?? 0) > 0 || overdueText != null;
+  if (!showStatus || hideStatusColumn) return null;
+  const spanBoth = hasDetail && showBalance && !hideBalanceColumn;
+
+  if (!hasDetail) {
+    return (
+      <>
+        <TableCell className={cn("text-center align-top py-0", ensureMinGaps && "min-w-[95px] px-[5px]")} />
+        {showBalance && !hideBalanceColumn && (
+          <TableCell className={cn("text-right align-top py-0", ensureMinGaps && "min-w-[115px] px-[5px]")} />
+        )}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <TableCell
+        colSpan={spanBoth ? 2 : 1}
+        className={cn(
+          "text-left text-[10px] leading-tight align-top py-0 text-black whitespace-normal break-words",
+          ensureMinGaps && (spanBoth ? "min-w-[210px] px-[5px]" : "min-w-[95px] px-[5px]")
+        )}
+      >
+        <div className="flex flex-col items-start gap-[1px] min-w-0">
+          <LinkedVouchersColored vouchers={vouchers} wrapInline align="start" billWisePink={billWisePink} />
+          {overdueText ? <span className="block font-medium text-red-600">{overdueText}</span> : null}
+        </div>
+      </TableCell>
+      {showBalance && !hideBalanceColumn && !spanBoth && (
+        <TableCell className={cn("text-right align-top py-0", ensureMinGaps && "min-w-[115px] px-[5px]")} />
+      )}
+    </>
   );
 }
 
@@ -1518,27 +1596,40 @@ export const TransactionRow = React.memo(
             </span>
           ) : null}
         </TableCell>
-        {/* Keep voucher-detail text aligned under the Status column, not attached to narration text. */}
-        {showCol("status") && !hideStatusColumn && (
-          <TableCell
-            className={cn(
-              // Halve detail-row cell vertical padding for tighter narration/detail grouping.
-              "text-center text-[10px] leading-tight align-top py-0 text-black",
-              isOverdueForSubRow && overdueDaysForSubRow > 0 && "font-medium",
-              ensureMinGaps && "min-w-[95px] px-[5px]"
+        {/* Bill-wise: linked vouchers Status se Balance tak wrap (print jaisa); spend-wise: sirf Status column. */}
+        {isBillWise ? (
+          <BillWiseLinkedDetailCells
+            vouchers={statusDetailVouchers}
+            overdueText={overdueSubText ? hl(overdueSubText) : undefined}
+            billWisePink
+            showStatus={showCol("status")}
+            hideStatusColumn={hideStatusColumn}
+            showBalance={showCol("runningBalance")}
+            hideBalanceColumn={hideBalanceColumn}
+            ensureMinGaps={ensureMinGaps}
+          />
+        ) : (
+          <>
+            {showCol("status") && !hideStatusColumn && (
+              <TableCell
+                className={cn(
+                  "text-center text-[10px] leading-tight align-top py-0 text-black",
+                  isOverdueForSubRow && overdueDaysForSubRow > 0 && "font-medium",
+                  ensureMinGaps && "min-w-[95px] px-[5px]"
+                )}
+              >
+                <div className="flex flex-col items-center gap-[1px]">
+                  <LinkedVouchersColored vouchers={statusDetailVouchers} align="center" billWisePink={isBillWise} />
+                  {overdueSubText ? (
+                    <span className="block font-medium text-red-600">{hl(overdueSubText)}</span>
+                  ) : null}
+                </div>
+              </TableCell>
             )}
-          >
-            <div className="flex flex-col items-center gap-[1px]">
-              <LinkedVouchersColored vouchers={statusDetailVouchers} align="center" billWisePink={isBillWise} />
-              {overdueSubText ? (
-                <span className="block font-medium text-red-600">{hl(overdueSubText)}</span>
-              ) : null}
-            </div>
-          </TableCell>
-        )}
-        {/* Keep narration sub-row column structure in sync with main row. */}
-        {showCol("runningBalance") && !hideBalanceColumn && (
-          <TableCell className={cn("text-right", ensureMinGaps && "min-w-[115px] px-[5px]")} />
+            {showCol("runningBalance") && !hideBalanceColumn && (
+              <TableCell className={cn("text-right", ensureMinGaps && "min-w-[115px] px-[5px]")} />
+            )}
+          </>
         )}
         <TableCell className="w-10 p-0" />
       </motion.tr>

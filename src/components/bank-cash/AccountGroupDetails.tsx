@@ -552,10 +552,10 @@ export function AccountGroupDetails({
     const rows = filterByUnapprovedOnly(displayTransactions);
     if (spendWiseView) return rows;
     return recomputeRunningBalanceTopToBottom(
-      sortTransactionsWithFiscalMergeForCompany(rows, sortBy, sortOrder, undefined, company),
+      sortTransactionsWithFiscalMergeForCompany(rows, "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
       openingBalanceForPeriod
     );
-  }, [displayTransactions, filterByUnapprovedOnly, spendWiseView, sortBy, sortOrder, openingBalanceForPeriod, company]);
+  }, [displayTransactions, filterByUnapprovedOnly, spendWiseView, openingBalanceForPeriod, company]);
 
   /** Statement: one row per block; spend-wise: blocks for search â€” pagination uses @/lib/spendWisePagination (data-line budget + split borders). */
   const displayBlocks = useMemo(
@@ -573,6 +573,8 @@ export function AccountGroupDetails({
     rowsPerPage,
     currentPage,
     ledgerOpeningForRunning: openingBalanceForPeriod,
+    pageSortBy: sortBy,
+    pageSortOrder: sortOrder,
   });
 
   const spendWisePaging = useMemo(() => {
@@ -624,7 +626,7 @@ export function AccountGroupDetails({
   const statementListForCounts = useMemo(() => {
     if (!spendWiseView) return statementCheckPaging.ledgerListForPaging as any[];
     const rows = filterByUnapprovedOnly(baseTransactions);
-    const sorted = sortTransactionsWithFiscalMergeForCompany(rows, sortBy, sortOrder, undefined, company);
+    const sorted = sortTransactionsWithFiscalMergeForCompany(rows, "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company);
     const filtered = statementCheck.filterTransactions([...sorted]);
     if (statementCheck.checkModeActive) {
       return recomputeRunningBalanceTopToBottom(filtered, openingBalanceForPeriod);
