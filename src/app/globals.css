@@ -3579,15 +3579,21 @@ body.theme-colorfull main [data-pl-master-list-chrome] [data-pl-master-list-tabs
     color: rgb(219 234 254) !important;
     border-color: rgb(22 163 74) !important;
   }
-  /* Pro mobile list — unselected halka gray border; hover orange hint */
+  /* Master list — dashboard emerald tone + darker border (mobile APK/EXE) */
   body.theme-pro main [data-pl-master-list-chrome] [data-pl-list-row]:not([data-pl-list-selected]),
   body.theme-pro main [data-pl-master-list-chrome] [data-theme-list="account-list"] [data-pl-list-row]:not([data-pl-list-selected]),
-  body.theme-pro main [data-pl-master-list-chrome] .pl-master-list-ul [data-pl-list-row]:not([data-pl-list-selected]) {
-    border-width: 1px !important;
+  body.theme-pro main [data-pl-master-list-chrome] .pl-master-list-ul [data-pl-list-row]:not([data-pl-list-selected]),
+  body[class*="theme-"] main [data-pl-master-list-chrome] [data-pl-list-row]:not([data-pl-list-selected]) {
+    border-width: 1.5px !important;
     border-style: solid !important;
-    border-color: rgb(209 213 219) !important;
-    background-color: transparent !important;
-    background-image: none !important;
+    border-color: rgba(0, 0, 0, 0.52) !important;
+    background-color: #ecfdf5 !important;
+    background-image: linear-gradient(
+      90deg,
+      rgba(236, 253, 245, 0.98) 0%,
+      #ffffff 50%,
+      rgba(209, 250, 229, 0.92) 100%
+    ) !important;
     box-shadow: none !important;
     transition: border-color 0.15s ease, background-color 0.15s ease !important;
   }
@@ -3596,9 +3602,19 @@ body.theme-colorfull main [data-pl-master-list-chrome] [data-pl-master-list-tabs
   body.theme-pro main [data-pl-master-list-chrome] .pl-master-list-ul [data-pl-list-row]:not([data-pl-list-selected]):hover,
   body.theme-pro main [data-pl-master-list-chrome] .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-list-selected]),
   body.theme-pro main [data-pl-master-list-chrome] .pl-master-list-ul > li:hover > a > [data-pl-list-row]:not([data-pl-list-selected]),
-  body.theme-pro main [data-pl-master-list-chrome] .pl-master-list-ul > li > a:hover > [data-pl-list-row]:not([data-pl-list-selected]) {
-    border-color: rgb(251 146 60) !important;
-    background-color: rgb(255 247 237 / 0.45) !important;
+  body.theme-pro main [data-pl-master-list-chrome] .pl-master-list-ul > li > a:hover > [data-pl-list-row]:not([data-pl-list-selected]),
+  body[class*="theme-"] main [data-pl-master-list-chrome] [data-pl-list-row]:not([data-pl-list-selected]):hover,
+  body[class*="theme-"] main [data-pl-master-list-chrome] .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-list-selected]),
+  body[class*="theme-"] main [data-pl-master-list-chrome] .pl-master-list-ul > li:hover > a > [data-pl-list-row]:not([data-pl-list-selected]),
+  body[class*="theme-"] main [data-pl-master-list-chrome] .pl-master-list-ul > li > a:hover > [data-pl-list-row]:not([data-pl-list-selected]) {
+    border-color: rgba(0, 0, 0, 0.68) !important;
+    background-color: #ecfdf5 !important;
+    background-image: linear-gradient(
+      90deg,
+      rgba(236, 253, 245, 0.98) 0%,
+      #ffffff 50%,
+      rgba(209, 250, 229, 0.92) 100%
+    ) !important;
   }
   /* Mobile Pro list — selected orange + peach (pink ribbon gradient hatao) */
   body.theme-pro main [data-pl-master-list-chrome] [data-pl-list-selected],
@@ -3609,18 +3625,34 @@ body.theme-colorfull main [data-pl-master-list-chrome] [data-pl-master-list-tabs
     background-image: none !important;
     box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05) !important;
   }
-  body.theme-pro.dark main [data-pl-master-list-chrome] [data-pl-list-row]:not([data-pl-list-selected]) {
-    border-width: 1px !important;
-    border-color: rgb(75 85 99) !important;
-    background-color: transparent !important;
-    background-image: none !important;
+  body.theme-pro.dark main [data-pl-master-list-chrome] [data-pl-list-row]:not([data-pl-list-selected]),
+  body[class*="theme-"].dark main [data-pl-master-list-chrome] [data-pl-list-row]:not([data-pl-list-selected]) {
+    border-width: 1.5px !important;
+    border-color: rgba(0, 0, 0, 0.45) !important;
+    background-color: rgb(6 78 59 / 0.22) !important;
+    background-image: linear-gradient(
+      90deg,
+      rgba(6, 78, 59, 0.35) 0%,
+      rgba(15, 23, 42, 0.55) 50%,
+      rgba(6, 95, 70, 0.3) 100%
+    ) !important;
   }
   body.theme-pro.dark main [data-pl-master-list-chrome] [data-pl-list-row]:not([data-pl-list-selected]):hover,
   body.theme-pro.dark main [data-pl-master-list-chrome] .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-list-selected]),
   body.theme-pro.dark main [data-pl-master-list-chrome] .pl-master-list-ul > li:hover > a > [data-pl-list-row]:not([data-pl-list-selected]),
-  body.theme-pro.dark main [data-pl-master-list-chrome] .pl-master-list-ul > li > a:hover > [data-pl-list-row]:not([data-pl-list-selected]) {
-    border-color: rgb(249 115 22) !important;
-    background-color: rgb(67 20 7 / 0.28) !important;
+  body.theme-pro.dark main [data-pl-master-list-chrome] .pl-master-list-ul > li > a:hover > [data-pl-list-row]:not([data-pl-list-selected]),
+  body[class*="theme-"].dark main [data-pl-master-list-chrome] [data-pl-list-row]:not([data-pl-list-selected]):hover,
+  body[class*="theme-"].dark main [data-pl-master-list-chrome] .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-list-selected]),
+  body[class*="theme-"].dark main [data-pl-master-list-chrome] .pl-master-list-ul > li:hover > a > [data-pl-list-row]:not([data-pl-list-selected]),
+  body[class*="theme-"].dark main [data-pl-master-list-chrome] .pl-master-list-ul > li > a:hover > [data-pl-list-row]:not([data-pl-list-selected]) {
+    border-color: rgba(0, 0, 0, 0.58) !important;
+    background-color: rgb(6 78 59 / 0.28) !important;
+    background-image: linear-gradient(
+      90deg,
+      rgba(6, 78, 59, 0.4) 0%,
+      rgba(15, 23, 42, 0.58) 50%,
+      rgba(6, 95, 70, 0.35) 100%
+    ) !important;
   }
   body.theme-pro.dark main [data-pl-master-list-chrome] [data-pl-list-selected] {
     border-color: rgb(249 115 22) !important;
@@ -4064,13 +4096,18 @@ body.theme-pro .pl-recon-share-child-card.pl-recon-share-child-tone-rose {
   border-color: rgb(253 164 175 / 0.65) !important;
 }
 
-/* Master list — unselected halka border; hover orange (Link/li parent se — row :hover miss fix) */
+/* Master list — dashboard emerald tone + darker border (web / APK / EXE / Linux / iOS) */
 body[class*="theme-"] [data-pl-list-row]:not([data-pl-list-selected]) {
-  border-width: 1px !important;
+  border-width: 1.5px !important;
   border-style: solid !important;
-  border-color: rgb(229 231 235) !important;
-  background-color: transparent !important;
-  background-image: none !important;
+  border-color: rgba(0, 0, 0, 0.52) !important;
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(
+    90deg,
+    rgba(236, 253, 245, 0.98) 0%,
+    #ffffff 50%,
+    rgba(209, 250, 229, 0.92) 100%
+  ) !important;
   box-shadow: none !important;
   transition: border-color 0.15s ease, background-color 0.15s ease !important;
 }
@@ -4081,8 +4118,14 @@ body[class*="theme-"] .pl-master-list-ul > li > a:hover > [data-pl-list-row]:not
 body[class*="theme-"] [data-theme-list="account-list"] .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-list-selected]),
 body[class*="theme-"] [data-theme-list="account-list"] .pl-master-list-ul > li:hover > a > [data-pl-list-row]:not([data-pl-list-selected]),
 body[class*="theme-"] [data-theme-list="account-list"] .pl-master-list-ul > li > a:hover > [data-pl-list-row]:not([data-pl-list-selected]) {
-  border-color: rgb(251 146 60) !important;
-  background-color: rgb(255 247 237 / 0.45) !important;
+  border-color: rgba(0, 0, 0, 0.68) !important;
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(
+    90deg,
+    rgba(236, 253, 245, 0.98) 0%,
+    #ffffff 50%,
+    rgba(209, 250, 229, 0.92) 100%
+  ) !important;
 }
 /* Selected — saari themes: orange border + peach (screenshot) */
 body[class*="theme-"] [data-pl-list-selected] {
@@ -4121,16 +4164,34 @@ body[class*="theme-"] [data-pl-list-selected] [data-pl-list-name] {
   background: transparent !important;
 }
 
-/* Pro dark: unselected border thoda gehra */
-body.theme-pro.dark [data-pl-list-row]:not([data-pl-list-selected]) {
-  border-color: rgb(75 85 99) !important;
+/* Pro dark: master list unselected — emerald dark tone */
+body.theme-pro.dark [data-pl-list-row]:not([data-pl-list-selected]),
+body[class*="theme-"].dark [data-pl-list-row]:not([data-pl-list-selected]) {
+  border-color: rgba(0, 0, 0, 0.45) !important;
+  background-color: rgb(6 78 59 / 0.22) !important;
+  background-image: linear-gradient(
+    90deg,
+    rgba(6, 78, 59, 0.35) 0%,
+    rgba(15, 23, 42, 0.55) 50%,
+    rgba(6, 95, 70, 0.3) 100%
+  ) !important;
 }
 body.theme-pro.dark .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-list-selected]),
 body.theme-pro.dark .pl-master-list-ul > li:hover > a > [data-pl-list-row]:not([data-pl-list-selected]),
 body.theme-pro.dark .pl-master-list-ul > li > a:hover > [data-pl-list-row]:not([data-pl-list-selected]),
-body.theme-pro.dark [data-pl-list-row]:not([data-pl-list-selected]):hover {
-  border-color: rgb(249 115 22) !important;
-  background-color: rgb(67 20 7 / 0.28) !important;
+body.theme-pro.dark [data-pl-list-row]:not([data-pl-list-selected]):hover,
+body[class*="theme-"].dark .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-list-selected]),
+body[class*="theme-"].dark .pl-master-list-ul > li:hover > a > [data-pl-list-row]:not([data-pl-list-selected]),
+body[class*="theme-"].dark .pl-master-list-ul > li > a:hover > [data-pl-list-row]:not([data-pl-list-selected]),
+body[class*="theme-"].dark [data-pl-list-row]:not([data-pl-list-selected]):hover {
+  border-color: rgba(0, 0, 0, 0.58) !important;
+  background-color: rgb(6 78 59 / 0.28) !important;
+  background-image: linear-gradient(
+    90deg,
+    rgba(6, 78, 59, 0.4) 0%,
+    rgba(15, 23, 42, 0.58) 50%,
+    rgba(6, 95, 70, 0.35) 100%
+  ) !important;
 }
 
 /* ========== Spend-wise view: har theme — green/pink/blue group box + inflow green (pic 2/3) ========== */

@@ -53,11 +53,7 @@ export function PartyGroupList({
   getItemHref?: (group: Group) => string | undefined;
 }) {
   const { formatCurrency } = useDate();
-  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion({
-    enabled: collapsible,
-  });
-  // Party page tab (`collapsible={false}`): layout/out animation band — tab switch flicker na ho
-  const useListMotion = collapsible === true;
+  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['party group']));
   const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
 
@@ -122,24 +118,20 @@ export function PartyGroupList({
         <ScrollArea
           listChrome
           className="min-h-0 min-w-0 w-full flex-1"
-          onViewportScroll={useListMotion ? markListScrolling : undefined}
-          onViewportTouchMove={useListMotion ? markListScrolling : undefined}
+          onViewportScroll={markListScrolling}
+          onViewportTouchMove={markListScrolling}
         >
           <div className="px-3 pt-0 pb-2 space-y-2 w-full">
           {categories.length === 0 ? (
             <div className="p-8 text-center text-sm text-muted-foreground">No groups found.</div>
           ) : null}
-          <AnimatePresence mode={useListMotion ? animatePresenceMode : "sync"}>
-            {categories.map((category) => {
+          {categories.map((category) => {
               const categoryKey = category.name.toLowerCase();
               const isExpanded = collapsible ? expandedCategories.has(categoryKey) : true;
               const hasGroups = category.groups.length > 0;
-              const CategoryTag = useListMotion ? motion.div : "div";
-              const RowTag = useListMotion ? motion.li : "li";
-              const motionProps = useListMotion ? rowMotionProps : {};
               
               return (
-                <CategoryTag key={categoryKey} {...motionProps}>
+                <div key={categoryKey}>
                   {/* Category Header - same padding/height as party list section (Party (x)) */}
                   <div
                     className={cn(
@@ -164,11 +156,12 @@ export function PartyGroupList({
                   {/* Groups under category - full width like party list */}
                   {isExpanded && hasGroups && (
                     <ul className="pl-master-list-ul mt-1 w-full">
+                      <AnimatePresence mode={animatePresenceMode}>
                       {category.groups.map((group) => {
                         const isSelected = selectedGroup?.id === group.id;
                         const isSystem = (group as any).isSystemReserved;
                         return (
-                          <RowTag key={group.id} className="w-full" {...motionProps}>
+                          <motion.li key={group.id} className="w-full" {...rowMotionProps}>
                             {(() => {
                               const href = getItemHref?.(group);
                               const cardClassName = masterListRowUnselectedCn(isSelected);
@@ -238,15 +231,15 @@ export function PartyGroupList({
                                 </MasterListRow>
                               );
                             })()}
-                          </RowTag>
+                          </motion.li>
                         );
                       })}
+                      </AnimatePresence>
                     </ul>
                   )}
-                </CategoryTag>
+                </div>
               );
             })}
-          </AnimatePresence>
           </div>
       </ScrollArea>
       <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
