@@ -556,10 +556,14 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
           return uid === selectedUserId;
         });
       }
-      if (voucherNumberSearch) {
-        itemsToFilter = itemsToFilter.filter(item => item.voucherNumber?.toLowerCase().includes(voucherNumberSearch.toLowerCase()));
+      if (voucherNumberSearch.trim()) {
+        const q = voucherNumberSearch.trim().toLowerCase().replace(/[\s\-]/g, "");
+        itemsToFilter = itemsToFilter.filter((item) => {
+          const nos = [item.voucherNumber, item.voucherNumberIn, item.voucherNumberOut, (item as any).voucher_number];
+          return nos.some((n) => n != null && String(n).toLowerCase().replace(/[\s\-]/g, "").includes(q));
+        });
       }
-       if (dateRange?.from) {
+       if (dateRange?.from && !voucherNumberSearch.trim()) {
         const fromDate = startOfDay(dateRange.from);
         const toDate = dateRange.to ? endOfDay(dateRange.to) : endOfDay(fromDate);
         itemsToFilter = itemsToFilter.filter(item => {
@@ -1005,6 +1009,22 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                 {showAvatarsOnly ? "Profile pictures for parties, staff, etc." : "All transaction documents."}
               </CardDescription>
               </div>
+              {!showAvatarsOnly && (
+                <div className="relative w-28 shrink-0 sm:w-32">
+                  <Search
+                    className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+                    aria-hidden
+                  />
+                  <Input
+                    type="search"
+                    value={voucherNumberSearch}
+                    onChange={(e) => setVoucherNumberSearch(e.target.value)}
+                    placeholder="Voucher no…"
+                    className="h-8 border-blue-300/70 bg-background/95 pl-8 text-xs dark:border-blue-700/60"
+                    aria-label="Search by voucher number"
+                  />
+                </div>
+              )}
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1.5 sm:flex-row sm:items-start sm:gap-2">
               <Badge

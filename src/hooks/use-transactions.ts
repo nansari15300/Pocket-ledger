@@ -2,7 +2,7 @@
 "use client";
 
 import { useMemo, useCallback } from "react";
-import { startOfDay, endOfDay } from "date-fns";
+import { startOfDay, endOfDay, subDays } from "date-fns";
 import type { Party, Group } from "@/components/party/types";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import type { Staff, StaffGroup } from "@/components/staff/types";
@@ -1841,19 +1841,24 @@ export function useTransactions(
         if (context === 'daybook' && dateRange?.from) {
             const today = startOfDay(dateRange.from);
 
-            /** Ek bank/cash account ka balance targetDate se pehle (user filter ke saath) */
-            const balanceForAccountBefore = (acc: Account, targetDate: Date) => {
+            /** Daybook summary: account balance kisi din ke end tak — same cash-flow rules as Todays In/Out */
+            const daybookAccountBalanceThroughDay = (acc: Account, throughDay: Date) => {
+                const throughEnd = endOfDay(throughDay);
                 let balance = acc.openingBalance || 0;
-                vouchers.forEach((v: any) => {
+                const accountObDate = safeToDate((acc as any).openingBalanceDate);
+                entityTransactions.forEach((v: any) => {
                     if (daybookUserIdFilter && String(v.userId || "") !== String(daybookUserIdFilter)) return;
                     const transactionDate = safeToDate(v.date);
-                    if (!transactionDate || transactionDate >= targetDate) return;
-                    const { debit, credit } = getTransactionAmounts(v, "account", acc, stockView, entityList, processedTaxes);
-                    if (!debit && !credit) return;
-                    balance += debit - credit;
+                    if (!transactionDate || transactionDate > throughEnd) return;
+                    if (accountObDate && transactionDate < accountObDate) return;
+                    const { tin, tout } = getDaybookAccountCashFlowInOut(v, acc, stockView, entityList, processedTaxes);
+                    balance += tin - tout;
                 });
                 return balance;
             };
+
+            /** Yesterday = pichhle din ka Todays Balance (carry forward), sare voucher dubara scan nahi */
+            const yesterdayDay = subDays(today, 1);
 
             /** Account ledger Dr/Cr → daybook in/out; IC clearing double-entry ko single-sided cash flow */
             const addInOutForAccount = (acc: Account, v: any) => {
@@ -1872,14 +1877,15 @@ export function useTransactions(
                     accIn += tin;
                     accOut += tout;
                 });
-                const y = balanceForAccountBefore(acc, today);
+                const y = daybookAccountBalanceThroughDay(acc, yesterdayDay);
+                const todayBalance = daybookAccountBalanceThroughDay(acc, today);
                 return {
                     id: acc.id,
                     name: acc.accountName || fallbackName,
                     yesterday: y,
                     in: accIn,
                     out: accOut,
-                    today: y + accIn - accOut,
+                    today: todayBalance,
                 };
             };
 
