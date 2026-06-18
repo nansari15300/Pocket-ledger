@@ -10,7 +10,7 @@ import { cn, masterDetailBalanceToneClass } from "@/lib/utils"
 import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 import { useDate } from "@/hooks/useDate";
-import { useAnimationSettings } from "@/hooks/useAnimationSettings";
+import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { Landmark, Crown } from "lucide-react";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipTrigger, TooltipContent } from "../ui/tooltip";
@@ -18,8 +18,6 @@ import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from 'next/link';
 import usePermissions from "@/hooks/usePermissions";
-import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
-import { isElectronEnvironment } from "@/hooks/use-mobile";
 import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
@@ -45,11 +43,7 @@ export function AccountList({
   const { formatCurrency } = useDate();
   const { can } = usePermissions();
   const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
-  const { settings: animationSettings } = useAnimationSettings();
-  const isRowAnimationEnabled = animationSettings?.rows?.enabled === true;
-  const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 2.5) : 0;
-  /** EXE/static: balance refresh par `layout` + popLayout se poora pane hilta hai */
-  const suppressListLayoutMotion = isStaticAppBuild() || isElectronEnvironment();
+  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   const canViewSpecialAccount = can('view_special_bank_accounts');
   const canViewSpecialBalance = can('view_special_account_balance');
 
@@ -87,9 +81,14 @@ export function AccountList({
 
   return (
     <div className={masterListShellCn}>
-      <ScrollArea listChrome className="min-h-0 min-w-0 flex-1">
+      <ScrollArea
+        listChrome
+        className="min-h-0 min-w-0 flex-1"
+        onViewportScroll={markListScrolling}
+        onViewportTouchMove={markListScrolling}
+      >
         <ul className="pl-master-list-ul">
-          <AnimatePresence mode={suppressListLayoutMotion ? "sync" : "popLayout"}>
+          <AnimatePresence mode={animatePresenceMode}>
             {filteredAndSortedAccounts.map((account) => {
               const isSelected = selectedAccount?.id === account.id;
               const isSpecial = account.isSpecial;
@@ -160,13 +159,7 @@ export function AccountList({
                 </div>
               );
               return (
-                <motion.li
-                  key={account.id}
-                  layout={!suppressListLayoutMotion}
-                  initial={false}
-                  exit={{ transition: { duration: 0 } }}
-                  transition={{ duration: suppressListLayoutMotion ? 0 : rowAnimationDuration, ease: "easeInOut" }}
-                >
+                <motion.li key={account.id} {...rowMotionProps}>
                   {href ? (
                     // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                     <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">

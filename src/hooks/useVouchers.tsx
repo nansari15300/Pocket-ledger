@@ -462,24 +462,31 @@ function shouldSkipHeavyVoucherBootstrap(pathname: string): boolean {
   return HEAVY_LEDGER_SKIP_ROUTE_PREFIXES.some((prefix) => route.startsWith(prefix));
 }
 
+/** Voucher forms (sale/purchase lines) ke liye zaroori sab master collections — route filter bypass. */
+const VOUCHER_FORM_MASTER_COLLECTION_PATHS = new Set([
+  "vouchers",
+  "parties",
+  "staff",
+  "bank_accounts",
+  "taxes",
+  "expense_accounts",
+  "items",
+  "item_groups",
+  "groups",
+  "account_groups",
+  "staff_groups",
+  "tax_groups",
+  "expense_groups",
+]);
+
 /** Active page route → sirf required collections live listen/prefetch; baki page inactive par idle. */
-function activeMasterCollectionPathsForRoute(pathname: string): Set<string> {
+function activeMasterCollectionPathsForRoute(
+  pathname: string,
+  /** Nested copy-to dialog: party/bank route par bhi taxes/items load — sale/pur tax dropdown khali na ho. */
+  voucherFormMasterScope = false
+): Set<string> {
+  if (voucherFormMasterScope) return VOUCHER_FORM_MASTER_COLLECTION_PATHS;
   const route = String(pathname || "").trim().toLowerCase();
-  const all = new Set([
-    "vouchers",
-    "parties",
-    "staff",
-    "bank_accounts",
-    "taxes",
-    "expense_accounts",
-    "items",
-    "item_groups",
-    "groups",
-    "account_groups",
-    "staff_groups",
-    "tax_groups",
-    "expense_groups",
-  ]);
   if (route.startsWith("/bank-cash")) return new Set(["vouchers", "bank_accounts", "account_groups"]);
   if (route.startsWith("/party")) return new Set(["vouchers", "parties", "groups", "expense_accounts"]);
   if (route.startsWith("/staff")) return new Set(["vouchers", "staff", "staff_groups"]);
@@ -487,10 +494,17 @@ function activeMasterCollectionPathsForRoute(pathname: string): Set<string> {
   if (route.startsWith("/items")) return new Set(["vouchers", "items", "item_groups"]);
   if (route.startsWith("/incomes")) return new Set(["vouchers", "expense_accounts", "expense_groups"]);
   // Voucher/reports/dashboard/reconciliation jaise shared pages par full master dataset chahiye.
-  return all;
+  return VOUCHER_FORM_MASTER_COLLECTION_PATHS;
 }
 
-export const VoucherProvider = ({ children }: { children: ReactNode }) => {
+export const VoucherProvider = ({
+  children,
+  /** Copy-to / compare nested provider: shell route filter ignore karke voucher-form masters load. */
+  voucherFormMasterScope = false,
+}: {
+  children: ReactNode;
+  voucherFormMasterScope?: boolean;
+}) => {
   const { companyId, company, clearCompanyId } = useCompany();
   const pathname = usePathname() || "";
   const { user, customUser, loading: authLoading } = useAuth();
@@ -866,8 +880,8 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       { path: "tax_groups", setter: setTaxGroups },
       { path: "expense_groups", setter: setExpenseGroups },
     ];
-    /** Active page collections hi prefetch/listen — inactive pages ke listeners band rakho. */
-    const activeCollectionPaths = activeMasterCollectionPathsForRoute(pathname);
+    /** Active page collections hi prefetch/listen — nested voucher dialog par full voucher-form scope. */
+    const activeCollectionPaths = activeMasterCollectionPathsForRoute(pathname, voucherFormMasterScope);
     const collectionsToPrefetch = allCollectionsToPrefetch.filter((c) => activeCollectionPaths.has(c.path));
 
     // Pure offline row: Firestore try mat karo — warna getDoc fail / empty se web jaisa reset ho sakta hai
@@ -1352,7 +1366,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       unsubRef.current.forEach(u => u());
       unsubRef.current = [];
     };
-  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch, pathname]);
+  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch, pathname, voucherFormMasterScope]);
 
   // Single-doc / write-path upsert ke baad merge (notify) — collections ke hisaab se state update.
   useEffect(() => {
@@ -1424,7 +1438,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       if (!d || d.companyId !== companyId || !d.collection) return;
       const coll = d.collection;
       // Active page ke bahar collection bump ignore — unnecessary background merge avoid.
-      if (!activeMasterCollectionPathsForRoute(pathname).has(coll)) return;
+      if (!activeMasterCollectionPathsForRoute(pathname, voucherFormMasterScope).has(coll)) return;
       if (
         embeddedClientPrefersQuietBackgroundSync() &&
         !sqliteBumpCollectionNeededOnLedgerRoute(pathname, coll)
@@ -1456,7 +1470,8 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     company?.syncedFromCloud,
     company?.syncPolicy,
     company?.authoritativeCompanyId,
-    pathname
+    pathname,
+    voucherFormMasterScope,
   ]);
 
   /** Voucher/account/user display names: masters se pehle, bounded Firestore chunk — `collection('users')` full scan hata (400+ vouchers / large user base = hang). */
@@ -2270,4 +2285,9 @@ export const useVouchers = () => {
   }
   return context;
 };
+
+/** Shell route par `bank_accounts` prefetch ho rahe hon (voucher dialog ke liye). */
+export function routeHasVoucherBankAccountsLoaded(pathname: string): boolean {
+  return activeMasterCollectionPathsForRoute(pathname, false).has("bank_accounts");
+}
 

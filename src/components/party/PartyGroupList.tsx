@@ -7,7 +7,7 @@ import { Users, Lock, Building2, CreditCard, Receipt, Package, FileText, Chevron
 import type { Group } from "@/components/party/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
-import { useAnimationSettings } from "@/hooks/useAnimationSettings";
+import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../ui/tooltip";
 import { useMemo, useState } from "react";
@@ -53,11 +53,10 @@ export function PartyGroupList({
   getItemHref?: (group: Group) => string | undefined;
 }) {
   const { formatCurrency } = useDate();
-  const { settings: animationSettings } = useAnimationSettings();
-  const isRowAnimationEnabled = animationSettings.rows.enabled === true;
+  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion({
+    enabled: collapsible,
+  });
   // Party page tab (`collapsible={false}`): layout/out animation band — tab switch flicker na ho
-  const rowAnimationDuration =
-    collapsible === false ? 0 : isRowAnimationEnabled ? animationSettings.rows.duration : 0;
   const useListMotion = collapsible === true;
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['party group']));
   const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
@@ -120,26 +119,24 @@ export function PartyGroupList({
   return (
     <TooltipProvider delayDuration={200}>
       <div className={masterListShellCn}>
-        <ScrollArea listChrome className="min-h-0 min-w-0 w-full flex-1">
+        <ScrollArea
+          listChrome
+          className="min-h-0 min-w-0 w-full flex-1"
+          onViewportScroll={useListMotion ? markListScrolling : undefined}
+          onViewportTouchMove={useListMotion ? markListScrolling : undefined}
+        >
           <div className="px-3 pt-0 pb-2 space-y-2 w-full">
           {categories.length === 0 ? (
             <div className="p-8 text-center text-sm text-muted-foreground">No groups found.</div>
           ) : null}
-          <AnimatePresence mode={useListMotion ? "popLayout" : "sync"}>
+          <AnimatePresence mode={useListMotion ? animatePresenceMode : "sync"}>
             {categories.map((category) => {
               const categoryKey = category.name.toLowerCase();
               const isExpanded = collapsible ? expandedCategories.has(categoryKey) : true;
               const hasGroups = category.groups.length > 0;
               const CategoryTag = useListMotion ? motion.div : "div";
               const RowTag = useListMotion ? motion.li : "li";
-              const motionProps = useListMotion
-                ? {
-                    layout: true as const,
-                    initial: false as const,
-                    exit: { transition: { duration: 0 } },
-                    transition: { duration: rowAnimationDuration, ease: "easeInOut" as const },
-                  }
-                : {};
+              const motionProps = useListMotion ? rowMotionProps : {};
               
               return (
                 <CategoryTag key={categoryKey} {...motionProps}>

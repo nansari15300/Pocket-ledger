@@ -6,7 +6,7 @@ import { Users, Lock } from "lucide-react";
 import type { ExpenseGroup } from "@/components/expenses/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
-import { useAnimationSettings } from "@/hooks/useAnimationSettings";
+import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 import { useMemo, useState } from "react";
@@ -43,9 +43,7 @@ export function ExpenseGroupList({
   getItemHref?: (group: ExpenseGroup) => string | undefined;
 }) {
   const { formatCurrency } = useDate();
-  const { settings: animationSettings } = useAnimationSettings();
-  const isRowAnimationEnabled = animationSettings.rows.enabled === true;
-  const rowAnimationDuration = isRowAnimationEnabled ? animationSettings.rows.duration : 0;
+  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
 
   // System groups sirf Reports me – list pages pe hide (Direct Income, Direct Expenses etc. bhi)
@@ -89,9 +87,14 @@ export function ExpenseGroupList({
   return (
     <TooltipProvider delayDuration={200}>
       <motion.div className={cn(masterListShellCn, disabled && "pointer-events-none opacity-60")}>
-        <ScrollArea listChrome className="min-h-0 min-w-0 w-full flex-1">
+        <ScrollArea
+          listChrome
+          className="min-h-0 min-w-0 w-full flex-1"
+          onViewportScroll={markListScrolling}
+          onViewportTouchMove={markListScrolling}
+        >
           <ul className="pl-master-list-ul w-full">
-            <AnimatePresence mode="popLayout">
+            <AnimatePresence mode={animatePresenceMode}>
               {filteredAndSortedGroups.map((group) => {
                 const isSelected = selectedGroup?.id === group.id;
                 const isSystem = (group as any).isSystemReserved;
@@ -153,17 +156,7 @@ export function ExpenseGroupList({
                       </div>
                 );
                 return (
-                  <motion.li
-                    key={group.id}
-                    className="w-full"
-                    layout
-                    initial={false}
-                    exit={{ transition: { duration: 0 } }}
-                    transition={{
-                      duration: rowAnimationDuration,
-                      ease: "easeInOut",
-                    }}
-                  >
+                  <motion.li key={group.id} className="w-full" {...rowMotionProps}>
                     {href ? (
                       // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                       <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">

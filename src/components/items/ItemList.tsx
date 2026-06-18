@@ -6,7 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { Item } from "@/components/items/types";
 import { useDate } from "@/hooks/useDate";
-import { useAnimationSettings } from "@/hooks/useAnimationSettings";
+import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { Package } from "lucide-react";
 import type { StockView } from "./ItemDetails";
 import React, { useMemo, useState } from "react";
@@ -93,9 +93,7 @@ export function ItemList({
   getItemHref,
 }: ItemListProps) {
   const { formatCurrency } = useDate();
-  const { settings: animationSettings } = useAnimationSettings();
-  const isRowAnimationEnabled = animationSettings.rows.enabled === true;
-  const rowAnimationDuration = isRowAnimationEnabled ? animationSettings.rows.duration : 0;
+  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   /** Party master list jaisa niche sort/filter strip */
   const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
 
@@ -132,9 +130,14 @@ export function ItemList({
   return (
     <TooltipProvider delayDuration={200}>
       <div className={masterListShellCn} data-theme-list="account-list">
-        <ScrollArea listChrome className="min-h-0 flex-1 min-w-0">
+        <ScrollArea
+          listChrome
+          className="min-h-0 flex-1 min-w-0"
+          onViewportScroll={markListScrolling}
+          onViewportTouchMove={markListScrolling}
+        >
           <div className="pl-master-list-ul">
-            <AnimatePresence>
+            <AnimatePresence mode={animatePresenceMode}>
               {filteredAndSortedRows.map(({ item, metrics }) => {
                 const isSelected = selectedItem?.id === item.id;
                 const { formattedDisplayValue, isPositive, displayUnit } = metrics;
@@ -199,16 +202,7 @@ export function ItemList({
                   </div>
                 );
                 return (
-                  <motion.li
-                    key={item.id}
-                    layout
-                    initial={false}
-                    exit={{ transition: { duration: 0 } }}
-                    transition={{
-                      duration: rowAnimationDuration,
-                      ease: "easeInOut",
-                    }}
-                  >
+                  <motion.li key={item.id} {...rowMotionProps}>
                     {href ? (
                       // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                       <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">

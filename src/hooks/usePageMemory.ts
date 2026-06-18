@@ -86,13 +86,16 @@ export function usePageMemory<T extends { id: string }>(
       return;
     }
 
-    // URL has report param (e.g. on refresh) - use that instead of localStorage
+    // URL has selected param: valid ho to usi ko restore karo.
+    // Invalid/stale id (e.g. deleted row / different company) ho to fallback auto-select chalao.
     if (urlSelectedId) {
       const urlItem = currentItems.find((i) => i.id === urlSelectedId);
-      if (urlItem && urlItem.id !== selected?.id) {
-        setSelected(urlItem);
+      if (urlItem) {
+        if (urlItem.id !== selected?.id) {
+          setSelected(urlItem);
+        }
+        return;
       }
-      return;
     }
 
     const lastSelectedIdForThisView = selectionsHistory.current[activeView];

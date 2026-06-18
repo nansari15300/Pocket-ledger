@@ -113,14 +113,16 @@ export function PrintMastersOptionsPanel({
   };
 
   return (
-    <>
-      <DialogHeader>
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <DialogHeader className="shrink-0 pr-8">
         <DialogTitle>Print masters</DialogTitle>
         <DialogDescription>
           Prints only the selected master lists in a table layout. The current screen report is not
           included.
         </DialogDescription>
       </DialogHeader>
+      {/* APK/WebView: options scroll; action buttons niche fixed */}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain touch-pan-y [-webkit-overflow-scrolling:touch] pr-1">
       <div className="flex flex-col gap-4 py-2">
         <MasterPrintKindPicker selected={masterTypes} onSelectedChange={setMasterTypes} />
         <div className="flex items-start gap-3">
@@ -203,7 +205,8 @@ export function PrintMastersOptionsPanel({
           </RadioGroup>
         </div>
       </div>
-      <DialogFooter className="!flex-row flex-nowrap items-center justify-end gap-2 w-full overflow-x-auto sm:space-x-0 [&>*]:mt-0 [&>button]:shrink-0">
+      </div>
+      <DialogFooter className="shrink-0 !flex-row flex-nowrap items-center justify-end gap-2 w-full overflow-x-auto border-t bg-background pt-3 mt-2 sm:space-x-0 [&>*]:mt-0 [&>button]:shrink-0">
         <Button type="button" variant="outline" className="rounded-full px-4 sm:px-5" onClick={onBack}>
           Back
         </Button>
@@ -223,6 +226,6 @@ export function PrintMastersOptionsPanel({
           Internal
         </Button>
       </DialogFooter>
-    </>
+    </div>
   );
 }

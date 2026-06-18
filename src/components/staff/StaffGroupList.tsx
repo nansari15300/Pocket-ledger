@@ -6,7 +6,7 @@ import { Users } from "lucide-react";
 import type { StaffGroup } from "@/components/staff/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
-import { useAnimationSettings } from "@/hooks/useAnimationSettings";
+import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 import { useMemo, useState } from "react";
@@ -38,9 +38,7 @@ export function StaffGroupList({
   getItemHref?: (group: StaffGroup) => string | undefined;
 }) {
   const { formatCurrency } = useDate();
-  const { settings: animationSettings } = useAnimationSettings();
-  const isRowAnimationEnabled = animationSettings?.rows?.enabled === true;
-  const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 2.5) : 0;
+  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
 
   const filteredAndSortedGroups = useMemo(() => {
@@ -58,9 +56,14 @@ export function StaffGroupList({
   return (
     <TooltipProvider delayDuration={200}>
     <motion.div className={masterListShellCn}>
-      <ScrollArea listChrome className="min-h-0 min-w-0 flex-1">
+      <ScrollArea
+        listChrome
+        className="min-h-0 min-w-0 flex-1"
+        onViewportScroll={markListScrolling}
+        onViewportTouchMove={markListScrolling}
+      >
         <ul className="pl-master-list-ul">
-          <AnimatePresence mode="popLayout">
+          <AnimatePresence mode={animatePresenceMode}>
             {filteredAndSortedGroups.map((group) => {
               const isSelected = selectedGroup?.id === group.id;
               const href = getItemHref?.(group);
@@ -119,13 +122,7 @@ export function StaffGroupList({
                       </div>
               );
               return (
-                <motion.li
-                  key={group.id}
-                  layout
-                  initial={false}
-                  exit={{ transition: { duration: 0 } }}
-                  transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
-                >
+                <motion.li key={group.id} {...rowMotionProps}>
                     {href ? (
                     // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                     <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">

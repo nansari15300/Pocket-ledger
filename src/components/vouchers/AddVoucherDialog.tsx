@@ -46,7 +46,7 @@ import type { InterCompanyRibbonTab } from "@/components/inter-company/InterComp
 import { isInterCompanyVoucherEditDeleteBlocked } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { useCompany, CompanyContext } from "@/hooks/useCompany";
 import usePermissions from "@/hooks/usePermissions";
-import { useVouchers, VoucherProvider } from "@/hooks/useVouchers";
+import { routeHasVoucherBankAccountsLoaded, useVouchers, VoucherProvider } from "@/hooks/useVouchers";
 import { determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { HistoryDialog } from "./HistoryDialog";
 import { toast } from "sonner";
@@ -4025,8 +4025,11 @@ export function AddVoucherDialog(props: any) {
     if (apkLedgerPinsShellCompanyContext) return false;
     // Header company change: target ≠ sidebar shell → nested masters (create/edit/copy sab).
     const dest = String(targetCompanyId || shellId).trim();
-    return dest !== shellId;
-  }, [apkLedgerPinsShellCompanyContext, targetCompanyId, ctxCompanyId]);
+    if (dest !== shellId) return true;
+    // Party/staff/tax/items/incomes: shell route par bank_accounts lazy nahi — dialog khulte hi load.
+    if (isOpen && !routeHasVoucherBankAccountsLoaded(pathname)) return true;
+    return false;
+  }, [apkLedgerPinsShellCompanyContext, targetCompanyId, ctxCompanyId, isOpen, pathname]);
 
   /** Auto switch Settings modal se commit nahi — sirf main voucher Save; forms ko block karne ki zaroorat nahi. */
   const recurringVoucherSaveBlocked = false;
@@ -4098,8 +4101,9 @@ export function AddVoucherDialog(props: any) {
   const bodyBlock = (
     <>
     <CompanyContext.Provider value={overriddenCompanyContextValue}>
+      {/* Cross-company copy-to: nested provider ko taxes/items bhi chahiye — route filter bypass */}
       {needsNestedVoucherProvider ? (
-        <VoucherProvider>{voucherDialogFormTree}</VoucherProvider>
+        <VoucherProvider voucherFormMasterScope>{voucherDialogFormTree}</VoucherProvider>
       ) : (
         voucherDialogFormTree
       )}

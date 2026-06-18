@@ -11,18 +11,25 @@ type ScrollAreaProps = React.ComponentPropsWithoutRef<typeof ScrollAreaPrimitive
   listChrome?: boolean;
   /** Inter Company voucher — light gray thumb; gutter par border-l nahi (4K black line avoid) */
   icVoucherChrome?: boolean;
+  /** Master list touch scroll — layout animation pause (frame drop kam) */
+  onViewportScroll?: React.UIEventHandler<HTMLDivElement>;
+  onViewportTouchMove?: React.TouchEventHandler<HTMLDivElement>;
 };
 
 const ScrollArea = React.forwardRef<
   React.ElementRef<typeof ScrollAreaPrimitive.Root>,
   ScrollAreaProps
->(({ className, children, listChrome, icVoucherChrome, ...props }, ref) => (
+>(({ className, children, listChrome, icVoucherChrome, onViewportScroll, onViewportTouchMove, ...props }, ref) => (
   <ScrollAreaPrimitive.Root
     ref={ref}
     className={cn("relative overflow-hidden", listChrome && "pl-master-list-scroll", className)}
     {...props}
   >
-    <ScrollAreaPrimitive.Viewport className="h-full w-full rounded-[inherit]">
+    <ScrollAreaPrimitive.Viewport
+      className="h-full w-full rounded-[inherit]"
+      onScroll={onViewportScroll}
+      onTouchMove={onViewportTouchMove}
+    >
       {children}
     </ScrollAreaPrimitive.Viewport>
     <ScrollBar listChrome={listChrome} icVoucherChrome={icVoucherChrome} />

@@ -117,23 +117,27 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
           }}
         >
           <DialogContent
-            className="w-[98vw] max-w-[98vw] h-[90vh] max-h-[90vh] rounded-2xl p-4 overflow-y-auto sm:h-auto sm:w-full sm:max-w-md"
+            className="!flex w-[98vw] max-w-[98vw] flex-col gap-0 overflow-hidden p-4 pb-3 h-[min(92dvh,calc(100vh-1.5rem))] max-h-[min(92dvh,calc(100vh-1.5rem))] sm:h-auto sm:max-h-none sm:w-full sm:max-w-md max-sm:top-[max(0.75rem,env(safe-area-inset-top,0px))] max-sm:translate-y-0"
             aria-describedby={view === "report" ? "print-options-desc" : undefined}
           >
             {view === "masters" ? (
-              <PrintMastersOptionsPanel
-                onBack={() => setView("report")}
-                onPrint={finishMastersPrint}
-              />
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <PrintMastersOptionsPanel
+                  onBack={() => setView("report")}
+                  onPrint={finishMastersPrint}
+                />
+              </div>
             ) : (
-              <>
-              <DialogHeader>
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <DialogHeader className="shrink-0 pr-8">
                 <DialogTitle>Print options</DialogTitle>
                 <DialogDescription id="print-options-desc">
                   Choose what appears in the PDF header. Cancel stops printing. Internal opens in-app
                   preview; External opens your device PDF app. Use Print masters for a masters-only list.
                 </DialogDescription>
               </DialogHeader>
+              {/* APK/WebView: sirf beech scroll — footer buttons hamesha viewport ke andar */}
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain touch-pan-y [-webkit-overflow-scrolling:touch] pr-1">
               <div className="flex flex-col gap-4 py-2">
                 <div className="flex items-start gap-3 space-y-0">
                   <Checkbox
@@ -275,7 +279,8 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
                   </RadioGroup>
                 </div>
               </div>
-              <DialogFooter className="!flex-row flex-nowrap items-center justify-end gap-2 w-full overflow-x-auto sm:space-x-0 [&>*]:mt-0 [&>button]:shrink-0">
+              </div>
+              <DialogFooter className="shrink-0 !flex-row flex-nowrap items-center justify-end gap-2 w-full overflow-x-auto border-t bg-background pt-3 mt-2 sm:space-x-0 [&>*]:mt-0 [&>button]:shrink-0">
                 <Button
                   type="button"
                   variant="outline"
@@ -307,7 +312,7 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
                   Internal
                 </Button>
               </DialogFooter>
-              </>
+              </div>
             )}
           </DialogContent>
         </Dialog>

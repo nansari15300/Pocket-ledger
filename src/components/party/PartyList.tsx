@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils"
 import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 import { useDate } from "@/hooks/useDate";
-import { useAnimationSettings } from "@/hooks/useAnimationSettings";
+import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../ui/tooltip";
 import React, { useMemo, useState } from "react";
@@ -50,10 +50,8 @@ export const PartyList = React.memo(({
   getItemHref?: (party: Party) => string | undefined;
 }) => {
   const { formatCurrency } = useDate();
-  const { settings: animationSettings } = useAnimationSettings();
+  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
-  const isRowAnimationEnabled = animationSettings?.rows?.enabled === true;
-  const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 2.5) : 0;
 
   const filteredAndSortedParties = useMemo(() => {
     const toDateMs = (raw: unknown): number => {
@@ -108,9 +106,14 @@ export const PartyList = React.memo(({
     <TooltipProvider delayDuration={200}>
       {/* min-w-0: grid 25% column bhitra ScrollArea overflow — lamba naam failaaundaina */}
       <div className={masterListShellCn} data-theme-list="account-list">
-        <ScrollArea listChrome className="min-h-0 min-w-0 flex-1">
+        <ScrollArea
+          listChrome
+          className="min-h-0 min-w-0 flex-1"
+          onViewportScroll={markListScrolling}
+          onViewportTouchMove={markListScrolling}
+        >
           <ul className="pl-master-list-ul">
-            <AnimatePresence mode="popLayout">
+            <AnimatePresence mode={animatePresenceMode}>
               {filteredAndSortedParties.map((party) => {
                 const isSelected = selectedParty?.id === party.id;
                 const href = getItemHref?.(party);
@@ -180,13 +183,7 @@ export const PartyList = React.memo(({
                 );
                 const cardClassName = masterListRowUnselectedCn(isSelected);
                 return (
-                  <motion.li
-                    key={party.id}
-                    layout
-                    initial={false}
-                    exit={{ transition: { duration: 0 } }}
-                    transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
-                  >
+                  <motion.li key={party.id} {...rowMotionProps}>
                     {href ? (
                       // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                       <Link

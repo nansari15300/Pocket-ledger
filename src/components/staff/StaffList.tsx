@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils"
 import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 import { useDate } from "@/hooks/useDate";
-import { useAnimationSettings } from "@/hooks/useAnimationSettings";
+import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Briefcase } from "lucide-react";
@@ -50,13 +50,7 @@ export function StaffList({
 }) {
   const { formatCurrency } = useDate();
   const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
-  const { settings: animationSettings } = useAnimationSettings();
-  
-  // Get animation settings - check enabled flag explicitly
-  const isRowAnimationEnabled = animationSettings.rows.enabled === true;
-  // Use exact duration when enabled, 0 when disabled
-  const rowAnimationDuration = isRowAnimationEnabled ? animationSettings.rows.duration : 0;
-  
+  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   const filteredAndSortedStaff = useMemo(() => {
     const toDateMs = (raw: unknown): number => {
       if (!raw) return 0;
@@ -90,9 +84,14 @@ export function StaffList({
 
   return (
     <div className={masterListShellCn}>
-      <ScrollArea listChrome className="min-h-0 min-w-0 flex-1">
+      <ScrollArea
+        listChrome
+        className="min-h-0 min-w-0 flex-1"
+        onViewportScroll={markListScrolling}
+        onViewportTouchMove={markListScrolling}
+      >
         <ul className="pl-master-list-ul">
-          <AnimatePresence mode="popLayout">
+          <AnimatePresence mode={animatePresenceMode}>
             {filteredAndSortedStaff.map((staffMember) => {
               const isSelected = selectedStaff?.id === staffMember.id;
               const href = getItemHref?.(staffMember);
@@ -152,13 +151,7 @@ export function StaffList({
                 </div>
               );
               return (
-                <motion.li
-                  key={staffMember.id}
-                  layout
-                  initial={false}
-                  exit={{ transition: { duration: 0 } }}
-                  transition={{ duration: isRowAnimationEnabled ? rowAnimationDuration : 0, ease: "easeInOut" }}
-                >
+                <motion.li key={staffMember.id} {...rowMotionProps}>
                   {href ? (
                     // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                     <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">

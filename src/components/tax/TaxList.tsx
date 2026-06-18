@@ -6,7 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { Receipt } from "lucide-react";
 import { useDate } from "@/hooks/useDate";
-import { useAnimationSettings } from "@/hooks/useAnimationSettings";
+import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { Tooltip, TooltipProvider, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import React, { useMemo, useState } from "react";
@@ -41,9 +41,7 @@ export function TaxList({
     getItemHref?: (tax: Tax) => string | undefined;
 }) {
   const { formatCurrency } = useDate();
-  const { settings: animationSettings } = useAnimationSettings();
-  const isRowAnimationEnabled = animationSettings?.rows?.enabled === true;
-  const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 2.5) : 0;
+  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   /** Party account list — `EntityListQuickFilterBar` niche (Default / Dr / By Name…) */
   const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
 
@@ -67,9 +65,14 @@ export function TaxList({
   return (
     <TooltipProvider delayDuration={200}>
       <div className={masterListShellCn} data-theme-list="account-list">
-        <ScrollArea listChrome className="min-h-0 min-w-0 flex-1">
+        <ScrollArea
+          listChrome
+          className="min-h-0 min-w-0 flex-1"
+          onViewportScroll={markListScrolling}
+          onViewportTouchMove={markListScrolling}
+        >
           <ul className="pl-master-list-ul">
-          <AnimatePresence mode="popLayout">
+          <AnimatePresence mode={animatePresenceMode}>
             {filteredAndSortedTaxes.map(tax => {
                 const isSelected = selectedTax?.id === tax.id;
                 const href = getItemHref?.(tax);
@@ -135,13 +138,7 @@ export function TaxList({
                         </div>
                 );
                 return (
-                  <motion.li
-                    key={tax.id}
-                    layout
-                    initial={false}
-                    exit={{ transition: { duration: 0 } }}
-                    transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
-                  >
+                  <motion.li key={tax.id} {...rowMotionProps}>
                     {href ? (
                       // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                       <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">

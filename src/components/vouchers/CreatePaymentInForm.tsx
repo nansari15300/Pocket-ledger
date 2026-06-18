@@ -5,6 +5,7 @@ import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, type Resolver, type FieldErrors } from "react-hook-form";
 import { z } from "zod";
+import { isNonClearingVoucherBankAccount } from "@/lib/voucherBankCashAccounts";
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -1890,6 +1891,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   
   const isOwner = user?.uid === company?.ownerId;
   const availableAccounts = processedAccounts.filter(acc => {
+    if (!isNonClearingVoucherBankAccount(acc)) return false;
     if (!acc.isSpecial) return true;
     // Owner/manage can always see special accounts; view-only follows optional `useFor.in` allow-list.
     if (isOwner || can('manage_special_bank_accounts')) return true;

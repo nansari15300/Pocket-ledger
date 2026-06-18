@@ -5,7 +5,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { MasterListRow } from "@/components/ui/master-list-row";
 import { DollarSign, Lock } from "lucide-react";
 import { useDate } from "@/hooks/useDate";
-import { useAnimationSettings } from "@/hooks/useAnimationSettings";
+import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -40,9 +40,7 @@ export function ExpenseAccountList({
   getItemHref,
 }: ExpenseAccountListProps) {
   const { formatCurrency } = useDate();
-  const { settings: animationSettings } = useAnimationSettings();
-  const isRowAnimationEnabled = animationSettings?.rows?.enabled === true;
-  const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 2.5) : 0;
+  const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   /** Income & Expense account column — Party jaisi sort/footer controls */
   const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
 
@@ -72,9 +70,14 @@ export function ExpenseAccountList({
         className={cn(masterListShellCn, disabled && "pointer-events-none opacity-60")}
         data-theme-list="account-list"
       >
-        <ScrollArea listChrome className="min-h-0 min-w-0 flex-1">
+        <ScrollArea
+          listChrome
+          className="min-h-0 min-w-0 flex-1"
+          onViewportScroll={markListScrolling}
+          onViewportTouchMove={markListScrolling}
+        >
           <ul className="pl-master-list-ul">
-            <AnimatePresence mode="popLayout">
+            <AnimatePresence mode={animatePresenceMode}>
               {filteredAndSortedAccounts.map((account) => {
                 const isSelected = selectedAccount?.id === account.id;
                 const isSystem = (account as any).isSystemReserved;
@@ -133,13 +136,7 @@ export function ExpenseAccountList({
                       </div>
                 );
                 return (
-                  <motion.li
-                    key={account.id}
-                    layout
-                    initial={false}
-                    exit={{ transition: { duration: 0 } }}
-                    transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
-                  >
+                  <motion.li key={account.id} {...rowMotionProps}>
                     {href ? (
                       // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
                       <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
