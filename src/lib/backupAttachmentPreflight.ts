@@ -222,7 +222,7 @@ export function formatBackupAttachmentPreflightError(
 ): string {
   if (missingCount <= 0) return "";
   if (localFirst) {
-    return `${missingCount} of ${totalRefs} attachment file(s) are not on this device (open those vouchers once to cache files, or backup without attachments).`;
+    return `${missingCount} of ${totalRefs} attachment file(s) are not on this device. Use “Pre-download data & attachments” under Backup, open those vouchers once, or backup without attachments.`;
   }
   return `${missingCount} of ${totalRefs} attachment file(s) could not be loaded (check internet and try again, or backup without attachments).`;
 }

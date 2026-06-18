@@ -23,7 +23,9 @@ import { CreateItemGroupDialog } from "@/components/items/CreateItemGroupDialog"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ItemGroupDetails } from "@/components/items/ItemGroupDetails";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
-import { mlc, mlcListChromeRoot, mlcListChromeRootData } from "@/lib/mobileListChrome";
+import { mlc } from "@/lib/mobileListChrome";
+import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
+import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import { PermissionButton } from "@/components/permission";
 import { useDate } from "@/hooks/useDate";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
@@ -37,6 +39,10 @@ import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
+import {
+  masterDetailTabHref,
+  replaceMasterDetailTabUrl,
+} from "@/lib/masterDetailTabChange";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
@@ -50,6 +56,7 @@ import { PendingApprovalListFilterBadge } from "@/components/layout/PendingAppro
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
+import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 
 type DisplayUnitState = Record<string, string>;
@@ -116,9 +123,30 @@ function ItemsPageContent() {
   }, [setSelected, router]);
   useRegisterMasterDetailHardwareBack("items", onBackToList);
 
+  const handleItemsTabChange = useCallback(
+    (value: string) => {
+      setActiveView(value);
+      if (!isMobile) return;
+      setSelected(null);
+      const href = masterDetailTabHref("items", {
+        tab: value,
+        defaultTab: "items",
+        listOnly: true,
+      });
+      replaceMasterDetailTabUrl(href, router, useQueryNav);
+    },
+    [isMobile, setActiveView, setSelected, router, useQueryNav]
+  );
+
   const [searchTerm, setSearchTerm] = useState("");
-  const [showOnlyItemsWithPendingApproval, setShowOnlyItemsWithPendingApproval] = useState(false);
-  const [showOnlyItemGroupsWithPendingApproval, setShowOnlyItemGroupsWithPendingApproval] = useState(false);
+  const [itemListQuickFilter, setItemListQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [groupListQuickFilter, setGroupListQuickFilter] = useState<EntityListQuickFilter>("default");
+  const {
+    showOnlyEntities: showOnlyItemsWithPendingApproval,
+    setShowOnlyEntities: setShowOnlyItemsWithPendingApproval,
+    showOnlyGroups: showOnlyItemGroupsWithPendingApproval,
+    setShowOnlyGroups: setShowOnlyItemGroupsWithPendingApproval,
+  } = usePendingApprovalListFilter(totalPendingApprovalVoucherCount);
   const [stockView, setStockView] = useState<StockView>("amount");
   const [itemDisplayUnits, setItemDisplayUnits] = useState<DisplayUnitState>({});
   const [isCreateItemOpen, setIsCreateItemOpen] = useState(false);
@@ -237,7 +265,7 @@ function ItemsPageContent() {
     setSelected,
     activeView === "items" ? allItems : processedItemGroups,
     vouchersLoading,
-    undefined,
+    isMobile,
     selectedIdFromUrl
   );
 
@@ -431,112 +459,134 @@ function ItemsPageContent() {
     );
   }
 
-  const listView = (
-    <div className={mlcListChromeRoot} {...mlcListChromeRootData}>
-      <div className={mlc.searchRow}>
-        <div className={mlc.searchWrap}>
-          <Search className={mlc.searchIcon} />
-          <Input
-            placeholder={activeView === "items" ? "Search items..." : "Search groups..."}
-            listChrome
-            listChromeSearch
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            autoComplete="off"
-          />
-        </div>
-        {activeView === "items" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-          <PendingApprovalListFilterBadge compact
-            count={totalPendingApprovalVoucherCount}
-            pressed={showOnlyItemsWithPendingApproval}
-            onToggle={() => setShowOnlyItemsWithPendingApproval((v) => !v)}
-            tooltipFilterHint={`Only items with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
-            tooltipShowAllHint="Show all items (click)"
-            ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
-            ariaLabelShowAll="Show all items"
-          />
-        ) : null}
-        {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-          <PendingApprovalListFilterBadge compact
-            count={totalPendingApprovalVoucherCount}
-            pressed={showOnlyItemGroupsWithPendingApproval}
-            onToggle={() => setShowOnlyItemGroupsWithPendingApproval((v) => !v)}
-            tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
-            tooltipShowAllHint="Show all groups (click)"
-            ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
-            ariaLabelShowAll="Show all groups"
-          />
-        ) : null}
-        {activeView === "items" ? (
-          <CreateItemDialog onItemCreated={() => {}} isOpen={isCreateItemOpen} onOpenChange={setIsCreateItemOpen}>
-            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateItemOpen(true)}>
-              + Add Item
-            </PermissionButton>
-          </CreateItemDialog>
-        ) : (
-          <CreateItemGroupDialog
-            onGroupCreated={() => {}}
-            isOpen={isCreateGroupOpen}
-            onOpenChange={setIsCreateGroupOpen}
-            groups={processedItemGroups}
-          >
-            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
-              + Add Group
-            </PermissionButton>
-          </CreateItemGroupDialog>
-        )}
+  const itemsTabsEl = (
+    <Tabs value={activeView} onValueChange={handleItemsTabChange} className="w-full">
+      <TabsList listChrome>
+        <TabsTrigger listChrome value="items" className="flex-1">Items</TabsTrigger>
+        <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
+      </TabsList>
+    </Tabs>
+  );
+
+  const itemsSearchRowEl = (
+    <div className={mlc.searchRow}>
+      <div className={mlc.searchWrap}>
+        <Search className={mlc.searchIcon} />
+        <Input
+          placeholder={activeView === "items" ? "Search items..." : "Search groups..."}
+          listChrome
+          listChromeSearch
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          autoComplete="off"
+        />
       </div>
+      {activeView === "items" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+        <PendingApprovalListFilterBadge compact
+          count={totalPendingApprovalVoucherCount}
+          pressed={showOnlyItemsWithPendingApproval}
+          onToggle={() => setShowOnlyItemsWithPendingApproval((v) => !v)}
+          tooltipFilterHint={`Only items with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+          tooltipShowAllHint="Show all items (click)"
+          ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+          ariaLabelShowAll="Show all items"
+        />
+      ) : null}
+      {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+        <PendingApprovalListFilterBadge compact
+          count={totalPendingApprovalVoucherCount}
+          pressed={showOnlyItemGroupsWithPendingApproval}
+          onToggle={() => setShowOnlyItemGroupsWithPendingApproval((v) => !v)}
+          tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+          tooltipShowAllHint="Show all groups (click)"
+          ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+          ariaLabelShowAll="Show all groups"
+        />
+      ) : null}
+      {activeView === "items" ? (
+        <CreateItemDialog onItemCreated={() => {}} isOpen={isCreateItemOpen} onOpenChange={setIsCreateItemOpen}>
+          <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateItemOpen(true)}>
+            + Add Item
+          </PermissionButton>
+        </CreateItemDialog>
+      ) : (
+        <CreateItemGroupDialog
+          onGroupCreated={() => {}}
+          isOpen={isCreateGroupOpen}
+          onOpenChange={setIsCreateGroupOpen}
+          groups={processedItemGroups}
+        >
+          <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
+            + Add Group
+          </PermissionButton>
+        </CreateItemGroupDialog>
+      )}
+    </div>
+  );
+
+  const itemsSectionLabelEl =
+    activeView === "items" ? (
+      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
+        <Package className={mlc.sectionIcon} />
+        <span>Item ({filteredItemListCount})</span>
+        <Select value={stockView} onValueChange={(v) => setStockView(v as StockView)}>
+          <SelectTrigger className="w-[100px] h-7 ml-auto">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="qty">Unit</SelectItem>
+            <SelectItem value="amount">Amounts</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+    ) : (
+      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
+        <Users className={mlc.sectionIcon} />
+        <span>Groups ({filteredGroupCount})</span>
+      </div>
+    );
+
+  const listView = (
+    <MasterListViewShell
+      isMobile={isMobile}
+      searchRow={itemsSearchRowEl}
+      sectionLabel={itemsSectionLabelEl}
+      tabs={itemsTabsEl}
+      quickFilter={activeView === "items" ? itemListQuickFilter : groupListQuickFilter}
+      onQuickFilterChange={activeView === "items" ? setItemListQuickFilter : setGroupListQuickFilter}
+    >
       {vouchersLoading ? (
-        <div className="flex-1 min-h-0 flex items-center justify-center p-4">
+        <div className="flex min-h-0 flex-1 items-center justify-center p-4">
           <LoadingSpinner />
         </div>
       ) : activeView === "items" ? (
-        <>
-          <div className={mlc.sectionLabelRow}>
-            <Package className={mlc.sectionIcon} />
-            <span>Item ({filteredItemListCount})</span>
-            <Select value={stockView} onValueChange={(v) => setStockView(v as StockView)}>
-              <SelectTrigger className="w-[100px] h-7 ml-auto">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="qty">Unit</SelectItem>
-                <SelectItem value="amount">Amounts</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <ItemList
-              items={itemsForItemList}
-              onSelectItem={(i) => handleSelect(i)}
-              selectedItem={selectedItem}
-              searchTerm={searchTerm}
-              stockView={stockView}
-              itemDisplayUnits={itemDisplayUnits}
-              pendingApprovalByItemId={pendingApprovalByItemId}
-              getItemHref={useQueryNav ? (i) => `/items?selected=${i.id}` : undefined}
-            />
-          </div>
-        </>
+        <ItemList
+          items={itemsForItemList}
+          onSelectItem={(i) => handleSelect(i)}
+          selectedItem={selectedItem}
+          searchTerm={searchTerm}
+          stockView={stockView}
+          itemDisplayUnits={itemDisplayUnits}
+          pendingApprovalByItemId={pendingApprovalByItemId}
+          getItemHref={useQueryNav ? (i) => `/items?selected=${i.id}` : undefined}
+          quickFilter={itemListQuickFilter}
+          onQuickFilterChange={setItemListQuickFilter}
+          hideQuickFilterBar
+        />
       ) : (
-        <>
-          <div className={mlc.sectionLabelRow}>
-            <Users className={mlc.sectionIcon} />
-            <span>Groups ({filteredGroupCount})</span>
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <ItemGroupList
-              groups={processedItemGroupsForList}
-              onSelectGroup={(g) => handleSelect(g)}
-              selectedGroup={selectedItemGroup}
-              searchTerm={searchTerm}
-              pendingApprovalByGroupId={pendingApprovalByItemGroupId}
-              getItemHref={useQueryNav ? (g) => `/items?view=groups&selected=${g.id}` : undefined}
-            />
-          </div>
-        </>
+        <ItemGroupList
+          groups={processedItemGroupsForList}
+          onSelectGroup={(g) => handleSelect(g)}
+          selectedGroup={selectedItemGroup}
+          searchTerm={searchTerm}
+          pendingApprovalByGroupId={pendingApprovalByItemGroupId}
+          getItemHref={useQueryNav ? (g) => `/items?view=groups&selected=${g.id}` : undefined}
+          quickFilter={groupListQuickFilter}
+          onQuickFilterChange={setGroupListQuickFilter}
+          hideQuickFilterBar
+        />
       )}
-    </div>
+    </MasterListViewShell>
   );
 
   const detailView = (
@@ -594,14 +644,8 @@ function ItemsPageContent() {
           {formatCurrency(totalBalance, { showDrCr: true, noAnimation: true })}
         </span>
       }
-      tabs={
-        <Tabs value={activeView} onValueChange={setActiveView} className="w-full">
-          <TabsList listChrome>
-            <TabsTrigger listChrome value="items" className="flex-1">Items</TabsTrigger>
-            <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
-          </TabsList>
-        </Tabs>
-      }
+      tabs={isMobile ? undefined : itemsTabsEl}
+      mobileTabsDocked={isMobile}
       listView={listView}
       detailView={detailView}
       isMobile={isMobile}

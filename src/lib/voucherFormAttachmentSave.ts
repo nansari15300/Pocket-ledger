@@ -203,11 +203,11 @@ export function buildVoucherAttachmentLivePatch(fileUrls: readonly string[]): {
 
 export const VOUCHER_ATTACHMENT_SAVED_EVENT = "pocket-ledger-voucher-attachment-saved";
 
-/** Save ke turant baad `useVouchers` cache update — har voucher form se (Payment/Sale/Journal…). */
-export function dispatchVoucherAttachmentSaved(
+/** Save / link ke turant baad `useVouchers` cache patch — ledger + dialogs bina refresh. */
+export function dispatchVoucherLivePatch(
   companyId: string,
   voucherId: string,
-  fileUrls: readonly string[]
+  patch: Record<string, unknown>
 ): void {
   if (typeof window === "undefined" || !companyId?.trim() || !voucherId?.trim()) return;
   window.dispatchEvent(
@@ -215,10 +215,19 @@ export function dispatchVoucherAttachmentSaved(
       detail: {
         companyId: companyId.trim(),
         voucherId: voucherId.trim(),
-        patch: buildVoucherAttachmentLivePatch(fileUrls),
+        patch,
       },
     })
   );
+}
+
+/** Save ke turant baad `useVouchers` cache update — har voucher form se (Payment/Sale/Journal…). */
+export function dispatchVoucherAttachmentSaved(
+  companyId: string,
+  voucherId: string,
+  fileUrls: readonly string[]
+): void {
+  dispatchVoucherLivePatch(companyId, voucherId, buildVoucherAttachmentLivePatch(fileUrls));
 }
 
 /**

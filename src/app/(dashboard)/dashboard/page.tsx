@@ -13,12 +13,12 @@ import { firestore } from "@/lib/firebase";
 import {
   doc,
   getDoc,
-  updateDoc,
   collection,
   query,
   getDocs,
   where,
 } from 'firebase/firestore';
+import { applyPaymentBillWiseLinkAllocations } from '@/lib/voucherActionsClient';
 import * as React from 'react';
 import { Suspense, useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import {
@@ -2212,7 +2212,7 @@ function DashboardPageContent() {
            onDone={async (allocations, _amount) => {
              if (!companyId || !linkPaymentVoucher?.id) return;
              try {
-               await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, linkPaymentVoucher.id), { allocations });
+               await applyPaymentBillWiseLinkAllocations(companyId, linkPaymentVoucher, allocations);
                toast.success("Allocations updated.");
                setLinkPaymentVoucher(null);
              } catch (e: any) {

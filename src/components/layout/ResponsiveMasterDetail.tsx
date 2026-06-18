@@ -8,6 +8,7 @@ import { useDate } from "@/hooks/useDate";
 import { cn } from "@/lib/utils";
 import { mdc, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
 import { mlc } from "@/lib/mobileListChrome";
+import type { MasterDetailListRouteKey } from "@/lib/masterDetailListPath";
 
 export function ResponsiveMasterDetail({
   title,
@@ -26,6 +27,10 @@ export function ResponsiveMasterDetail({
   mobileSelectionLabelClassName,
   /** Mobile detail title row — right side (e.g. voucher count); niche duplicate row avoid */
   mobileDetailHeaderEnd,
+  /** PC-only CSS tweaks per route (e.g. party tabs +20% height) */
+  listChromeRouteKey,
+  /** Mobile list: tabs listView footer me (title upar, list beech me) */
+  mobileTabsDocked,
 }: {
   title: string | React.ReactNode;
   balance: string | React.ReactNode;
@@ -43,7 +48,13 @@ export function ResponsiveMasterDetail({
   mobileSelectionLabel?: string | null;
   mobileSelectionLabelClassName?: string;
   mobileDetailHeaderEnd?: React.ReactNode;
+  listChromeRouteKey?: MasterDetailListRouteKey;
+  mobileTabsDocked?: boolean;
 }) {
+  const listChromeRouteData = listChromeRouteKey
+    ? ({ "data-pl-master-list-route": listChromeRouteKey } as const)
+    : {};
+  const dockTabsOnMobile = mobileTabsDocked ?? Boolean(isMobile && mobileListOnly);
   const isNegative = typeof balance === 'string' && balance.includes('Cr');
 
   if (isMobile) {
@@ -96,14 +107,14 @@ export function ResponsiveMasterDetail({
     if (mobileListOnly) {
       return (
         <div className="h-full w-full overflow-hidden bg-background flex flex-col">
-          <div className="flex flex-col flex-1 min-h-0" data-pl-master-list-chrome="">
+          <div className="flex flex-col flex-1 min-h-0" data-pl-master-list-chrome="" {...listChromeRouteData}>
             <div className={mlc.pageHeader}>
               <div className="flex min-w-0 items-center justify-between gap-2">
                 <h1 className={mlc.pageTitle}>{title}</h1>
                 <span className={cn(mlc.pageBalance, isNegative ? "text-red-600" : "text-green-600")}>{balance}</span>
               </div>
             </div>
-            {tabs && <div className={mlc.tabsRow}>{tabs}</div>}
+            {tabs && !dockTabsOnMobile && <div className={mlc.tabsRow}>{tabs}</div>}
             {/* overflow-hidden + flex column taaki andar ScrollArea ko height mile; overflow-auto yahan nested scroll tod deta tha */}
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{listView}</div>
           </div>
@@ -116,6 +127,7 @@ export function ResponsiveMasterDetail({
         <div
           className="flex flex-col min-h-0 border-b flex-shrink-0"
           data-pl-master-list-chrome=""
+          {...listChromeRouteData}
           style={{ maxHeight: "45%" }}
         >
           <div className={mlc.pageHeader}>
@@ -143,6 +155,7 @@ export function ResponsiveMasterDetail({
       <div
         className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r"
         data-pl-master-list-chrome=""
+        {...listChromeRouteData}
       >
         <div className={cn(mlc.pageHeader, "flex justify-between items-center gap-2 min-w-0")}>
           <h1 className={cn(mlc.pageTitle, "truncate")}>{title}</h1>

@@ -29,7 +29,14 @@ export const mlc = {
 
   actionRow: "pl-mlc-action-row flex-shrink-0 border-b px-2 py-0",
   actionGrid: "grid grid-cols-2 gap-1",
+
+  /** Mobile master list: search/section/tabs — scroll ke neeche, quick-filter sabse niche */
+  mobileListDock:
+    "pl-mobile-list-dock flex flex-shrink-0 flex-col gap-[2px] border-t px-[2px] pb-[2px]",
 } as const;
+
+/** `MasterListViewShell` mobile footer dock */
+export const mobileListDockData = { "data-pl-mobile-list-dock": "" } as const;
 
 /** listView root — `data-pl-master-list-chrome` attribute ResponsiveMasterDetail PC column par */
 export const mlcListChromeRoot = "flex flex-col h-full min-h-0";

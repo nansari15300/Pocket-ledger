@@ -28,6 +28,9 @@ interface ExpenseAccountListProps {
   disabled?: boolean;
   /** When provided, use Link for navigation (mobile/Capacitor) – static export ke liye query params */
   getItemHref?: (account: ExpenseAccount) => string | undefined;
+  quickFilter?: EntityListQuickFilter;
+  onQuickFilterChange?: (next: EntityListQuickFilter) => void;
+  hideQuickFilterBar?: boolean;
 }
 
 export function ExpenseAccountList({
@@ -38,11 +41,18 @@ export function ExpenseAccountList({
   pendingApprovalByAccountId = {},
   disabled = false,
   getItemHref,
+  quickFilter: quickFilterProp,
+  onQuickFilterChange,
+  hideQuickFilterBar = false,
 }: ExpenseAccountListProps) {
   const { formatCurrency } = useDate();
   const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
-  /** Income & Expense account column — Party jaisi sort/footer controls */
-  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
+  const quickFilter = quickFilterProp ?? internalQuickFilter;
+  const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
+  const quickFilterFooter = !hideQuickFilterBar ? (
+    <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+  ) : null;
 
   const filteredAndSortedAccounts = useMemo(() => {
     return filterAndSortMasterEntityListRows(accounts ?? [], searchTerm, quickFilter);
@@ -58,7 +68,7 @@ export function ExpenseAccountList({
           <div className="flex flex-1 min-h-0 items-center justify-center p-8 text-center text-sm text-muted-foreground">
             No accounts found.
           </div>
-          <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+          {quickFilterFooter}
         </div>
       </TooltipProvider>
     );
@@ -153,7 +163,7 @@ export function ExpenseAccountList({
             </AnimatePresence>
           </ul>
         </ScrollArea>
-        <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+        {quickFilterFooter}
       </motion.div>
     </TooltipProvider>
   );

@@ -30,6 +30,9 @@ export function ExpenseGroupList({
   disabled = false,
   pendingApprovalByGroupId = {},
   getItemHref,
+  quickFilter: quickFilterProp,
+  onQuickFilterChange,
+  hideQuickFilterBar = false,
 }: {
   groups: ExpenseGroup[];
   searchTerm: string;
@@ -41,10 +44,18 @@ export function ExpenseGroupList({
   pendingApprovalByGroupId?: Record<string, number>;
   /** When provided, use Link for navigation (mobile/Capacitor) – static export ke liye query params */
   getItemHref?: (group: ExpenseGroup) => string | undefined;
+  quickFilter?: EntityListQuickFilter;
+  onQuickFilterChange?: (next: EntityListQuickFilter) => void;
+  hideQuickFilterBar?: boolean;
 }) {
   const { formatCurrency } = useDate();
   const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
-  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
+  const quickFilter = quickFilterProp ?? internalQuickFilter;
+  const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
+  const quickFilterFooter = !hideQuickFilterBar ? (
+    <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+  ) : null;
 
   // System groups sirf Reports me – list pages pe hide (Direct Income, Direct Expenses etc. bhi)
   const filteredAndSortedGroups = useMemo(() => {
@@ -78,7 +89,7 @@ export function ExpenseGroupList({
           <div className="flex min-h-0 flex-1 items-center justify-center p-8 text-center text-sm text-muted-foreground">
             No groups found.
           </div>
-          <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+          {quickFilterFooter}
         </div>
       </TooltipProvider>
     );
@@ -173,7 +184,7 @@ export function ExpenseGroupList({
             </AnimatePresence>
           </ul>
         </ScrollArea>
-        <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+        {quickFilterFooter}
       </motion.div>
     </TooltipProvider>
   );

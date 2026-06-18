@@ -30,6 +30,9 @@ export function AccountList({
   searchTerm,
   pendingApprovalByAccountId = {},
   getItemHref,
+  quickFilter: quickFilterProp,
+  onQuickFilterChange,
+  hideQuickFilterBar = false,
 }: {
   accounts: Account[];
   selectedAccount: Account | null;
@@ -39,10 +42,15 @@ export function AccountList({
   pendingApprovalByAccountId?: Record<string, number>;
   /** When provided, use Link for navigation (mobile/Capacitor) – static export ke liye query params */
   getItemHref?: (account: Account) => string | undefined;
+  quickFilter?: EntityListQuickFilter;
+  onQuickFilterChange?: (next: EntityListQuickFilter) => void;
+  hideQuickFilterBar?: boolean;
 }) {
   const { formatCurrency } = useDate();
   const { can } = usePermissions();
-  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
+  const quickFilter = quickFilterProp ?? internalQuickFilter;
+  const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
   const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   const canViewSpecialAccount = can('view_special_bank_accounts');
   const canViewSpecialBalance = can('view_special_account_balance');
@@ -181,7 +189,9 @@ export function AccountList({
           )}
         </ul>
       </ScrollArea>
-      <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+      {!hideQuickFilterBar ? (
+        <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+      ) : null}
     </div>
   );
 }

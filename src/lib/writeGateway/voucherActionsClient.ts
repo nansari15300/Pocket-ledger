@@ -76,7 +76,7 @@ import {
   voucherNewAttachmentsAlwaysStageAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
 import { parseAttachmentHoldClipboardText } from "@/lib/attachmentHoldClipboard";
-import { materializeVoucherAttachmentsInSavePayload } from "@/lib/voucherFormAttachmentSave";
+import { dispatchVoucherLivePatch, materializeVoucherAttachmentsInSavePayload } from "@/lib/voucherFormAttachmentSave";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
@@ -1598,6 +1598,12 @@ export async function updateVoucherSpendWiseLinks(
     coerceVoucherDocumentDate(payload);
     await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId, payload);
     await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
+    dispatchVoucherLivePatch(companyId, voucherId, {
+      linkedPaymentInIds,
+      linkedPaymentInAmounts,
+      lastEditedByUserName: currentUserName,
+      lastEditedAt: payload.lastEditedAt,
+    });
     return;
   }
   const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucherId);
@@ -1654,9 +1660,21 @@ export async function updateVoucherSpendWiseLinks(
       lastEditedAt: Timestamp.now(),
       history: newHistory as unknown as Record<string, unknown>,
     });
+    dispatchVoucherLivePatch(companyId, voucherId, {
+      linkedPaymentInIds,
+      linkedPaymentInAmounts,
+      lastEditedByUserName: currentUserName,
+      lastEditedAt: Timestamp.now(),
+    });
     return;
   }
   await mirrorVoucherDocToBrowserDb(companyId, voucherId);
+  dispatchVoucherLivePatch(companyId, voucherId, {
+    linkedPaymentInIds,
+    linkedPaymentInAmounts,
+    lastEditedByUserName: currentUserName,
+    lastEditedAt: Timestamp.now(),
+  });
 }
 
 /**
@@ -1774,6 +1792,36 @@ export async function syncBillWiseAllocationsToTargetVouchers(
     else allocations.push(entry);
     await updateDoc(ref, { allocations });
     await mirrorVoucherDocToBrowserDb(companyId, a.voucherId);
+  }
+}
+
+/**
+ * Ledger / report "Link for bill wise" save — mirror + bilateral sync + live cache patch.
+ */
+export async function applyPaymentBillWiseLinkAllocations(
+  companyId: string,
+  sourceVoucher: { id: string; allocations?: Allocation[] },
+  newAllocations: Allocation[]
+): Promise<void> {
+  if (!companyId || !sourceVoucher?.id) throw new Error("Missing companyId or voucher");
+  const sourceId = sourceVoucher.id;
+  const previousAllocations = Array.isArray(sourceVoucher.allocations) ? sourceVoucher.allocations : [];
+  await patchVoucherFields(companyId, sourceId, { allocations: newAllocations });
+  await syncBillWiseAllocationsToTargetVouchers(companyId, sourceId, newAllocations, previousAllocations);
+
+  dispatchVoucherLivePatch(companyId, sourceId, { allocations: newAllocations });
+
+  const affectedTargetIds = new Set<string>();
+  for (const a of [...previousAllocations, ...newAllocations]) {
+    if (a.voucherId && a.voucherId !== OPENING_BALANCE_VOUCHER_ID) affectedTargetIds.add(a.voucherId);
+  }
+  for (const targetId of affectedTargetIds) {
+    const data = await getCompanyDocFromBrowserDb(companyId, "vouchers", targetId).catch(() => null);
+    if (!data) continue;
+    const allocations = Array.isArray((data as { allocations?: Allocation[] }).allocations)
+      ? (data as { allocations: Allocation[] }).allocations
+      : [];
+    dispatchVoucherLivePatch(companyId, targetId, { allocations });
   }
 }
 

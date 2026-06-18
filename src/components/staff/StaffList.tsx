@@ -38,6 +38,9 @@ export function StaffList({
   searchTerm,
   pendingApprovalByStaffId = {},
   getItemHref,
+  quickFilter: quickFilterProp,
+  onQuickFilterChange,
+  hideQuickFilterBar = false,
 }: {
   staff: Staff[];
   selectedStaff: Staff | null;
@@ -47,9 +50,14 @@ export function StaffList({
   pendingApprovalByStaffId?: Record<string, number>;
   /** When provided, use Link for navigation (mobile/Capacitor) */
   getItemHref?: (staff: Staff) => string | undefined;
+  quickFilter?: EntityListQuickFilter;
+  onQuickFilterChange?: (next: EntityListQuickFilter) => void;
+  hideQuickFilterBar?: boolean;
 }) {
   const { formatCurrency } = useDate();
-  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
+  const quickFilter = quickFilterProp ?? internalQuickFilter;
+  const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
   const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   const filteredAndSortedStaff = useMemo(() => {
     const toDateMs = (raw: unknown): number => {
@@ -173,7 +181,9 @@ export function StaffList({
           )}
         </ul>
       </ScrollArea>
-      <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+      {!hideQuickFilterBar ? (
+        <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+      ) : null}
     </div>
   );
 };

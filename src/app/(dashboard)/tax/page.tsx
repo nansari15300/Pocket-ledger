@@ -9,7 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
-import { mlc, mlcListChromeRoot, mlcListChromeRootData } from "@/lib/mobileListChrome";
+import { mlc } from "@/lib/mobileListChrome";
+import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
+import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams } from "next/navigation";
 import { TaxList } from "@/components/tax/TaxList";
@@ -34,6 +36,10 @@ import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
+import {
+  masterDetailTabHref,
+  replaceMasterDetailTabUrl,
+} from "@/lib/masterDetailTabChange";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { isSystemParentGroup } from "@/lib/system-groups";
 
@@ -45,6 +51,7 @@ import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
 
 function TaxPageContent() {
   const { user } = useAuth();
@@ -129,9 +136,30 @@ function TaxPageContent() {
   }, [setSelected, router]);
   useRegisterMasterDetailHardwareBack("tax", onBackToList);
 
+  const handleTaxTabChange = useCallback(
+    (value: string) => {
+      setActiveView(value);
+      if (!isMobile) return;
+      setSelected(null);
+      const href = masterDetailTabHref("tax", {
+        tab: value,
+        defaultTab: "taxes",
+        listOnly: true,
+      });
+      replaceMasterDetailTabUrl(href, router, useQueryNav);
+    },
+    [isMobile, setActiveView, setSelected, router, useQueryNav]
+  );
+
   const [searchTerm, setSearchTerm] = useState("");
-  const [showOnlyTaxesWithPendingApproval, setShowOnlyTaxesWithPendingApproval] = useState(false);
-  const [showOnlyTaxGroupsWithPendingApproval, setShowOnlyTaxGroupsWithPendingApproval] = useState(false);
+  const [taxListQuickFilter, setTaxListQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [groupListQuickFilter, setGroupListQuickFilter] = useState<EntityListQuickFilter>("default");
+  const {
+    showOnlyEntities: showOnlyTaxesWithPendingApproval,
+    setShowOnlyEntities: setShowOnlyTaxesWithPendingApproval,
+    showOnlyGroups: showOnlyTaxGroupsWithPendingApproval,
+    setShowOnlyGroups: setShowOnlyTaxGroupsWithPendingApproval,
+  } = usePendingApprovalListFilter(totalPendingApprovalVoucherCount);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -232,7 +260,7 @@ function TaxPageContent() {
     setSelected,              
     activeView === 'taxes' ? processedTaxes : processedTaxGroups, 
     vouchersLoading,
-    undefined,
+    isMobile,
     selectedIdFromUrl
   );
   // ==================================
@@ -424,71 +452,107 @@ function TaxPageContent() {
     );
   }
   
-  const listView = (
-    <div className={mlcListChromeRoot} {...mlcListChromeRootData}>
-      <div className={mlc.searchRow}>
-        <div className={mlc.searchWrap}>
-          <Search className={mlc.searchIcon} />
-          <Input placeholder={activeView === 'taxes' ? 'Search taxes...' : 'Search groups...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
-        </div>
-        {activeView === "taxes" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-          <PendingApprovalListFilterBadge compact
-            count={totalPendingApprovalVoucherCount}
-            pressed={showOnlyTaxesWithPendingApproval}
-            onToggle={() => setShowOnlyTaxesWithPendingApproval((v) => !v)}
-            tooltipFilterHint={`Only taxes with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
-            tooltipShowAllHint="Show all taxes (click)"
-            ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
-            ariaLabelShowAll="Show all taxes"
-          />
-        ) : null}
-        {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-          <PendingApprovalListFilterBadge compact
-            count={totalPendingApprovalVoucherCount}
-            pressed={showOnlyTaxGroupsWithPendingApproval}
-            onToggle={() => setShowOnlyTaxGroupsWithPendingApproval((v) => !v)}
-            tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
-            tooltipShowAllHint="Show all groups (click)"
-            ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
-            ariaLabelShowAll="Show all groups"
-          />
-        ) : null}
-        {activeView === "taxes" ? (
-          <CreateTaxDialog onTaxCreated={() => {}} isOpen={isCreateTaxOpen} onOpenChange={setIsCreateTaxOpen}>
-            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateTaxOpen(true)}>
-              + Add Tax
-            </PermissionButton>
-          </CreateTaxDialog>
-        ) : (
-          <CreateTaxGroupDialog onGroupCreated={() => {}} groups={processedTaxGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
-            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
-              + Add Group
-            </PermissionButton>
-          </CreateTaxGroupDialog>
-        )}
+  const taxTabsEl = (
+    <Tabs value={activeView} onValueChange={handleTaxTabChange} className="w-full">
+      <TabsList listChrome>
+        <TabsTrigger listChrome value="taxes" className="flex-1">Taxes</TabsTrigger>
+        <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
+      </TabsList>
+    </Tabs>
+  );
+
+  const taxSearchRowEl = (
+    <div className={mlc.searchRow}>
+      <div className={mlc.searchWrap}>
+        <Search className={mlc.searchIcon} />
+        <Input placeholder={activeView === 'taxes' ? 'Search taxes...' : 'Search groups...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
       </div>
-       {activeView === 'taxes' ? (
-            <>
-              <div className={mlc.sectionLabelRow}>
-                <Receipt className={mlc.sectionIcon} />
-                <span>Tax ({filteredTaxListCount})</span>
-              </div>
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <TaxList taxes={taxesForTaxList} onSelectTax={handleSelect as any} selectedTax={selectedTax} searchTerm={searchTerm} pendingApprovalByTaxId={pendingApprovalByTaxId} getItemHref={useQueryNav ? (t) => `/tax?selected=${t.id}` : undefined} />
-              </div>
-            </>
-        ) : (
-            <>
-              <div className={mlc.sectionLabelRow}>
-                <Users className={mlc.sectionIcon} />
-                <span>Groups ({filteredGroupCount})</span>
-              </div>
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <TaxGroupList groups={processedTaxGroupsForList} onSelectGroup={handleSelect} selectedGroup={selectedGroup} searchTerm={searchTerm} pendingApprovalByGroupId={pendingApprovalByTaxGroupId} getItemHref={useQueryNav ? (g) => `/tax?view=groups&selected=${g.id}` : undefined} />
-              </div>
-            </>
-        )}
+      {activeView === "taxes" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+        <PendingApprovalListFilterBadge compact
+          count={totalPendingApprovalVoucherCount}
+          pressed={showOnlyTaxesWithPendingApproval}
+          onToggle={() => setShowOnlyTaxesWithPendingApproval((v) => !v)}
+          tooltipFilterHint={`Only taxes with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+          tooltipShowAllHint="Show all taxes (click)"
+          ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+          ariaLabelShowAll="Show all taxes"
+        />
+      ) : null}
+      {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+        <PendingApprovalListFilterBadge compact
+          count={totalPendingApprovalVoucherCount}
+          pressed={showOnlyTaxGroupsWithPendingApproval}
+          onToggle={() => setShowOnlyTaxGroupsWithPendingApproval((v) => !v)}
+          tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+          tooltipShowAllHint="Show all groups (click)"
+          ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+          ariaLabelShowAll="Show all groups"
+        />
+      ) : null}
+      {activeView === "taxes" ? (
+        <CreateTaxDialog onTaxCreated={() => {}} isOpen={isCreateTaxOpen} onOpenChange={setIsCreateTaxOpen}>
+          <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateTaxOpen(true)}>
+            + Add Tax
+          </PermissionButton>
+        </CreateTaxDialog>
+      ) : (
+        <CreateTaxGroupDialog onGroupCreated={() => {}} groups={processedTaxGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
+          <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
+            + Add Group
+          </PermissionButton>
+        </CreateTaxGroupDialog>
+      )}
     </div>
+  );
+
+  const taxSectionLabelEl =
+    activeView === "taxes" ? (
+      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
+        <Receipt className={mlc.sectionIcon} />
+        <span>Tax ({filteredTaxListCount})</span>
+      </div>
+    ) : (
+      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
+        <Users className={mlc.sectionIcon} />
+        <span>Groups ({filteredGroupCount})</span>
+      </div>
+    );
+
+  const listView = (
+    <MasterListViewShell
+      isMobile={isMobile}
+      searchRow={taxSearchRowEl}
+      sectionLabel={taxSectionLabelEl}
+      tabs={taxTabsEl}
+      quickFilter={activeView === "taxes" ? taxListQuickFilter : groupListQuickFilter}
+      onQuickFilterChange={activeView === "taxes" ? setTaxListQuickFilter : setGroupListQuickFilter}
+    >
+      {activeView === "taxes" ? (
+        <TaxList
+          taxes={taxesForTaxList}
+          onSelectTax={handleSelect as any}
+          selectedTax={selectedTax}
+          searchTerm={searchTerm}
+          pendingApprovalByTaxId={pendingApprovalByTaxId}
+          getItemHref={useQueryNav ? (t) => `/tax?selected=${t.id}` : undefined}
+          quickFilter={taxListQuickFilter}
+          onQuickFilterChange={setTaxListQuickFilter}
+          hideQuickFilterBar
+        />
+      ) : (
+        <TaxGroupList
+          groups={processedTaxGroupsForList}
+          onSelectGroup={handleSelect}
+          selectedGroup={selectedGroup}
+          searchTerm={searchTerm}
+          pendingApprovalByGroupId={pendingApprovalByTaxGroupId}
+          getItemHref={useQueryNav ? (g) => `/tax?view=groups&selected=${g.id}` : undefined}
+          quickFilter={groupListQuickFilter}
+          onQuickFilterChange={setGroupListQuickFilter}
+          hideQuickFilterBar
+        />
+      )}
+    </MasterListViewShell>
   );
 
   const detailView = (
@@ -517,14 +581,8 @@ function TaxPageContent() {
             {formatCurrency(totalBalance, { showDrCr: true, noAnimation: true })}
         </span>
       }
-      tabs={
-        <Tabs value={activeView} onValueChange={setActiveView} className="w-full">
-          <TabsList listChrome>
-            <TabsTrigger listChrome value="taxes" className="flex-1">Taxes</TabsTrigger>
-            <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
-          </TabsList>
-        </Tabs>
-      }
+      tabs={isMobile ? undefined : taxTabsEl}
+      mobileTabsDocked={isMobile}
       listView={listView}
       detailView={detailView}
       isMobile={isMobile}

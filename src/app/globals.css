@@ -36,9 +36,16 @@
   .pl-master-list-row-amount-xs {
     @apply justify-self-end text-right text-xs font-bold whitespace-nowrap tabular-nums;
   }
-  /* Master–detail list scroll: rows ke beech sirf 3px gap (pehle space-y-1 / p-2) */
+  /* Party group list (mobile + PC): category label + rows — dono taraf 2px full width */
+  [data-pl-party-group-list] .pl-master-list-ul,
+  [data-pl-party-group-list] .pl-mlc-section-label-row {
+    padding-left: 2px !important;
+    padding-right: 2px !important;
+  }
+
+  /* Master–detail list scroll: rows ke beech 3px gap; dono taraf 2px inset (mobile APK jaisa full width) */
   .pl-master-list-ul {
-    @apply flex flex-col gap-[3px] p-1;
+    @apply flex flex-col gap-[3px] px-[2px] pb-2 pt-0;
   }
   /* List row: unselected halka border — globals.css theme hover/selected se control */
   .pl-master-list-item {
@@ -546,16 +553,25 @@ body.theme-colorfull [data-theme-table="transactions"] table tfoot td {
 }
 
 /* Opening balance block ke niche line — pehli transaction se pehle (dated / narration / billwise OB) */
-[data-theme-table="transactions"] tbody tr[data-row="opening-balance"] > td,
 [data-theme-table="transactions"] tbody tr[data-row="opening-balance-narration"] > td,
-[data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:not(:has(+ tr[data-row="opening-balance-narration"])) > td {
+[data-theme-table="transactions"] tbody tr[data-row="opening-balance-linked"] > td {
   border-bottom-width: 0 !important;
   /* Zoom in/out par 1px border flicker avoid — inset shadow stable rehta hai */
   box-shadow: inset 0 -1px 0 0 #000;
 }
-/* Dated + narration dono hon to line sirf narration ke niche */
-[data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:has(+ tr[data-row="opening-balance-narration"]) > td {
+[data-theme-table="transactions"] tbody tr[data-row="opening-balance"] > td,
+[data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:not(:has(+ tr[data-row="opening-balance-narration"])):not(:has(+ tr[data-row="opening-balance-linked"])):not(:has(+ tr[data-row="opening-balance-gap"])) > td {
   border-bottom-width: 0 !important;
+  /* Zoom in/out par 1px border flicker avoid — inset shadow stable rehta hai */
+  box-shadow: inset 0 -1px 0 0 #000;
+}
+/* Main OB row ke turant baad narration ya linked sub-row — beech ki line kabhi na dikhe */
+[data-theme-table="transactions"] tbody tr[data-row="opening-balance"]:has(+ tr[data-row="opening-balance-linked"]) > td,
+[data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:has(+ tr[data-row="opening-balance-narration"]) > td,
+[data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:has(+ tr[data-row="opening-balance-linked"]) > td,
+[data-theme-table="transactions"] tbody tr[data-row="opening-book"]:has(+ tr[data-row="opening-balance-narration"]) > td {
+  border-bottom-width: 0 !important;
+  box-shadow: none !important;
 }
 /* Spend-wise: OB ke baad gap row ho to bhi dated/narration ke niche line */
 [data-theme-table="transactions"] tbody tr[data-row="opening-balance-dated"]:has(+ tr[data-row="opening-balance-gap"]) > td,
@@ -3506,6 +3522,22 @@ body.theme-colorfull main [data-pl-master-list-chrome] [data-pl-master-list-tabs
     background-color: rgb(191 219 254) !important;
     color: rgb(30 58 138) !important;
   }
+  /* Party PC list — Parties/Groups tabs +20% height (sirf is page par) */
+  [data-master-detail-layout] [data-pl-master-list-chrome][data-pl-master-list-route="party"] .pl-mlc-tabs-row {
+    min-height: 2.52rem !important;
+  }
+  [data-master-detail-layout] [data-pl-master-list-chrome][data-pl-master-list-route="party"] [data-pl-master-list-tabs][role="tablist"],
+  [data-master-detail-layout] [data-pl-master-list-chrome][data-pl-master-list-route="party"] [role="tablist"] {
+    height: 2.16rem !important;
+    min-height: 2.16rem !important;
+    max-height: 2.16rem !important;
+  }
+  [data-master-detail-layout] [data-pl-master-list-chrome][data-pl-master-list-route="party"] [data-pl-master-list-tabs] [role="tab"],
+  [data-master-detail-layout] [data-pl-master-list-chrome][data-pl-master-list-route="party"] [role="tablist"] [role="tab"] {
+    height: 1.8rem !important;
+    min-height: 1.8rem !important;
+    max-height: 1.8rem !important;
+  }
 }
 
 /* Mobile list pages: Pro — dashboard rose/pink (details page green rehta hai); baaki themes green tab */
@@ -3658,6 +3690,39 @@ body.theme-colorfull main [data-pl-master-list-chrome] [data-pl-master-list-tabs
     border-color: rgb(249 115 22) !important;
     background-color: rgb(67 20 7 / 0.4) !important;
     background-image: none !important;
+  }
+  /* Mobile master list footer dock — tabs +20% (1.5→1.8rem), rows ke beech 2px gap */
+  [data-pl-mobile-list-dock] .pl-mlc-tabs-row,
+  [data-pl-party-mobile-list-dock] .pl-mlc-tabs-row {
+    min-height: 1.92rem !important;
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
+    box-sizing: border-box !important;
+  }
+  [data-pl-mobile-list-dock] [data-pl-master-list-tabs][role="tablist"],
+  [data-pl-mobile-list-dock] [role="tablist"],
+  [data-pl-party-mobile-list-dock] [data-pl-master-list-tabs][role="tablist"],
+  [data-pl-party-mobile-list-dock] [role="tablist"] {
+    height: 1.8rem !important;
+    min-height: 1.8rem !important;
+    max-height: 1.8rem !important;
+  }
+  [data-pl-mobile-list-dock] [data-pl-master-list-tabs] [role="tab"],
+  [data-pl-mobile-list-dock] [role="tablist"] [role="tab"],
+  [data-pl-party-mobile-list-dock] [data-pl-master-list-tabs] [role="tab"],
+  [data-pl-party-mobile-list-dock] [role="tablist"] [role="tab"] {
+    height: 1.5rem !important;
+    min-height: 1.5rem !important;
+    max-height: 1.5rem !important;
+  }
+  [data-pl-mobile-list-dock] .pl-mlc-search-row,
+  [data-pl-mobile-list-dock] .pl-mlc-section-label-row,
+  [data-pl-mobile-list-dock] .pl-mlc-action-row,
+  [data-pl-party-mobile-list-dock] .pl-mlc-search-row,
+  [data-pl-party-mobile-list-dock] .pl-mlc-section-label-row {
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
+    box-sizing: border-box !important;
   }
   body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-search-row input {
     border-color: #f9a8d4 !important;

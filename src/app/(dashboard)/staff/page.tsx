@@ -30,11 +30,17 @@ import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
+import {
+  masterDetailTabHref,
+  replaceMasterDetailTabUrl,
+} from "@/lib/masterDetailTabChange";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
-import { mlc, mlcListChromeRoot, mlcListChromeRootData } from "@/lib/mobileListChrome";
+import { mlc } from "@/lib/mobileListChrome";
+import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
+import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
@@ -46,6 +52,7 @@ import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
 
 function StaffPageContent() {
   const { user } = useAuth();
@@ -108,10 +115,31 @@ function StaffPageContent() {
   }, [setSelected, router]);
   useRegisterMasterDetailHardwareBack("staff", onBackToList);
   const useQueryNav = useMasterDetailQueryNav();
+
+  const handleStaffTabChange = useCallback(
+    (value: string) => {
+      setActiveView(value);
+      if (!isMobile) return;
+      setSelected(null);
+      const href = masterDetailTabHref("staff", {
+        tab: value,
+        defaultTab: "staff",
+        listOnly: true,
+      });
+      replaceMasterDetailTabUrl(href, router, useQueryNav);
+    },
+    [isMobile, setActiveView, setSelected, router, useQueryNav]
+  );
   
   const [searchTerm, setSearchTerm] = useState("");
-  const [showOnlyStaffWithPendingApproval, setShowOnlyStaffWithPendingApproval] = useState(false);
-  const [showOnlyStaffGroupsWithPendingApproval, setShowOnlyStaffGroupsWithPendingApproval] = useState(false);
+  const [staffListQuickFilter, setStaffListQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [groupListQuickFilter, setGroupListQuickFilter] = useState<EntityListQuickFilter>("default");
+  const {
+    showOnlyEntities: showOnlyStaffWithPendingApproval,
+    setShowOnlyEntities: setShowOnlyStaffWithPendingApproval,
+    showOnlyGroups: showOnlyStaffGroupsWithPendingApproval,
+    setShowOnlyGroups: setShowOnlyStaffGroupsWithPendingApproval,
+  } = usePendingApprovalListFilter(totalPendingApprovalVoucherCount);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateStaffOpen, setIsCreateStaffOpen] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
@@ -213,7 +241,7 @@ function StaffPageContent() {
     setSelected,              
     activeView === 'staff' ? processedStaff : processedStaffGroups, 
     vouchersLoading,
-    undefined,
+    isMobile,
     selectedIdFromUrl
   );
   // ==================================
@@ -357,103 +385,128 @@ function StaffPageContent() {
     );
  }
 
- const listView = (
-    <div className={mlcListChromeRoot} {...mlcListChromeRootData}>
-        <div className={mlc.searchRow}>
-            <div className={mlc.searchWrap}>
-                <Search className={mlc.searchIcon} />
-                <Input
-                    placeholder={activeView === 'staff' ? 'Search staff...' : 'Search groups...'}
-                    listChrome
-                    listChromeSearch
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    autoComplete="off"
-                />
-            </div>
-            {activeView === "staff" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-              <PendingApprovalListFilterBadge compact
-                count={totalPendingApprovalVoucherCount}
-                pressed={showOnlyStaffWithPendingApproval}
-                onToggle={() => setShowOnlyStaffWithPendingApproval((v) => !v)}
-                tooltipFilterHint={`Only staff with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
-                tooltipShowAllHint="Show all staff (click)"
-                ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
-                ariaLabelShowAll="Show all staff"
-              />
-            ) : null}
-            {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-              <PendingApprovalListFilterBadge compact
-                count={totalPendingApprovalVoucherCount}
-                pressed={showOnlyStaffGroupsWithPendingApproval}
-                onToggle={() => setShowOnlyStaffGroupsWithPendingApproval((v) => !v)}
-                tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
-                tooltipShowAllHint="Show all groups (click)"
-                ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
-                ariaLabelShowAll="Show all groups"
-              />
-            ) : null}
-            {activeView === "staff" ? (
-                <CreateStaffDialog onStaffCreated={() => {}} groups={processedStaffGroups} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen}>
-                    <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateStaffOpen(true)}>
-                        + Add Staff
-                    </PermissionButton>
-                </CreateStaffDialog>
-            ) : (
-                <CreateStaffGroupDialog onGroupCreated={() => {}} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={processedStaffGroups}>
-                    <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
-                        + Add Group
-                    </PermissionButton>
-                </CreateStaffGroupDialog>
-            )}
-        </div>
-        <div className={mlc.actionRow}>
-            <div className={mlc.actionGrid}>
-                {/* List action row: search/+ Add jitni height (`size="list"`) */}
-                <PermissionButton permission="create_records" variant="outline" size="list" className="w-full" onClick={() => openVoucherDialog("add_salary")}>
-                    Add Salary
-                </PermissionButton>
-                <PermissionButton permission="create_records" variant="chromePill" size="list" className="w-full" onClick={() => openVoucherDialog("payment_out")}>
-                    Pay Salary
-                </PermissionButton>
-            </div>
-        </div>
-        {activeView === "staff" ? (
-          <>
-            <div className={mlc.sectionLabelRow}>
-              <Briefcase className={mlc.sectionIcon} />
-              <span>Staff ({filteredStaffListCount})</span>
-            </div>
-            <div className="flex-1 min-h-0 overflow-hidden">
-              <StaffList
-                staff={staffForStaffList}
-                onSelectStaff={handleSelect as any}
-                selectedStaff={selectedStaff}
-                searchTerm={searchTerm}
-                pendingApprovalByStaffId={pendingApprovalByStaffId}
-                getItemHref={useQueryNav ? (s) => `/staff?selected=${s.id}` : undefined}
-              />
-            </div>
-          </>
-        ) : (
-          <>
-            <div className={mlc.sectionLabelRow}>
-              <Users className={mlc.sectionIcon} />
-              <span>Groups ({filteredStaffGroupCount})</span>
-            </div>
-            <div className="flex-1 min-h-0 overflow-hidden">
-              <StaffGroupList
-                groups={processedStaffGroupsForList}
-                onSelectGroup={handleSelect}
-                selectedGroup={selectedGroup}
-                searchTerm={searchTerm}
-                pendingApprovalByGroupId={pendingApprovalByStaffGroupId}
-                getItemHref={useQueryNav ? (g) => `/staff?view=groups&selected=${g.id}` : undefined}
-              />
-            </div>
-          </>
-        )}
+ const staffTabsEl = (
+    <Tabs value={activeView} onValueChange={handleStaffTabChange} className="w-full">
+      <TabsList listChrome>
+        <TabsTrigger listChrome value="staff" className="flex-1">Staff</TabsTrigger>
+        <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
+      </TabsList>
+    </Tabs>
+  );
+
+  const staffSearchRowEl = (
+    <div className={mlc.searchRow}>
+      <div className={mlc.searchWrap}>
+        <Search className={mlc.searchIcon} />
+        <Input
+          placeholder={activeView === 'staff' ? 'Search staff...' : 'Search groups...'}
+          listChrome
+          listChromeSearch
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          autoComplete="off"
+        />
+      </div>
+      {activeView === "staff" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+        <PendingApprovalListFilterBadge compact
+          count={totalPendingApprovalVoucherCount}
+          pressed={showOnlyStaffWithPendingApproval}
+          onToggle={() => setShowOnlyStaffWithPendingApproval((v) => !v)}
+          tooltipFilterHint={`Only staff with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+          tooltipShowAllHint="Show all staff (click)"
+          ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+          ariaLabelShowAll="Show all staff"
+        />
+      ) : null}
+      {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+        <PendingApprovalListFilterBadge compact
+          count={totalPendingApprovalVoucherCount}
+          pressed={showOnlyStaffGroupsWithPendingApproval}
+          onToggle={() => setShowOnlyStaffGroupsWithPendingApproval((v) => !v)}
+          tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+          tooltipShowAllHint="Show all groups (click)"
+          ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+          ariaLabelShowAll="Show all groups"
+        />
+      ) : null}
+      {activeView === "staff" ? (
+        <CreateStaffDialog onStaffCreated={() => {}} groups={processedStaffGroups} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen}>
+          <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateStaffOpen(true)}>
+            + Add Staff
+          </PermissionButton>
+        </CreateStaffDialog>
+      ) : (
+        <CreateStaffGroupDialog onGroupCreated={() => {}} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={processedStaffGroups}>
+          <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
+            + Add Group
+          </PermissionButton>
+        </CreateStaffGroupDialog>
+      )}
     </div>
+  );
+
+  const staffActionRowEl = (
+    <div className={mlc.actionRow}>
+      <div className={mlc.actionGrid}>
+        <PermissionButton permission="create_records" variant="outline" size="list" className="w-full" onClick={() => openVoucherDialog("add_salary")}>
+          Add Salary
+        </PermissionButton>
+        <PermissionButton permission="create_records" variant="chromePill" size="list" className="w-full" onClick={() => openVoucherDialog("payment_out")}>
+          Pay Salary
+        </PermissionButton>
+      </div>
+    </div>
+  );
+
+  const staffSectionLabelEl =
+    activeView === "staff" ? (
+      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
+        <Briefcase className={mlc.sectionIcon} />
+        <span>Staff ({filteredStaffListCount})</span>
+      </div>
+    ) : (
+      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
+        <Users className={mlc.sectionIcon} />
+        <span>Groups ({filteredStaffGroupCount})</span>
+      </div>
+    );
+
+ const listView = (
+    <MasterListViewShell
+      isMobile={isMobile}
+      searchRow={staffSearchRowEl}
+      sectionLabel={staffSectionLabelEl}
+      actionRow={staffActionRowEl}
+      tabs={staffTabsEl}
+      quickFilter={activeView === "staff" ? staffListQuickFilter : groupListQuickFilter}
+      onQuickFilterChange={activeView === "staff" ? setStaffListQuickFilter : setGroupListQuickFilter}
+    >
+      {activeView === "staff" ? (
+        <StaffList
+          staff={staffForStaffList}
+          onSelectStaff={handleSelect as any}
+          selectedStaff={selectedStaff}
+          searchTerm={searchTerm}
+          pendingApprovalByStaffId={pendingApprovalByStaffId}
+          getItemHref={useQueryNav ? (s) => `/staff?selected=${s.id}` : undefined}
+          quickFilter={staffListQuickFilter}
+          onQuickFilterChange={setStaffListQuickFilter}
+          hideQuickFilterBar
+        />
+      ) : (
+        <StaffGroupList
+          groups={processedStaffGroupsForList}
+          onSelectGroup={handleSelect}
+          selectedGroup={selectedGroup}
+          searchTerm={searchTerm}
+          pendingApprovalByGroupId={pendingApprovalByStaffGroupId}
+          getItemHref={useQueryNav ? (g) => `/staff?view=groups&selected=${g.id}` : undefined}
+          quickFilter={groupListQuickFilter}
+          onQuickFilterChange={setGroupListQuickFilter}
+          hideQuickFilterBar
+        />
+      )}
+    </MasterListViewShell>
 );
 
 {/* Render detail view with stable component types + keys so it does NOT remount when vouchers/table data updates (which would close Add Voucher dialog). */}
@@ -503,14 +556,8 @@ function StaffPageContent() {
             {formatCurrency(totalBalance, { showDrCr: true, noAnimation: true })}
         </span>
       }
-      tabs={
-        <Tabs value={activeView} onValueChange={setActiveView} className="w-full">
-          <TabsList listChrome>
-            <TabsTrigger listChrome value="staff" className="flex-1">Staff</TabsTrigger>
-            <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
-          </TabsList>
-        </Tabs>
-      }
+      tabs={isMobile ? undefined : staffTabsEl}
+      mobileTabsDocked={isMobile}
       listView={listView}
       detailView={detailView}
       isMobile={isMobile}

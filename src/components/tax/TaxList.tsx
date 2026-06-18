@@ -30,6 +30,9 @@ export function TaxList({
     searchTerm,
     pendingApprovalByTaxId = {},
     getItemHref,
+    quickFilter: quickFilterProp,
+    onQuickFilterChange,
+    hideQuickFilterBar = false,
 }: { 
     taxes: Tax[], 
     selectedTax: Tax | null,
@@ -39,11 +42,18 @@ export function TaxList({
     pendingApprovalByTaxId?: Record<string, number>;
     /** When provided, use Link for navigation (mobile/Capacitor) – static export ke liye query params */
     getItemHref?: (tax: Tax) => string | undefined;
+    quickFilter?: EntityListQuickFilter;
+    onQuickFilterChange?: (next: EntityListQuickFilter) => void;
+    hideQuickFilterBar?: boolean;
 }) {
   const { formatCurrency } = useDate();
   const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
-  /** Party account list — `EntityListQuickFilterBar` niche (Default / Dr / By Name…) */
-  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
+  const quickFilter = quickFilterProp ?? internalQuickFilter;
+  const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
+  const quickFilterFooter = !hideQuickFilterBar ? (
+    <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+  ) : null;
 
   const filteredAndSortedTaxes = useMemo(() => {
     return filterAndSortMasterEntityListRows(taxes, searchTerm, quickFilter);
@@ -56,7 +66,7 @@ export function TaxList({
           <div className="flex flex-1 min-h-0 items-center justify-center p-8 text-center text-sm text-muted-foreground">
             No taxes found.
           </div>
-          <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+          {quickFilterFooter}
         </div>
       </TooltipProvider>
     );
@@ -155,7 +165,7 @@ export function TaxList({
           </AnimatePresence>
         </ul>
       </ScrollArea>
-      <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+      {quickFilterFooter}
     </div>
     </TooltipProvider>
   );

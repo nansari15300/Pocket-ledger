@@ -29,6 +29,9 @@ export function ItemGroupList({
   onSelectGroup,
   pendingApprovalByGroupId = {},
   getItemHref,
+  quickFilter: quickFilterProp,
+  onQuickFilterChange,
+  hideQuickFilterBar = false,
 }: {
   groups: ItemGroup[];
   searchTerm: string;
@@ -37,11 +40,15 @@ export function ItemGroupList({
   pendingApprovalByGroupId?: Record<string, number>;
   /** When provided, use Link for navigation (mobile/Capacitor) – static export ke liye query params */
   getItemHref?: (group: ItemGroup) => string | undefined;
+  quickFilter?: EntityListQuickFilter;
+  onQuickFilterChange?: (next: EntityListQuickFilter) => void;
+  hideQuickFilterBar?: boolean;
 }) {
   const { formatCurrency } = useDate();
   const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
-  // Same quick filters as ExpenseGroupList — footer bar needs this state + filterAndSortEntityGroups.
-  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
+  const quickFilter = quickFilterProp ?? internalQuickFilter;
+  const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
 
   const filteredAndSortedGroups = useMemo(() => {
     const base = (groups || []).filter((group) => {
@@ -146,7 +153,9 @@ export function ItemGroupList({
           )}
         </ul>
       </ScrollArea>
-      <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+      {!hideQuickFilterBar ? (
+        <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+      ) : null}
     </div>
   );
 }

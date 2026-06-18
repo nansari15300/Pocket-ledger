@@ -20,7 +20,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
-import { mlc, mlcListChromeRoot, mlcListChromeRootData } from "@/lib/mobileListChrome";
+import { mlc } from "@/lib/mobileListChrome";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams, useParams } from "next/navigation";
 import { AccountList } from "@/components/bank-cash/AccountList";
@@ -41,6 +41,10 @@ import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
+import {
+  masterDetailTabHref,
+  replaceMasterDetailTabUrl,
+} from "@/lib/masterDetailTabChange";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import usePermissions from "@/hooks/usePermissions";
@@ -54,7 +58,9 @@ import { PendingApprovalListFilterBadge } from "@/components/layout/PendingAppro
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
-import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
+import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
+import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 
 function BankCashPageContent() {
   const { user } = useAuth();
@@ -130,10 +136,32 @@ function BankCashPageContent() {
   }, [setSelected, router]);
   useRegisterMasterDetailHardwareBack("bank-cash", onBackToList);
 
+  /** Mobile: tab switch par list; desktop: usePageMemory se last row restore */
+  const handleBankCashTabChange = useCallback(
+    (value: string) => {
+      setActiveView(value);
+      if (!isMobile) return;
+      setSelected(null);
+      const href = masterDetailTabHref("bank-cash", {
+        tab: value,
+        defaultTab: "accounts",
+        listOnly: true,
+      });
+      replaceMasterDetailTabUrl(href, router, useQueryNav);
+    },
+    [isMobile, setActiveView, setSelected, router, useQueryNav]
+  );
+
   const [searchTerm, setSearchTerm] = useState("");
+  const [accountListQuickFilter, setAccountListQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [groupListQuickFilter, setGroupListQuickFilter] = useState<EntityListQuickFilter>("default");
   /** Accounts tab: pink count click → sirf jinke paas pending approval */
-  const [showOnlyAccountsWithPendingApproval, setShowOnlyAccountsWithPendingApproval] = useState(false);
-  const [showOnlyGroupsWithPendingApproval, setShowOnlyGroupsWithPendingApproval] = useState(false);
+  const {
+    showOnlyEntities: showOnlyAccountsWithPendingApproval,
+    setShowOnlyEntities: setShowOnlyAccountsWithPendingApproval,
+    showOnlyGroups: showOnlyGroupsWithPendingApproval,
+    setShowOnlyGroups: setShowOnlyGroupsWithPendingApproval,
+  } = usePendingApprovalListFilter(totalPendingApprovalVoucherCount);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [accountDetailsDateRange, setAccountDetailsDateRange] = useState<DateRange | undefined>(undefined);
@@ -437,82 +465,125 @@ function BankCashPageContent() {
     );
   }
   
-  const listView = (
-    <div className={mlcListChromeRoot} {...mlcListChromeRootData}>
-      <div className={mlc.searchRow}>
-        {/* `min-w-0`: flex row me search shrink ho sake; badge Add ke beech party/staff page jaisa */}
-        <div className={mlc.searchWrap}>
-          <Search className={mlc.searchIcon} />
-          <Input placeholder={activeView === 'groups' ? 'Search groups...' : 'Search accounts...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
-        </div>
-        {activeView === "accounts" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-          <PendingApprovalListFilterBadge compact
-            count={totalPendingApprovalVoucherCount}
-            pressed={showOnlyAccountsWithPendingApproval}
-            onToggle={() => setShowOnlyAccountsWithPendingApproval((v) => !v)}
-            tooltipFilterHint={`Only accounts with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
-            tooltipShowAllHint="Show all accounts (click)"
-            ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
-            ariaLabelShowAll="Show all accounts"
-          />
-        ) : null}
-        {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-          <PendingApprovalListFilterBadge compact
-            count={totalPendingApprovalVoucherCount}
-            pressed={showOnlyGroupsWithPendingApproval}
-            onToggle={() => setShowOnlyGroupsWithPendingApproval((v) => !v)}
-            tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
-            tooltipShowAllHint="Show all groups (click)"
-            ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
-            ariaLabelShowAll="Show all groups"
-          />
-        ) : null}
-        {activeView === "groups" ? (
-          <CreateAccountGroupDialog onGroupCreated={(id) => handleSelect({ id, name: "" } as AccountGroup)} groups={processedAccountGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
-            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
-              + Add Group
-            </PermissionButton>
-          </CreateAccountGroupDialog>
-        ) : (
-          <CreateBankAccountDialog onAccountCreated={(id) => handleSelect({ id, accountName: "" } as Account)} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
-            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateAccountOpen(true)}>
-              + Add Account
-            </PermissionButton>
-          </CreateBankAccountDialog>
-        )}
+  const bankTabsEl = (
+    <Tabs value={activeView} onValueChange={handleBankCashTabChange} className="w-full">
+      <TabsList listChrome>
+        <TabsTrigger listChrome value="accounts" className="flex-1">Accounts</TabsTrigger>
+        <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
+        <TabsTrigger listChrome value="clearing" className="flex-1">Clearing A/c</TabsTrigger>
+      </TabsList>
+    </Tabs>
+  );
+
+  const bankSearchRowEl = (
+    <div className={mlc.searchRow}>
+      <div className={mlc.searchWrap}>
+        <Search className={mlc.searchIcon} />
+        <Input placeholder={activeView === 'groups' ? 'Search groups...' : 'Search accounts...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
       </div>
-       {activeView === 'accounts' ? (
-            <>
-              <div className={mlc.sectionLabelRow}>
-                <Landmark className={mlc.sectionIcon} />
-                <span>Accounts ({filteredAccountListCount})</span>
-              </div>
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <AccountList accounts={accountsForAccountList} onSelectAccount={handleSelect as any} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByAccountId} getItemHref={useQueryNav ? getAccountItemHref : undefined} />
-              </div>
-            </>
-        ) : activeView === 'clearing' ? (
-            <>
-              <div className={mlc.sectionLabelRow}>
-                <Landmark className={mlc.sectionIcon} />
-                <span>Clearing A/c ({filteredClearingAccountListCount})</span>
-              </div>
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <AccountList accounts={clearingAccountsForList} onSelectAccount={handleSelect as any} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByAccountId} getItemHref={useQueryNav ? getAccountItemHref : undefined} />
-              </div>
-            </>
-        ) : (
-            <>
-              <div className={mlc.sectionLabelRow}>
-                <Landmark className={mlc.sectionIcon} />
-                <span>Groups ({filteredGroupCount})</span>
-              </div>
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <AccountGroupList groups={processedAccountGroupsForList} onSelectGroup={handleSelect as any} selectedGroup={selectedGroup} searchTerm={searchTerm} pendingApprovalByGroupId={pendingApprovalByAccountGroupId} getItemHref={useQueryNav ? getGroupItemHref : undefined} />
-              </div>
-            </>
-        )}
+      {activeView === "accounts" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+        <PendingApprovalListFilterBadge compact
+          count={totalPendingApprovalVoucherCount}
+          pressed={showOnlyAccountsWithPendingApproval}
+          onToggle={() => setShowOnlyAccountsWithPendingApproval((v) => !v)}
+          tooltipFilterHint={`Only accounts with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+          tooltipShowAllHint="Show all accounts (click)"
+          ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+          ariaLabelShowAll="Show all accounts"
+        />
+      ) : null}
+      {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+        <PendingApprovalListFilterBadge compact
+          count={totalPendingApprovalVoucherCount}
+          pressed={showOnlyGroupsWithPendingApproval}
+          onToggle={() => setShowOnlyGroupsWithPendingApproval((v) => !v)}
+          tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+          tooltipShowAllHint="Show all groups (click)"
+          ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+          ariaLabelShowAll="Show all groups"
+        />
+      ) : null}
+      {activeView === "groups" ? (
+        <CreateAccountGroupDialog onGroupCreated={(id) => handleSelect({ id, name: "" } as AccountGroup)} groups={processedAccountGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
+          <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
+            + Add Group
+          </PermissionButton>
+        </CreateAccountGroupDialog>
+      ) : (
+        <CreateBankAccountDialog onAccountCreated={(id) => handleSelect({ id, accountName: "" } as Account)} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
+          <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateAccountOpen(true)}>
+            + Add Account
+          </PermissionButton>
+        </CreateBankAccountDialog>
+      )}
     </div>
+  );
+
+  const bankSectionLabelEl =
+    activeView === "accounts" ? (
+      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
+        <Landmark className={mlc.sectionIcon} />
+        <span>Accounts ({filteredAccountListCount})</span>
+      </div>
+    ) : activeView === "clearing" ? (
+      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
+        <Landmark className={mlc.sectionIcon} />
+        <span>Clearing A/c ({filteredClearingAccountListCount})</span>
+      </div>
+    ) : (
+      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
+        <Landmark className={mlc.sectionIcon} />
+        <span>Groups ({filteredGroupCount})</span>
+      </div>
+    );
+
+  const listView = (
+    <MasterListViewShell
+      isMobile={isMobile}
+      searchRow={bankSearchRowEl}
+      sectionLabel={bankSectionLabelEl}
+      tabs={bankTabsEl}
+      quickFilter={activeView === "groups" ? groupListQuickFilter : accountListQuickFilter}
+      onQuickFilterChange={activeView === "groups" ? setGroupListQuickFilter : setAccountListQuickFilter}
+    >
+      {activeView === "accounts" ? (
+        <AccountList
+          accounts={accountsForAccountList}
+          onSelectAccount={handleSelect as any}
+          selectedAccount={selectedAccount}
+          searchTerm={searchTerm}
+          pendingApprovalByAccountId={pendingApprovalByAccountId}
+          getItemHref={useQueryNav ? getAccountItemHref : undefined}
+          quickFilter={accountListQuickFilter}
+          onQuickFilterChange={setAccountListQuickFilter}
+          hideQuickFilterBar
+        />
+      ) : activeView === "clearing" ? (
+        <AccountList
+          accounts={clearingAccountsForList}
+          onSelectAccount={handleSelect as any}
+          selectedAccount={selectedAccount}
+          searchTerm={searchTerm}
+          pendingApprovalByAccountId={pendingApprovalByAccountId}
+          getItemHref={useQueryNav ? getAccountItemHref : undefined}
+          quickFilter={accountListQuickFilter}
+          onQuickFilterChange={setAccountListQuickFilter}
+          hideQuickFilterBar
+        />
+      ) : (
+        <AccountGroupList
+          groups={processedAccountGroupsForList}
+          onSelectGroup={handleSelect as any}
+          selectedGroup={selectedGroup}
+          searchTerm={searchTerm}
+          pendingApprovalByGroupId={pendingApprovalByAccountGroupId}
+          getItemHref={useQueryNav ? getGroupItemHref : undefined}
+          quickFilter={groupListQuickFilter}
+          onQuickFilterChange={setGroupListQuickFilter}
+          hideQuickFilterBar
+        />
+      )}
+    </MasterListViewShell>
   );
 
   const detailView = (
@@ -561,16 +632,8 @@ function BankCashPageContent() {
             {formatRunning(totalBalance)}
         </span>
       }
-      tabs={
-        <Tabs value={activeView} onValueChange={setActiveView} className="w-full">
-          <TabsList listChrome>
-            <TabsTrigger listChrome value="accounts" className="flex-1">Accounts</TabsTrigger>
-            <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
-            {/* Clearing tab: form me tick `isClearing=true` wale accounts */}
-            <TabsTrigger listChrome value="clearing" className="flex-1">Clearing A/c</TabsTrigger>
-          </TabsList>
-        </Tabs>
-      }
+      tabs={isMobile ? undefined : bankTabsEl}
+      mobileTabsDocked={isMobile}
       listView={listView}
       detailView={detailView}
       isMobile={isMobile}

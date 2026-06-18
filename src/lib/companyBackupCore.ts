@@ -351,27 +351,28 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
         forBackupMerge: true,
       })) as Array<Record<string, unknown> & { id: string }>;
 
+      // Static APK/EXE/Linux/iOS: backup hamesha is device ke SQLite se — Firestore merge skip.
+      if (preferLocalSnapshot) {
+        backupData[colName] = localRows;
+        continue;
+      }
+
       let fsRows: Array<Record<string, unknown> & { id: string }> = [];
-      const pullFirestore = !preferLocalSnapshot || localRows.length === 0;
-      if (pullFirestore) {
-        if (onlineForBackup && fsCompanyId) {
-          try {
-            fsRows = await fetchSubcollectionAllDocsPaginated(fsCompanyId, colName);
-          } catch {
-            fsRows = [];
-          }
-        } else if (!localOnlyBackup) {
-          try {
-            fsRows = await fetchSubcollectionAllDocsPaginated(fsCompanyId, colName);
-          } catch {
-            fsRows = [];
-          }
+      if (onlineForBackup && fsCompanyId) {
+        try {
+          fsRows = await fetchSubcollectionAllDocsPaginated(fsCompanyId, colName);
+        } catch {
+          fsRows = [];
+        }
+      } else if (!localOnlyBackup) {
+        try {
+          fsRows = await fetchSubcollectionAllDocsPaginated(fsCompanyId, colName);
+        } catch {
+          fsRows = [];
         }
       }
 
-      if (preferLocalSnapshot && localRows.length > 0) {
-        backupData[colName] = localRows;
-      } else if (localRows.length > 0) {
+      if (localRows.length > 0) {
         backupData[colName] = mergeFirestoreRowsWithLocalMirrorForBackup(fsRows, localRows);
       } else {
         backupData[colName] = fsRows;

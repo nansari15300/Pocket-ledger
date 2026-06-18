@@ -22,8 +22,9 @@ import { useCalendarMonths } from "@/hooks/use-mobile";
 import usePermissions from "@/hooks/usePermissions";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemFilterDropdown } from "../items/ItemFilterDropdown";
-import { collection, onSnapshot, query, getDoc, doc, updateDoc, getDocs, where } from "firebase/firestore";
+import { collection, onSnapshot, query, getDoc, doc, getDocs, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
+import { applyPaymentBillWiseLinkAllocations } from "@/lib/voucherActionsClient";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { HistoryDialog } from "../vouchers/HistoryDialog";
 import { LinkAdvancesToVoucherDialog } from "../vouchers/LinkAdvancesToVoucherDialog";
@@ -758,7 +759,7 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
             onDone={async (allocations, _amount) => {
               if (!companyId || !linkPaymentVoucher?.id) return;
               try {
-                await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, linkPaymentVoucher.id), { allocations });
+                await applyPaymentBillWiseLinkAllocations(companyId, linkPaymentVoucher, allocations);
                 toast.success("Allocations updated.");
                 setLinkPaymentVoucher(null);
               } catch (e: any) {

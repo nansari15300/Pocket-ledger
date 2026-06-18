@@ -107,9 +107,10 @@ import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { TableCell, TableRow } from "@/components/ui/table";
-import { doc, getDoc, updateDoc, query, collection, getDocs, where } from "firebase/firestore";
+import { doc, getDoc, query, collection, getDocs, where } from "firebase/firestore";
 import { batchFetchUserDisplayNamesFromFirestore } from "@/lib/batchFetchUserDisplayNames";
 import { firestore } from "@/lib/firebase";
+import { applyPaymentBillWiseLinkAllocations } from "@/lib/voucherActionsClient";
 import { StaffGroupDetails } from "../staff/StaffGroupDetails";
 import type { StaffGroup, Staff } from "../staff/types";
 import { AccountGroupDetails } from "../bank-cash/AccountGroupDetails";
@@ -1853,7 +1854,7 @@ export function GroupDetails({
           onDone={async (allocations, _amount) => {
             if (!companyId || !linkPaymentVoucher?.id) return;
             try {
-              await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, linkPaymentVoucher.id), { allocations });
+              await applyPaymentBillWiseLinkAllocations(companyId, linkPaymentVoucher, allocations);
               toast.success("Allocations updated.");
               setLinkPaymentVoucher(null);
             } catch (e: any) {

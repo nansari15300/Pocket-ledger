@@ -118,6 +118,11 @@ import { generateCompanyId } from "@/lib/generateCompanyId";
 import { cn } from "@/lib/utils";
 import { chromeProPillCn } from "@/lib/chromePillButton";
 import { canPickElectronBackupDirectory } from "@/lib/electronBackupFolder";
+import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
+import {
+  runStaticCompanyBackupPredownload,
+  type StaticBackupPredownloadProgress,
+} from "@/lib/staticBackupPredownload";
 
 /** Backup cards — header jaisa blue pill tone + sab ki height enable auto backup (h-9) jitni. */
 const backupCardPillCn = cn(
@@ -580,6 +585,8 @@ export function BackupRestore() {
   const [savingLiveDataLocation, setSavingLiveDataLocation] = useState(false);
   const supportsWebFolderPicker = canPickWebBackupFolder();
   const nativeRuntime = isNativeRuntime();
+  /** APK / static export / Electron — attachment backup + SQLite-first backup. */
+  const staticBackupClient = isEmbeddedOfflinePreloadClient();
   /** Cloud-linked company: user choose SQLite vs Firestore — pehle default Firestore tha, local UI blank ho jati thi */
   const [restoreToLocalSqlite, setRestoreToLocalSqlite] = useState(true);
   /** Restore ke baad `companies.name`: default = jis slot mein restore ho raha hai (target); alternate = backup file ka naam */
@@ -592,6 +599,9 @@ export function BackupRestore() {
   /** Restore: bundle ho to attachments restore karna hai ya sirf URLs. */
   const [restoreIncludeAttachments, setRestoreIncludeAttachments] = useState(false);
   const [restoreAttachmentGateHint, setRestoreAttachmentGateHint] = useState<string | null>(null);
+  const [predownloadRunning, setPredownloadRunning] = useState(false);
+  const [predownloadProgress, setPredownloadProgress] = useState<StaticBackupPredownloadProgress | null>(null);
+  const predownloadAbortRef = useRef<AbortController | null>(null);
 
   /** Device backup folder prefs → UI state; dono cards same label share karte hain. */
   const refreshBackupLocationUi = useCallback(() => {
@@ -956,6 +966,52 @@ export function BackupRestore() {
     }
   };
 
+  const handlePredownloadForBackup = async () => {
+    if (!companyId || !company) return;
+    if (predownloadRunning) return;
+    try {
+      assertCan(can, "export_data");
+    } catch (error) {
+      if (error instanceof PermissionDeniedError) {
+        toast({ variant: "destructive", title: "Permission Denied", description: error.message });
+      }
+      return;
+    }
+    predownloadAbortRef.current?.abort();
+    const ac = new AbortController();
+    predownloadAbortRef.current = ac;
+    setPredownloadRunning(true);
+    setPredownloadProgress({ phase: "Starting", detail: "Preparing…" });
+    try {
+      const result = await runStaticCompanyBackupPredownload({
+        company,
+        companyId,
+        signal: ac.signal,
+        onProgress: setPredownloadProgress,
+      });
+      if (result.ok) {
+        toast({
+          title: "Pre-download complete",
+          description: "Local SQLite and attachments are ready. You can create a backup with attachments.",
+        });
+        window.setTimeout(() => setPredownloadProgress(null), 4000);
+      } else if (!result.cancelled) {
+        toast({ variant: "destructive", title: "Pre-download failed", description: result.error });
+        window.setTimeout(() => setPredownloadProgress(null), 8000);
+      } else {
+        setPredownloadProgress(null);
+      }
+    } finally {
+      setPredownloadRunning(false);
+      predownloadAbortRef.current = null;
+    }
+  };
+
+  const cancelPredownload = () => {
+    if (!predownloadAbortRef.current) return;
+    predownloadAbortRef.current.abort();
+  };
+
   const handleBackup = async (includeAttachments: boolean) => {
     if (!companyId || !company || !company.password || !user?.uid) return;
 
@@ -982,8 +1038,8 @@ export function BackupRestore() {
 
     setIsEncryptedBackupConfirmOpen(false);
 
-    // Web: sirf data-only backup — attachments + folder picker static build par.
-    const withAttachments = includeAttachments;
+    // Web: sirf data-only backup — attachments embed static/APK/EXE par.
+    const withAttachments = staticBackupClient && includeAttachments;
 
     const result = await startCompanyBackupRun({
       company,
@@ -1765,23 +1821,57 @@ export function BackupRestore() {
               onChooseLocation={openBackupLocationDialog}
               showButton={false}
             />
+            {staticBackupClient ? (
+              <div className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
+                <p className="text-sm text-foreground font-medium">Pre-download (static app)</p>
+                <p className="text-xs leading-relaxed">
+                  Download full company data into local SQLite and cache attachment files on this device before backup with attachments.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={predownloadRunning || isBackingUp || !companyId}
+                  onClick={() => void handlePredownloadForBackup()}
+                >
+                  {predownloadRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                  Pre-download data &amp; attachments
+                </Button>
+              </div>
+            ) : null}
             {isBackingUp ? null : backupRun.status === "interrupted" ? (
               <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                 Previous backup was interrupted by refresh or close. Start again and keep this page open until complete.
               </p>
             ) : null}
           </CardContent>
-          {(isBackingUp || backupProgress) && backupProgress ? (
+          {(isBackingUp || predownloadRunning) && (backupProgress || predownloadProgress) ? (
           <CardFooter className="flex flex-col items-stretch gap-3 pt-0">
             <BackupProgressStrip
-              progress={backupProgress}
-              spinning={isBackingUp}
+              progress={
+                isBackingUp && backupProgress
+                  ? backupProgress
+                  : predownloadProgress
+                    ? {
+                        phase: predownloadProgress.phase,
+                        detail: predownloadProgress.detail,
+                        done: predownloadProgress.percent,
+                        total: 100,
+                      }
+                    : backupProgress!
+              }
+              spinning={isBackingUp || predownloadRunning}
               inCard
-              showRefreshWarning={isBackingUp}
-              showCancel={isBackingUp}
+              showRefreshWarning={isBackingUp || predownloadRunning}
+              showCancel={isBackingUp || predownloadRunning}
               onCancel={() => {
-                if (cancelCompanyBackupRun()) {
+                if (isBackingUp && cancelCompanyBackupRun()) {
                   toast({ title: "Backup cancelled", description: "You can start a new backup when ready." });
+                } else if (predownloadRunning) {
+                  cancelPredownload();
+                  setPredownloadRunning(false);
+                  setPredownloadProgress(null);
+                  toast({ title: "Pre-download cancelled" });
                 }
               }}
             />
@@ -1873,6 +1963,7 @@ export function BackupRestore() {
               <Button type="button" variant="outline" size="sm" onClick={openBackupLocationDialog}>
                 Backup location
               </Button>
+              {staticBackupClient ? (
               <TooltipProvider delayDuration={200}>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1900,6 +1991,7 @@ export function BackupRestore() {
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
+              ) : null}
             </div>
             {autoBackupPrefs.lastRunAt ? (
               <p className="text-xs text-muted-foreground">
@@ -2175,6 +2267,7 @@ export function BackupRestore() {
                 </p>
                 <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
                   <Label className="text-sm font-medium text-foreground">Backup contents</Label>
+                  {staticBackupClient && attachmentFeatureOn ? (
                   <RadioGroup
                     value={backupIncludeAttachments ? "attachments" : "data"}
                     onValueChange={(v) => setBackupIncludeAttachments(v === "attachments")}
@@ -2203,13 +2296,18 @@ export function BackupRestore() {
                       </span>
                     </label>
                   </RadioGroup>
+                  ) : (
+                    <p className="text-sm leading-relaxed">
+                      <span className="font-medium text-foreground">Data only</span> — company records and attachment links (URLs). Attachment embed is available in the mobile/desktop app after pre-download.
+                    </p>
+                  )}
                 </div>
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={() => void handleBackup(backupIncludeAttachments)}>
+                <AlertDialogAction onClick={() => void handleBackup(staticBackupClient && backupIncludeAttachments)}>
                   Proceed
                 </AlertDialogAction>
           </AlertDialogFooter>

@@ -28,6 +28,9 @@ export function StaffGroupList({
   onSelectGroup,
   pendingApprovalByGroupId = {},
   getItemHref,
+  quickFilter: quickFilterProp,
+  onQuickFilterChange,
+  hideQuickFilterBar = false,
 }: {
   groups: StaffGroup[];
   searchTerm: string;
@@ -36,10 +39,15 @@ export function StaffGroupList({
   pendingApprovalByGroupId?: Record<string, number>;
   /** When provided, use Link for navigation (mobile/Capacitor) – static export ke liye query params */
   getItemHref?: (group: StaffGroup) => string | undefined;
+  quickFilter?: EntityListQuickFilter;
+  onQuickFilterChange?: (next: EntityListQuickFilter) => void;
+  hideQuickFilterBar?: boolean;
 }) {
   const { formatCurrency } = useDate();
   const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
-  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
+  const quickFilter = quickFilterProp ?? internalQuickFilter;
+  const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
 
   const filteredAndSortedGroups = useMemo(() => {
     const base = groups.filter((group) => {
@@ -144,7 +152,9 @@ export function StaffGroupList({
           )}
         </ul>
       </ScrollArea>
-      <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+      {!hideQuickFilterBar ? (
+        <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+      ) : null}
     </motion.div>
     </TooltipProvider>
   );

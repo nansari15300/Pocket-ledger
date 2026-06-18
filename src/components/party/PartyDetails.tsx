@@ -87,9 +87,10 @@ import {
   TableFooter,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { doc, getDoc, updateDoc, query, collection, getDocs, where } from "firebase/firestore";
+import { doc, getDoc, query, collection, getDocs, where } from "firebase/firestore";
 import { batchFetchUserDisplayNamesFromFirestore } from "@/lib/batchFetchUserDisplayNames";
 import { firestore } from "@/lib/firebase";
+import { applyPaymentBillWiseLinkAllocations } from "@/lib/voucherActionsClient";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { HistoryDialog } from "@/components/vouchers/HistoryDialog";
 import { LinkAdvancesToVoucherDialog } from "@/components/vouchers/LinkAdvancesToVoucherDialog";
@@ -1268,7 +1269,7 @@ export function PartyDetails({
             onDone={async (allocations, _amount) => {
               if (!companyId || !linkPaymentVoucher?.id) return;
               try {
-                await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, linkPaymentVoucher.id), { allocations });
+                await applyPaymentBillWiseLinkAllocations(companyId, linkPaymentVoucher, allocations);
                 toast.success("Allocations updated.");
                 setLinkPaymentVoucher(null);
               } catch (e: any) {
@@ -1667,7 +1668,7 @@ export function PartyDetails({
           onDone={async (allocations, _amount) => {
             if (!companyId || !linkPaymentVoucher?.id) return;
             try {
-              await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, linkPaymentVoucher.id), { allocations });
+              await applyPaymentBillWiseLinkAllocations(companyId, linkPaymentVoucher, allocations);
               toast.success("Allocations updated.");
               setLinkPaymentVoucher(null);
             } catch (e: any) {

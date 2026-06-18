@@ -15,6 +15,7 @@ import {
   isCompanyBackupRunning,
   startCompanyBackupRun,
 } from "@/lib/companyBackupRunner";
+import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 
 /** Dashboard layout — device prefs ke hisaab se scheduled backup (same runner, background). */
 export function AutoBackupScheduler() {
@@ -38,7 +39,7 @@ export function AutoBackupScheduler() {
           companyId,
           ownerUid: user.uid,
           accountPlanId,
-          includeAttachments: prefs.includeAttachments,
+          includeAttachments: isEmbeddedOfflinePreloadClient() && prefs.includeAttachments,
         });
         if (result.ok) {
           const next: AutoBackupPrefs = {

@@ -11,7 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Search, User, AlertCircle, ArrowLeft, XCircle } from "lucide-react";
+import { Search, User, Users, AlertCircle, ArrowLeft, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -20,7 +20,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
-import { mlc, mlcListChromeRoot, mlcListChromeRootData } from "@/lib/mobileListChrome";
+import { mlc } from "@/lib/mobileListChrome";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams } from "next/navigation";
 import { PartyList } from "@/components/party/PartyList";
@@ -44,13 +44,19 @@ import type { Party, Group } from "@/components/party/types";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
-import { collection, doc, getDoc, getDocs, query, updateDoc, where } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
+import { applyPaymentBillWiseLinkAllocations } from "@/lib/voucherActionsClient";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
+import {
+  masterDetailTabHref,
+  replaceMasterDetailTabUrl,
+  tabSwitchSelection,
+} from "@/lib/masterDetailTabChange";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { toast } from "sonner";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
@@ -63,8 +69,13 @@ import { isSystemParentGroup } from "@/lib/system-groups";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
 import { appendPreservedModalQueryToHref } from "@/lib/modalUrlSync";
 import { consumeMasterDetailSidebarListNav } from "@/lib/masterDetailSidebarNav";
+import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
 import { collectPartyIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesPartyLedger";
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
+import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
+import {
+  type EntityListQuickFilter,
+} from "@/components/entity/EntityListQuickFilterBar";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
@@ -233,9 +244,15 @@ function PartyPageContent() {
   useRegisterMasterDetailHardwareBack("party", onBackToList);
 
   const [searchTerm, setSearchTerm] = useState("");
+  const [partyListQuickFilter, setPartyListQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [groupListQuickFilter, setGroupListQuickFilter] = useState<EntityListQuickFilter>("default");
   /** Party list: sirf un jinke paas pending approval (count box click toggle) */
-  const [showOnlyPartiesWithPendingApproval, setShowOnlyPartiesWithPendingApproval] = useState(false);
-  const [showOnlyPartyGroupsWithPendingApproval, setShowOnlyPartyGroupsWithPendingApproval] = useState(false);
+  const {
+    showOnlyEntities: showOnlyPartiesWithPendingApproval,
+    setShowOnlyEntities: setShowOnlyPartiesWithPendingApproval,
+    showOnlyGroups: showOnlyPartyGroupsWithPendingApproval,
+    setShowOnlyGroups: setShowOnlyPartyGroupsWithPendingApproval,
+  } = usePendingApprovalListFilter(totalPendingApprovalVoucherCount);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -670,22 +687,18 @@ function PartyPageContent() {
   const handlePartyGroupsTabChange = useCallback(
     (value: string) => {
       const tab: "parties" | "groups" = value === "groups" ? "groups" : "parties";
-      const nextSelected = pickPartyTabSelection(tab, partiesForPageMemory, processedGroups);
+      const nextSelected = tabSwitchSelection(
+        isMobile,
+        pickPartyTabSelection(tab, partiesForPageMemory, processedGroups)
+      );
       suppressPartyListRestoreRef.current = false;
       pendingPartySelectIdRef.current = nextSelected?.id ?? null;
       setActiveView(tab);
       setSelected(nextSelected);
-      const href = partyTabCanonicalHref(tab, nextSelected);
-      if (typeof window !== "undefined") {
-        try {
-          window.history.replaceState(window.history.state, "", href);
-        } catch {
-          /* ignore */
-        }
-      }
-      if (useQueryNav) {
-        router.replace(href, { scroll: false });
-      }
+      const href = isMobile
+        ? masterDetailTabHref("party", { tab, defaultTab: "parties", listOnly: true })
+        : partyTabCanonicalHref(tab, nextSelected);
+      replaceMasterDetailTabUrl(href, router, useQueryNav);
       try {
         const raw = localStorage.getItem("partyPageState");
         const parsed = raw ? JSON.parse(raw) : { selections: {} };
@@ -698,7 +711,7 @@ function PartyPageContent() {
         /* ignore */
       }
     },
-    [partiesForPageMemory, processedGroups, setActiveView, setSelected, useQueryNav, router]
+    [partiesForPageMemory, processedGroups, setActiveView, setSelected, useQueryNav, router, isMobile]
   );
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
@@ -861,109 +874,151 @@ function PartyPageContent() {
     return <LoadingSpinner />;
   }
   
-  const listView = (
-    <div className={mlcListChromeRoot} {...mlcListChromeRootData}>
-      <div className={mlc.searchRow}>
-        <div className={mlc.searchWrap}>
-          <Search className={mlc.searchIcon} />
-          <Input placeholder={activeView === 'parties' ? 'Search parties...' : 'Search groups...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
-        </div>
-        {activeView === "parties" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-          <PendingApprovalListFilterBadge compact
-            count={totalPendingApprovalVoucherCount}
-            pressed={showOnlyPartiesWithPendingApproval}
-            onToggle={() => setShowOnlyPartiesWithPendingApproval((v) => !v)}
-            tooltipFilterHint={`Only parties with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
-            tooltipShowAllHint="Show all parties (click)"
-            ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
-            ariaLabelShowAll="Show all parties"
-          />
-        ) : null}
-        {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
-          <PendingApprovalListFilterBadge compact
-            count={totalPendingApprovalVoucherCount}
-            pressed={showOnlyPartyGroupsWithPendingApproval}
-            onToggle={() => setShowOnlyPartyGroupsWithPendingApproval((v) => !v)}
-            tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
-            tooltipShowAllHint="Show all groups (click)"
-            ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
-            ariaLabelShowAll="Show all groups"
-          />
-        ) : null}
-        {activeView === "parties" ? (
-          <CreatePartyDialog onPartyCreated={() => {}} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen}>
-            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreatePartyOpen(true)}>
-              + Add Party
-            </PermissionButton>
-          </CreatePartyDialog>
-        ) : (
-          <CreateGroupDialog onGroupCreated={() => {}} groups={processedGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
-            <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
-              + Add Group
-            </PermissionButton>
-          </CreateGroupDialog>
-        )}
+  const partyTabsEl = (
+    <Tabs value={activeView} onValueChange={handlePartyGroupsTabChange} className="w-full">
+      <TabsList listChrome>
+        <TabsTrigger listChrome value="parties" className="flex-1">Parties</TabsTrigger>
+        <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
+      </TabsList>
+    </Tabs>
+  );
+
+  const partySearchRowEl = (
+    <div className={mlc.searchRow}>
+      <div className={mlc.searchWrap}>
+        <Search className={mlc.searchIcon} />
+        <Input
+          placeholder={activeView === "parties" ? "Search parties..." : "Search groups..."}
+          listChrome
+          listChromeSearch
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          autoComplete="off"
+        />
       </div>
-       <div className="relative flex-1 min-h-0 overflow-hidden">
-        {/* Dono lists mounted — tab switch par unmount/out animation flicker na ho */}
+      {activeView === "parties" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+        <PendingApprovalListFilterBadge
+          compact
+          count={totalPendingApprovalVoucherCount}
+          pressed={showOnlyPartiesWithPendingApproval}
+          onToggle={() => setShowOnlyPartiesWithPendingApproval((v) => !v)}
+          tooltipFilterHint={`Only parties with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+          tooltipShowAllHint="Show all parties (click)"
+          ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+          ariaLabelShowAll="Show all parties"
+        />
+      ) : null}
+      {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+        <PendingApprovalListFilterBadge
+          compact
+          count={totalPendingApprovalVoucherCount}
+          pressed={showOnlyPartyGroupsWithPendingApproval}
+          onToggle={() => setShowOnlyPartyGroupsWithPendingApproval((v) => !v)}
+          tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+          tooltipShowAllHint="Show all groups (click)"
+          ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+          ariaLabelShowAll="Show all groups"
+        />
+      ) : null}
+      {activeView === "parties" ? (
+        <CreatePartyDialog onPartyCreated={() => {}} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen}>
+          <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreatePartyOpen(true)}>
+            + Add Party
+          </PermissionButton>
+        </CreatePartyDialog>
+      ) : (
+        <CreateGroupDialog onGroupCreated={() => {}} groups={processedGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
+          <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
+            + Add Group
+          </PermissionButton>
+        </CreateGroupDialog>
+      )}
+    </div>
+  );
+
+  const partySectionLabelEl = (
+    <div className={cn(mlc.sectionLabelRow, "justify-between", isMobile && "px-[2px]")}>
+      <div className="flex items-center gap-2">
+        <User className={mlc.sectionIcon} />
+        <span>Party ({filteredPartyCount})</span>
+      </div>
+      {hasOverdueTransactions && overdueVirtualParty ? (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 px-2 text-xs font-medium border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-900/40 dark:hover:text-amber-100"
+          onClick={() => handleSelect(overdueVirtualParty)}
+        >
+          <AlertCircle className="h-3.5 w-3 mr-1 shrink-0" />
+          Overdue Vouchers ({overdueTransactions.length})
+        </Button>
+      ) : null}
+    </div>
+  );
+
+  const groupSectionLabelEl = (
+    <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
+      <Users className={mlc.sectionIcon} />
+      <span>Party group ({groupsForPartyGroupListView.length})</span>
+    </div>
+  );
+
+  const listView = (
+    <MasterListViewShell
+      isMobile={isMobile}
+      searchRow={partySearchRowEl}
+      sectionLabel={activeView === "parties" ? partySectionLabelEl : groupSectionLabelEl}
+      tabs={partyTabsEl}
+      quickFilter={activeView === "parties" ? partyListQuickFilter : groupListQuickFilter}
+      onQuickFilterChange={
+        activeView === "parties" ? setPartyListQuickFilter : setGroupListQuickFilter
+      }
+    >
+      <div className="relative h-full min-h-0 w-full overflow-hidden">
         <div
           className={cn(
-            "absolute inset-0 flex min-h-0 flex-col overflow-hidden",
+            "absolute inset-0 flex h-full min-h-0 flex-col overflow-hidden",
             activeView !== "parties" && "hidden pointer-events-none"
           )}
           aria-hidden={activeView !== "parties"}
         >
-            <>
-              <div className={cn(mlc.sectionLabelRow, "justify-between")}>
-                <div className="flex items-center gap-2">
-                  <User className={mlc.sectionIcon} />
-                  <span>Party ({filteredPartyCount})</span>
-                </div>
-                {hasOverdueTransactions && overdueVirtualParty && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 px-2 text-xs font-medium border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-900/40 dark:hover:text-amber-100"
-                    onClick={() => handleSelect(overdueVirtualParty)}
-                  >
-                    <AlertCircle className="h-3.5 w-3 mr-1 shrink-0" />
-                    Overdue Vouchers ({overdueTransactions.length})
-                  </Button>
-                )}
-              </div>
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <PartyList
-                parties={partiesForPartyListView}
-                onSelectParty={handleSelect}
-                selectedParty={selectedParty}
-                searchTerm={searchTerm}
-                topPartyId={hasOverdueTransactions ? OVERDUE_ACCOUNT_ID : undefined}
-                overdueVoucherCount={hasOverdueTransactions ? overdueTransactions.length : undefined}
-                pendingApprovalByPartyId={pendingApprovalByPartyId}
-                getItemHref={useQueryNav ? (p) => (p.id === OVERDUE_ACCOUNT_ID ? undefined : `/party?selected=${p.id}`) : undefined}
-              />
-              </div>
-            </>
+          <PartyList
+            parties={partiesForPartyListView}
+            onSelectParty={handleSelect}
+            selectedParty={selectedParty}
+            searchTerm={searchTerm}
+            topPartyId={hasOverdueTransactions ? OVERDUE_ACCOUNT_ID : undefined}
+            overdueVoucherCount={hasOverdueTransactions ? overdueTransactions.length : undefined}
+            pendingApprovalByPartyId={pendingApprovalByPartyId}
+            getItemHref={useQueryNav ? (p) => (p.id === OVERDUE_ACCOUNT_ID ? undefined : `/party?selected=${p.id}`) : undefined}
+            quickFilter={partyListQuickFilter}
+            onQuickFilterChange={setPartyListQuickFilter}
+            hideQuickFilterBar
+          />
         </div>
         <div
           className={cn(
-            "absolute inset-0 flex min-h-0 flex-col overflow-hidden",
+            "absolute inset-0 flex h-full min-h-0 flex-col overflow-hidden",
             activeView !== "groups" && "hidden pointer-events-none"
           )}
           aria-hidden={activeView !== "groups"}
         >
-            <PartyGroupList
-              groups={groupsForPartyGroupListView}
-              onSelectGroup={handleSelect}
-              selectedGroup={selectedGroup}
-              searchTerm={searchTerm}
-              collapsible={false}
-              pendingApprovalByGroupId={pendingApprovalByGroupId}
-              getItemHref={useQueryNav ? (g) => `/party?view=groups&selected=${g.id}` : undefined}
-            />
+          <PartyGroupList
+            groups={groupsForPartyGroupListView}
+            onSelectGroup={handleSelect}
+            selectedGroup={selectedGroup}
+            searchTerm={searchTerm}
+            collapsible={false}
+            pendingApprovalByGroupId={pendingApprovalByGroupId}
+            getItemHref={useQueryNav ? (g) => `/party?view=groups&selected=${g.id}` : undefined}
+            quickFilter={groupListQuickFilter}
+            onQuickFilterChange={setGroupListQuickFilter}
+            hideQuickFilterBar
+            hideCategoryHeaders={isMobile}
+          />
         </div>
-       </div>
-    </div>
+      </div>
+    </MasterListViewShell>
   );
 
   const detailView = (
@@ -1183,7 +1238,7 @@ function PartyPageContent() {
             onDone={async (allocations, _amount) => {
               if (!companyId || !linkPaymentVoucher?.id) return;
               try {
-                await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, linkPaymentVoucher.id), { allocations });
+                await applyPaymentBillWiseLinkAllocations(companyId, linkPaymentVoucher, allocations);
                 toast.success("Allocations updated.");
                 setLinkPaymentVoucher(null);
               } catch (e: any) {
@@ -1199,6 +1254,8 @@ function PartyPageContent() {
   return (
     <>
       <ResponsiveMasterDetail
+        listChromeRouteKey="party"
+        mobileTabsDocked={isMobile}
         title={responsiveMasterDetailTitle}
         mobileSelectionLabel={mobilePartyGroupSelectionLabel}
         mobileSelectionLabelClassName={mobilePartyGroupSelectionLabelClassName}
@@ -1211,14 +1268,7 @@ function PartyPageContent() {
               {formatCurrency(totalBalance, { showDrCr: true, noAnimation: true })}
           </span>
         }
-        tabs={
-          <Tabs value={activeView} onValueChange={handlePartyGroupsTabChange} className="w-full">
-            <TabsList listChrome>
-              <TabsTrigger listChrome value="parties" className="flex-1">Parties</TabsTrigger>
-              <TabsTrigger listChrome value="groups" className="flex-1">Groups</TabsTrigger>
-            </TabsList>
-          </Tabs>
-        }
+        tabs={isMobile ? undefined : partyTabsEl}
         listView={listView}
         detailView={detailView}
         isMobile={isMobile}
@@ -1278,7 +1328,7 @@ function PartyPageContent() {
           onDone={async (allocations, _amount) => {
             if (!companyId || !linkPaymentVoucher?.id) return;
             try {
-              await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, linkPaymentVoucher.id), { allocations });
+              await applyPaymentBillWiseLinkAllocations(companyId, linkPaymentVoucher, allocations);
               toast.success("Allocations updated.");
               setLinkPaymentVoucher(null);
             } catch (e: any) {

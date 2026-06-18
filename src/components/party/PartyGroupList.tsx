@@ -2,7 +2,6 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { mlc } from "@/lib/mobileListChrome";
 import { Users, Lock, Building2, CreditCard, Receipt, Package, FileText, ChevronRight, ChevronDown } from "lucide-react";
 import type { Group } from "@/components/party/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -20,7 +19,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import AnimatedNumber from "../ui/AnimatedNumber";
 import { isSystemParentGroup } from "@/lib/system-groups"
-import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
+import { masterListShellCn, masterListRowUnselectedCn, masterListScrollBodyCn, masterListCategoryLabelCn } from "@/lib/masterListChrome";
 import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 import { getAllSystemGroupNames } from "@/lib/system-group-names";
 
@@ -40,6 +39,11 @@ export function PartyGroupList({
   collapsible = true,
   pendingApprovalByGroupId = {},
   getItemHref,
+  quickFilter: quickFilterProp,
+  onQuickFilterChange,
+  hideQuickFilterBar = false,
+  /** Mobile party page: category headers footer me — scroll me sirf cards */
+  hideCategoryHeaders = false,
 }: {
   groups: Group[];
   searchTerm: string;
@@ -51,11 +55,17 @@ export function PartyGroupList({
   pendingApprovalByGroupId?: Record<string, number>;
   /** When provided, use Link for navigation (mobile/Capacitor) – ensures details page opens reliably */
   getItemHref?: (group: Group) => string | undefined;
+  quickFilter?: EntityListQuickFilter;
+  onQuickFilterChange?: (next: EntityListQuickFilter) => void;
+  hideQuickFilterBar?: boolean;
+  hideCategoryHeaders?: boolean;
 }) {
   const { formatCurrency } = useDate();
   const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['party group']));
-  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
+  const quickFilter = quickFilterProp ?? internalQuickFilter;
+  const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
 
   const categories: CategorySection[] = useMemo(() => {
     const sortedFlat = filterAndSortEntityGroups(groups || [], searchTerm, quickFilter);
@@ -114,14 +124,14 @@ export function PartyGroupList({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className={masterListShellCn}>
+      <div className={masterListShellCn} data-theme-list="account-list" data-pl-party-group-list="">
         <ScrollArea
           listChrome
           className="min-h-0 min-w-0 w-full flex-1"
           onViewportScroll={markListScrolling}
           onViewportTouchMove={markListScrolling}
         >
-          <div className="px-3 pt-0 pb-2 space-y-2 w-full">
+          <div className={masterListScrollBodyCn}>
           {categories.length === 0 ? (
             <div className="p-8 text-center text-sm text-muted-foreground">No groups found.</div>
           ) : null}
@@ -132,10 +142,10 @@ export function PartyGroupList({
               
               return (
                 <div key={categoryKey}>
-                  {/* Category Header - same padding/height as party list section (Party (x)) */}
+                  {!hideCategoryHeaders ? (
                   <div
                     className={cn(
-                      mlc.sectionLabelRow,
+                      masterListCategoryLabelCn,
                       collapsible && "cursor-pointer hover:bg-muted/50 rounded-none"
                     )}
                     onClick={() => collapsible && toggleCategory(categoryKey)}
@@ -152,10 +162,11 @@ export function PartyGroupList({
                     </div>
                     <span>{category.name} ({category.groups.length})</span>
                   </div>
+                  ) : null}
 
                   {/* Groups under category - full width like party list */}
-                  {isExpanded && hasGroups && (
-                    <ul className="pl-master-list-ul mt-1 w-full">
+                  {(hideCategoryHeaders || isExpanded) && hasGroups && (
+                    <ul className="pl-master-list-ul w-full">
                       <AnimatePresence mode={animatePresenceMode}>
                       {category.groups.map((group) => {
                         const isSelected = selectedGroup?.id === group.id;
@@ -242,7 +253,9 @@ export function PartyGroupList({
             })}
           </div>
       </ScrollArea>
-      <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+      {!hideQuickFilterBar ? (
+        <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+      ) : null}
       </div>
     </TooltipProvider>
   );

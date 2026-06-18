@@ -1010,6 +1010,11 @@ export function TransactionsTable({
   /** Bill-wise OB linked voucher detail — narration sub-row ya alag linked-only row par */
   const hasObLinkedVoucherDetail =
     isBillWiseMode && showNarration && (openingBalanceLinkedVoucherNos?.length ?? 0) > 0;
+  /** Dated OB row ke turant baad narration ya bill-wise linked sub-row — beech ki horizontal line hide */
+  const hideDatedOpeningRowBottomBeforeSubRow =
+    (hasOpeningBalanceNarrationSubRow && !showBookOpeningAboveDatedRow) || hasObLinkedVoucherDetail;
+  const hideBookOpeningRowBottomBeforeSubRow =
+    showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow;
 
   const openingBalanceNarrationRow =
     hasOpeningBalanceNarrationSubRow ? (
@@ -1020,7 +1025,7 @@ export function TransactionsTable({
           "narration-row border-b",
           useSpendWiseOpeningBalanceCard && "bg-blue-50/50 dark:bg-blue-950/20",
           /* OB main row + narration ke beech `TableCell` p-1 gap — tight */
-          "[&>td]:!pt-0 [&>td]:!pb-0"
+          "[&>td]:!pt-0 [&>td]:!pb-0 [&>td]:border-t-0"
         )}
       >
         <TableCell
@@ -1067,7 +1072,7 @@ export function TransactionsTable({
         className={cn(
           "narration-row border-b",
           useSpendWiseOpeningBalanceCard && "bg-blue-50/50 dark:bg-blue-950/20",
-          "[&>td]:!pt-0 [&>td]:!pb-0"
+          "[&>td]:!pt-0 [&>td]:!pb-0 [&>td]:border-t-0"
         )}
       >
         <TableCell colSpan={openingBalanceNarrationColSpan} className="py-0" />
@@ -1772,15 +1777,15 @@ export function TransactionsTable({
                       data-row="opening-book"
                       data-pl-spend-wise-opening=""
                       // Narration `<tr>` book ke turant baad — dual mode mein dated row se pehle
-                      data-ob-narration-follows={showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow ? true : undefined}
+                      data-ob-narration-follows={showBookOpeningAboveDatedRow && hideBookOpeningRowBottomBeforeSubRow ? true : undefined}
                       className={cn(
                         "bg-blue-50/50 dark:bg-blue-950/20",
                         "[&>td]:border-y [&>td]:border-blue-500 [&>td]:border-solid",
                         "[&>td:first-child]:border-l [&>td:last-child]:border-r",
                         "[&>td:first-child]:rounded-l-xl [&>td:last-child]:rounded-r-xl",
                         "[&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden",
-                        showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow && "[&>td]:border-b-0",
-                        showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow && "[&>td]:!pb-0"
+                        hideBookOpeningRowBottomBeforeSubRow && "[&>td]:border-b-0",
+                        hideBookOpeningRowBottomBeforeSubRow && "[&>td]:!pb-0"
                       )}
                     >
                       {renderOpeningBalanceDateCells(openingBalanceRowDate)}
@@ -1837,15 +1842,15 @@ export function TransactionsTable({
                   <tr
                     data-row="opening-balance-dated"
                     data-pl-spend-wise-opening=""
-                    data-ob-narration-follows={!showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow ? true : undefined}
+                    data-ob-narration-follows={!showBookOpeningAboveDatedRow && hideDatedOpeningRowBottomBeforeSubRow ? true : undefined}
                     className={cn(
                       "bg-blue-50/50 dark:bg-blue-950/20",
                       "[&>td]:border-y [&>td]:border-blue-500 [&>td]:border-solid",
                       "[&>td:first-child]:border-l [&>td:last-child]:border-r",
                       "[&>td:first-child]:rounded-l-xl [&>td:last-child]:rounded-r-xl",
                       "[&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden",
-                      hasOpeningBalanceNarrationSubRow && !showBookOpeningAboveDatedRow && "[&>td]:border-b-0",
-                      hasOpeningBalanceNarrationSubRow && !showBookOpeningAboveDatedRow && "[&>td]:!pb-0"
+                      hideDatedOpeningRowBottomBeforeSubRow && "[&>td]:border-b-0",
+                      hideDatedOpeningRowBottomBeforeSubRow && "[&>td]:!pb-0"
                     )}
                   >
                     {renderOpeningBalanceDateCells(datedOpeningBalanceRowDate)}
@@ -1932,10 +1937,10 @@ export function TransactionsTable({
                   {showBookOpeningAboveDatedRow && (
                     <tr
                       data-row="opening-book"
-                      data-ob-narration-follows={showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow ? true : undefined}
+                      data-ob-narration-follows={showBookOpeningAboveDatedRow && hideBookOpeningRowBottomBeforeSubRow ? true : undefined}
                       className={cn(
-                        showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow && "border-b-0 [&>td]:border-b-0",
-                        showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow && "[&>td]:!pb-0"
+                        hideBookOpeningRowBottomBeforeSubRow && "border-b-0 [&>td]:border-b-0",
+                        hideBookOpeningRowBottomBeforeSubRow && "[&>td]:!pb-0"
                       )}
                     >
                       {renderOpeningBalanceDateCells(openingBalanceRowDate)}
@@ -1991,10 +1996,10 @@ export function TransactionsTable({
                   {showBookOpeningAboveDatedRow && openingBalanceNarrationRow}
                   <tr
                     data-row="opening-balance-dated"
-                    data-ob-narration-follows={!showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow ? true : undefined}
+                    data-ob-narration-follows={!showBookOpeningAboveDatedRow && hideDatedOpeningRowBottomBeforeSubRow ? true : undefined}
                     className={cn(
-                      hasOpeningBalanceNarrationSubRow && !showBookOpeningAboveDatedRow && "border-b-0 [&>td]:border-b-0",
-                      hasOpeningBalanceNarrationSubRow && !showBookOpeningAboveDatedRow && "[&>td]:!pb-0"
+                      hideDatedOpeningRowBottomBeforeSubRow && "border-b-0 [&>td]:border-b-0",
+                      hideDatedOpeningRowBottomBeforeSubRow && "[&>td]:!pb-0"
                     )}
                   >
                     {renderOpeningBalanceDateCells(datedOpeningBalanceRowDate)}

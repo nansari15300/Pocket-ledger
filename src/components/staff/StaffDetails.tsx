@@ -115,8 +115,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
+import { applyPaymentBillWiseLinkAllocations } from "@/lib/voucherActionsClient";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useMasterEntityLivePatch } from "@/hooks/useMasterEntityLivePatch";
@@ -1650,7 +1651,7 @@ export function StaffDetails({
           onDone={async (allocations, _amount) => {
             if (!companyId || !linkPaymentVoucher?.id) return;
             try {
-              await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, linkPaymentVoucher.id), { allocations });
+              await applyPaymentBillWiseLinkAllocations(companyId, linkPaymentVoucher, allocations);
               toast.success("Allocations updated.");
               setLinkPaymentVoucher(null);
             } catch (e: any) {

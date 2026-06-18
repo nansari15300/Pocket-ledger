@@ -19,7 +19,9 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
-import { mlc, mlcListChromeRoot, mlcListChromeRootData } from "@/lib/mobileListChrome";
+import { mlc } from "@/lib/mobileListChrome";
+import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
+import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -33,6 +35,10 @@ import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
+import {
+  masterDetailTabHref,
+  replaceMasterDetailTabUrl,
+} from "@/lib/masterDetailTabChange";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { useCachedFeatureConfig } from "@/hooks/useCachedFeatureConfig";
@@ -56,6 +62,7 @@ import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
 
 function IncomeExpensePageContent() {
   const CORE_EXPENSE_GROUP_IDS = useMemo(
@@ -144,10 +151,14 @@ function IncomeExpensePageContent() {
   useRegisterMasterDetailHardwareBack("incomes", onBackToList);
 
   const [searchTerm, setSearchTerm] = useState("");
-  const [showOnlyExpenseAccountsWithPendingApproval, setShowOnlyExpenseAccountsWithPendingApproval] =
-    useState(false);
-  const [showOnlyExpenseGroupsWithPendingApproval, setShowOnlyExpenseGroupsWithPendingApproval] =
-    useState(false);
+  const [accountListQuickFilter, setAccountListQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [groupListQuickFilter, setGroupListQuickFilter] = useState<EntityListQuickFilter>("default");
+  const {
+    showOnlyEntities: showOnlyExpenseAccountsWithPendingApproval,
+    setShowOnlyEntities: setShowOnlyExpenseAccountsWithPendingApproval,
+    showOnlyGroups: showOnlyExpenseGroupsWithPendingApproval,
+    setShowOnlyGroups: setShowOnlyExpenseGroupsWithPendingApproval,
+  } = usePendingApprovalListFilter(totalPendingApprovalVoucherCount);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -219,6 +230,33 @@ function IncomeExpensePageContent() {
   const isActiveTabEnabled = activeView === "accounts" ? accountsTabEnabled : groupsTabEnabled;
   const listDisabled = !incomesListEnabled || !isActiveTabEnabled;
   const detailsDisabled = activeView === "accounts" ? !accountDetailsEnabled : !groupDetailsEnabled;
+
+  const handleIncomesTabChange = useCallback(
+    (value: string) => {
+      if (!incomesListEnabled) return;
+      if (value === "accounts" && !accountsTabEnabled) return;
+      if (value === "groups" && !groupsTabEnabled) return;
+      setActiveView(value);
+      if (!isMobile) return;
+      setSelected(null);
+      const href = masterDetailTabHref("incomes", {
+        tab: value,
+        defaultTab: "accounts",
+        listOnly: true,
+      });
+      replaceMasterDetailTabUrl(href, router, useQueryNav);
+    },
+    [
+      incomesListEnabled,
+      accountsTabEnabled,
+      groupsTabEnabled,
+      isMobile,
+      setActiveView,
+      setSelected,
+      router,
+      useQueryNav,
+    ]
+  );
   
   const processedExpenseGroups = useMemo(() => {
     const normalizeGroup = (g: ExpenseGroup): ExpenseGroup => {
@@ -286,7 +324,7 @@ function IncomeExpensePageContent() {
     setSelected,              
     activeView === 'accounts' ? processedExpenseAccounts : processedExpenseGroups, 
     vouchersLoading,
-    undefined,
+    isMobile,
     selectedIdFromUrl
   );
   // ==================================
@@ -511,101 +549,141 @@ function IncomeExpensePageContent() {
     );
   }
   
-  // Mobile list column: flex-1 + min-h-0 (h-full nahi) taaki parent flex chain se height mile aur ScrollArea scroll kare
-  const listView = (
-    <div className={cn(mlcListChromeRoot, "flex min-h-0 flex-1")} {...mlcListChromeRootData}>
-        <div className={cn(mlc.searchRow, "shrink-0", listDisabled && "pointer-events-none opacity-60")}>
-            <div className={mlc.searchWrap}>
-              <Search className={mlc.searchIcon} />
-              <Input placeholder={activeView === 'accounts' ? 'Search accounts...' : 'Search groups...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
-            </div>
-            {activeView === "accounts" &&
-            showApproveOnList &&
-            totalPendingApprovalVoucherCount > 0 &&
-            !listDisabled ? (
-              <PendingApprovalListFilterBadge compact
-                count={totalPendingApprovalVoucherCount}
-                pressed={showOnlyExpenseAccountsWithPendingApproval}
-                onToggle={() => setShowOnlyExpenseAccountsWithPendingApproval((v) => !v)}
-                tooltipFilterHint={`Only accounts with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
-                tooltipShowAllHint="Show all accounts (click)"
-                ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
-                ariaLabelShowAll="Show all accounts"
-              />
-            ) : null}
-            {activeView === "groups" &&
-            showApproveOnList &&
-            totalPendingApprovalVoucherCount > 0 &&
-            !listDisabled ? (
-              <PendingApprovalListFilterBadge compact
-                count={totalPendingApprovalVoucherCount}
-                pressed={showOnlyExpenseGroupsWithPendingApproval}
-                onToggle={() => setShowOnlyExpenseGroupsWithPendingApproval((v) => !v)}
-                tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
-                tooltipShowAllHint="Show all groups (click)"
-                ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
-                ariaLabelShowAll="Show all groups"
-              />
-            ) : null}
-            {activeView === "accounts" ? (
-              <CreateExpenseAccountDialog onExpenseAccountCreated={() => {}} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
-                <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateAccountOpen(true)}>
-                  + Add Account
-                </PermissionButton>
-              </CreateExpenseAccountDialog>
-            ) : (
-              <CreateExpenseGroupDialog onGroupCreated={() => {}} groups={processedExpenseGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
-                <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
-                  + Add Group
-                </PermissionButton>
-              </CreateExpenseGroupDialog>
-            )}
+  const incomesTabsEl = (
+    <Tabs value={activeView} onValueChange={handleIncomesTabChange} className="w-full">
+      <TabsList listChrome>
+        <TabsTrigger listChrome value="accounts" className="flex-1" disabled={!incomesListEnabled || !accountsTabEnabled}>Accounts</TabsTrigger>
+        <TabsTrigger listChrome value="groups" className="flex-1" disabled={!incomesListEnabled || !groupsTabEnabled}>Groups</TabsTrigger>
+      </TabsList>
+    </Tabs>
+  );
+
+  const incomesSearchRowEl = (
+    <div className={cn(mlc.searchRow, listDisabled && "pointer-events-none opacity-60")}>
+      <div className={mlc.searchWrap}>
+        <Search className={mlc.searchIcon} />
+        <Input placeholder={activeView === 'accounts' ? 'Search accounts...' : 'Search groups...'} listChrome listChromeSearch value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
+      </div>
+      {activeView === "accounts" &&
+      showApproveOnList &&
+      totalPendingApprovalVoucherCount > 0 &&
+      !listDisabled ? (
+        <PendingApprovalListFilterBadge compact
+          count={totalPendingApprovalVoucherCount}
+          pressed={showOnlyExpenseAccountsWithPendingApproval}
+          onToggle={() => setShowOnlyExpenseAccountsWithPendingApproval((v) => !v)}
+          tooltipFilterHint={`Only accounts with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+          tooltipShowAllHint="Show all accounts (click)"
+          ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+          ariaLabelShowAll="Show all accounts"
+        />
+      ) : null}
+      {activeView === "groups" &&
+      showApproveOnList &&
+      totalPendingApprovalVoucherCount > 0 &&
+      !listDisabled ? (
+        <PendingApprovalListFilterBadge compact
+          count={totalPendingApprovalVoucherCount}
+          pressed={showOnlyExpenseGroupsWithPendingApproval}
+          onToggle={() => setShowOnlyExpenseGroupsWithPendingApproval((v) => !v)}
+          tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+          tooltipShowAllHint="Show all groups (click)"
+          ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+          ariaLabelShowAll="Show all groups"
+        />
+      ) : null}
+      {activeView === "accounts" ? (
+        <CreateExpenseAccountDialog onExpenseAccountCreated={() => {}} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
+          <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateAccountOpen(true)}>
+            + Add Account
+          </PermissionButton>
+        </CreateExpenseAccountDialog>
+      ) : (
+        <CreateExpenseGroupDialog onGroupCreated={() => {}} groups={processedExpenseGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
+          <PermissionButton permission="create_records" variant="chromePill" size="list" onClick={() => setIsCreateGroupOpen(true)}>
+            + Add Group
+          </PermissionButton>
+        </CreateExpenseGroupDialog>
+      )}
+    </div>
+  );
+
+  const incomesActionRowEl =
+    activeView === "accounts" ? (
+      <div className={cn(mlc.actionRow, listDisabled && "pointer-events-none opacity-60")}>
+        <div className={cn(mlc.actionGrid, "grid-cols-3")}>
+          <PermissionButton permission="create_records" variant="chromePill" size="list" className="w-full" onClick={() => openVoucherDialog("direct_income")}>
+            Direct Income
+          </PermissionButton>
+          <PermissionButton permission="create_records" variant="chromePill" size="list" className="w-full" onClick={() => openVoucherDialog("direct_expense")}>
+            Direct Expense
+          </PermissionButton>
+          <PermissionButton permission="create_records" variant="chromePill" size="list" className="w-full" onClick={() => openVoucherDialog("add_salary")}>
+            Add Salary
+          </PermissionButton>
         </div>
-        {activeView === 'accounts' && (
-          <div className={cn(mlc.actionRow, listDisabled && "pointer-events-none opacity-60")}>
-            <div className={cn(mlc.actionGrid, "grid-cols-3")}>
-              {/* Voucher shortcuts — list toolbar height (`size="list"`) */}
-              <PermissionButton permission="create_records" variant="chromePill" size="list" className="w-full" onClick={() => openVoucherDialog("direct_income")}>
-                Direct Income
-              </PermissionButton>
-              <PermissionButton permission="create_records" variant="chromePill" size="list" className="w-full" onClick={() => openVoucherDialog("direct_expense")}>
-                Direct Expense
-              </PermissionButton>
-              <PermissionButton permission="create_records" variant="chromePill" size="list" className="w-full" onClick={() => openVoucherDialog("add_salary")}>
-                Add Salary
-              </PermissionButton>
-            </div>
-          </div>
-        )}
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {activeView === 'accounts' ? (
-            <>
-              <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-sm font-semibold text-muted-foreground">
-                <DollarSign className={mlc.sectionIcon} />
-                <span>Account ({filteredExpenseAccountListCount})</span>
-              </div>
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                <ExpenseAccountList accounts={expenseAccountsForList} onSelectAccount={(a) => handleSelect(a, 'accounts')} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByExpenseAccountId} disabled={listDisabled || !accountDetailsEnabled} getItemHref={useQueryNav && accountDetailsEnabled ? (a) => `/incomes?selected=${a.id}` : undefined} />
-              </div>
-            </>
+      </div>
+    ) : undefined;
+
+  const incomesSectionLabelEl =
+    activeView === "accounts" ? (
+      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
+        <DollarSign className={mlc.sectionIcon} />
+        <span>Account ({filteredExpenseAccountListCount})</span>
+      </div>
+    ) : (
+      <div className={cn(mlc.sectionLabelRow, isMobile && "px-[2px]")}>
+        <Users className={mlc.sectionIcon} />
+        <span>Groups ({filteredExpenseGroupListCount})</span>
+      </div>
+    );
+
+  const listView = (
+    <MasterListViewShell
+      isMobile={isMobile}
+      searchRow={incomesSearchRowEl}
+      sectionLabel={incomesSectionLabelEl}
+      actionRow={incomesActionRowEl}
+      tabs={incomesTabsEl}
+      quickFilter={activeView === "accounts" ? accountListQuickFilter : groupListQuickFilter}
+      onQuickFilterChange={activeView === "accounts" ? setAccountListQuickFilter : setGroupListQuickFilter}
+    >
+      <div className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+        {activeView === "accounts" ? (
+          <ExpenseAccountList
+            accounts={expenseAccountsForList}
+            onSelectAccount={(a) => handleSelect(a, "accounts")}
+            selectedAccount={selectedAccount}
+            searchTerm={searchTerm}
+            pendingApprovalByAccountId={pendingApprovalByExpenseAccountId}
+            disabled={listDisabled || !accountDetailsEnabled}
+            getItemHref={useQueryNav && accountDetailsEnabled ? (a) => `/incomes?selected=${a.id}` : undefined}
+            quickFilter={accountListQuickFilter}
+            onQuickFilterChange={setAccountListQuickFilter}
+            hideQuickFilterBar
+          />
         ) : (
-            <>
-              <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-sm font-semibold text-muted-foreground">
-                <Users className={mlc.sectionIcon} />
-                <span>Groups ({filteredExpenseGroupListCount})</span>
-              </div>
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                <ExpenseGroupList groups={expenseGroupsForList} onSelectGroup={(g) => handleSelect(g, 'groups')} selectedGroup={selectedGroup} searchTerm={searchTerm} collapsible={false} disabled={listDisabled || !groupDetailsEnabled} pendingApprovalByGroupId={pendingApprovalByExpenseGroupId} getItemHref={useQueryNav && groupDetailsEnabled ? (g) => `/incomes?view=groups&selected=${g.id}` : undefined} />
-              </div>
-            </>
+          <ExpenseGroupList
+            groups={expenseGroupsForList}
+            onSelectGroup={(g) => handleSelect(g, "groups")}
+            selectedGroup={selectedGroup}
+            searchTerm={searchTerm}
+            collapsible={false}
+            disabled={listDisabled || !groupDetailsEnabled}
+            pendingApprovalByGroupId={pendingApprovalByExpenseGroupId}
+            getItemHref={useQueryNav && groupDetailsEnabled ? (g) => `/incomes?view=groups&selected=${g.id}` : undefined}
+            quickFilter={groupListQuickFilter}
+            onQuickFilterChange={setGroupListQuickFilter}
+            hideQuickFilterBar
+          />
         )}
         {listDisabled && (
-          <div className="absolute inset-0 z-10 bg-background/60 backdrop-blur-[1px] flex items-center justify-center px-4 text-center text-sm font-medium text-muted-foreground">
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60 px-4 text-center text-sm font-medium text-muted-foreground backdrop-blur-[1px]">
             Income & Expense list access is turned off.
           </div>
         )}
-        </div>
-    </div>
+      </div>
+    </MasterListViewShell>
   );
 
   const detailView = (
@@ -656,19 +734,8 @@ function IncomeExpensePageContent() {
                 {formatCurrency(totalBalance, { showDrCr: true, noAnimation: true })}
             </span>
         }
-        tabs={
-          <Tabs value={activeView} onValueChange={(v) => {
-            if (!incomesListEnabled) return;
-            if (v === "accounts" && !accountsTabEnabled) return;
-            if (v === "groups" && !groupsTabEnabled) return;
-            setActiveView(v);
-          }} className="w-full">
-            <TabsList listChrome>
-              <TabsTrigger listChrome value="accounts" className="flex-1" disabled={!incomesListEnabled || !accountsTabEnabled}>Accounts</TabsTrigger>
-              <TabsTrigger listChrome value="groups" className="flex-1" disabled={!incomesListEnabled || !groupsTabEnabled}>Groups</TabsTrigger>
-            </TabsList>
-          </Tabs>
-        }
+        tabs={isMobile ? undefined : incomesTabsEl}
+        mobileTabsDocked={isMobile}
         listView={listView}
         detailView={detailView}
         isMobile={isMobile}

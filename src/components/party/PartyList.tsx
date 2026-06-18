@@ -35,6 +35,9 @@ export const PartyList = React.memo(({
   overdueVoucherCount,
   pendingApprovalByPartyId = {},
   getItemHref,
+  quickFilter: quickFilterProp,
+  onQuickFilterChange,
+  hideQuickFilterBar = false,
 }: {
   parties: Party[];
   selectedParty: Party | null;
@@ -48,10 +51,15 @@ export const PartyList = React.memo(({
   pendingApprovalByPartyId?: Record<string, number>;
   /** When provided, use Link for navigation (mobile/Capacitor) – ensures details page opens reliably */
   getItemHref?: (party: Party) => string | undefined;
+  quickFilter?: EntityListQuickFilter;
+  onQuickFilterChange?: (next: EntityListQuickFilter) => void;
+  hideQuickFilterBar?: boolean;
 }) => {
   const { formatCurrency } = useDate();
   const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
-  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
+  const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
+  const quickFilter = quickFilterProp ?? internalQuickFilter;
+  const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
 
   const filteredAndSortedParties = useMemo(() => {
     const toDateMs = (raw: unknown): number => {
@@ -205,7 +213,9 @@ export const PartyList = React.memo(({
             </AnimatePresence>
           </ul>
         </ScrollArea>
-        <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+        {!hideQuickFilterBar ? (
+          <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+        ) : null}
       </div>
     </TooltipProvider>
   );

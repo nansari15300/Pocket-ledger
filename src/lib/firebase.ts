@@ -68,8 +68,11 @@ if (typeof window !== 'undefined') {
     ) {
       return;
     }
-    // Firebase Auth: Google endpoints tak reach nahi (Wi‑Fi flap, firewall) — dev console spam kam.
-    if (errorMessage.includes('auth/network-request-failed')) {
+    // Firestore 12.x: multi-tab IndexedDB lease races during Next dev HMR / duplicate listeners.
+    if (
+      errorMessage.includes('Failed to obtain primary lease') ||
+      (errorMessage.includes('Firestore') && errorMessage.includes('primary lease'))
+    ) {
       return;
     }
     // Firestore 12.12: signOut + snapshot teardown → ca9; AsyncQueue sometimes wraps it as b815 (SDK bug).
@@ -171,8 +174,9 @@ function initFirestoreInstance() {
     return getFirestore(app);
   }
   const forceLongPolling = process.env.NEXT_PUBLIC_FIRESTORE_FORCE_LONG_POLLING === '1';
-  // Static/APK/EXE runtime usually single-window hota hai; multi-tab manager se b815/ve:-1 races zyada hit ho rahi thi.
-  const useSingleTabPersistence = isEmbeddedOfflinePreloadClient();
+  // Dev HMR + multi-tab manager = IndexedDB primary-lease noise; embed/APK already single-tab.
+  const useSingleTabPersistence =
+    isEmbeddedOfflinePreloadClient() || process.env.NODE_ENV === 'development';
   try {
     return initializeFirestore(app, {
       /** Hosted web par multi-tab cache share; static embed par single-tab manager se watch-state assertions kam. */
