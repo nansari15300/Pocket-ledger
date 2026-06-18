@@ -995,7 +995,7 @@ export function BackupRestore() {
           description: "Local SQLite and attachments are ready. You can create a backup with attachments.",
         });
         window.setTimeout(() => setPredownloadProgress(null), 4000);
-      } else if (!result.cancelled) {
+      } else if (result.ok === false && !result.cancelled) {
         toast({ variant: "destructive", title: "Pre-download failed", description: result.error });
         window.setTimeout(() => setPredownloadProgress(null), 8000);
       } else {

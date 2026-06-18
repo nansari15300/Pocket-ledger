@@ -58,6 +58,7 @@ import { PendingApprovalListFilterBadge } from "@/components/layout/PendingAppro
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
 import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
 import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
