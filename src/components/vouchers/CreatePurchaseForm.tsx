@@ -71,6 +71,7 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
+import { applyVoucherAttachmentsAfterFormSave } from "@/lib/voucherFormAttachmentSave";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { LinkAdvancesToVoucherDialog, applyAdvancesAllocationsToServer } from "@/components/vouchers/LinkAdvancesToVoucherDialog";
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
@@ -163,7 +164,7 @@ const formSchema = z.object({
   overdueImportant: z.boolean().optional().default(false),
   subTotal: z.coerce.number(),
   totalPurchasePrice: z.coerce.number().optional(),
-  discount: z.coerce.number().min(0).optional(),
+  discount: z.coerce.number().optional(),
   tax: z.coerce.number().min(0).optional(),
   total: z.coerce.number(),
   unassignedFile: z.any().optional(), // Keep unassignedFile data
@@ -373,6 +374,8 @@ export function CreatePurchaseForm({
     [allowAttachments, fileAttachmentLimits.maxFileCount, fileAttachmentLimits.allowPDF, files]
   );
   const initialFilesRef = useRef<string[]>([]);
+  /** Post-save parent `voucher.fileUrls` stale snapshot se form overwrite rokne ke liye. */
+  const savedFileUrlsSnapshotRef = useRef<string[] | null>(null);
   /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
   const lastResetVoucherIdRef = useRef<string | null>(null);
   const [taxRowIndex, setTaxRowIndex] = useState<number | null>(null);
@@ -736,6 +739,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         cref?.companyId && cref?.voucherId
           ? `sync:${cref.companyId}|${cref.voucherId}`
           : `new:${String(voucher.type || "purchase")}|${String(voucher.partyId || "")}|${String(voucher.narration || "").slice(0, 40)}`;
+      if (lastResetVoucherIdRef.current === syncDraftKey && isFormDirty) return;
       const isFirstNewPurchaseHydrate = lastResetVoucherIdRef.current !== syncDraftKey;
       lastResetVoucherIdRef.current = syncDraftKey;
       setSavedVoucherId(null);
@@ -746,12 +750,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         if (li0?.type === "service" || li0?.type === "item") {
           setItemType(li0.type);
         }
-      }
-      const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
-      if (Array.isArray(urlsToSet)) {
-        setFiles(urlsToSet);
-        initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === "string") as string[];
-        setSavePdfAsImage(shouldSuggestPdfAsImage(urlsToSet));
+        const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
+        if (Array.isArray(urlsToSet)) {
+          setFiles(urlsToSet);
+          initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === "string") as string[];
+          setSavePdfAsImage(shouldSuggestPdfAsImage(urlsToSet));
+        }
       }
     } else {
       lastResetVoucherIdRef.current = null;
@@ -1149,6 +1153,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             : "Purchase bill saved successfully.";
         replaceVoucherSaveLoadingWithShortSuccess(toastId, "Success", successDescription);
         if (isMounted.current) setIsLoading(false);
+        if (docId && companyId) {
+          const rawUrls = (finalData.fileUrls as string[]).filter(
+            (u): u is string => typeof u === "string" && Boolean(String(u).trim())
+          );
+          const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
+            companyId,
+            voucherId: docId,
+            rawFileUrls: rawUrls,
+            storageFolder: "purchase",
+          });
+          if (isMounted.current) {
+            savedFileUrlsSnapshotRef.current = [...persistedUrls];
+            setFiles(persistedUrls);
+            initialFilesRef.current = persistedUrls;
+          }
+        }
 
         const postSaveTail = async () => {
           if (pendingLinkAllocations && companyId && docId && vouchers?.length) {
@@ -2973,7 +2993,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       )}
                       <RestrictedFileUploader>
                         {/* When linked: add/remove disabled; existing files stay clickable to open. Filter by file identity (not index) so remove works reliably. */}
-                        <div className="grid grid-cols-3 gap-2 px-[2px]">
+                        <div className="flex flex-wrap items-start gap-2 px-[2px]">
                           {files.map((file, index) => (
                             <FilePreview 
                               key={typeof file === "string" ? file : `file-${index}`} 
@@ -2987,7 +3007,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             />
                           ))}
                           {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                            <div className="col-span-3 flex flex-wrap items-start gap-2">
+                            <>
                               <AttachmentHoldPasteSurface
                                 enabled={
                                   !editingDisabled &&
@@ -3041,7 +3061,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                                 />
                               </FormControl>
-                            </div>
+                            </>
                           )}
                         </div>
                       </RestrictedFileUploader>

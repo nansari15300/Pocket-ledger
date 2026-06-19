@@ -50,8 +50,7 @@ import {
 import {
   incomingVoucherFileUrlsLookStaleVersusSaved,
   isLocalToRemoteAttachmentUpgrade,
-  resolvePersistedVoucherFileUrlsAfterSave,
-  dispatchVoucherAttachmentSaved,
+  applyVoucherAttachmentsAfterFormSave,
   voucherAttachmentFieldsForSave,
   materializeVoucherFileUrlsForWebSave,
   normalizeFormFileUrlsForSave,
@@ -91,7 +90,7 @@ import { bankAccountAllowsVoucherMinusBalance } from "@/lib/bankAccountMinusBala
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
 import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
-import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_PC_DATE_ROW, VOUCHER_PC_DATE_BOTH_SLOT, VOUCHER_PC_DATE_BS_PILL, VOUCHER_PC_DATE_AD_PILL } from "@/components/vouchers/voucherButtonStyles";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { LinkPaymentOutToSalaryDialog } from "@/components/vouchers/LinkPaymentOutToSalaryDialog";
 import { LinkPaymentInToPaymentOutDialog } from "@/components/vouchers/LinkPaymentInToPaymentOutDialog";
@@ -1523,14 +1522,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           const vid = savedDoc.id;
           const persistedUrls =
             vid && companyId
-              ? await resolvePersistedVoucherFileUrlsAfterSave(companyId, vid, rawUrls, String(voucherType))
+              ? await applyVoucherAttachmentsAfterFormSave({
+                  companyId,
+                  voucherId: vid,
+                  rawFileUrls: rawUrls,
+                  storageFolder: String(voucherType),
+                })
               : rawUrls;
           savedFileUrlsSnapshotRef.current = [...persistedUrls];
           setFiles(persistedUrls);
           initialFilesRef.current = persistedUrls;
-          if (vid && companyId) {
-            dispatchVoucherAttachmentSaved(companyId, vid, persistedUrls);
-          }
         }
         if (shouldAutoFlushOutboxAfterEnqueue()) {
           void flushVoucherOutbox().catch((err) => {
@@ -2123,21 +2124,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       render={({ field }: any) => (
                         <FormItem className="flex flex-col">
                           <FormLabel>Date</FormLabel>
-                          <div className={cn("flex gap-2 h-10", dateSystem === 'Both' && "gap-2")}>
+                          <div className={VOUCHER_PC_DATE_ROW}>
                             {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                              <BsDatePicker valueAD={field.value} onChangeAD={(d) => { 
-                                if (d) d.setHours(12, 0, 0, 0);
-                                field.onChange(d as Date); 
-                                setIsCalendarOpen(false); 
-                              }} isRange={false} transactionDates={transactionDates} disabled={deleteDisabledWhenLinked} />
+                              <div className={cn(dateSystem === 'Both' ? VOUCHER_PC_DATE_BOTH_SLOT : "w-full min-w-0")}>
+                                <BsDatePicker valueAD={field.value} onChangeAD={(d) => { 
+                                  if (d) d.setHours(12, 0, 0, 0);
+                                  field.onChange(d as Date); 
+                                  setIsCalendarOpen(false); 
+                                }} isRange={false} transactionDates={transactionDates} className={VOUCHER_PC_DATE_BS_PILL} disabled={deleteDisabledWhenLinked} />
+                              </div>
                             )}
                             {(dateSystem === 'AD' || dateSystem === 'Both') && (
+                              <div className={cn(dateSystem === 'Both' ? VOUCHER_PC_DATE_BOTH_SLOT : "w-full min-w-0")}>
                               <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
                                 <PopoverTrigger asChild>
                                   <FormControl>
                                     <Button
                                       variant={"outline"}
-                                      className={cn("h-10 pl-3 text-left font-normal", !field.value && "text-muted-foreground")}
+                                      className={cn(VOUCHER_PC_DATE_AD_PILL, !field.value && "text-muted-foreground")}
                                       disabled={deleteDisabledWhenLinked}
                                     >
                                       {field.value ? formatDate(field.value) : <span>Pick a date</span>}
@@ -2155,6 +2159,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
                                 </PopoverContent>
                               </Popover>
+                              </div>
                             )}
                           </div>
                           <FormMessage />

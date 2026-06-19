@@ -73,8 +73,7 @@ import {
   isLocalToRemoteAttachmentUpgrade,
   materializeVoucherFileUrlsForWebSave,
   normalizeFormFileUrlsForSave,
-  resolvePersistedVoucherFileUrlsAfterSave,
-  dispatchVoucherAttachmentSaved,
+  applyVoucherAttachmentsAfterFormSave,
   voucherAttachmentFieldsForSave,
 } from "@/lib/voucherFormAttachmentSave";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
@@ -90,7 +89,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
 import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
 import type { CopyMasterDraftRequestPayload } from "./AddVoucherDialog";
-import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_PC_DATE_ROW, VOUCHER_PC_DATE_BOTH_SLOT, VOUCHER_PC_DATE_BS_PILL, VOUCHER_PC_DATE_AD_PILL } from "@/components/vouchers/voucherButtonStyles";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { LinkPaymentOutToPaymentInDialog } from "@/components/vouchers/LinkPaymentOutToPaymentInDialog";
 import { getOpeningBalanceBaseAmount, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
@@ -1181,7 +1180,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           lastSyncedVoucherIdRef.current = "new";
           const urls = defaultVoucherData.fileUrls || [];
           setFiles(urls);
-          initialFilesRef.current = urls;
+          initialFilesRef.current = urls.filter((f: unknown): f is string => typeof f === "string");
           setSavePdfAsImage(shouldSuggestPdfAsImage(urls));
           const allocs = Array.isArray(defaultVoucherData.allocations) ? defaultVoucherData.allocations : [];
           setAllocations(allocs);
@@ -1555,14 +1554,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           const rawUrls = (sanitizedData.fileUrls || []).filter((u: unknown): u is string => typeof u === "string");
           const persistedUrls =
             docId && companyId
-              ? await resolvePersistedVoucherFileUrlsAfterSave(companyId, docId, rawUrls, String(voucherType))
+              ? await applyVoucherAttachmentsAfterFormSave({
+                  companyId,
+                  voucherId: docId,
+                  rawFileUrls: rawUrls,
+                  storageFolder: String(voucherType),
+                })
               : rawUrls;
           savedFileUrlsSnapshotRef.current = [...persistedUrls];
           setFiles(persistedUrls);
           initialFilesRef.current = persistedUrls;
-          if (docId && companyId) {
-            dispatchVoucherAttachmentSaved(companyId, docId, persistedUrls);
-          }
         }
         // Online ho to outbox turant flush — Storage upload + dusre device ko HTTPS URLs.
         if (shouldAutoFlushOutboxAfterEnqueue()) {
@@ -2059,21 +2060,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       render={({ field }: any) => (
                         <FormItem className="flex flex-col">
                           <FormLabel>Date</FormLabel>
-                          <div className={cn("flex gap-2 h-10", dateSystem === 'Both' && "gap-2")}>
+                          <div className={VOUCHER_PC_DATE_ROW}>
                             {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                              <BsDatePicker valueAD={field.value} onChangeAD={(d) => { 
-                                if (d) d.setHours(12, 0, 0, 0);
-                                field.onChange(d as Date); 
-                                setIsCalendarOpen(false); 
-                              }} isRange={false} transactionDates={transactionDates} disabled={deleteDisabledWhenLinked} />
+                              <div className={cn(dateSystem === 'Both' ? VOUCHER_PC_DATE_BOTH_SLOT : "w-full min-w-0")}>
+                                <BsDatePicker valueAD={field.value} onChangeAD={(d) => { 
+                                  if (d) d.setHours(12, 0, 0, 0);
+                                  field.onChange(d as Date); 
+                                  setIsCalendarOpen(false); 
+                                }} isRange={false} transactionDates={transactionDates} className={VOUCHER_PC_DATE_BS_PILL} disabled={deleteDisabledWhenLinked} />
+                              </div>
                             )}
                             {(dateSystem === 'AD' || dateSystem === 'Both') && (
+                              <div className={cn(dateSystem === 'Both' ? VOUCHER_PC_DATE_BOTH_SLOT : "w-full min-w-0")}>
                               <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
                                 <PopoverTrigger asChild>
                                   <FormControl>
                                     <Button
                                       variant={"outline"}
-                                      className={cn("h-10 pl-3 text-left font-normal", !field.value && "text-muted-foreground")}
+                                      className={cn(VOUCHER_PC_DATE_AD_PILL, !field.value && "text-muted-foreground")}
                                       disabled={deleteDisabledWhenLinked}
                                     >
                                       {field.value ? formatDate(field.value) : <span>Pick a date</span>}
@@ -2091,6 +2095,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
                                 </PopoverContent>
                               </Popover>
+                              </div>
                             )}
                           </div>
                           <FormMessage />

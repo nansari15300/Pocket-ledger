@@ -99,7 +99,7 @@ import {
   shouldSuggestPdfAsImage,
 } from "@/lib/voucherAttachmentPdfAsImage";
 import {
-  dispatchVoucherAttachmentSaved,
+  applyVoucherAttachmentsAfterFormSave,
   incomingVoucherFileUrlsLookStaleVersusSaved,
   voucherAttachmentFieldsForSave,
 } from "@/lib/voucherFormAttachmentSave";
@@ -117,7 +117,7 @@ import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedEr
 import { loadJournalLedgerScopeSnapshot, type JournalScopedLedgerSnapshot } from "@/lib/journalLedgerScopeLoad";
 import { getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID, getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
-import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_PC_DATE_ROW, VOUCHER_PC_DATE_BOTH_SLOT, VOUCHER_PC_DATE_BS_PILL, VOUCHER_PC_DATE_AD_PILL } from "@/components/vouchers/voucherButtonStyles";
 /** Copy chip → parent ko journal row index bhejna hai — runtime import na ho isliye sirf types AddVoucherDialog se. */
 import type { CopyMissingMasterOpts, CopyMasterDraftRequestPayload } from "@/components/vouchers/AddVoucherDialog";
 
@@ -246,6 +246,16 @@ function getInitialFormValues(voucher?: any): JournalFormValues {
         files: [],
         lines: lines,
     };
+}
+
+
+function journalBankCashMasterSuffix(account: { accountType?: string | null }): "Bank" | "Cash" {
+    return account.accountType === "Cash" ? "Cash" : "Bank";
+}
+
+function journalBankCashMasterLabel(account: { accountName?: string; name?: string; accountType?: string | null }): string {
+    const name = account.accountName || account.name || "Account";
+    return `${name} (${journalBankCashMasterSuffix(account)})`;
 }
 
 
@@ -526,7 +536,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const parts: { value: string; label: string; nameOnly: string; balance?: number; entityType: string }[] = [];
     (pParties || []).forEach((p: any) => parts.push({ value: p.id, label: `${p.name} (Party)`, nameOnly: p.name, balance: p.balance, entityType: "party" }));
     (pStaff || []).forEach((s: any) => parts.push({ value: s.id, label: `${s.name} (Staff)`, nameOnly: s.name, balance: s.balance, entityType: "staff" }));
-    (pAccounts || []).forEach((a: any) => parts.push({ value: a.id, label: `${a.accountName || a.name || "Account"} (Account)`, nameOnly: a.accountName || a.name || "Account", balance: a.balance, entityType: "account" }));
+    (pAccounts || []).forEach((a: any) => parts.push({ value: a.id, label: journalBankCashMasterLabel(a), nameOnly: a.accountName || a.name || "Account", balance: a.balance, entityType: "account" }));
     (pExpense || []).forEach((a: any) => parts.push({ value: a.id, label: `${a.name || "Expense"} (Expense)`, nameOnly: a.name || "Expense", balance: (a as any).balance, entityType: "expense" }));
     (pTaxes || []).forEach((t: any) => parts.push({ value: t.id, label: `${t.name || "Tax"} (Tax)`, nameOnly: t.name || "Tax", balance: (t as any).balance, entityType: "tax" }));
     return parts.sort((a, b) => a.label.localeCompare(b.label));
@@ -670,7 +680,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const map = new Map<string, string>();
     (pParties || []).forEach((p: any) => map.set(String(p.id), `${p.name} (Party)`));
     (pStaff || []).forEach((s: any) => map.set(String(s.id), `${s.name} (Staff)`));
-    (pAccounts || []).forEach((a: any) => map.set(String(a.id), `${a.accountName || a.name || "Account"} (Account)`));
+    (pAccounts || []).forEach((a: any) => map.set(String(a.id), journalBankCashMasterLabel(a)));
     (pExpense || []).forEach((a: any) => map.set(String(a.id), `${a.name || "Expense"} (Expense)`));
     (pTaxes || []).forEach((t: any) => map.set(String(t.id), `${t.name || "Tax"} (Tax)`));
     return map;
@@ -1677,11 +1687,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
         if (isMounted.current) setIsLoading(false);
 
-        savedFileUrlsSnapshotRef.current = [...fileUrls];
-        setFiles(fileUrls);
-        initialFilesRef.current = [...fileUrls];
         if (companyId && docId) {
-          dispatchVoucherAttachmentSaved(companyId, docId, fileUrls);
+          const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
+            companyId,
+            voucherId: docId,
+            rawFileUrls: fileUrls,
+            storageFolder: "journal",
+          });
+          savedFileUrlsSnapshotRef.current = [...persistedUrls];
+          setFiles(persistedUrls);
+          initialFilesRef.current = [...persistedUrls];
         }
 
         const postSaveTail = async () => {
@@ -2261,19 +2276,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       render={({ field }: any) => (
                         <FormItem className="flex flex-col">
                           <FormLabel>Date</FormLabel>
-                          <div className={cn("flex gap-2 h-10", dateSystem === 'Both' && "gap-2")}>
+                          <div className={VOUCHER_PC_DATE_ROW}>
                             {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                              <BsDatePicker valueAD={field.value} onChangeAD={(d) => { 
-                                if (d) d.setHours(12, 0, 0, 0);
-                                field.onChange(d as Date); 
-                                setIsCalendarOpen(false); 
-                              }} isRange={false} transactionDates={transactionDates} />
+                              <div className={cn(dateSystem === 'Both' ? VOUCHER_PC_DATE_BOTH_SLOT : "w-full min-w-0")}>
+                                <BsDatePicker valueAD={field.value} onChangeAD={(d) => { 
+                                  if (d) d.setHours(12, 0, 0, 0);
+                                  field.onChange(d as Date); 
+                                  setIsCalendarOpen(false); 
+                                }} isRange={false} transactionDates={transactionDates} className={VOUCHER_PC_DATE_BS_PILL} />
+                              </div>
                             )}
                             {(dateSystem === 'AD' || dateSystem === 'Both') && (
+                              <div className={cn(dateSystem === 'Both' ? VOUCHER_PC_DATE_BOTH_SLOT : "w-full min-w-0")}>
                               <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
                                 <PopoverTrigger asChild>
                                   <FormControl>
-                                    <Button disabled={!isFormEditing} variant={"outline"} className={cn("h-10 pl-3 text-left font-normal", !field.value && "text-muted-foreground")}>
+                                    <Button disabled={!isFormEditing} variant={"outline"} className={cn(VOUCHER_PC_DATE_AD_PILL, !field.value && "text-muted-foreground")}>
                                       {field.value ? formatDate(field.value) : <span>Pick a date</span>}
                                       <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
                                     </Button>
@@ -2289,6 +2307,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
                                 </PopoverContent>
                               </Popover>
+                              </div>
                             )}
                           </div>
                           <FormMessage />

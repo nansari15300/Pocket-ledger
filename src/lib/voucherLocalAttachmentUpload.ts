@@ -21,6 +21,7 @@ import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 
 /**
  * Legacy rollback: `NEXT_PUBLIC_VOUCHER_ATTACHMENT_FIRESTORE_IMMEDIATE_UPLOAD=1` → purana flow (online + Firestore-first par form `uploadBytes` await).
@@ -75,6 +76,7 @@ export async function appendLocalOnlyVoucherFilesToUrls(params: {
   let out = [...existingFileUrls];
   if (newFiles.length === 0) return { fileUrls: out };
 
+  const fsCompanyId = await resolveAuthoritativeFirestoreCompanyId(companyId);
   const voucherIdForDoc = existingVoucherId || generateLocalVoucherIdForCreate();
   const preGeneratedVoucherId = existingVoucherId ? undefined : voucherIdForDoc;
 
@@ -85,7 +87,7 @@ export async function appendLocalOnlyVoucherFilesToUrls(params: {
       id: localFileId,
       blob: file,
       contentType: file.type || "application/octet-stream",
-      docPath: `companies/${companyId}/vouchers/${voucherIdForDoc}`,
+      docPath: `companies/${fsCompanyId}/vouchers/${voucherIdForDoc}`,
       field: "fileUrls",
       storagePathPrefix: `voucher-files/${companyId}/${storageFolder}`,
       fileName: file.name,

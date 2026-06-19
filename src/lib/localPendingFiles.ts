@@ -28,6 +28,7 @@ import { getLocalCompanyById, listLocalCompanies } from "@/lib/localCompanyStore
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
+import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
 
 const STORE = "pendingFiles";
 const ATTACHMENT_HOLD_CLIPBOARD_PREFIX = "PL_ATTACH_V1:";
@@ -76,12 +77,15 @@ async function readCompanyDocForPendingSync(
     if (!parts) continue;
     const [, cid, coll, did] = parts;
     const reg = await getLocalCompanyById(cid!, { includeDeleted: true });
-    if (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) {
+    const readSqliteMirror =
+      (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) ||
+      apkEmbeddedSqliteFirstWritesPreferred();
+    if (readSqliteMirror) {
       const row = (await getCompanyDocFromBrowserDb(cid!, coll!, did!, {
         includeDeleted: opts?.includeDeleted === true,
       })) as Record<string, unknown> | null;
       if (row) return row;
-      continue;
+      if (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) continue;
     }
     const snap = await getDoc(firestoreDocRefFromPath(path));
     if (snap.exists()) return snap.data() as Record<string, unknown>;

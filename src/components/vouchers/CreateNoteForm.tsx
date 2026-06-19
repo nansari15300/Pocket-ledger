@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form";
 import { Loader2, Trash2, CalendarIcon, PlusCircle, CheckCircle, History, Printer } from "lucide-react";
-import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_PC_DATE_ROW, VOUCHER_PC_DATE_BOTH_SLOT, VOUCHER_PC_DATE_BS_PILL, VOUCHER_PC_DATE_AD_PILL } from "@/components/vouchers/voucherButtonStyles";
 import { FilePreview } from "./FilePreview";
 import { compressVoucherAttachment } from "@/lib/compression";
 import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
@@ -58,6 +58,7 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
+import { applyVoucherAttachmentsAfterFormSave } from "@/lib/voucherFormAttachmentSave";
 import { toast as sonnerToast } from "sonner";
 import { replaceVoucherSaveLoadingWithShortSuccess } from "@/lib/voucherSaveUi";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -661,6 +662,17 @@ export function CreateNoteForm({
         }
         setIsLoading(false);
 
+        if (companyId && docId) {
+          const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
+            companyId,
+            voucherId: docId,
+            rawFileUrls: fileUrls,
+            storageFolder: "note",
+          });
+          initialFilesRef.current = [...persistedUrls];
+          setFiles(persistedUrls);
+        }
+
         const postSaveTail = async () => {
           if (approveBanner && !isEdit) {
             await approveVoucherWithHistory(companyId, docId!, user.uid, approverName);
@@ -673,8 +685,7 @@ export function CreateNoteForm({
             lastResetVoucherIdRef.current = undefined;
             fetchVoucherNumber();
           } else {
-            initialFilesRef.current = [...fileUrls];
-            setFiles(fileUrls);
+            /* file state already synced via applyVoucherAttachmentsAfterFormSave above */
           }
 
           onSuccess?.();
@@ -912,8 +923,9 @@ export function CreateNoteForm({
                       render={({ field }: any) => (
                         <FormItem className="flex flex-col">
                           <FormLabel>Date</FormLabel>
-                          <div className={cn("flex gap-2 h-10", dateSystem === 'Both' && "gap-2")}>
+                          <div className={VOUCHER_PC_DATE_ROW}>
                             {(dateSystem === 'BS' || dateSystem === 'Both') && (
+                              <div className={cn(dateSystem === 'Both' ? VOUCHER_PC_DATE_BOTH_SLOT : "w-full min-w-0")}>
                               <BsDatePicker 
                                 valueAD={field.value} 
                                 onChangeAD={(d) => { 
@@ -922,15 +934,18 @@ export function CreateNoteForm({
                                   setIsCalendarOpen(false); 
                                 }} 
                                 isRange={false} 
-                                transactionDates={transactionDates} 
+                                transactionDates={transactionDates}
+                                className={VOUCHER_PC_DATE_BS_PILL}
                               />
+                              </div>
                             )}
                             {(dateSystem === 'AD' || dateSystem === 'Both') && (
+                              <div className={cn(dateSystem === 'Both' ? VOUCHER_PC_DATE_BOTH_SLOT : "w-full min-w-0")}>
                               <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
                                 <PopoverTrigger asChild>
                                   <Button 
                                     variant="outline" 
-                                    className="h-10 pl-3 text-left font-normal"
+                                    className={cn(VOUCHER_PC_DATE_AD_PILL, !field.value && "text-muted-foreground")}
                                   >
                                     {field.value instanceof Date && !isNaN(field.value.getTime()) ? formatDate(field.value) : "Select Date"}
                                     <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
@@ -953,6 +968,7 @@ export function CreateNoteForm({
                                   />
                                 </PopoverContent>
                               </Popover>
+                              </div>
                             )}
                           </div>
                           <FormMessage />

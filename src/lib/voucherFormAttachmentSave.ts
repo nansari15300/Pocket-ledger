@@ -2,6 +2,7 @@
 
 import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";
 import { isLocalFileRef, getBlobFromLocalFileRef } from "@/lib/localPendingFiles";
+import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
@@ -228,6 +229,48 @@ export function dispatchVoucherAttachmentSaved(
   fileUrls: readonly string[]
 ): void {
   dispatchVoucherLivePatch(companyId, voucherId, buildVoucherAttachmentLivePatch(fileUrls));
+}
+
+/**
+ * Form save ke baad: `local:` → resolve + vouchers cache patch + UI ke liye persisted URL list.
+ * EXE/static par pehli create par cache me row na ho to bhi `dispatchVoucherAttachmentSaved` stub append karta hai.
+ */
+export async function applyVoucherAttachmentsAfterFormSave(params: {
+  companyId: string;
+  voucherId: string;
+  rawFileUrls: readonly string[];
+  storageFolder: string;
+}): Promise<string[]> {
+  const cid = String(params.companyId || "").trim();
+  const vid = String(params.voucherId || "").trim();
+  let raw = params.rawFileUrls.filter(
+    (u): u is string => typeof u === "string" && Boolean(String(u).trim())
+  );
+  if (!cid || !vid) return [...raw];
+
+  // EXE/APK create: form state ab bhi `local:` ho sakta hai — SQLite me hydrate ke baad HTTPS padha ho.
+  if (raw.some((u) => isLocalFileRef(u)) && (isElectronDesktopApp() || isCapacitorNativeApp() || isStaticAppBuild())) {
+    try {
+      const row = (await getCompanyDocFromBrowserDb(cid, "vouchers", vid)) as Record<string, unknown> | null;
+      const fromDb = Array.isArray(row?.fileUrls)
+        ? row!.fileUrls!.filter((u): u is string => typeof u === "string" && Boolean(String(u).trim()))
+        : [];
+      if (fromDb.length > 0 && fromDb.some((u) => !isLocalFileRef(u))) {
+        raw = fromDb;
+      }
+    } catch {
+      /* mirror miss — resolve fallback */
+    }
+  }
+
+  const persisted = await resolvePersistedVoucherFileUrlsAfterSave(
+    cid,
+    vid,
+    raw,
+    params.storageFolder
+  );
+  dispatchVoucherAttachmentSaved(cid, vid, persisted);
+  return persisted;
 }
 
 /**

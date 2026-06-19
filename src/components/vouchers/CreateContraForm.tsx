@@ -38,6 +38,7 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
+import { applyVoucherAttachmentsAfterFormSave } from "@/lib/voucherFormAttachmentSave";
 import { toast as sonnerToast } from "sonner";
 import { replaceVoucherSaveLoadingWithShortSuccess } from "@/lib/voucherSaveUi";
 import BsDatePicker from "../ui/BsDatePicker";
@@ -73,7 +74,7 @@ import { bankAccountAllowsVoucherMinusBalance } from "@/lib/bankAccountMinusBala
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
 import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
-import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_PC_DATE_ROW, VOUCHER_PC_DATE_BOTH_SLOT, VOUCHER_PC_DATE_BS_PILL, VOUCHER_PC_DATE_AD_PILL } from "@/components/vouchers/voucherButtonStyles";
 import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
 import { LinkPaymentInToPaymentOutDialog } from "@/components/vouchers/LinkPaymentInToPaymentOutDialog";
 import { LinkPaymentOutToPaymentInDialog } from "@/components/vouchers/LinkPaymentOutToPaymentInDialog";
@@ -699,29 +700,32 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       initialFilesRef.current = urlsEdit;
       setSavePdfAsImage(shouldSuggestPdfAsImage(urlsEdit));
     } else if (voucher) {
-      // Naya Contra: template object id ke bina — vid falsy tha isliye pehle `isFormDirty` par bhi reset chalta tha; File attach mitt jati thi.
+      // Naya Contra: template object id ke bina — dirty par seed se files overwrite mat karo.
       if (lastResetVoucherIdRef.current === NEW_CONTRA && isFormDirty) return;
+      const isFirstNewContraHydrate = lastResetVoucherIdRef.current !== NEW_CONTRA;
       lastResetVoucherIdRef.current = NEW_CONTRA;
-      const initialValues: any = { ...voucher, files: [], date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date) };
-      if (isEditingAndConverting) {
-        initialValues.voucherNumber = "";
+      if (isFirstNewContraHydrate) {
+        const initialValues: any = { ...voucher, files: [], date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date) };
+        if (isEditingAndConverting) {
+          initialValues.voucherNumber = "";
+        }
+        const base = getContraBasePrefix(company?.voucherPrefixes as Record<string, string[]> | undefined);
+        const prefix = getVoucherPrefix(company?.voucherPrefixes as Record<string, string[]> | undefined);
+        if (initialValues.voucherNumberOut == null || initialValues.voucherNumberOut === "") {
+          const num = parseVoucherNumberPart(initialValues.voucherNumber || "", prefix);
+          initialValues.voucherNumberOut = !isNaN(num) ? formatVoucherNumber(`${base} Out`, num) : (initialValues.voucherNumber || "");
+        }
+        if (initialValues.voucherNumberIn == null || initialValues.voucherNumberIn === "") {
+          const num = parseVoucherNumberPart(initialValues.voucherNumber || "", prefix);
+          initialValues.voucherNumberIn = !isNaN(num) ? formatVoucherNumber(`${base} In`, num) : (initialValues.voucherNumber || "");
+        }
+        form.reset(initialValues);
+        setSavedVoucherId(voucher?.id ?? null);
+        const urlsNew = voucher.fileUrls || [];
+        setFiles(urlsNew);
+        initialFilesRef.current = urlsNew.filter((f: unknown): f is string => typeof f === "string");
+        setSavePdfAsImage(shouldSuggestPdfAsImage(urlsNew));
       }
-      const base = getContraBasePrefix(company?.voucherPrefixes as Record<string, string[]> | undefined);
-      const prefix = getVoucherPrefix(company?.voucherPrefixes as Record<string, string[]> | undefined);
-      if (initialValues.voucherNumberOut == null || initialValues.voucherNumberOut === "") {
-        const num = parseVoucherNumberPart(initialValues.voucherNumber || "", prefix);
-        initialValues.voucherNumberOut = !isNaN(num) ? formatVoucherNumber(`${base} Out`, num) : (initialValues.voucherNumber || "");
-      }
-      if (initialValues.voucherNumberIn == null || initialValues.voucherNumberIn === "") {
-        const num = parseVoucherNumberPart(initialValues.voucherNumber || "", prefix);
-        initialValues.voucherNumberIn = !isNaN(num) ? formatVoucherNumber(`${base} In`, num) : (initialValues.voucherNumber || "");
-      }
-      form.reset(initialValues);
-      setSavedVoucherId(voucher?.id ?? null);
-      const urlsNew = voucher.fileUrls || [];
-      setFiles(urlsNew);
-      initialFilesRef.current = urlsNew;
-      setSavePdfAsImage(shouldSuggestPdfAsImage(urlsNew));
     } else {
       lastResetVoucherIdRef.current = null;
     }
@@ -1113,6 +1117,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           );
         }
         setIsLoading(false);
+
+        if (companyId && docId) {
+          const rawUrls = (submissionData.fileUrls as string[]).filter(
+            (u): u is string => typeof u === "string" && Boolean(String(u).trim())
+          );
+          const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
+            companyId,
+            voucherId: docId,
+            rawFileUrls: rawUrls,
+            storageFolder: "contra",
+          });
+          setFiles(persistedUrls);
+          initialFilesRef.current = persistedUrls;
+        }
 
         const postSaveTail = async () => {
           if (approveBanner && !isEditForApprove) {
@@ -1657,21 +1675,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       render={({ field }: any) => (
                         <FormItem className="flex flex-col">
                           <FormLabel>Date</FormLabel>
-                          <div className={cn("flex gap-2 h-10", dateSystem === 'Both' && "gap-2")}>
+                          <div className={VOUCHER_PC_DATE_ROW}>
                             {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                              <BsDatePicker valueAD={field.value} onChangeAD={(d) => { 
-                                if (d) d.setHours(12, 0, 0, 0);
-                                field.onChange(d as Date); 
-                                setIsCalendarOpen(false); 
-                              }} isRange={false} transactionDates={transactionDates} disabled={deleteDisabledWhenLinked} />
+                              <div className={cn(dateSystem === 'Both' ? VOUCHER_PC_DATE_BOTH_SLOT : "w-full min-w-0")}>
+                                <BsDatePicker valueAD={field.value} onChangeAD={(d) => { 
+                                  if (d) d.setHours(12, 0, 0, 0);
+                                  field.onChange(d as Date); 
+                                  setIsCalendarOpen(false); 
+                                }} isRange={false} transactionDates={transactionDates} className={VOUCHER_PC_DATE_BS_PILL} disabled={deleteDisabledWhenLinked} />
+                              </div>
                             )}
                             {(dateSystem === 'AD' || dateSystem === 'Both') && (
+                              <div className={cn(dateSystem === 'Both' ? VOUCHER_PC_DATE_BOTH_SLOT : "w-full min-w-0")}>
                               <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
                                 <PopoverTrigger asChild>
                                   <FormControl>
                                     <Button
                                       variant={"outline"}
-                                      className={cn("h-10 pl-3 text-left font-normal", !field.value && "text-muted-foreground")}
+                                      className={cn(VOUCHER_PC_DATE_AD_PILL, !field.value && "text-muted-foreground")}
                                       disabled={deleteDisabledWhenLinked}
                                     >
                                       {field.value ? formatDate(field.value) : <span>Pick a date</span>}
@@ -1689,6 +1710,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
                                 </PopoverContent>
                               </Popover>
+                              </div>
                             )}
                           </div>
                           <FormMessage />

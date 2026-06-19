@@ -121,7 +121,7 @@ import {
   shouldSuggestPdfAsImage,
 } from "@/lib/voucherAttachmentPdfAsImage";
 import {
-  dispatchVoucherAttachmentSaved,
+  applyVoucherAttachmentsAfterFormSave,
   voucherAttachmentFieldsForSave,
 } from "@/lib/voucherFormAttachmentSave";
 import { CreateBankAccountDialog } from "../bank-cash/CreateBankAccountDialog";
@@ -166,7 +166,7 @@ const formSchema = z.object({
   overdueImportant: z.boolean().optional().default(false),
   subTotal: z.coerce.number(),
   totalPurchasePrice: z.coerce.number().optional(),
-  discount: z.coerce.number().min(0).optional(),
+  discount: z.coerce.number().optional(),
   tax: z.coerce.number().min(0).optional(),
   total: z.coerce.number(),
   unassignedFile: z.any().optional(), // Keep unassignedFile data
@@ -429,6 +429,8 @@ export function CreateSaleForm({
     [allowAttachments, fileAttachmentLimits.maxFileCount, fileAttachmentLimits.allowPDF, files]
   );
   const initialFilesRef = useRef<string[]>([]);
+  /** Post-save parent `voucher.fileUrls` stale snapshot se form overwrite rokne ke liye. */
+  const savedFileUrlsSnapshotRef = useRef<string[] | null>(null);
   /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
   const lastResetVoucherIdRef = useRef<string | null>(null);
   /** Line id → qty-driven ya amount-driven calc (amount field se qty derive) */
@@ -797,6 +799,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         cref?.companyId && cref?.voucherId
           ? `sync:${cref.companyId}|${cref.voucherId}`
           : `new:${String(voucher.type || "sale")}|${String(voucher.partyId || "")}|${String(voucher.narration || "").slice(0, 40)}`;
+      if (lastResetVoucherIdRef.current === syncDraftKey && isFormDirty) return;
       const isFirstNewSaleHydrate = lastResetVoucherIdRef.current !== syncDraftKey;
       lastResetVoucherIdRef.current = syncDraftKey;
       setSavedVoucherId(null);
@@ -807,12 +810,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         if (li0?.type === "service" || li0?.type === "item") {
           setItemType(li0.type);
         }
-      }
-      const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
-      if (Array.isArray(urlsToSet)) {
-        setFiles(urlsToSet);
-        initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === "string") as string[];
-        setSavePdfAsImage(shouldSuggestPdfAsImage(urlsToSet));
+        const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
+        if (Array.isArray(urlsToSet)) {
+          setFiles(urlsToSet);
+          initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === "string") as string[];
+          setSavePdfAsImage(shouldSuggestPdfAsImage(urlsToSet));
+        }
       }
     } else {
       lastResetVoucherIdRef.current = null;
@@ -1350,11 +1353,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         replaceVoucherSaveLoadingWithShortSuccess(toastId, "Success", successDescription);
         if (isMounted.current) setIsLoading(false);
         if (docId && companyId) {
-          dispatchVoucherAttachmentSaved(
-            companyId,
-            docId,
-            (finalData.fileUrls as string[]) || existingFileUrls
+          const rawUrls = ((finalData.fileUrls as string[]) || existingFileUrls).filter(
+            (u): u is string => typeof u === "string" && Boolean(String(u).trim())
           );
+          const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
+            companyId,
+            voucherId: docId,
+            rawFileUrls: rawUrls,
+            storageFolder: "sale",
+          });
+          if (isMounted.current) {
+            savedFileUrlsSnapshotRef.current = [...persistedUrls];
+            setFiles(persistedUrls);
+            initialFilesRef.current = persistedUrls;
+          }
         }
 
         // Baaki linkage / alerts / print background — Save & Close par dialog turant band (Firestore row already persisted).
@@ -3524,7 +3536,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       )}
                       <RestrictedFileUploader>
                         {/* When linked: add/remove disabled; existing files stay clickable to open */}
-                        <div className="grid grid-cols-3 gap-2 px-[2px]">
+                        <div className="flex flex-wrap items-start gap-2 px-[2px]">
                           {files.map((file, index) => (
                             <FilePreview 
                               key={index} 
@@ -3538,7 +3550,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             />
                           ))}
                           {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                            <div className="col-span-3 flex flex-wrap items-start gap-2">
+                            <>
                               <AttachmentHoldPasteSurface
                                 enabled={
                                   !editingDisabled &&
@@ -3592,7 +3604,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                                 />
                               </FormControl>
-                            </div>
+                            </>
                           )}
                         </div>
                       </RestrictedFileUploader>

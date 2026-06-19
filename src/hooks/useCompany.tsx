@@ -227,6 +227,8 @@ export type Company = {
     };
     /** Firestore `companies/{id}` — local SQLite id alag ho to sync-plan yahan se */
     authoritativeCompanyId?: string;
+    /** Outstanding (R/P) dialog + dashboard card: hidden category ids — owner only edit. */
+    receivablesPayablesHiddenCategories?: string[];
     /** Server offline-license window end (`sync-plan` har online + max 20d chunk) */
     offlineLicenseValidUntilMs?: number;
     /**

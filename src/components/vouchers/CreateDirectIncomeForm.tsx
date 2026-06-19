@@ -47,7 +47,7 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDialog";
 import type { ExpenseAccount } from "../expenses/types";
 import { Checkbox } from "../ui/checkbox";
-import { BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_PC_DATE_ROW, VOUCHER_PC_DATE_BOTH_SLOT, VOUCHER_PC_DATE_BS_PILL, VOUCHER_PC_DATE_AD_PILL } from "@/components/vouchers/voucherButtonStyles";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
@@ -59,6 +59,7 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
+import { applyVoucherAttachmentsAfterFormSave } from "@/lib/voucherFormAttachmentSave";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -460,6 +461,17 @@ export function CreatePaymentInForm({
           throw new Error("Failed to save voucher and get ID.");
       }
 
+      if (companyId && docId) {
+        const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
+          companyId,
+          voucherId: docId,
+          rawFileUrls: (submissionData.fileUrls as string[]) || [],
+          storageFolder: String(voucherType),
+        });
+        initialFilesRef.current = [...persistedUrls];
+        setFiles(persistedUrls);
+      }
+
         sonnerToast.success("Receipt Recorded!", { id: toastId, description: `Voucher #${data.voucherNumber} has been created.` });
 
         if (companyId && company) {
@@ -854,17 +866,20 @@ export function CreatePaymentInForm({
                   render={({ field }: any) => (
                     <FormItem className="flex flex-col">
                       <FormLabel>Date</FormLabel>
-                      <div className={cn("flex gap-2 h-10", dateSystem === 'Both' && "gap-2")}>
+                      <div className={VOUCHER_PC_DATE_ROW}>
                            {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                              <BsDatePicker valueAD={field.value} onChangeAD={(d) => { field.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} />
+                              <div className={cn(dateSystem === 'Both' ? VOUCHER_PC_DATE_BOTH_SLOT : "w-full min-w-0")}>
+                              <BsDatePicker valueAD={field.value} onChangeAD={(d) => { field.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className={VOUCHER_PC_DATE_BS_PILL} />
+                              </div>
                            )}
                            {(dateSystem === 'AD' || dateSystem === 'Both') && (
+                               <div className={cn(dateSystem === 'Both' ? VOUCHER_PC_DATE_BOTH_SLOT : "w-full min-w-0")}>
                                <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
                                   <PopoverTrigger asChild>
                                     <FormControl>
                                       <Button
                                         variant={"outline"}
-                                        className={cn("h-10 pl-3 text-left font-normal", !field.value && "text-muted-foreground")}
+                                        className={cn(VOUCHER_PC_DATE_AD_PILL, !field.value && "text-muted-foreground")}
                                       >
                                         {field.value ? formatDate(field.value) : <span>Pick a date</span>}
                                         <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
@@ -875,6 +890,7 @@ export function CreatePaymentInForm({
                                     <Calendar mode="single" selected={field.value} onSelect={(date) => {field.onChange(date); setIsCalendarOpen(false);}} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
                                   </PopoverContent>
                                 </Popover>
+                                </div>
                            )}
                         </div>
                       <FormMessage />

@@ -25,6 +25,12 @@ export const BTN_APPROVE_CLASS = "bg-violet-600 hover:bg-violet-700 text-white b
 export const VOUCHER_NARRATION_TEXTAREA_CLASS =
   "min-h-[9rem] max-h-[min(70vh,28rem)] w-full min-w-0 resize-y overflow-y-auto";
 
+/** PC voucher header — BS + AD date pills equal height/width when date system is Both */
+export const VOUCHER_PC_DATE_ROW = "flex gap-2 h-10 w-full min-w-0";
+export const VOUCHER_PC_DATE_BOTH_SLOT = "flex-1 min-w-0";
+export const VOUCHER_PC_DATE_BS_PILL = "h-10 min-h-10 w-full";
+export const VOUCHER_PC_DATE_AD_PILL = "h-10 w-full pl-3 text-left font-normal";
+
 /** Mobile 3-col attach: square `h-24 w-24` — Payment In ke Add / preview jaisa (pehle `w-full` = lamba rectangle). */
 export const VOUCHER_MOBILE_ATTACH_TILE_SLOT = "relative h-24 w-24 shrink-0";
 export const VOUCHER_MOBILE_ATTACH_PREVIEW_CLASS =

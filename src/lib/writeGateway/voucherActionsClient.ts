@@ -76,7 +76,7 @@ import {
   voucherNewAttachmentsAlwaysStageAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
 import { parseAttachmentHoldClipboardText } from "@/lib/attachmentHoldClipboard";
-import { dispatchVoucherLivePatch, materializeVoucherAttachmentsInSavePayload } from "@/lib/voucherFormAttachmentSave";
+import { dispatchVoucherLivePatch, dispatchVoucherAttachmentSaved, materializeVoucherAttachmentsInSavePayload } from "@/lib/voucherFormAttachmentSave";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
@@ -206,6 +206,36 @@ async function syncPendingAttachmentsAfterFirestoreWrite(wrotePayload: Record<st
     console.warn("[voucherActionsClient] syncPendingFiles after Firestore write failed", e);
     logAttachmentPipeline("sync", { step: "syncPendingFiles_failed", error: String(e) });
   }
+}
+
+/** EXE/APK create: outbox flush se pehle online par `local:` → HTTPS taaki SQLite + UI turant sahi URL dikhaye. */
+async function hydrateLocalAttachmentsInPayloadIfOnline(
+  companyId: string,
+  payload: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  if (typeof navigator !== "undefined" && !navigator.onLine) return payload;
+  if (!recordContainsLocalPendingVoucherFileRef(payload)) return payload;
+  try {
+    const fsCompanyId = await resolveAuthoritativeFirestoreCompanyId(companyId);
+    const hydrated = await hydrateVoucherLocalAttachmentsForServer(fsCompanyId, payload);
+    normalizeVoucherAttachmentFieldsForPersistence(hydrated, companyId);
+    deleteUndefinedTopLevelFields(hydrated);
+    return hydrated;
+  } catch (e) {
+    console.warn("[voucherActionsClient] inline attachment hydrate failed", e);
+    return payload;
+  }
+}
+
+function dispatchSavedVoucherAttachmentUrls(
+  companyId: string,
+  voucherId: string,
+  payload: Record<string, unknown>
+): void {
+  const urls = Array.isArray(payload.fileUrls)
+    ? payload.fileUrls.filter((u): u is string => typeof u === "string" && Boolean(String(u).trim()))
+    : [];
+  if (urls.length > 0) dispatchVoucherAttachmentSaved(companyId, voucherId, urls);
 }
 
 /** Firestore company root: `planExpiry` Timestamp ya `planExpiryMs` — tier overlay + cache ke saath expiry compare */
@@ -976,9 +1006,11 @@ async function saveVoucherOfflineLocalCreate(
   coerceVoucherDocumentDate(body);
   // Sync‑3: device lineage debug / future merge tuning — Firebase flush me strip (`localVoucherOutbox`)
   body[PL_CLIENT_OFFLINE_FIRST_PERSIST_MS] = Date.now();
-  const payload = { id: newId, ...body };
+  let payload = { id: newId, ...body };
+  payload = { ...(await hydrateLocalAttachmentsInPayloadIfOnline(companyId, payload)), id: newId };
   await upsertCompanyDocInBrowserDb(companyId, "vouchers", newId, payload);
   await enqueueVoucherOutbox(companyId, "create", newId, payload);
+  dispatchSavedVoucherAttachmentUrls(companyId, newId, payload);
   return { id: newId };
 }
 
@@ -1218,7 +1250,7 @@ export async function saveVoucher(
     const existingLocal = resolvedExisting?.voucher ?? null;
     const writeCompanyIdLocal = resolvedExisting?.writeCompanyId ?? companyId;
     const nowTs = Timestamp.now();
-    const mergedLocal = removeUndefined(
+    let mergedLocal = removeUndefined(
       mergeVoucherEditPayloadPreservingAttachments(
         (existingLocal as Record<string, unknown> | null) ?? null,
         {
@@ -1233,9 +1265,11 @@ export async function saveVoucher(
         }
       )
     ) as Record<string, unknown>;
+    mergedLocal = { ...(await hydrateLocalAttachmentsInPayloadIfOnline(writeCompanyIdLocal, mergedLocal)), id: voucherId! };
     coerceVoucherDocumentDate(mergedLocal);
     await upsertCompanyDocInBrowserDb(writeCompanyIdLocal, "vouchers", voucherId!, mergedLocal);
     await enqueueVoucherOutbox(writeCompanyIdLocal, "update", voucherId!, mergedLocal);
+    dispatchSavedVoucherAttachmentUrls(writeCompanyIdLocal, voucherId!, mergedLocal);
     return { id: voucherId! };
   }
 

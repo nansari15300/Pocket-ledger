@@ -605,7 +605,10 @@ export const VoucherProvider = ({
     if (!voucherId?.trim()) return;
     setVouchers((prev) => {
       const idx = prev.findIndex((v) => String(v?.id) === String(voucherId));
-      if (idx < 0) return prev;
+      if (idx < 0) {
+        // Naya create: SQLite bump se pehle attachment patch — pehle `idx < 0` par skip se fileUrls list me nahi dikhte the.
+        return [{ ...patch, id: voucherId }, ...prev];
+      }
       const merged = { ...prev[idx], ...patch, id: voucherId };
       const next = prev.slice();
       next[idx] = merged;

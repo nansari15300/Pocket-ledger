@@ -83,6 +83,21 @@ import {
 } from '@/components/ui/dialog';
 import { useDate } from '@/hooks/useDate';
 import { openPrintDirect } from "@/lib/printDirect";
+import { computeReceivablesPayablesFinancialSummary } from "@/lib/receivablesPayablesFinancialSummary";
+import {
+  buildRpDialogSections,
+  countRpDialogSide,
+  normalizeReceivablesPayablesSummary,
+  RP_DIALOG_FILTER_OPTIONS,
+  sumRpDialogSide,
+  type RpCategoryFilter,
+} from "@/lib/receivablesPayablesDialogUi";
+import { ReceivablesPayablesDialogFooter } from "@/components/reports/ReceivablesPayablesDialogFooter";
+import { ReceivablesPayablesDialogEntityList, rpDialogListScrollHandlers } from "@/components/reports/ReceivablesPayablesDialogEntityList";
+import { ReceivablesPayablesEntitySettings } from "@/components/reports/ReceivablesPayablesEntitySettings";
+import { useReceivablesPayablesEntityVisibility } from "@/hooks/useReceivablesPayablesEntityVisibility";
+import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
+import { RP_DIALOG_SCROLL_CN } from "@/lib/receivablesPayablesEntityKeys";
 import { orderedCashFlowCategories } from "@/lib/cashFlowCategoryOrder";
 import {
   voucherCountsAsDashboardPaySalary,
@@ -551,7 +566,7 @@ export default function DashboardPage() {
   const [taxSummaryOpen, setTaxSummaryOpen] = useState(false);
   
   // Filter for Receivables & Payables Dialog
-  const [receivablePayableFilter, setReceivablePayableFilter] = useState<'all' | 'party' | 'staff' | 'tax'>('all');
+  const [receivablePayableFilter, setReceivablePayableFilter] = useState<RpCategoryFilter>("all");
   const [receivablesPayablesTab, setReceivablesPayablesTab] = useState<'receivables' | 'payables'>('receivables');
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();
@@ -737,111 +752,47 @@ export default function DashboardPage() {
   }, [vouchers, fetchUserName, userNames]);
 
   // ---------- FINANCIAL SUMMARY CALCULATION (Grouped) ----------
-  const financialSummary = React.useMemo(() => {
-    if (loading) return { 
-        totalReceivable: 0, 
-        totalPayable: 0, 
-        receivables: { parties: [], staff: [], taxes: [] }, 
-        payables: { parties: [], staff: [], taxes: [] },
-        recCount: 0,
-        payCount: 0
-    };
-    
-    let filteredVouchers = vouchers;
-    if (receivablesDateRange?.from) {
-        const fromDate = startOfDay(receivablesDateRange.from);
-        const toDate = receivablesDateRange.to ? endOfDay(receivablesDateRange.to) : endOfDay(fromDate);
-        filteredVouchers = vouchers.filter(v => {
-            const txDate = safeToDate(v.date);
-            return txDate && txDate >= fromDate && txDate <= toDate;
-        });
-    }
+  const {
+    hiddenCategories: rpHiddenCategories,
+    canEdit: canEditRpVisibility,
+    filterSummary: filterRpSummary,
+    saveHiddenCategories: saveRpHiddenCategories,
+  } = useReceivablesPayablesEntityVisibility();
+  const rpListMotion = useMasterListRowMotion();
+  const rpListScrollHandlers = rpDialogListScrollHandlers(rpListMotion);
 
-    // Grouped Storage
-    const receivables = {
-        parties: [] as { party: string, balance: number, fileUrl?: string }[],
-        staff: [] as { party: string, balance: number, fileUrl?: string }[],
-        taxes: [] as { party: string, balance: number, fileUrl?: string }[]
-    };
-    const payables = {
-        parties: [] as { party: string, balance: number, fileUrl?: string }[],
-        staff: [] as { party: string, balance: number, fileUrl?: string }[],
-        taxes: [] as { party: string, balance: number, fileUrl?: string }[]
-    };
+  const rawFinancialSummary = React.useMemo(() => {
+    const raw = computeReceivablesPayablesFinancialSummary({
+      vouchers,
+      processedParties,
+      processedStaff,
+      processedTaxes,
+      processedAccounts,
+      processedExpenseAccounts: expenseAccounts,
+      receivablesDateRange,
+      loading: !!loading,
+    });
+    return normalizeReceivablesPayablesSummary(raw);
+  }, [
+    loading,
+    vouchers,
+    processedParties,
+    processedStaff,
+    processedTaxes,
+    processedAccounts,
+    expenseAccounts,
+    receivablesDateRange,
+  ]);
 
-    const addToGroup = (entity: any, type: 'party' | 'staff' | 'tax') => {
-        let balance = 0;
-        
-        balance = Number(entity.openingBalance) || 0;
-
-        filteredVouchers.forEach(v => {
-            const amount = v.total || v.amount || 0;
-             if (v.partyId === entity.id) {
-                if (["sale", "payment_out", "direct_income"].includes(v.type)) balance += amount;
-                else if (["purchase", "payment_in", "direct_expense"].includes(v.type)) balance -= amount;
-            } else if (v.staffId === entity.id) {
-                if (v.type === 'payment_out') balance += amount;
-                else if (v.type === 'payment_in') balance -= amount;
-                else if (v.type === 'journal' && v.subType === 'add_salary' && v.entries?.some((e: any) => e.accountId === entity.id)) {
-                    const entry = v.entries.find((e: any) => e.accountId === entity.id);
-                    balance -= (entry.credit || 0);
-                }
-            } else if (v.taxAccountId === entity.id) {
-                if (v.type === 'payment_out') balance += amount;
-                else if (v.type === 'payment_in') balance -= amount;
-            } else if (v.lineItems?.some((li: any) => li.taxAccountId === entity.id)) {
-                const taxAmount = v.lineItems.reduce(
-                    (sum: number, li: any) => li.taxAccountId === entity.id ? sum + Number(li.taxAmount || 0) : sum,
-                    0
-                );
-                if (v.type === 'purchase') balance += taxAmount;
-                else if (v.type === 'sale') balance -= taxAmount;
-            }
-        });
-        
-        if (balance > 0) {
-            if(type === 'party') receivables.parties.push({party: entity.name, balance: balance, fileUrl: (entity as any).fileUrl});
-            if(type === 'staff') receivables.staff.push({party: entity.name, balance: balance, fileUrl: (entity as any).fileUrl});
-            if(type === 'tax') receivables.taxes.push({party: entity.name, balance: balance, fileUrl: (entity as any).fileUrl});
-        } else if (balance < 0) {
-            if(type === 'party') payables.parties.push({party: entity.name, balance: balance, fileUrl: (entity as any).fileUrl});
-            if(type === 'staff') payables.staff.push({party: entity.name, balance: balance, fileUrl: (entity as any).fileUrl});
-            if(type === 'tax') payables.taxes.push({party: entity.name, balance: balance, fileUrl: (entity as any).fileUrl});
-        }
-    }
-
-    processedParties.forEach(p => addToGroup(p, 'party'));
-    processedStaff.forEach(s => addToGroup(s, 'staff'));
-    processedTaxes.forEach(t => addToGroup(t, 'tax'));
-
-    const sortFn = (a: any, b: any) => Math.abs(b.balance) - Math.abs(a.balance);
-    receivables.parties.sort(sortFn); receivables.staff.sort(sortFn); receivables.taxes.sort(sortFn);
-    payables.parties.sort(sortFn); payables.staff.sort(sortFn); payables.taxes.sort(sortFn);
-
-    const calcSum = (arr: any[]) => arr.reduce((sum, item) => sum + item.balance, 0);
-    const totalReceivable = calcSum(receivables.parties) + calcSum(receivables.staff) + calcSum(receivables.taxes);
-    const totalPayable = calcSum(payables.parties) + calcSum(payables.staff) + calcSum(payables.taxes);
-
-    const recCount = receivables.parties.length + receivables.staff.length + receivables.taxes.length;
-    const payCount = payables.parties.length + payables.staff.length + payables.taxes.length;
-
-    return { totalReceivable, totalPayable, receivables, payables, recCount, payCount };
-  }, [processedParties, processedStaff, processedTaxes, loading, vouchers, receivablesDateRange]);
+  const financialSummary = React.useMemo(
+    () => filterRpSummary(rawFinancialSummary),
+    [rawFinancialSummary, filterRpSummary]
+  );
 
   /** Receivables/Payables dialog footer: list jo dikh rahi hai usi ka sum (card summary alag). */
   const receivablesPayablesDialogListTotals = React.useMemo(() => {
-    const include = (t: "party" | "staff" | "tax") =>
-      receivablePayableFilter === "all" || receivablePayableFilter === t;
-    const notOB = (p: { party: string }) => p.party !== "Opening Balance";
-    const { receivables, payables } = financialSummary;
-    let receivableSum = 0;
-    if (include("party")) receivableSum += receivables.parties.filter(notOB).reduce((s, p) => s + (Number(p.balance) || 0), 0);
-    if (include("staff")) receivableSum += receivables.staff.filter(notOB).reduce((s, p) => s + (Number(p.balance) || 0), 0);
-    if (include("tax")) receivableSum += receivables.taxes.filter(notOB).reduce((s, p) => s + (Number(p.balance) || 0), 0);
-    let payableSum = 0;
-    if (include("party")) payableSum += payables.parties.filter(notOB).reduce((s, p) => s + Math.abs(Number(p.balance) || 0), 0);
-    if (include("staff")) payableSum += payables.staff.filter(notOB).reduce((s, p) => s + Math.abs(Number(p.balance) || 0), 0);
-    if (include("tax")) payableSum += payables.taxes.filter(notOB).reduce((s, p) => s + Math.abs(Number(p.balance) || 0), 0);
+    const receivableSum = sumRpDialogSide("receivables", financialSummary, receivablePayableFilter);
+    const payableSum = sumRpDialogSide("payables", financialSummary, receivablePayableFilter);
     return { receivableSum, payableSum };
   }, [financialSummary, receivablePayableFilter]);
 
@@ -864,45 +815,37 @@ export default function DashboardPage() {
 
   /** Outstanding card = list-sum (All), dialog ke default totals jaisa. */
   const receivablesPayablesCardTotals = React.useMemo(() => {
-    const notOB = (p: { party: string }) => p.party !== "Opening Balance";
-    const { receivables, payables } = financialSummary;
-    const receivableSum =
-      receivables.parties.filter(notOB).reduce((s, p) => s + (Number(p.balance) || 0), 0) +
-      receivables.staff.filter(notOB).reduce((s, p) => s + (Number(p.balance) || 0), 0) +
-      receivables.taxes.filter(notOB).reduce((s, p) => s + (Number(p.balance) || 0), 0);
-    const payableSum =
-      payables.parties.filter(notOB).reduce((s, p) => s + Math.abs(Number(p.balance) || 0), 0) +
-      payables.staff.filter(notOB).reduce((s, p) => s + Math.abs(Number(p.balance) || 0), 0) +
-      payables.taxes.filter(notOB).reduce((s, p) => s + Math.abs(Number(p.balance) || 0), 0);
+    const receivableSum = sumRpDialogSide("receivables", financialSummary, "all");
+    const payableSum = sumRpDialogSide("payables", financialSummary, "all");
     return { receivableSum, payableSum, net: receivableSum - payableSum };
   }, [financialSummary]);
 
-  type RpDlgRow = { party: string; balance: number; fileUrl?: string; kind: "party" | "staff" | "tax" };
-  const receivablesDialogRows = React.useMemo(() => {
-    const include = (t: "party" | "staff" | "tax") =>
-      receivablePayableFilter === "all" || receivablePayableFilter === t;
-    const notOB = (p: { party: string }) => p.party !== "Opening Balance";
-    const { receivables } = financialSummary;
-    const rows: RpDlgRow[] = [];
-    if (include("party")) receivables.parties.filter(notOB).forEach((p) => rows.push({ ...p, kind: "party" }));
-    if (include("staff")) receivables.staff.filter(notOB).forEach((p) => rows.push({ ...p, kind: "staff" }));
-    if (include("tax")) receivables.taxes.filter(notOB).forEach((p) => rows.push({ ...p, kind: "tax" }));
-    rows.sort((a, b) => Math.abs(Number(b.balance) || 0) - Math.abs(Number(a.balance) || 0));
-    return rows;
-  }, [financialSummary, receivablePayableFilter]);
+  const receivablesDialogSections = React.useMemo(
+    () => buildRpDialogSections("receivables", financialSummary, receivablePayableFilter),
+    [financialSummary, receivablePayableFilter]
+  );
 
-  const payablesDialogRows = React.useMemo(() => {
-    const include = (t: "party" | "staff" | "tax") =>
-      receivablePayableFilter === "all" || receivablePayableFilter === t;
-    const notOB = (p: { party: string }) => p.party !== "Opening Balance";
-    const { payables } = financialSummary;
-    const rows: RpDlgRow[] = [];
-    if (include("party")) payables.parties.filter(notOB).forEach((p) => rows.push({ ...p, kind: "party" }));
-    if (include("staff")) payables.staff.filter(notOB).forEach((p) => rows.push({ ...p, kind: "staff" }));
-    if (include("tax")) payables.taxes.filter(notOB).forEach((p) => rows.push({ ...p, kind: "tax" }));
-    rows.sort((a, b) => Math.abs(Number(b.balance) || 0) - Math.abs(Number(a.balance) || 0));
-    return rows;
-  }, [financialSummary, receivablePayableFilter]);
+  const payablesDialogSections = React.useMemo(
+    () => buildRpDialogSections("payables", financialSummary, receivablePayableFilter),
+    [financialSummary, receivablePayableFilter]
+  );
+
+  const receivablesDialogCount = React.useMemo(
+    () => countRpDialogSide("receivables", financialSummary, receivablePayableFilter),
+    [financialSummary, receivablePayableFilter]
+  );
+
+  const payablesDialogCount = React.useMemo(
+    () => countRpDialogSide("payables", financialSummary, receivablePayableFilter),
+    [financialSummary, receivablePayableFilter]
+  );
+
+  const formatRpDialogAmount = (amount: number, absAmount = false) =>
+    formatCurrency(absAmount ? Math.abs(amount) : amount, {
+      noSuffix: true,
+      showDrCr: true,
+      context: "transaction",
+    });
 
   // --- CASH FLOW CALCULATION ---
   const cashFlowDetails = React.useMemo(() => {
@@ -1169,46 +1112,61 @@ export default function DashboardPage() {
   }, [allRecentTransactions, recentRowsPerPage, recentUnapprovedOnly]);
   
   const handlePrint = () => {
-    const shouldInclude = (type: 'party' | 'staff' | 'tax') => {
-        if (receivablePayableFilter === 'all') return true;
-        return receivablePayableFilter === type;
+    const filterLabel =
+      RP_DIALOG_FILTER_OPTIONS.find((o) => o.id === receivablePayableFilter)?.label ??
+      receivablePayableFilter;
+    const printTotalReceivable = sumRpDialogSide("receivables", financialSummary, receivablePayableFilter);
+    const printTotalPayable = sumRpDialogSide("payables", financialSummary, receivablePayableFilter);
+    const buildTableBody = (side: "receivables" | "payables") => {
+      const sections = buildRpDialogSections(side, financialSummary, receivablePayableFilter);
+      const body: any[] = [["Account", { text: "Amount", alignment: "right" }]];
+      for (const section of sections) {
+        if (section.rows.length === 0) continue;
+        body.push([
+          { text: `${section.label} (${section.rows.length})`, bold: true, color: "#64748b" },
+          "",
+        ]);
+        for (const item of section.rows) {
+          body.push([
+            item.party,
+            {
+              text: formatCurrencyForPrint(Math.abs(item.balance), { noSuffix: true, noAnimation: true }),
+              alignment: "right",
+            },
+          ]);
+        }
+      }
+      return body;
     };
-    const calculateFilteredTotal = (list: typeof financialSummary.receivables) => {
-        let sum = 0;
-        if (shouldInclude('party')) sum += list.parties.reduce((s, i) => s + i.balance, 0);
-        if (shouldInclude('staff')) sum += list.staff.reduce((s, i) => s + i.balance, 0);
-        if (shouldInclude('tax')) sum += list.taxes.reduce((s, i) => s + i.balance, 0);
-        return sum;
-    };
-    const printTotalReceivable = calculateFilteredTotal(financialSummary.receivables);
-    const printTotalPayable = calculateFilteredTotal(financialSummary.payables);
-    const excludeOpeningBalance = (arr: { party: string; balance: number }[]) => arr.filter(p => p.party !== "Opening Balance");
-    const buildTableBody = (list: typeof financialSummary.receivables) => {
-        const body: any[] = [['Party/Staff/Tax', { text: 'Amount', alignment: 'right' }]];
-        const rows: { party: string; balance: number }[] = [];
-        if (shouldInclude('party')) rows.push(...excludeOpeningBalance(list.parties));
-        if (shouldInclude('staff')) rows.push(...excludeOpeningBalance(list.staff));
-        if (shouldInclude('tax')) rows.push(...excludeOpeningBalance(list.taxes));
-        rows.sort((a, b) => Math.abs(Number(b.balance) || 0) - Math.abs(Number(a.balance) || 0));
-        rows.forEach(item =>
-            body.push([item.party, { text: formatCurrencyForPrint(Math.abs(item.balance), { noSuffix: true, noAnimation: true }), alignment: 'right' }])
-        );
-        return body;
-    };
-    const receivablesBody = buildTableBody(financialSummary.receivables);
-    const payablesBody = buildTableBody(financialSummary.payables);
-    receivablesBody.push([{ text: 'Total Receivable', bold: true, alignment: 'right'}, { text: formatCurrencyForPrint(printTotalReceivable, {noSuffix: true, noAnimation: true}), bold: true, alignment: 'right', color: '#059669' }]);
-    payablesBody.push([{ text: 'Total Payable', bold: true, alignment: 'right'}, { text: formatCurrencyForPrint(Math.abs(printTotalPayable), {noSuffix: true, noAnimation: true}), bold: true, alignment: 'right', color: '#DC2626' }]);
-    const printRecCount = (shouldInclude('party') ? financialSummary.receivables.parties.length : 0) + (shouldInclude('staff') ? financialSummary.receivables.staff.length : 0) + (shouldInclude('tax') ? financialSummary.receivables.taxes.length : 0);
-    const printPayCount = (shouldInclude('party') ? financialSummary.payables.parties.length : 0) + (shouldInclude('staff') ? financialSummary.payables.staff.length : 0) + (shouldInclude('tax') ? financialSummary.payables.taxes.length : 0);
+    const receivablesBody = buildTableBody("receivables");
+    const payablesBody = buildTableBody("payables");
+    receivablesBody.push([
+      { text: "Total Receivable", bold: true, alignment: "right" },
+      {
+        text: formatCurrencyForPrint(printTotalReceivable, { noSuffix: true, noAnimation: true }),
+        bold: true,
+        alignment: "right",
+        color: "#059669",
+      },
+    ]);
+    payablesBody.push([
+      { text: "Total Payable", bold: true, alignment: "right" },
+      {
+        text: formatCurrencyForPrint(printTotalPayable, { noSuffix: true, noAnimation: true }),
+        bold: true,
+        alignment: "right",
+        color: "#DC2626",
+      },
+    ]);
+    const printRecCount = countRpDialogSide("receivables", financialSummary, receivablePayableFilter);
+    const printPayCount = countRpDialogSide("payables", financialSummary, receivablePayableFilter);
 
-    // FIXED: Format Date based on System
-    const asOfDate = dateSystem === 'BS' ? formatDateBS(new Date()) : formatDate(new Date());
+    const asOfDate = dateSystem === "BS" ? formatDateBS(new Date()) : formatDate(new Date());
 
     openPrintDirect({
         company: { name: company?.name || '', pan: company?.pan, phone: company?.phone, address: company?.address, decimalPlaces: company?.decimalPlaces, showDrCr: company?.showDrCr, showCurrencySymbol: company?.showCurrencySymbol, logoUrl: company?.logoUrl },
         dateSystem: dateSystem,
-        title: `Receivables & Payables (${receivablePayableFilter.toUpperCase()})`,
+        title: `Receivables & Payables (${filterLabel})`,
         context: "daybook",
         dateRangeText: `As of ${asOfDate}`,
         vouchersCount: printRecCount + printPayCount,
@@ -1510,8 +1468,8 @@ export default function DashboardPage() {
                                 <DialogTrigger asChild>
                                     <Button variant="link" size="sm" className="h-auto p-0">View Details</Button>
                                 </DialogTrigger>
-                                <DialogContent className="dashboard-financial-popup max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col">
-                                    <DialogHeader className="p-4 border-b flex flex-col gap-3">
+                                <DialogContent className="dashboard-financial-popup max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col overflow-hidden">
+                                    <DialogHeader className="shrink-0 p-4 border-b flex flex-col gap-3">
                                         {/* Title Row - Mobile: Title + Close Icon */}
                                         <div className="flex items-center justify-between">
                                             <DialogTitle className="whitespace-nowrap text-base md:text-lg">Receivables & Payables Details</DialogTitle>
@@ -1527,20 +1485,25 @@ export default function DashboardPage() {
                                         
                                         {/* Filter Tabs Row */}
                                         <div className="flex items-center gap-2 flex-wrap">
-                                            <div className="flex bg-muted rounded-md p-1 space-x-1 flex-1 min-w-0">
-                                                {['all', 'party', 'staff', 'tax'].map((type) => (
+                                            <div className="flex bg-muted rounded-md p-1 space-x-1 flex-1 min-w-0 flex-wrap">
+                                                {RP_DIALOG_FILTER_OPTIONS.map(({ id, label }) => (
                                                     <button 
-                                                        key={type} 
-                                                        onClick={() => setReceivablePayableFilter(type as any)} 
+                                                        key={id} 
+                                                        onClick={() => setReceivablePayableFilter(id)} 
                                                         className={cn(
-                                                            "px-2 md:px-3 py-1 text-xs rounded-sm transition-all capitalize font-medium whitespace-nowrap",
-                                                            receivablePayableFilter === type ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                                                            "px-2 md:px-3 py-1 text-xs rounded-sm transition-all font-medium whitespace-nowrap",
+                                                            receivablePayableFilter === id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                                                         )}
                                                     >
-                                                        {type}
+                                                        {label}
                                                     </button>
                                                 ))}
                                             </div>
+                                            <ReceivablesPayablesEntitySettings
+                                                hiddenCategories={rpHiddenCategories}
+                                                canEdit={canEditRpVisibility}
+                                                onSave={saveRpHiddenCategories}
+                                            />
                                             <Button 
                                                 variant="outline" 
                                                 size="sm" 
@@ -1566,7 +1529,7 @@ export default function DashboardPage() {
                                                             : "text-muted-foreground hover:text-foreground"
                                                     )}
                                                 >
-                                                    Receivables ({financialSummary.recCount})
+                                                    Receivables ({receivablesDialogCount})
                                                 </button>
                                                 <button 
                                                     onClick={() => setReceivablesPayablesTab('payables')} 
@@ -1577,111 +1540,52 @@ export default function DashboardPage() {
                                                             : "text-muted-foreground hover:text-foreground"
                                                     )}
                                                 >
-                                                    Payables ({financialSummary.payCount})
+                                                    Payables ({payablesDialogCount})
                                                 </button>
                                             </div>
                                         )}
                                     </DialogHeader>
-                                    <>
                                     <div className={cn(
-                                        "gap-4 p-4 flex-1 min-h-0",
-                                        isMobile ? "flex flex-col" : "grid grid-cols-2"
+                                        "flex-1 min-h-0 overflow-hidden px-4 pt-0",
+                                        isMobile ? "flex flex-col" : "grid grid-cols-2 gap-4"
                                     )}>
-                                        {/* Receivables Section */}
-                                        {(isMobile ? receivablesPayablesTab === 'receivables' : true) && (
-                                            <div className="flex flex-col min-h-0">
-                                                {!isMobile && <h3 className="text-lg font-semibold mb-2 text-green-600">Receivables ({financialSummary.recCount})</h3>}
-                                                <div className="flex-1 border rounded-lg flex flex-col min-h-0">
-                                                    <ScrollArea className="flex-1 min-w-0">
-                                                        <Table className={rpDlgTableClass}>
-                                                            <TableHeader className="[&_tr]:bg-sky-100/90 dark:[&_tr]:bg-sky-950/45 [&_th]:text-sky-950 dark:[&_th]:text-sky-100">
-                                                                <TableRow>
-                                                                    <TableHead className={rpDlgAccountThClass}>Account</TableHead>
-                                                                    <TableHead className={rpDlgAmountThClass}>Amount</TableHead>
-                                                                </TableRow>
-                                                            </TableHeader>
-                                                            <TableBody>
-                                                                {receivablesDialogRows.map((p, i) => (
-                                                                    <TableRow key={`${p.kind}-${p.party}-${i}`}>
-                                                                        <TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell>
-                                                                        <TableCell className={rpDlgAmountTdRecClass}>{formatCurrency(p.balance, { noSuffix: true })}</TableCell>
-                                                                    </TableRow>
-                                                                ))}
-                                                            </TableBody>
-                                                        </Table>
-                                                    </ScrollArea>
-                                                    <div className="p-2 border-t font-bold flex justify-between bg-emerald-50/90 dark:bg-emerald-950/35"><span>Total Receivable</span><span className="text-green-700 dark:text-green-400 tabular-nums">{formatCurrency(receivablesPayablesDialogListTotals.receivableSum, {noSuffix: true})}</span></div>
+                                        {(isMobile ? receivablesPayablesTab === "receivables" : true) && (
+                                            <div className="flex flex-col min-h-0 h-full">
+                                                {!isMobile && <h3 className="text-lg font-semibold mb-2 text-green-600 shrink-0">Receivables ({receivablesDialogCount})</h3>}
+                                                <div className={cn("flex-1 min-h-0 border rounded-lg bg-muted/20 p-1.5 overflow-y-auto overflow-x-hidden", RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
+                                                    <ReceivablesPayablesDialogEntityList
+                                                        sections={receivablesDialogSections}
+                                                        side="receivables"
+                                                        formatAmount={formatRpDialogAmount}
+                                                        isMobile={isMobile}
+                                                        listMotion={rpListMotion}
+                                                    />
                                                 </div>
                                             </div>
                                         )}
-                                        
-                                        {/* Payables Section */}
-                                        {(isMobile ? receivablesPayablesTab === 'payables' : true) && (
-                                            <div className="flex flex-col min-h-0">
-                                                {!isMobile && <h3 className="text-lg font-semibold mb-2 text-red-600">Payables ({financialSummary.payCount})</h3>}
-                                                <div className="flex-1 border rounded-lg flex flex-col min-h-0">
-                                                    <ScrollArea className="flex-1 min-w-0">
-                                                        <Table className={rpDlgTableClass}>
-                                                            <TableHeader className="[&_tr]:bg-sky-100/90 dark:[&_tr]:bg-sky-950/45 [&_th]:text-sky-950 dark:[&_th]:text-sky-100">
-                                                                <TableRow>
-                                                                    <TableHead className={rpDlgAccountThClass}>Account</TableHead>
-                                                                    <TableHead className={rpDlgAmountThClass}>Amount</TableHead>
-                                                                </TableRow>
-                                                            </TableHeader>
-                                                            <TableBody>
-                                                                {payablesDialogRows.map((p, i) => (
-                                                                    <TableRow key={`${p.kind}-${p.party}-${i}`}>
-                                                                        <TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell>
-                                                                        <TableCell className={rpDlgAmountTdPayClass}>{formatCurrency(Math.abs(p.balance), { noSuffix: true })}</TableCell>
-                                                                    </TableRow>
-                                                                ))}
-                                                            </TableBody>
-                                                        </Table>
-                                                    </ScrollArea>
-                                                    <div className="p-2 border-t font-bold flex justify-between bg-emerald-50/90 dark:bg-emerald-950/35"><span>Total Payable</span><span className="text-red-600 dark:text-red-400 tabular-nums">{formatCurrency(receivablesPayablesDialogListTotals.payableSum, {noSuffix: true})}</span></div>
+                                        {(isMobile ? receivablesPayablesTab === "payables" : true) && (
+                                            <div className="flex flex-col min-h-0 h-full">
+                                                {!isMobile && <h3 className="text-lg font-semibold mb-2 text-red-600 shrink-0">Payables ({payablesDialogCount})</h3>}
+                                                <div className={cn("flex-1 min-h-0 border rounded-lg bg-muted/20 p-1.5 overflow-y-auto overflow-x-hidden", RP_DIALOG_SCROLL_CN)} {...rpListScrollHandlers}>
+                                                    <ReceivablesPayablesDialogEntityList
+                                                        sections={payablesDialogSections}
+                                                        side="payables"
+                                                        formatAmount={formatRpDialogAmount}
+                                                        isMobile={isMobile}
+                                                        listMotion={rpListMotion}
+                                                    />
                                                 </div>
                                             </div>
                                         )}
                                     </div>
-                                    {!isMobile && receivablesPayablesDialogBalance.side !== "equal" && receivablesPayablesDialogBalance.amount > 0 && (
-                                        <div className="px-4 pb-4">
-                                            <div className="rounded-lg border border-border bg-gradient-to-br from-green-50/90 via-muted/40 to-red-50/90 dark:from-green-950/35 dark:via-background dark:to-red-950/35 p-3 shadow-sm">
-                                                {receivablesPayablesDialogBalance.side === "receivable" && (
-                                                    <div className="flex w-full flex-wrap items-baseline justify-start gap-x-2 gap-y-0">
-                                                        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Balance</span>
-                                                        <span className="text-base font-bold text-green-600 dark:text-green-400 tabular-nums">{formatCurrency(receivablesPayablesDialogBalance.amount, { noSuffix: true })} <span className="text-xs font-normal">Dr</span></span>
-                                                    </div>
-                                                )}
-                                                {receivablesPayablesDialogBalance.side === "payable" && (
-                                                    <div className="flex w-full flex-wrap items-baseline justify-end gap-x-2 gap-y-0">
-                                                        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Balance</span>
-                                                        <span className="text-base font-bold text-red-600 dark:text-red-400 tabular-nums">{formatCurrency(receivablesPayablesDialogBalance.amount, { noSuffix: true })} <span className="text-xs font-normal">Cr</span></span>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    )}
-                                    {isMobile && receivablesPayablesTab === 'receivables' && receivablesPayablesDialogBalance.side === "receivable" && receivablesPayablesDialogBalance.amount > 0 && (
-                                        <div className="px-4 pb-4">
-                                            <div className="rounded-lg border border-green-200/80 bg-green-50/90 dark:border-green-900 dark:bg-green-950/40 p-3 shadow-sm">
-                                                <div className="flex flex-wrap items-baseline justify-start gap-x-2 gap-y-0">
-                                                    <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Balance</span>
-                                                    <span className="text-lg font-bold text-green-600 dark:text-green-400 tabular-nums">{formatCurrency(receivablesPayablesDialogBalance.amount, { noSuffix: true })} <span className="text-sm font-normal">Dr</span></span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
-                                    {isMobile && receivablesPayablesTab === 'payables' && receivablesPayablesDialogBalance.side === "payable" && receivablesPayablesDialogBalance.amount > 0 && (
-                                        <div className="px-4 pb-4">
-                                            <div className="rounded-lg border border-red-200/80 bg-red-50/90 dark:border-red-900 dark:bg-red-950/40 p-3 shadow-sm">
-                                                <div className="flex flex-wrap items-baseline justify-end gap-x-2 gap-y-0">
-                                                    <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Balance</span>
-                                                    <span className="text-lg font-bold text-red-600 dark:text-red-400 tabular-nums">{formatCurrency(receivablesPayablesDialogBalance.amount, { noSuffix: true })} <span className="text-sm font-normal">Cr</span></span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
-                                    </>
+                                    <ReceivablesPayablesDialogFooter
+                                        receivableSum={receivablesPayablesDialogListTotals.receivableSum}
+                                        payableSum={receivablesPayablesDialogListTotals.payableSum}
+                                        balance={receivablesPayablesDialogBalance}
+                                        formatAmount={(amount) =>
+                                            formatCurrency(amount, { noSuffix: true, context: "transaction" })
+                                        }
+                                    />
                                 </DialogContent>
                             </Dialog>
                         </div>

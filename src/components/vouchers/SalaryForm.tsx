@@ -64,11 +64,12 @@ import {
   shouldDeferStorageIncrementUntilPendingUpload,
   shouldStageNewVoucherFilesAsLocalPending,
 } from "@/lib/voucherLocalAttachmentUpload";
+import { applyVoucherAttachmentsAfterFormSave } from "@/lib/voucherFormAttachmentSave";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
 import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
-import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_PC_DATE_ROW, VOUCHER_PC_DATE_BOTH_SLOT, VOUCHER_PC_DATE_BS_PILL, VOUCHER_PC_DATE_AD_PILL } from "@/components/vouchers/voucherButtonStyles";
 import { getPaymentOutRemaining, getTaxFromAllocation, getNetFromAllocation, hasPaymentLinks, getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 
@@ -1636,6 +1637,17 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
           throw new Error("Failed to save voucher and get ID.");
       }
 
+      if (companyId && savedDoc.id) {
+        const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
+          companyId,
+          voucherId: savedDoc.id,
+          rawFileUrls: allFileUrls,
+          storageFolder: "salary",
+        });
+        initialFilesRef.current = [...persistedUrls];
+        setFiles(persistedUrls);
+      }
+
         sonnerToast.success("Voucher saved successfully!", { id: toastId });
         if (companyId && company) {
           const isEdit = !!voucher?.id;
@@ -2013,8 +2025,9 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                       render={({ field }: any) => (
                         <FormItem className="flex flex-col">
                           <FormLabel>Date</FormLabel>
-                          <div className={cn("flex gap-2 h-10", dateSystem === 'Both' && "gap-2")}>
+                          <div className={VOUCHER_PC_DATE_ROW}>
                             {(dateSystem === 'BS' || dateSystem === 'Both') && (
+                              <div className={cn(dateSystem === 'Both' ? VOUCHER_PC_DATE_BOTH_SLOT : "w-full min-w-0")}>
                               <BsDatePicker 
                                 valueAD={field.value} 
                                 onChangeAD={(d) => { 
@@ -2025,16 +2038,19 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                 isRange={false} 
                                 transactionDates={transactionDates} 
                                 disabled={deleteDisabledWhenLinked}
+                                className={VOUCHER_PC_DATE_BS_PILL}
                               />
+                              </div>
                             )}
                             {(dateSystem === 'AD' || dateSystem === 'Both') && (
+                              <div className={cn(dateSystem === 'Both' ? VOUCHER_PC_DATE_BOTH_SLOT : "w-full min-w-0")}>
                               <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
                                 <PopoverTrigger asChild>
                                   <FormControl>
                                     <Button 
                                       disabled={!isFormEditing || deleteDisabledWhenLinked} 
                                       variant={"outline"} 
-                                      className={cn("h-10 pl-3 text-left font-normal", !field.value && "text-muted-foreground")}
+                                      className={cn(VOUCHER_PC_DATE_AD_PILL, !field.value && "text-muted-foreground")}
                                     >
                                       {field.value ? formatDate(field.value) : <span>Pick a date</span>}
                                       <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
@@ -2058,6 +2074,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                   />
                                 </PopoverContent>
                               </Popover>
+                              </div>
                             )}
                           </div>
                           <FormMessage />

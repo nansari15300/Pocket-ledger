@@ -119,6 +119,14 @@ import {
   voucherCountsAsDashboardPaymentOutExcludingPaySalary,
 } from "@/lib/dashboardPaySalaryStat";
 import { computeReceivablesPayablesFinancialSummary } from "@/lib/receivablesPayablesFinancialSummary";
+import {
+  buildRpDialogSections,
+  countRpDialogSide,
+  normalizeReceivablesPayablesSummary,
+  RP_DIALOG_FILTER_OPTIONS,
+  sumRpDialogSide,
+  type RpCategoryFilter,
+} from "@/lib/receivablesPayablesDialogUi";
 import { useServerReceivablesPayablesSummary } from "@/hooks/useServerReceivablesPayablesSummary";
 import { RecurringAutoSummaryCard } from "@/components/dashboard/RecurringAutoSummaryCard";
 import { DashboardWelcomeClockLine } from "@/components/dashboard/DashboardWelcomeClockLine";
@@ -598,7 +606,7 @@ function DashboardPageContent() {
   const [taxSummaryOpen, setTaxSummaryOpen] = useState(false);
   
   // Filter for Receivables & Payables Dialog
-  const [receivablePayableFilter, setReceivablePayableFilter] = useState<'all' | 'party' | 'staff' | 'tax'>('all');
+  const [receivablePayableFilter, setReceivablePayableFilter] = useState<RpCategoryFilter>("all");
   const [cashFlowFilter, setCashFlowFilter] = useState<'all' | 'inflow' | 'outflow'>('all');
   const [cashFlowCategoryFilter, setCashFlowCategoryFilter] = useState<'all' | 'party' | 'staff' | 'tax' | 'income_expense' | 'other'>('all');
   const [receivablesDateRange, setReceivablesDateRange] = useState<DateRange | undefined>(undefined);
@@ -889,6 +897,8 @@ function DashboardPageContent() {
         processedParties,
         processedStaff,
         processedTaxes,
+        processedAccounts,
+        processedExpenseAccounts: expenseAccounts,
         receivablesDateRange,
         loading: true,
       });
@@ -898,6 +908,8 @@ function DashboardPageContent() {
       processedParties,
       processedStaff,
       processedTaxes,
+      processedAccounts,
+      processedExpenseAccounts: expenseAccounts,
       receivablesDateRange,
       loading: !!loading,
     });
@@ -908,24 +920,30 @@ function DashboardPageContent() {
     processedParties,
     processedStaff,
     processedTaxes,
+    processedAccounts,
+    expenseAccounts,
     receivablesDateRange,
   ]);
 
   const financialSummary = React.useMemo(() => {
+    let raw;
     if (pagePreferServerRp && !pageServerRpClientFb && pageServerRpSummary) {
-      return pageServerRpSummary;
-    }
-    if (pagePreferServerRp && !pageServerRpClientFb && pageServerRpLoading) {
-      return computeReceivablesPayablesFinancialSummary({
+      raw = pageServerRpSummary;
+    } else if (pagePreferServerRp && !pageServerRpClientFb && pageServerRpLoading) {
+      raw = computeReceivablesPayablesFinancialSummary({
         vouchers,
         processedParties,
         processedStaff,
         processedTaxes,
+        processedAccounts,
+        processedExpenseAccounts: expenseAccounts,
         receivablesDateRange,
         loading: true,
       });
+    } else {
+      raw = pageClientFinancialSummary;
     }
-    return pageClientFinancialSummary;
+    return normalizeReceivablesPayablesSummary(raw);
   }, [
     pagePreferServerRp,
     pageServerRpClientFb,
@@ -936,6 +954,8 @@ function DashboardPageContent() {
     processedParties,
     processedStaff,
     processedTaxes,
+    processedAccounts,
+    expenseAccounts,
     receivablesDateRange,
   ]);
 
@@ -1216,46 +1236,61 @@ function DashboardPageContent() {
   }, [recentPoolBeforeLimit, recentRowsPerPage, recentUnapprovedOnly]);
   
   const handlePrint = () => {
-    const shouldInclude = (type: 'party' | 'staff' | 'tax') => {
-        if (receivablePayableFilter === 'all') return true;
-        return receivablePayableFilter === type;
+    const filterLabel =
+      RP_DIALOG_FILTER_OPTIONS.find((o) => o.id === receivablePayableFilter)?.label ??
+      receivablePayableFilter;
+    const printTotalReceivable = sumRpDialogSide("receivables", financialSummary, receivablePayableFilter);
+    const printTotalPayable = sumRpDialogSide("payables", financialSummary, receivablePayableFilter);
+    const buildTableBody = (side: "receivables" | "payables") => {
+      const sections = buildRpDialogSections(side, financialSummary, receivablePayableFilter);
+      const body: any[] = [["Account", { text: "Amount", alignment: "right" }]];
+      for (const section of sections) {
+        if (section.rows.length === 0) continue;
+        body.push([
+          { text: `${section.label} (${section.rows.length})`, bold: true, color: "#64748b" },
+          "",
+        ]);
+        for (const item of section.rows) {
+          body.push([
+            item.party,
+            {
+              text: formatCurrencyForPrint(Math.abs(item.balance), { noSuffix: true, noAnimation: true }),
+              alignment: "right",
+            },
+          ]);
+        }
+      }
+      return body;
     };
-    const calculateFilteredTotal = (list: typeof financialSummary.receivables) => {
-        let sum = 0;
-        if (shouldInclude('party')) sum += list.parties.reduce((s, i) => s + i.balance, 0);
-        if (shouldInclude('staff')) sum += list.staff.reduce((s, i) => s + i.balance, 0);
-        if (shouldInclude('tax')) sum += list.taxes.reduce((s, i) => s + i.balance, 0);
-        return sum;
-    };
-    const printTotalReceivable = calculateFilteredTotal(financialSummary.receivables);
-    const printTotalPayable = calculateFilteredTotal(financialSummary.payables);
-    const excludeOpeningBalance = (arr: { party: string; balance: number }[]) => arr.filter(p => p.party !== "Opening Balance");
-    const buildTableBody = (list: typeof financialSummary.receivables) => {
-        const body: any[] = [['Party/Staff/Tax', { text: 'Amount', alignment: 'right' }]];
-        const rows: { party: string; balance: number }[] = [];
-        if (shouldInclude('party')) rows.push(...excludeOpeningBalance(list.parties));
-        if (shouldInclude('staff')) rows.push(...excludeOpeningBalance(list.staff));
-        if (shouldInclude('tax')) rows.push(...excludeOpeningBalance(list.taxes));
-        rows.sort((a, b) => Math.abs(Number(b.balance) || 0) - Math.abs(Number(a.balance) || 0));
-        rows.forEach(item =>
-            body.push([item.party, { text: formatCurrencyForPrint(Math.abs(item.balance), { noSuffix: true, noAnimation: true }), alignment: 'right' }])
-        );
-        return body;
-    };
-    const receivablesBody = buildTableBody(financialSummary.receivables);
-    const payablesBody = buildTableBody(financialSummary.payables);
-    receivablesBody.push([{ text: 'Total Receivable', bold: true, alignment: 'right'}, { text: formatCurrencyForPrint(printTotalReceivable, {noSuffix: true, noAnimation: true}), bold: true, alignment: 'right', color: '#059669' }]);
-    payablesBody.push([{ text: 'Total Payable', bold: true, alignment: 'right'}, { text: formatCurrencyForPrint(Math.abs(printTotalPayable), {noSuffix: true, noAnimation: true}), bold: true, alignment: 'right', color: '#DC2626' }]);
-    const printRecCount = (shouldInclude('party') ? financialSummary.receivables.parties.length : 0) + (shouldInclude('staff') ? financialSummary.receivables.staff.length : 0) + (shouldInclude('tax') ? financialSummary.receivables.taxes.length : 0);
-    const printPayCount = (shouldInclude('party') ? financialSummary.payables.parties.length : 0) + (shouldInclude('staff') ? financialSummary.payables.staff.length : 0) + (shouldInclude('tax') ? financialSummary.payables.taxes.length : 0);
+    const receivablesBody = buildTableBody("receivables");
+    const payablesBody = buildTableBody("payables");
+    receivablesBody.push([
+      { text: "Total Receivable", bold: true, alignment: "right" },
+      {
+        text: formatCurrencyForPrint(printTotalReceivable, { noSuffix: true, noAnimation: true }),
+        bold: true,
+        alignment: "right",
+        color: "#059669",
+      },
+    ]);
+    payablesBody.push([
+      { text: "Total Payable", bold: true, alignment: "right" },
+      {
+        text: formatCurrencyForPrint(printTotalPayable, { noSuffix: true, noAnimation: true }),
+        bold: true,
+        alignment: "right",
+        color: "#DC2626",
+      },
+    ]);
+    const printRecCount = countRpDialogSide("receivables", financialSummary, receivablePayableFilter);
+    const printPayCount = countRpDialogSide("payables", financialSummary, receivablePayableFilter);
 
-    // FIXED: Format Date based on System
-    const asOfDate = dateSystem === 'BS' ? formatDateBS(new Date()) : formatDate(new Date());
+    const asOfDate = dateSystem === "BS" ? formatDateBS(new Date()) : formatDate(new Date());
 
     openPrintDirect({
         company: { name: company?.name || '', pan: company?.pan, phone: company?.phone, address: company?.address, decimalPlaces: company?.decimalPlaces, showDrCr: company?.showDrCr, showCurrencySymbol: company?.showCurrencySymbol, logoUrl: company?.logoUrl },
         dateSystem: dateSystem,
-        title: `Receivables & Payables (${receivablePayableFilter.toUpperCase()})`,
+        title: `Receivables & Payables (${filterLabel})`,
         context: "daybook",
         dateRangeText: `As of ${asOfDate}`,
         vouchersCount: printRecCount + printPayCount,
