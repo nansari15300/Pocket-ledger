@@ -9,6 +9,7 @@ import { CreateCompanyDialog } from "@/components/company/CreateCompanyDialog";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { embeddedClientUsesFirestoreCompanyList } from "@/lib/planSyncClientPolicy";
 import { registerCompanyPickerFirestoreDetach } from "@/lib/companyPickerFirestoreDetach";
 import { sharedCompanyQueryKey, sharedCompanyQuerySpecs } from "@/lib/sharedWithEmailsQuery";
 

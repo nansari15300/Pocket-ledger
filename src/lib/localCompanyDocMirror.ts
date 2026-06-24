@@ -15,6 +15,7 @@
 import { doc, getDoc, Timestamp } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { clearBrowserDbCache, getBrowserDb } from "@/lib/localSqlite";
+import { yieldToMain } from "@/lib/yieldToMain";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
@@ -210,7 +211,8 @@ export async function listCompanyDocsFromBrowserDb(
       .prepare("SELECT id, data FROM company_docs WHERE company_id = ? AND collection = ?")
       .all(companyId, collectionName) as Array<{ id: string; data: string }>;
     const out: any[] = [];
-    for (const row of rows) {
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]!;
       try {
         const parsed = JSON.parse(row.data) as Record<string, unknown>;
         const data = deserializeLocalDbValue(parsed) as Record<string, unknown>;
@@ -218,9 +220,34 @@ export async function listCompanyDocsFromBrowserDb(
       } catch {
         // corrupt row skip
       }
+      if (i > 0 && i % 40 === 0) await yieldToMain();
     }
     if (options?.includeSoftDeleted) return out;
     return out.filter((item: any) => item.isDeleted !== true);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Force-upload / attachment scan: sirf rows jinke JSON me `local:` ref ho — poori collection parse se bachao.
+ */
+export async function listCompanyDocRawRowsWithLocalRefHint(
+  companyId: string,
+  fsCompanyId: string,
+  collectionName: string
+): Promise<Array<{ id: string; data: string }>> {
+  if (typeof window === "undefined" || !companyId || !collectionName) return [];
+  try {
+    const db = await getBrowserDb();
+    if (!db) return [];
+    const sql =
+      "SELECT id, data FROM company_docs WHERE company_id = ? AND collection = ? AND data LIKE '%local:%'";
+    let rows = db.prepare(sql).all(companyId, collectionName) as Array<{ id: string; data: string }>;
+    if (!rows.length && companyId !== fsCompanyId) {
+      rows = db.prepare(sql).all(fsCompanyId, collectionName) as Array<{ id: string; data: string }>;
+    }
+    return rows;
   } catch {
     return [];
   }

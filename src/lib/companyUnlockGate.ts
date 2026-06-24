@@ -5,9 +5,25 @@ import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 /** Company row jisme selector `isOwned` set karta hai */
 export type CompanyUnlockRow = Company & { isOwned?: boolean };
 
-/** `storageOption` local = offline device par data */
-export function isOfflineCompanyStorage(c: { storageOption?: string }): boolean {
-  return String(c.storageOption || "local").toLowerCase() === "local";
+type CompanyStorageRow = {
+  storageOption?: string | null;
+  syncedFromCloud?: boolean;
+};
+
+/** Firestore mirror / explicit firebase|drive — device-local SQLite row nahi. */
+export function isCloudLinkedCompanyStorage(c: CompanyStorageRow): boolean {
+  if (c.syncedFromCloud === true) return true;
+  const so = String(c.storageOption ?? "").toLowerCase().trim();
+  return so === "firebase" || so === "drive";
+}
+
+/**
+ * Device-local company (SQLite-first / Drive restore).
+ * Missing `storageOption` default local — **lekin** `syncedFromCloud: true` mirror row ko online rakhta hai
+ * (Shared Companies Local hide ke baad online shared galat "local" ban kar gayab na ho).
+ */
+export function isOfflineCompanyStorage(c: CompanyStorageRow): boolean {
+  return !isCloudLinkedCompanyStorage(c);
 }
 
 /** Shared + cloud (Firebase) — unlock: Company Profile `adminUsername` + root `password` */

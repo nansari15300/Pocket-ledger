@@ -28,7 +28,7 @@ import {
   isClientNavigatorOffline,
   shouldAutoFlushOutboxAfterEnqueue,
 } from "@/lib/apkOnlineFirestoreWritePolicy";
-import { mirrorCompanyDocToBrowserDb } from "@/lib/localCompanyDocMirror";
+import { mirrorCompanyDocToBrowserDb, getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { getLocalCompanyById, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { coerceVoucherDocumentDate } from "@/lib/voucherDateNormalize";
 import { PL_CLIENT_OFFLINE_FIRST_PERSIST_MS } from "@/lib/localMirrorServerMeta";
@@ -40,8 +40,18 @@ import {
   encryptServerBackupPayloadJson,
   getBackupEncryptionPassphraseFromSession,
 } from "@/lib/serverBackupEncryption";
-import { hydrateVoucherLocalAttachmentsForServer, hydratePendingLocalFileRefsDeep } from "@/lib/hydrateVoucherLocalAttachmentsForServer";
+import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
+import { mergeVoucherFileUrlsForEditDialog } from "@/lib/resolveVoucherAttachmentRemoteUrl";
+import { isLocalFileRef } from "@/lib/localPendingFiles";
+import {
+  hydrateVoucherLocalAttachmentsForServer,
+  hydratePendingLocalFileRefsDeep,
+} from "@/lib/hydrateVoucherLocalAttachmentsForServer";
 import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
+import {
+  canReconcileLocalCollectionViaFirebase,
+  readLocalFirebaseReconcileConfig,
+} from "@/lib/localFirebaseReconcile";
 
 /** REST `Commit` pe idem create race → `already-exists`; outbox duplicate-cleanup pehchan ke liye. */
 function isFirestoreAlreadyExistsError(e: unknown): boolean {
@@ -178,6 +188,17 @@ export async function canSyncCompanyToServer(companyId: string): Promise<boolean
   );
 }
 
+/** Collection-level gate: local company par sirf invited pages Firebase reconcile karein. */
+export async function canSyncCompanyCollectionToServer(
+  companyId: string,
+  collectionName: string
+): Promise<boolean> {
+  const localCompany = await getLocalCompanyById(companyId, { includeDeleted: true });
+  if (!localCompany) return false;
+  if (await canSyncCompanyToServer(companyId)) return true;
+  return canReconcileLocalCollectionViaFirebase(localCompany, collectionName);
+}
+
 /** Drop outbox rows only for truly local-only companies — if `storageOption` is missing, treat as ambiguous and do not delete. */
 function isPureLocalOnlyCompanyRow(localCompany: LocalCompanyDoc): boolean {
   const c = localCompany as Record<string, unknown>;
@@ -208,7 +229,7 @@ export async function enqueueCompanyDocOutbox(
     !docId
   )
     return;
-  if (!(await canSyncCompanyToServer(companyId))) return;
+  if (!(await canSyncCompanyCollectionToServer(companyId, collectionName))) return;
   const db = await getBrowserDb();
   if (!db) return;
   const outboxId =
@@ -380,8 +401,15 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
         // Company registry not hydrated yet — do not delete the row (used to wrongly drop online sync deletes here)
         continue;
       }
-      if (!(await canSyncCompanyToServer(row.company_id))) {
-        if (isPureLocalOnlyCompanyRow(reg)) {
+      const rowSyncAllowed = await canSyncCompanyCollectionToServer(row.company_id, row.collection_name);
+      if (!rowSyncAllowed) {
+        // Pure-local + no reconcile setting: drop row. Drive-connected pause: keep row for later.
+        const localReconcileCfg = readLocalFirebaseReconcileConfig(reg);
+        const dropPureLocalRow =
+          isPureLocalOnlyCompanyRow(reg) &&
+          !localReconcileCfg.blockedByDrive &&
+          !canReconcileLocalCollectionViaFirebase(reg, row.collection_name);
+        if (dropPureLocalRow) {
           db.prepare(`DELETE FROM sync_outbox WHERE outbox_id = ?`).run(row.outbox_id);
         }
         continue;
@@ -397,11 +425,37 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
       const fsCompanyId =
         String((reg as Record<string, unknown>).authoritativeCompanyId || row.company_id).trim() || row.company_id;
       let docFieldsToWrite = docFields as Record<string, unknown>;
-      // `local:` device-only — vouchers: typed folder; baaki company subcollections: deep walk (party `documentFileUrls`, item `avatarUrl`, …).
       if (row.collection_name === "vouchers") {
-        docFieldsToWrite = await hydrateVoucherLocalAttachmentsForServer(fsCompanyId, docFieldsToWrite);
-      } else {
-        docFieldsToWrite = await hydratePendingLocalFileRefsDeep(fsCompanyId, docFieldsToWrite);
+        try {
+          const mirrorRow = await getCompanyDocFromBrowserDb(row.company_id, "vouchers", row.doc_id, {
+            includeDeleted: true,
+          });
+          const mirrorUrls = normalizeFileUrlsField(mirrorRow?.fileUrls);
+          const payloadUrls = normalizeFileUrlsField(docFieldsToWrite.fileUrls);
+          if (
+            mirrorUrls.length > 0 &&
+            payloadUrls.some((u) => isLocalFileRef(u)) &&
+            mirrorUrls.some((u) => typeof u === "string" && u.startsWith("http"))
+          ) {
+            docFieldsToWrite = {
+              ...docFieldsToWrite,
+              fileUrls: mergeVoucherFileUrlsForEditDialog(payloadUrls, mirrorUrls),
+            };
+          } else if (payloadUrls.length > 0 && !Array.isArray(docFieldsToWrite.fileUrls)) {
+            docFieldsToWrite = { ...docFieldsToWrite, fileUrls: payloadUrls };
+          }
+        } catch {
+          /* mirror merge best-effort */
+        }
+      }
+      const localFirebaseReconcile = canReconcileLocalCollectionViaFirebase(reg, row.collection_name);
+      // Local reconcile mode: data-only Firebase sync, files always device-only (`local:` remains local).
+      if (!localFirebaseReconcile) {
+        if (row.collection_name === "vouchers") {
+          docFieldsToWrite = await hydrateVoucherLocalAttachmentsForServer(fsCompanyId, docFieldsToWrite);
+        } else {
+          docFieldsToWrite = await hydratePendingLocalFileRefsDeep(fsCompanyId, docFieldsToWrite);
+        }
       }
       const ref = doc(firestore, `companies/${fsCompanyId}/${row.collection_name}`, row.doc_id);
       const regAny = reg as Record<string, unknown>;

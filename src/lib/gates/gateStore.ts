@@ -2,6 +2,7 @@
 
 import {
   ACTIVE_GATE_STORAGE_KEY,
+  BUILTIN_DEVICE_GATE_ID,
   BUILTIN_ONLINE_GATE_ID,
   GATE_STORAGE_KEY,
   type GateRecord,
@@ -33,8 +34,13 @@ function writeRawGates(gates: GateRecord[]): void {
 
 export function buildDefaultGates(): GateRecord[] {
   const t = nowMs();
-  // Online-only app mode: keep a single built-in Online gate and drop legacy device/local gates.
   return [
+    {
+      id: BUILTIN_DEVICE_GATE_ID,
+      type: "device",
+      label: "This device",
+      createdAtMs: t,
+    },
     {
       id: BUILTIN_ONLINE_GATE_ID,
       type: "online",
@@ -46,13 +52,25 @@ export function buildDefaultGates(): GateRecord[] {
 
 /** Ensure built-in device + online gates exist; migrate empty store. */
 export function ensureDefaultGates(): GateRecord[] {
-  const onlineOnly = buildDefaultGates();
-  // Persist online-only registry so stale local/server gates are fully removed from storage.
-  writeRawGates(onlineOnly);
-  if (readActiveGateId() !== BUILTIN_ONLINE_GATE_ID) {
-    writeActiveGateId(BUILTIN_ONLINE_GATE_ID);
+  const existing = readRawGates();
+  const byId = new Map(existing.map((g) => [g.id, g]));
+  for (const def of buildDefaultGates()) {
+    if (!byId.has(def.id)) byId.set(def.id, def);
   }
-  return onlineOnly;
+  let needsPersist = false;
+  const merged = [...byId.values()]
+    .map((g) => {
+      if (g.type !== "local_server" || !g.serverUrl) return g;
+      const serverUrl = normalizeServerUrl(g.serverUrl);
+      if (serverUrl && serverUrl !== g.serverUrl) {
+        needsPersist = true;
+        return { ...g, serverUrl };
+      }
+      return g;
+    })
+    .sort((a, b) => a.createdAtMs - b.createdAtMs);
+  if (needsPersist) writeRawGates(merged);
+  return merged;
 }
 
 export function listGates(): GateRecord[] {
@@ -76,8 +94,10 @@ export function writeActiveGateId(id: string): void {
 
 export function getActiveGate(): GateRecord {
   const gates = listGates();
-  // Online-only app mode: always resolve active gate to Online.
-  return gates.find((g) => g.id === BUILTIN_ONLINE_GATE_ID) ?? gates[0]!;
+  const id = readActiveGateId();
+  const found = id ? gates.find((g) => g.id === id) : null;
+  const fallbackId = defaultBuiltinGateId();
+  return found ?? gates.find((g) => g.id === fallbackId) ?? gates[0]!;
 }
 
 function newLocalGateId(): string {
@@ -110,19 +130,51 @@ export function addLocalServerGate(input: {
   serverUrl: string;
   accessToken: string;
 }): GateRecord {
-  // Keep API signature stable but hard-disable local server gate creation in online-only mode.
-  void input;
-  throw new Error("Local server gate is removed. App is online-only.");
+  const label = input.label.trim() || "Local server";
+  const serverUrl = normalizeServerUrl(input.serverUrl);
+  const accessToken = input.accessToken.trim();
+  if (!serverUrl) throw new Error("Enter a valid server address (IP or URL).");
+  if (!accessToken) throw new Error("Access token is required.");
+
+  const gate: GateRecord = {
+    id: newLocalGateId(),
+    type: "local_server",
+    label,
+    serverUrl,
+    accessToken,
+    createdAtMs: nowMs(),
+  };
+  const gates = listGates();
+  writeRawGates([...gates, gate]);
+  return gate;
 }
 
 export function updateLocalServerGate(
   id: string,
   input: { label: string; serverUrl: string; accessToken?: string }
 ): GateRecord {
-  // Keep API signature stable but hard-disable local server gate updates in online-only mode.
-  void id;
-  void input;
-  throw new Error("Local server gate is removed. App is online-only.");
+  const prev = getGateById(id);
+  if (!prev || prev.type !== "local_server") {
+    throw new Error("Gate not found or not editable.");
+  }
+  const label = input.label.trim() || prev.label;
+  const serverUrl = normalizeServerUrl(input.serverUrl);
+  if (!serverUrl) throw new Error("Enter a valid server address (IP or URL).");
+
+  const token = input.accessToken?.trim();
+  const patch: Partial<Pick<GateRecord, "label" | "serverUrl" | "accessToken" | "lastStatus" | "lastError">> = {
+    label,
+    serverUrl,
+  };
+  if (token) patch.accessToken = token;
+  if (serverUrl !== prev.serverUrl || token) {
+    patch.lastStatus = "unknown";
+    patch.lastError = undefined;
+  }
+
+  const next = updateGate(id, patch);
+  if (!next) throw new Error("Could not update gate.");
+  return next;
 }
 
 export function updateGate(id: string, patch: Partial<Pick<GateRecord, "label" | "serverUrl" | "accessToken" | "lastStatus" | "lastError" | "lastTestedAtMs">>): GateRecord | null {
@@ -130,7 +182,7 @@ export function updateGate(id: string, patch: Partial<Pick<GateRecord, "label" |
   const idx = gates.findIndex((g) => g.id === id);
   if (idx < 0) return null;
   const prev = gates[idx]!;
-  if (prev.type === "online") {
+  if (prev.type === "device" || prev.type === "online") {
     if (patch.label) {
       gates[idx] = { ...prev, label: patch.label.trim() || prev.label };
       writeRawGates(gates);
@@ -153,28 +205,38 @@ export function updateGate(id: string, patch: Partial<Pick<GateRecord, "label" |
 }
 
 export function deleteGate(id: string): boolean {
-  // Online-only app mode: no deletable gate exists.
-  void id;
-  return false;
+  if (id === BUILTIN_DEVICE_GATE_ID || id === BUILTIN_ONLINE_GATE_ID) return false;
+  const gates = listGates().filter((g) => g.id !== id);
+  writeRawGates(gates);
+  if (readActiveGateId() === id) {
+    writeActiveGateId(BUILTIN_DEVICE_GATE_ID);
+  }
+  return true;
 }
 
 export function gateTypeLabel(type: GateType): string {
   switch (type) {
+    case "device":
+      return "Device";
     case "online":
       return "Online";
+    case "local_server":
+      return "Local server";
     default:
-      // Online-only UX copy for legacy type values.
-      return "Online";
+      return type;
   }
 }
 
 /** Sidebar: active gate type next to “Gate” nav item. */
 export function gateSidebarTypeLabel(type: GateType): string {
   switch (type) {
+    case "device":
+      return "Local";
     case "online":
       return "Online";
+    case "local_server":
+      return "Local server";
     default:
-      // Online-only UX copy for legacy type values.
       return "";
   }
 }

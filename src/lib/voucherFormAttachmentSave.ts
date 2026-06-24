@@ -12,6 +12,7 @@ import {
 } from "@/lib/attachmentHoldClipboard";
 import { storage } from "@/lib/firebase";
 import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize";
 
 /**
  * Form `files` state me `PL_ATTACH_V1:local:uuid` clipboard marker strings ho sakti hain (paste / Reuse).
@@ -180,9 +181,7 @@ export function isLocalToRemoteAttachmentUpgrade(saved: readonly string[], incom
 /** Voucher row fingerprint — `fileUrls`/`files` change par vouchers context live update. */
 export function voucherAttachmentUiFingerprint(row: Record<string, unknown> | null | undefined): string {
   if (!row) return "";
-  const urls = Array.isArray(row.fileUrls)
-    ? row.fileUrls.filter((u): u is string => typeof u === "string").map((u) => u.trim()).filter(Boolean).join("\x1e")
-    : "";
+  const urls = getVoucherAttachmentUrlsForUi(row).join("\x1e");
   const filesMeta = Array.isArray(row.files) ? row.files.length : 0;
   const uf =
     row.unassignedFile && typeof row.unassignedFile === "object"

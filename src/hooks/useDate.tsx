@@ -32,6 +32,8 @@ type DateContextType = {
   setDateFormatBS: (fmt: BSFormatKey) => void;
   formatDate: (date: Date) => string;
   formatDateBS: (date: Date) => string;
+  /** AD / BS / Both — company calendar setting ke hisaab se. */
+  formatDateBySystem: (date: Date | null | undefined) => string;
   formatCurrency: (amount: number, options?: CurrencyFormattingOptions) => React.ReactNode;
   formatCurrencyForPrint: (amount: number, options?: CurrencyFormattingOptions) => string;
   formatRunning: (amount: number) => string;
@@ -112,6 +114,13 @@ export const DateProvider = ({ children }: { children: ReactNode }) => {
       const bs = formatBsFromAD(date, dateFormatBS);
       return bs !== "" ? bs : format(date, dateFormatAD);
   };
+
+  const formatDateBySystem = (date: Date | null | undefined): string => {
+    if (!date || !(date instanceof Date) || isNaN(date.getTime())) return "";
+    if (dateSystem === "AD") return formatDate(date);
+    if (dateSystem === "BS") return formatDateBS(date);
+    return `${formatDateBS(date)} (${formatDate(date)})`;
+  };
   
   const formatCurrencyForPrint = (amount: number, options?: CurrencyFormattingOptions): string => {
      if (typeof amount !== 'number' || isNaN(amount)) return '-';
@@ -173,7 +182,7 @@ export const DateProvider = ({ children }: { children: ReactNode }) => {
 
 
   return (
-    <DateContext.Provider value={{ dateSystem, setDateSystem, dateFormatAD, dateFormatBS, setDateFormatAD, setDateFormatBS, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint, formatRunning }}>
+    <DateContext.Provider value={{ dateSystem, setDateSystem, dateFormatAD, dateFormatBS, setDateFormatAD, setDateFormatBS, formatDate, formatDateBS, formatDateBySystem, formatCurrency, formatCurrencyForPrint, formatRunning }}>
       {children}
     </DateContext.Provider>
   );

@@ -38,6 +38,105 @@ function localPendingFilesForensicEnabled(): boolean {
   return typeof process !== "undefined" && process.env.NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG === "1";
 }
 
+/** Upload ke baad SQLite mirror me HTTPS URL — verify hone ke baad hi local blob delete. */
+async function verifyLocalMirrorHasHttpsUrl(
+  companyId: string,
+  collection: string,
+  docId: string,
+  field: string,
+  httpsUrl: string
+): Promise<boolean> {
+  const row = await getCompanyDocFromBrowserDb(companyId, collection, docId, { includeDeleted: true });
+  if (!row) return false;
+  const cur = row[field];
+  if (typeof cur === "string") return cur === httpsUrl;
+  if (Array.isArray(cur)) return cur.some((v) => v === httpsUrl);
+  return false;
+}
+
+async function mirrorUploadedFileUrlToLocalSqlite(
+  docPath: string,
+  field: string,
+  localId: string,
+  httpsUrl: string
+): Promise<boolean> {
+  const m = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(String(docPath || "").trim());
+  if (!m) return false;
+  const [, companyId, collection, docId] = m;
+  const existing = await getCompanyDocFromBrowserDb(companyId!, collection!, docId!, { includeDeleted: true });
+  if (!existing) return false;
+  const needle = `${LOCAL_FILE_PREFIX}${localId}`;
+  const patch: Record<string, unknown> = {};
+  const cur = existing[field];
+  if (Array.isArray(cur)) {
+    const arr = [...cur];
+    const idx = arr.findIndex((v) => v === needle);
+    if (idx < 0) return false;
+    arr[idx] = httpsUrl;
+    patch[field] = arr;
+  } else if (cur === needle) {
+    patch[field] = httpsUrl;
+  } else {
+    return false;
+  }
+  const { upsertCompanyDocInBrowserDb, notifyBrowserDbCollectionUpdated } = await import(
+    "@/lib/localCompanyDocMirror"
+  );
+  await upsertCompanyDocInBrowserDb(
+    companyId!,
+    collection!,
+    docId!,
+    { ...existing, ...patch, id: docId },
+    { notify: true, force: true }
+  );
+  notifyBrowserDbCollectionUpdated(companyId!, collection!);
+  return verifyLocalMirrorHasHttpsUrl(companyId!, collection!, docId!, field, httpsUrl);
+}
+
+/** Firestore pe HTTPS aa chuka ho lekin SQLite abhi `local:` — dubara upload ke bina mirror + delete. */
+function resolveHttpsUrlAfterPendingPatch(fieldValue: unknown, localId: string): string | null {
+  const needle = `${LOCAL_FILE_PREFIX}${localId}`;
+  const isHttps = (v: unknown): v is string => typeof v === "string" && /^https?:\/\//i.test(v);
+  if (typeof fieldValue === "string") {
+    if (fieldValue === needle) return null;
+    return isHttps(fieldValue) ? fieldValue : null;
+  }
+  if (Array.isArray(fieldValue)) {
+    if (fieldValue.some((v) => v === needle)) return null;
+    for (const v of fieldValue) {
+      if (isHttps(v)) return v;
+    }
+  }
+  return null;
+}
+
+function fieldStillHasLocalPendingRef(fieldValue: unknown, localId: string): boolean {
+  const needle = `${LOCAL_FILE_PREFIX}${localId}`;
+  if (typeof fieldValue === "string") return fieldValue === needle;
+  if (Array.isArray(fieldValue)) return fieldValue.some((v) => v === needle);
+  return false;
+}
+
+/** SQLite mirror ready → tab hi pending bytes hatao (HTTPS load hone ke baad). */
+async function removePendingFileAfterMirrorReady(
+  localId: string,
+  docPath: string,
+  field: string,
+  httpsUrl: string
+): Promise<boolean> {
+  const mirrored = await mirrorUploadedFileUrlToLocalSqlite(docPath, field, localId, httpsUrl);
+  if (!mirrored) {
+    console.warn("[localPendingFiles] kept local blob — SQLite HTTPS mirror not verified yet", {
+      localId,
+      docPath,
+      field,
+    });
+    return false;
+  }
+  await removePendingFile(localId);
+  return true;
+}
+
 /** `companies/{cid}/{col}/{id}` par partial patch — direct `updateDoc` ki jagah write gateway. */
 async function patchCompanyDocViaGateway(docRef: DocumentReference, patch: Record<string, unknown>): Promise<void> {
   const m = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(docRef.path);
@@ -101,6 +200,13 @@ async function resolvePendingTargetDocOrRemoveOrphan(
   docPath: string,
   localId: string
 ): Promise<Record<string, unknown> | null> {
+  if (!isValidPendingSubcollectionDocPath(docPath)) {
+    console.warn("[localPendingFiles] pending sync skipped — invalid docPath (blob kept for requeue)", {
+      docPath,
+      localId,
+    });
+    return null;
+  }
   let data = await readCompanyDocForPendingSync(docPath);
   if (!data) {
     data = await readCompanyDocForPendingSync(docPath, { includeDeleted: true });
@@ -178,12 +284,32 @@ function resolvePendingPayloadCompanyId(item: {
 }
 
 /** Cloud sync removed — pending attachments always use Firebase Storage / native paths. */
-export async function resolvePendingAttachmentCloudSyncProvider(_companyId: string): Promise<null> {
-  return null;
+import { isGoogleDriveCloudSyncCompany } from "@/lib/localCloudSync/driveCloudSyncClient";
+
+export async function resolvePendingAttachmentCloudSyncProvider(
+  companyId: string
+): Promise<"google_drive" | null> {
+  return (await isGoogleDriveCloudSyncCompany(companyId)) ? "google_drive" : null;
 }
 
 /** Party/Bank/Staff/Item pending sync ke liye bhi yahi ref (pehle sirf vouchers tha). */
-const PENDING_SYNC_COLLECTIONS = new Set(["vouchers", "parties", "bank_accounts", "staff", "items"]);
+const PENDING_SYNC_COLLECTIONS = new Set([
+  "vouchers",
+  "parties",
+  "bank_accounts",
+  "staff",
+  "items",
+  "taxes",
+  "expense_accounts",
+]);
+
+function isValidPendingSubcollectionDocPath(docPath: string): boolean {
+  const m = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(String(docPath || "").trim());
+  if (!m) return false;
+  return PENDING_SYNC_COLLECTIONS.has(m[2]!);
+}
+
+export { isValidPendingSubcollectionDocPath };
 
 export function firestoreDocRefFromPath(docPath: string): DocumentReference {
   const p = String(docPath || "").trim().replace(/^\/+|\/+$/g, "");
@@ -524,16 +650,15 @@ export async function uploadPendingLocalFileRef(
   await uploadBytes(storageRef, item.blob, { contentType: item.contentType || "application/octet-stream" });
   const url = await getDownloadURL(storageRef);
   await patchPendingFileTargetField(item.docPath, item.field, item.id, url);
-  if (localPendingFilesForensicEnabled()) {
+  const deleted = await removePendingFileAfterMirrorReady(item.id, item.docPath, item.field, url);
+  if (!deleted && localPendingFilesForensicEnabled()) {
     console.warn("[FORENSIC_PENDING_UPLOAD]", {
       phase: "uploadPendingLocalFileRef",
       localId: item.id,
-      step: "AFTER_GATEWAY_PATCH_BEFORE_PENDING_DELETE",
-      pendingBytesStillPresentUntilRemovePendingFile: true,
+      step: "KEPT_LOCAL_BLOB_UNTIL_SQLITE_HTTPS",
     });
   }
-  await removePendingFile(item.id);
-  if (localPendingFilesForensicEnabled()) {
+  if (deleted && localPendingFilesForensicEnabled()) {
     console.warn("[FORENSIC_PENDING_UPLOAD]", {
       phase: "uploadPendingLocalFileRef",
       localId: item.id,
@@ -700,12 +825,28 @@ export async function removePendingFile(id: string): Promise<void> {
 }
 
 /**
- * Upload one pending file to Storage and update Firestore doc; then remove from IndexedDB.
+ * Upload one pending file to Storage and update Firestore doc.
+ * Local blob tab hi delete jab SQLite me HTTPS URL verify ho jaye.
  */
 export async function syncOnePendingFile(
   item: PendingFilePayload
 ): Promise<{ success: boolean; error?: string }> {
   try {
+    const preData = await resolvePendingTargetDocOrRemoveOrphan(item.docPath, item.id);
+    if (!preData) {
+      return { success: true };
+    }
+
+    const existingHttps = resolveHttpsUrlAfterPendingPatch(preData[item.field], item.id);
+    if (existingHttps) {
+      await removePendingFileAfterMirrorReady(item.id, item.docPath, item.field, existingHttps);
+      return { success: true };
+    }
+
+    if (!fieldStillHasLocalPendingRef(preData[item.field], item.id)) {
+      return { success: true };
+    }
+
     const storagePath = `${item.storagePathPrefix}/${Date.now()}_${item.fileName || "file"}`;
     const storageRef = ref(storage, storagePath);
     await uploadBytes(storageRef, item.blob, { contentType: item.contentType || "application/octet-stream" });
@@ -735,7 +876,7 @@ export async function syncOnePendingFile(
           action,
           oldArray: oldArraySnapshot,
           newArray: arr,
-          note: "STEP_FIRESTORE_PATCH_NEXT_then_removePendingFile_after_await",
+          note: "STEP_FIRESTORE_PATCH_NEXT_then_SQLITE_MIRROR_then_PENDING_DELETE",
           navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
         });
       }
@@ -749,21 +890,20 @@ export async function syncOnePendingFile(
           action: "scalar_field_replace",
           oldValue: current,
           newValue: url,
-          note: "STEP_FIRESTORE_PATCH_NEXT_then_removePendingFile_after_await",
+          note: "STEP_FIRESTORE_PATCH_NEXT_then_SQLITE_MIRROR_then_PENDING_DELETE",
         });
       }
       await patchPendingFileTargetField(item.docPath, item.field, item.id, url);
     }
 
-    if (localPendingFilesForensicEnabled()) {
-      console.warn("[FORENSIC_PENDING_SYNC_ONE]", {
-        phase: "syncOnePendingFile",
-        localId: item.id,
-        step: "AFTER_GATEWAY_PATCH_BEFORE_PENDING_DELETE",
-        pendingBytesStillPresentUntilRemovePendingFile: true,
-      });
+    const deleted = await removePendingFileAfterMirrorReady(item.id, item.docPath, item.field, url);
+    if (!deleted) {
+      return {
+        success: true,
+        error: "Uploaded to cloud; local copy kept until this device finishes loading the HTTPS link.",
+      };
     }
-    await removePendingFile(item.id);
+
     if (localPendingFilesForensicEnabled()) {
       console.warn("[FORENSIC_PENDING_SYNC_ONE]", {
         phase: "syncOnePendingFile",
@@ -813,15 +953,11 @@ export async function syncPendingFiles(): Promise<{
 }
 
 /** Drive sync cycle — sirf is company ke pending attachments/avatars upload karo. */
-export async function syncPendingFilesForCompany(companyId: string): Promise<{
-  synced: number;
-  failed: number;
-  lastError?: string;
-}> {
+async function resolveCompanyTargetAliases(companyId: string): Promise<Set<string>> {
   const cid = String(companyId || "").trim();
-  if (!cid) return { synced: 0, failed: 0 };
-  const pending = await getPendingFiles();
-  const targetAliases = new Set<string>([cid]);
+  const targetAliases = new Set<string>();
+  if (!cid) return targetAliases;
+  targetAliases.add(cid);
   try {
     const reg = await getLocalCompanyById(cid, { includeDeleted: true });
     const auth = String((reg as Record<string, unknown> | null)?.authoritativeCompanyId ?? "").trim();
@@ -843,19 +979,49 @@ export async function syncPendingFilesForCompany(companyId: string): Promise<{
   } catch {
     /* keep primary id only */
   }
+  return targetAliases;
+}
+
+export async function listPendingFilesForCompany(companyId: string): Promise<PendingFilePayload[]> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return [];
+  const targetAliases = await resolveCompanyTargetAliases(cid);
+  const pending = await getPendingFiles();
+  return pending.filter((item) => {
+    const itemCompanyId = resolvePendingPayloadCompanyId(item) ?? "";
+    return itemCompanyId && targetAliases.has(itemCompanyId);
+  });
+}
+
+export async function countPendingFilesForCompany(companyId: string): Promise<number> {
+  return (await listPendingFilesForCompany(companyId)).length;
+}
+
+export async function syncPendingFilesForCompany(
+  companyId: string,
+  options?: { onProgress?: (done: number, total: number, fileName?: string) => void }
+): Promise<{
+  synced: number;
+  failed: number;
+  lastError?: string;
+}> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return { synced: 0, failed: 0 };
+  const items = await listPendingFilesForCompany(cid);
+  const total = items.length;
   let synced = 0;
   let failed = 0;
   let lastError: string | undefined;
-  for (const item of pending) {
-    const itemCompanyId = resolvePendingPayloadCompanyId(item) ?? "";
-    // Pending rows should sync when docPath/prefix uses any known alias for this company.
-    if (!itemCompanyId || !targetAliases.has(itemCompanyId)) continue;
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
+    options?.onProgress?.(i, total, item.fileName);
     const result = await syncOnePendingFile(item);
     if (result.success) synced++;
     else {
       failed++;
       if (!lastError && result.error) lastError = result.error;
     }
+    options?.onProgress?.(i + 1, total, item.fileName);
   }
   return { synced, failed, lastError };
 }

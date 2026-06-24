@@ -16,6 +16,206 @@ import { clearCompanyPlanLocalCache, readCompanyPlanLocalCache, writeCompanyPlan
 import { normalizePlanIdForClient } from "@/config/plans";
 import { verifyPlanEntitlementJws } from "@/lib/security/planEntitlementJwtVerify";
 import { getOrCreateClientDeviceId } from "@/lib/security/deviceIdentity";
+import { doc, getDoc } from "firebase/firestore";
+import { firestore } from "@/lib/firebase";
+
+const TWENTY_DAYS_MS = 20 * 24 * 60 * 60 * 1000;
+
+/** Local `next dev` without Admin service account — client Firestore read + SQLite patch. */
+function isLocalDevPlanSyncFallbackEligible(): boolean {
+  if (process.env.NODE_ENV === "production") return false;
+  if (typeof window === "undefined") return false;
+  const host = window.location.hostname.toLowerCase();
+  return host === "localhost" || host === "127.0.0.1";
+}
+
+function planExpiryMsFromCompanyData(data: Record<string, unknown>): number | null {
+  if (typeof data.planExpiryMs === "number" && Number.isFinite(data.planExpiryMs)) {
+    return data.planExpiryMs;
+  }
+  const pe = data.planExpiry as { toMillis?: () => number } | undefined;
+  if (pe && typeof pe.toMillis === "function") {
+    const ms = pe.toMillis();
+    return typeof ms === "number" && Number.isFinite(ms) ? ms : null;
+  }
+  return null;
+}
+
+function computeOfflineLicenseValidUntilMs(
+  planId: string,
+  planExpiryMs: number | null,
+  prevUntilMs: number | undefined
+): number {
+  const now = Date.now();
+  const prevUntil = typeof prevUntilMs === "number" && Number.isFinite(prevUntilMs) ? prevUntilMs : now;
+  const base = Math.max(now, prevUntil);
+  let chunkMs: number;
+  if (planId === "basic" || planExpiryMs == null) {
+    chunkMs = TWENTY_DAYS_MS;
+  } else {
+    chunkMs = Math.min(TWENTY_DAYS_MS, Math.max(0, planExpiryMs - base));
+  }
+  let offlineLicenseValidUntilMs = base + chunkMs;
+  if (planExpiryMs != null) {
+    offlineLicenseValidUntilMs = Math.min(offlineLicenseValidUntilMs, planExpiryMs);
+  }
+  return offlineLicenseValidUntilMs;
+}
+
+async function applyAuthoritativePlanPayloadToLocal(opts: {
+  firebaseCompanyId: string;
+  localCompanyId: string;
+  data: ServerAuthoritativePlanPayload;
+}): Promise<SyncCompanyPlanResult> {
+  const { firebaseCompanyId, localCompanyId, data } = opts;
+  const planId = String(data.planId || "basic").trim() || "basic";
+  const planExpiryMs =
+    typeof data.planExpiryMs === "number" && Number.isFinite(data.planExpiryMs) ? data.planExpiryMs : null;
+
+  if (planId === "basic") {
+    clearCompanyPlanLocalCache(localCompanyId);
+  } else if (planExpiryMs != null) {
+    const prevCache = readCompanyPlanLocalCache(localCompanyId);
+    const jwsField = data.planEntitlementJws;
+    const jwsRaw =
+      typeof jwsField === "string"
+        ? jwsField.trim()
+        : jwsField === null
+          ? ""
+          : (prevCache?.planEntitlementJws || "").trim();
+    let entitlementSignatureOk = false;
+    let entitlementPlanIdFromJwt: string | undefined;
+    let entitlementPlanExpMsFromJwt: number | undefined;
+    let entitlementOfflineUntilMsFromJwt: number | undefined;
+    let entitlementDeviceMatch = false;
+    if (jwsRaw) {
+      const vr = await verifyPlanEntitlementJws(jwsRaw);
+      if (vr.ok) {
+        entitlementSignatureOk = true;
+        const c = vr.claims;
+        if (typeof c.plan === "string" && c.plan.trim()) entitlementPlanIdFromJwt = normalizePlanIdForClient(c.plan.trim());
+        if (typeof c.plan_exp === "number" && Number.isFinite(c.plan_exp)) entitlementPlanExpMsFromJwt = c.plan_exp;
+        if (typeof c.off_until === "number" && Number.isFinite(c.off_until)) entitlementOfflineUntilMsFromJwt = c.off_until;
+        const dev = getOrCreateClientDeviceId();
+        entitlementDeviceMatch = c.device === dev;
+      }
+    }
+    const nextJwsStored =
+      jwsField === null ? undefined : typeof jwsField === "string" ? jwsField.trim() || undefined : prevCache?.planEntitlementJws;
+    writeCompanyPlanLocalCache(localCompanyId, {
+      planId,
+      planExpiryMs,
+      lastStripeCheckoutSessionId: data.lastStripeCheckoutSessionId ?? undefined,
+      planEntitlementJws: nextJwsStored,
+      entitlementVerifiedAtMs: Date.now(),
+      entitlementSignatureOk,
+      entitlementPlanIdFromJwt,
+      entitlementPlanExpMsFromJwt,
+      entitlementOfflineUntilMsFromJwt,
+      entitlementDeviceMatch,
+    });
+  }
+
+  const local = await getLocalCompanyById(localCompanyId);
+  if (!local) {
+    writePlanAuthoritativeSyncTimestamp(localCompanyId);
+    return { ok: true, applied: false, reason: "no_local_sqlite_row" };
+  }
+
+  const storageLower = String((local as { storageOption?: string }).storageOption || "").toLowerCase();
+  const isDeviceLocalCompany = storageLower === "local";
+
+  const offlineUntil =
+    typeof data.offlineLicenseValidUntilMs === "number" && Number.isFinite(data.offlineLicenseValidUntilMs)
+      ? data.offlineLicenseValidUntilMs
+      : undefined;
+
+  const merged: Record<string, unknown> = {
+    ...local,
+    planId,
+    planUpgradedAtMs: Date.now(),
+    authoritativeCompanyId: firebaseCompanyId,
+    ...(!isDeviceLocalCompany
+      ? { syncedFromCloud: true, syncPolicy: "online", storageOption: "firebase" }
+      : { syncedFromCloud: true }),
+    ...(offlineUntil != null ? { offlineLicenseValidUntilMs: offlineUntil } : {}),
+    ...(data.stripeCustomerId != null && data.stripeCustomerId !== ""
+      ? { stripeCustomerId: data.stripeCustomerId }
+      : {}),
+    ...(data.stripeSubscriptionId != null && data.stripeSubscriptionId !== ""
+      ? { stripeSubscriptionId: data.stripeSubscriptionId }
+      : {}),
+    ...(data.lastStripeCheckoutSessionId
+      ? { lastStripeCheckoutSessionId: data.lastStripeCheckoutSessionId }
+      : {}),
+  };
+  if (planId === "basic") delete merged.planExpiryMs;
+  else if (planExpiryMs != null) merged.planExpiryMs = planExpiryMs;
+
+  await upsertLocalCompany(merged as LocalCompanyDoc);
+
+  writePlanAuthoritativeSyncTimestamp(localCompanyId);
+  bumpLocalCompanyRegistry();
+  return { ok: true, applied: true };
+}
+
+async function syncCompanyPlanFromFirestoreClientFallback(opts: {
+  firebaseCompanyId: string;
+  localCompanyId: string;
+}): Promise<SyncCompanyPlanResult> {
+  try {
+    const snap = await getDoc(doc(firestore, "companies", opts.firebaseCompanyId));
+    if (!snap.exists()) {
+      return { ok: false, applied: false, reason: "company_not_found" };
+    }
+    const data = (snap.data() || {}) as Record<string, unknown>;
+    if (data.isDeleted === true) {
+      return { ok: false, applied: false, reason: "company_deleted" };
+    }
+
+    const planId = normalizePlanIdForClient(data.planId != null ? String(data.planId) : undefined);
+    const planExpiryMs = planExpiryMsFromCompanyData(data);
+    const local = await getLocalCompanyById(opts.localCompanyId);
+    const localOffline = (local as { offlineLicenseValidUntilMs?: unknown } | null)?.offlineLicenseValidUntilMs;
+    const prevOffline =
+      typeof localOffline === "number" && Number.isFinite(localOffline)
+        ? localOffline
+        : typeof data.offlineLicenseValidUntilMs === "number" && Number.isFinite(data.offlineLicenseValidUntilMs)
+          ? data.offlineLicenseValidUntilMs
+          : undefined;
+    const offlineLicenseValidUntilMs = computeOfflineLicenseValidUntilMs(planId, planExpiryMs, prevOffline);
+
+    return applyAuthoritativePlanPayloadToLocal({
+      firebaseCompanyId: opts.firebaseCompanyId,
+      localCompanyId: opts.localCompanyId,
+      data: {
+        companyId: opts.firebaseCompanyId,
+        planId,
+        planExpiryMs,
+        offlineLicenseValidUntilMs,
+        stripeCustomerId:
+          typeof data.stripeCustomerId === "string" && data.stripeCustomerId.trim()
+            ? data.stripeCustomerId.trim()
+            : null,
+        stripeSubscriptionId:
+          typeof data.stripeSubscriptionId === "string" && data.stripeSubscriptionId.trim()
+            ? data.stripeSubscriptionId.trim()
+            : null,
+        lastStripeCheckoutSessionId:
+          typeof data.lastStripeCheckoutSessionId === "string" && data.lastStripeCheckoutSessionId.trim()
+            ? data.lastStripeCheckoutSessionId.trim()
+            : null,
+      },
+    });
+  } catch (e) {
+    const code =
+      typeof e === "object" && e !== null && "code" in e ? String((e as { code?: unknown }).code || "") : "";
+    if (code === "permission-denied" || code === "PERMISSION_DENIED") {
+      return { ok: false, applied: false, reason: "forbidden" };
+    }
+    return { ok: false, applied: false, reason: "network" };
+  }
+}
 
 /** Online + healthy: har 5 min plan sync. */
 export const PLAN_SERVER_SYNC_INTERVAL_MS = 5 * 60 * 1000;
@@ -170,6 +370,9 @@ export function planSyncFailureUserMessage(reason?: string): string {
   if (reason === "token_error") return "Could not verify your login. Sign out and sign in again.";
   if (reason === "missing_ids" || reason === "no_context") return "No company selected to sync.";
   if (reason === "local_only_company") return "Local-only company does not require server plan sync yet.";
+  if (reason === "Firebase Admin not configured") {
+    return "Firebase Admin is not set up on this dev server. Add FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY to .env.local, or use localhost (client fallback applies automatically).";
+  }
   if (reason.startsWith("http_")) return "Plan server returned an error. Try again later.";
   return reason;
 }
@@ -289,98 +492,21 @@ export async function syncCompanyPlanFromServer(opts: {
   }
 
   if (!res.ok || !data?.companyId) {
+    if (
+      isLocalDevPlanSyncFallbackEligible() &&
+      (res.status === 503 || errMsg === "Firebase Admin not configured")
+    ) {
+      return syncCompanyPlanFromFirestoreClientFallback({
+        firebaseCompanyId,
+        localCompanyId,
+      });
+    }
     return { ok: false, applied: false, reason: errMsg };
   }
 
-  const planId = String(data.planId || "basic").trim() || "basic";
-  const planExpiryMs =
-    typeof data.planExpiryMs === "number" && Number.isFinite(data.planExpiryMs) ? data.planExpiryMs : null;
-
-  if (planId === "basic") {
-    clearCompanyPlanLocalCache(localCompanyId);
-  } else if (planExpiryMs != null) {
-    const prevCache = readCompanyPlanLocalCache(localCompanyId);
-    const jwsField = (data as { planEntitlementJws?: string | null }).planEntitlementJws;
-    // `null` = server ne unsigned response bheja — purana JWS hatao; `undefined` = purana API deploy — pehle wala token optional preserve.
-    const jwsRaw =
-      typeof jwsField === "string"
-        ? jwsField.trim()
-        : jwsField === null
-          ? ""
-          : (prevCache?.planEntitlementJws || "").trim();
-    let entitlementSignatureOk = false;
-    let entitlementPlanIdFromJwt: string | undefined;
-    let entitlementPlanExpMsFromJwt: number | undefined;
-    let entitlementOfflineUntilMsFromJwt: number | undefined;
-    let entitlementDeviceMatch = false;
-    if (jwsRaw) {
-      const vr = await verifyPlanEntitlementJws(jwsRaw);
-      if (vr.ok) {
-        entitlementSignatureOk = true;
-        const c = vr.claims;
-        if (typeof c.plan === "string" && c.plan.trim()) entitlementPlanIdFromJwt = normalizePlanIdForClient(c.plan.trim());
-        if (typeof c.plan_exp === "number" && Number.isFinite(c.plan_exp)) entitlementPlanExpMsFromJwt = c.plan_exp;
-        if (typeof c.off_until === "number" && Number.isFinite(c.off_until)) entitlementOfflineUntilMsFromJwt = c.off_until;
-        const dev = getOrCreateClientDeviceId();
-        entitlementDeviceMatch = c.device === dev;
-      }
-    }
-    const nextJwsStored =
-      jwsField === null ? undefined : typeof jwsField === "string" ? jwsField.trim() || undefined : prevCache?.planEntitlementJws;
-    writeCompanyPlanLocalCache(localCompanyId, {
-      planId,
-      planExpiryMs,
-      lastStripeCheckoutSessionId: data.lastStripeCheckoutSessionId ?? undefined,
-      planEntitlementJws: nextJwsStored,
-      entitlementVerifiedAtMs: Date.now(),
-      entitlementSignatureOk,
-      entitlementPlanIdFromJwt,
-      entitlementPlanExpMsFromJwt,
-      entitlementOfflineUntilMsFromJwt,
-      entitlementDeviceMatch,
-    });
-  }
-
-  const local = await getLocalCompanyById(localCompanyId);
-  if (!local) {
-    writePlanAuthoritativeSyncTimestamp(localCompanyId);
-    return { ok: true, applied: false, reason: "no_local_sqlite_row" };
-  }
-
-  const storageLower = String((local as { storageOption?: string }).storageOption || "").toLowerCase();
-  const isDeviceLocalCompany = storageLower === "local";
-
-  const offlineUntil =
-    typeof data.offlineLicenseValidUntilMs === "number" && Number.isFinite(data.offlineLicenseValidUntilMs)
-      ? data.offlineLicenseValidUntilMs
-      : undefined;
-
-  // `syncedFromCloud !== true` pe `mergeOnlineCompanyWithLocalPlanOverlay` hamesha "local-first" maan leta tha → Firestore `basic` ke baad bhi SQLite purana paid `higherPlanByTier` se chipak sakta tha.
-  const merged: Record<string, unknown> = {
-    ...local,
-    planId,
-    planUpgradedAtMs: Date.now(),
-    authoritativeCompanyId: firebaseCompanyId,
-    ...(!isDeviceLocalCompany
-      ? { syncedFromCloud: true, syncPolicy: "online", storageOption: "firebase" }
-      : { syncedFromCloud: true }),
-    ...(offlineUntil != null ? { offlineLicenseValidUntilMs: offlineUntil } : {}),
-    ...(data.stripeCustomerId != null && data.stripeCustomerId !== ""
-      ? { stripeCustomerId: data.stripeCustomerId }
-      : {}),
-    ...(data.stripeSubscriptionId != null && data.stripeSubscriptionId !== ""
-      ? { stripeSubscriptionId: data.stripeSubscriptionId }
-      : {}),
-    ...(data.lastStripeCheckoutSessionId
-      ? { lastStripeCheckoutSessionId: data.lastStripeCheckoutSessionId }
-      : {}),
-  };
-  if (planId === "basic") delete merged.planExpiryMs;
-  else if (planExpiryMs != null) merged.planExpiryMs = planExpiryMs;
-
-  await upsertLocalCompany(merged as LocalCompanyDoc);
-
-  writePlanAuthoritativeSyncTimestamp(localCompanyId);
-  bumpLocalCompanyRegistry();
-  return { ok: true, applied: true };
+  return applyAuthoritativePlanPayloadToLocal({
+    firebaseCompanyId,
+    localCompanyId,
+    data: data as ServerAuthoritativePlanPayload,
+  });
 }

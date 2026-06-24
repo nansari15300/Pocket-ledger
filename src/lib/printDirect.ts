@@ -19,6 +19,11 @@ import { getPrintColorPalette, type PrintColorMode } from "@/lib/printColorPalet
 import { getInterCompanyLedgerAmounts } from "@/lib/interCompany/interCompanyLedgerAmounts";
 import { sumJournalAmountsForAccount } from "@/lib/journalLedgerAmounts";
 import type { Context as LedgerContext } from "@/components/vouchers/transactionTableShared";
+import {
+  injectSpendWiseEmbeddedOpeningPrintRows,
+  resolveLedgerOpeningPrintRows,
+  type LedgerOpeningPrintRow,
+} from "@/lib/ledgerOpeningBalanceDisplay";
 
 const DEFAULT_AD_FORMAT: ADFormatKey = "yyyy-MM-dd";
 const DEFAULT_BS_FORMAT: BSFormatKey = "YYYY-MM-DD";
@@ -110,6 +115,20 @@ export type PrintPayload = {
   openingBalanceDate?: unknown;
   /** Entity print: OB ke neeche narration line */
   openingBalanceNarration?: string | null;
+  /** Ledger page print: master books OB (Book Opening row). */
+  booksOpeningBalance?: number;
+  /** Ledger page print: page 1 / slice start — Book Opening row dikhao. */
+  ledgerShowBookOpeningRow?: boolean;
+  /** Ledger page print: date filter active — Dated Opening row date = range from. */
+  ledgerDateFilterActive?: boolean;
+  /** Ledger page print: page 2+ Dated row date = prev page last txn date. */
+  openingBalancePeriodStartDate?: unknown;
+  /** Ledger page print: master OB date range check (stacked Book row). */
+  ledgerDateRange?: { from?: Date | null; to?: Date | null };
+  /** Ledger page print: footer period totals (check mode adjusted). */
+  ledgerPagePeriodDr?: number;
+  ledgerPagePeriodCr?: number;
+  ledgerPageClosingBalance?: number;
   transactions: any[];
   showNarration?: boolean;
   journalAccountNames?: Record<string, string>;
@@ -477,7 +496,26 @@ const getAutoFontSize = (text: string | number, baseSize: number): number => {
 // ------------ INTERNALS ------------
 
 function buildDocDefinition(p: PrintPayload): TDocumentDefinitions {
-  const { rows, periodDr, periodCr, closing } = computeRows(p);
+  const computed = computeRows(p);
+  const { rows: embeddedRows, skipStandaloneOpeningRow } = injectSpendWiseEmbeddedOpeningPrintRows(
+    computed.rows,
+    {
+      spendWise: p.spendWise,
+      context: p.context,
+      openingBalance: Number(p.openingBalance) || 0,
+      booksOpeningBalance: p.booksOpeningBalance,
+      ledgerShowBookOpeningRow: p.ledgerShowBookOpeningRow,
+      ledgerDateFilterActive: p.ledgerDateFilterActive,
+      openingBalancePeriodStartDate: p.openingBalancePeriodStartDate,
+      openingBalanceDate: p.openingBalanceDate,
+      ledgerDateRange: p.ledgerDateRange,
+      openingBalanceNarration: p.openingBalanceNarration,
+      showNarration: p.showNarration,
+      transactions: p.transactions,
+    }
+  );
+  const rows = embeddedRows;
+  const { periodDr, periodCr, closing } = computed;
   const { formatDate, formatDateBS, formatCurrencyForPrint, formatRunning, numToWords } = getFormatters(p);
   const voucherRowCount = rows.filter((r: any) => r?.type !== FISCAL_YEAR_PARTITION_ROW_TYPE).length;
   const palette = getPrintColorPalette(p.printColorMode);
@@ -701,7 +739,16 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
   
   const tableHeader = buildTableHeader(p);
   const tableFooter = buildTableFooter(p, periodDr, periodCr, closing, formatCurrencyForPrint, formatRunning, tableHeader, numToWords);
-  const openingBalanceRow = buildOpeningBalanceRow(p, formatRunning, formatCurrencyForPrint, tableHeader.length);
+  const openingBalanceRow = skipStandaloneOpeningRow
+    ? null
+    : buildOpeningBalanceRow(
+        p,
+        formatRunning,
+        formatCurrencyForPrint,
+        formatDate,
+        formatDateBS,
+        tableHeader.length
+      );
 
   const tableLayout: Content = {
     table: {
@@ -710,7 +757,18 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
       body: [
         tableHeader,
         ...(openingBalanceRow ?? []),
-        ...rows.flatMap(row => buildTableRow(row, p, formatDate, formatDateBS, formatCurrencyForPrint, formatRunning, tableHeader.length)),
+        ...rows.flatMap((row, rowIdx) =>
+          buildTableRow(
+            row,
+            rows[rowIdx + 1],
+            p,
+            formatDate,
+            formatDateBS,
+            formatCurrencyForPrint,
+            formatRunning,
+            tableHeader.length
+          )
+        ),
         ...tableFooter,
       ]
     },
@@ -719,15 +777,19 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
            if (i === 0 || i === 1) return 1;
            if (i > 1) {
                const currentRow = node.table.body[i];
+               const nextRow = node.table.body[i + 1];
                const currentIsNarration = currentRow && currentRow.some((cell: any) => cell && cell.style === 'narrationRow');
-               if (currentIsNarration) return 0;
+               const currentIsSpendGap = currentRow && currentRow.some((cell: any) => cell && cell.style === 'spendWiseGapRow');
+               const nextIsSpendGap = nextRow && nextRow.some((cell: any) => cell && cell.style === 'spendWiseGapRow');
+               if (currentIsNarration || currentIsSpendGap || nextIsSpendGap) return 0;
            }
            if (tableFooter.length > 0 && i === node.table.body.length - tableFooter.length) return 1;
            if (i === node.table.body.length) return 1;
            
            return 0.5;
        },
-      vLineWidth: () => 0,
+      vLineWidth: () => (p.spendWise ? 0.5 : 0),
+      vLineColor: () => "#cccccc",
       hLineColor: (i: number, node:any) => {
           if(i === 1 || (i === node.table.body.length - 1 && tableFooter.length > 0)) return 'black';
           return '#aaa'
@@ -737,7 +799,7 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
       paddingTop: (i: number, node: any) => {
           if (i > 0) {
               const row = node.table.body[i];
-               if (row && (row as any[]).some(cell => cell && cell.style === 'narrationRow')) {
+               if (row && (row as any[]).some(cell => cell && (cell.style === 'narrationRow' || cell.style === 'spendWiseGapRow'))) {
                    return 0;
                }
           }
@@ -748,6 +810,9 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
           const row = node.table.body[i];
           const nextIsNarration = nextRow && (nextRow as any[]).some((cell: any) => cell && cell.style === 'narrationRow');
           const currentIsNarration = row && (row as any[]).some((cell: any) => cell && cell.style === 'narrationRow');
+          const currentIsSpendGap = row && (row as any[]).some((cell: any) => cell && cell.style === 'spendWiseGapRow');
+          const nextIsSpendGap = nextRow && (nextRow as any[]).some((cell: any) => cell && cell.style === 'spendWiseGapRow');
+          if (currentIsSpendGap || nextIsSpendGap) return 0;
           if (nextIsNarration) return 0;
           if (currentIsNarration) return 0;
           return 2;
@@ -772,7 +837,8 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
       header: { fontSize: 16, bold: true },
       sub: { fontSize: 9, color: '#555' },
       subheader: { fontSize: 12, bold: true, margin: [0, 0, 0, 0] },
-      body: { fontSize: 9 }
+      body: { fontSize: 9 },
+      spendWiseGapRow: { fontSize: 1, color: "#ffffff" },
     }
   };
   if (includeLogo && p.company.logoUrl) {
@@ -854,9 +920,12 @@ function computeRows(payload: PrintPayload) {
           credit = 0;
         }
       }
-      const spendWiseBalance = typeof (t as any)._spendWiseRunningBalance === "number"
-        ? Number((t as any)._spendWiseRunningBalance)
-        : (Number(t.balance ?? t.runningBalance) || 0);
+      const spendWiseBalance =
+        typeof (t as any)._spendWiseLedgerRunningBalance === "number"
+          ? Number((t as any)._spendWiseLedgerRunningBalance)
+          : typeof (t as any)._spendWiseRunningBalance === "number"
+            ? Number((t as any)._spendWiseRunningBalance)
+            : Number(t.balance ?? t.runningBalance) || 0;
       lastSpendWiseBal = spendWiseBalance;
       return { ...t, debit, credit, runningBalance: spendWiseBalance };
     });
@@ -931,9 +1000,18 @@ function computeRows(payload: PrintPayload) {
     return { ...row, runningBalance };
   });
 
-  const periodDr = rowsAsc.reduce((sum, row) => sum + row.debit, 0);
-  const periodCr = rowsAsc.reduce((sum, row) => sum + row.credit, 0);
-  const closingBalance = openingBalNum + periodDr - periodCr;
+  const periodDr =
+    typeof payload.ledgerPagePeriodDr === "number"
+      ? payload.ledgerPagePeriodDr
+      : rowsAsc.reduce((sum, row) => sum + row.debit, 0);
+  const periodCr =
+    typeof payload.ledgerPagePeriodCr === "number"
+      ? payload.ledgerPagePeriodCr
+      : rowsAsc.reduce((sum, row) => sum + row.credit, 0);
+  const closingBalance =
+    typeof payload.ledgerPageClosingBalance === "number"
+      ? payload.ledgerPageClosingBalance
+      : openingBalNum + periodDr - periodCr;
 
   return { rows: rowsAsc, periodDr, periodCr, closing: closingBalance };
 }
@@ -1308,145 +1386,265 @@ function ensureRowLength(row: TableCell[], expectedLength: number): TableCell[] 
   return row;
 }
 
-const buildOpeningBalanceRow = (p: PrintPayload, formatRunning: Function, formatCurrencyForPrint: Function, colSpan: number): TableCell[][] | null => {
+const buildOpeningBalanceRow = (
+  p: PrintPayload,
+  formatRunning: Function,
+  formatCurrencyForPrint: Function,
+  formatDate: Function,
+  formatDateBS: Function,
+  colSpan: number
+): TableCell[][] | null => {
   const palette = getPrintColorPalette(p.printColorMode);
-  if (p.context === 'daybook' || p.context === 'sale' || p.context === 'overdue') return null;
-  
-  const factor = p.context === 'item' && p.stockView === 'qty' ? getConversionFactor(findItem(p.itemsData, p.contextId), p.displayUnit) : 1;
-  const openingBalNum = (p.openingBalance ?? 0) / factor;
-  const openingText = formatRunning(openingBalNum);
+  if (p.context === "daybook" || p.context === "sale" || p.context === "overdue") return null;
 
-  let displayOpeningText: string = typeof openingText === 'string' ? openingText : '-';
-  if (p.context === 'item' && p.stockView === 'qty') {
-    displayOpeningText = `${openingBalNum.toFixed(2)} ${p.displayUnit || ''}`.trim() || '-';
-  }
-
-  // Calculate opening balance debit and credit amounts
-  // If openingBalance is positive, it's a debit; if negative, it's a credit
-  const openingBalanceDr = openingBalNum > 0 ? openingBalNum : 0;
-  const openingBalanceCr = openingBalNum < 0 ? Math.abs(openingBalNum) : 0;
-  
-  let displayOpeningBalanceDr: string = '-';
-  let displayOpeningBalanceCr: string = '-';
-  
-  if (p.context === 'item' && p.stockView === 'qty') {
-    displayOpeningBalanceDr = openingBalanceDr > 0 ? `${openingBalanceDr.toFixed(2)} ${p.displayUnit || ''}`.trim() : '-';
-    displayOpeningBalanceCr = openingBalanceCr > 0 ? `${openingBalanceCr.toFixed(2)} ${p.displayUnit || ''}`.trim() : '-';
-  } else {
-    displayOpeningBalanceDr = openingBalanceDr > 0 ? formatCurrencyForPrint(openingBalanceDr, { noSuffix: true }) : '-';
-    displayOpeningBalanceCr = openingBalanceCr > 0 ? formatCurrencyForPrint(openingBalanceCr, { noSuffix: true }) : '-';
-  }
+  const openingRows = resolveLedgerOpeningPrintRows({
+    context: p.context,
+    openingBalance: Number(p.openingBalance) || 0,
+    booksOpeningBalance: p.booksOpeningBalance,
+    ledgerShowBookOpeningRow: p.ledgerShowBookOpeningRow,
+    ledgerDateFilterActive: p.ledgerDateFilterActive,
+    openingBalancePeriodStartDate: p.openingBalancePeriodStartDate,
+    masterOpeningBalanceDate: p.openingBalanceDate,
+    dateRange: p.ledgerDateRange,
+  });
 
   const isBillWise = isBillWiseContext(p);
   const showDr = isColVisible(p, "dr");
   const showCr = isColVisible(p, "cr");
   const showStatus = isBillWise && isColVisible(p, "status");
   const showBalance = isColVisible(p, "runningBalance");
+  const showType = isColVisible(p, "type");
+  const showDate = isColVisible(p, "date");
+  const showVoucherNo = isColVisible(p, "voucherNo");
+  const showUser = isColVisible(p, "user");
   const visibleDataCols = [showDr, showCr, showStatus, showBalance].filter(Boolean).length;
-  // Keep opening-balance row shape aligned to currently visible print columns.
-  const labelColSpan = colSpan - visibleDataCols;
-  if (labelColSpan < 1) {
-    return [[{ text: 'Opening Balance', colSpan, bold: true, alignment: 'left', fontSize: 9, noWrap: true }]];
-  }
 
-  // Bill-wise: show outstanding in Balance column (0.00 when Paid/Settled)
-  const obAmount = Math.abs(openingBalNum);
-  const obOutstanding = isBillWise ? (p.openingBalanceOutstanding ?? obAmount) : obAmount;
-  const signedOutstanding = openingBalNum >= 0 ? obOutstanding : -obOutstanding;
-  const balanceDisplayText = isBillWise
-    ? (p.context === 'item' && p.stockView === 'qty'
-        ? `${Math.abs(signedOutstanding).toFixed(2)} ${p.displayUnit || ''}`.trim()
-        : formatRunning(signedOutstanding))
-    : displayOpeningText;
+  const factor =
+    p.context === "item" && p.stockView === "qty"
+      ? getConversionFactor(findItem(p.itemsData, p.contextId), p.displayUnit)
+      : 1;
 
-  const balanceCell: TableCell = {
-    text: balanceDisplayText,
-    alignment: 'right',
-    bold: true,
-    color: palette.balanceSigned(signedOutstanding),
-    fontSize: getAutoFontSize(typeof balanceDisplayText === 'string' ? balanceDisplayText : '', 9),
-    noWrap: true
-  };
+  const buildOneRow = (
+    spec: LedgerOpeningPrintRow,
+    applyBillWiseExtras: boolean
+  ): TableCell[][] => {
+    const openingBalNum = spec.signedBalance / factor;
+    const openingText = formatRunning(openingBalNum);
+    let displayOpeningText: string = typeof openingText === "string" ? openingText : "-";
+    if (p.context === "item" && p.stockView === "qty") {
+      displayOpeningText = `${openingBalNum.toFixed(2)} ${p.displayUnit || ""}`.trim() || "-";
+    }
 
-  const debitCell: TableCell = {
-    text: displayOpeningBalanceDr,
-    alignment: 'right',
-    bold: true,
-    color: palette.debit,
-    fontSize: getAutoFontSize(displayOpeningBalanceDr, 9),
-    noWrap: true
-  };
+    const openingBalanceDr = openingBalNum > 0 ? openingBalNum : 0;
+    const openingBalanceCr = openingBalNum < 0 ? Math.abs(openingBalNum) : 0;
 
-  const creditCell: TableCell = {
-    text: displayOpeningBalanceCr,
-    alignment: 'right',
-    bold: true,
-    color: palette.credit,
-    fontSize: getAutoFontSize(displayOpeningBalanceCr, 9),
-    noWrap: true
-  };
+    let displayOpeningBalanceDr = "-";
+    let displayOpeningBalanceCr = "-";
+    if (p.context === "item" && p.stockView === "qty") {
+      displayOpeningBalanceDr =
+        openingBalanceDr > 0 ? `${openingBalanceDr.toFixed(2)} ${p.displayUnit || ""}`.trim() : "-";
+      displayOpeningBalanceCr =
+        openingBalanceCr > 0 ? `${openingBalanceCr.toFixed(2)} ${p.displayUnit || ""}`.trim() : "-";
+    } else {
+      displayOpeningBalanceDr =
+        openingBalanceDr > 0 ? formatCurrencyForPrint(openingBalanceDr, { noSuffix: true }) : "-";
+      displayOpeningBalanceCr =
+        openingBalanceCr > 0 ? formatCurrencyForPrint(openingBalanceCr, { noSuffix: true }) : "-";
+    }
 
-  // pdfmake requires row length = table column count: add {} placeholders for each colSpan
-  const labelCell: TableCell = { text: 'Opening Balance', colSpan: labelColSpan, bold: true, alignment: 'left', fontSize: 9, noWrap: true };
-  const placeholders = Array.from({ length: labelColSpan - 1 }, () => ({}));
+    const obAmount = Math.abs(openingBalNum);
+    const obOutstanding = applyBillWiseExtras
+      ? p.openingBalanceOutstanding ?? obAmount
+      : obAmount;
+    const signedOutstanding = openingBalNum >= 0 ? obOutstanding : -obOutstanding;
+    const balanceDisplayText = applyBillWiseExtras
+      ? p.context === "item" && p.stockView === "qty"
+        ? `${Math.abs(signedOutstanding).toFixed(2)} ${p.displayUnit || ""}`.trim()
+        : formatRunning(signedOutstanding)
+      : displayOpeningText;
 
-  if (isBillWise) {
-    const obStatusLabel = obOutstanding <= 0 ? 'Paid' : obOutstanding >= obAmount ? 'Unpaid' : 'Partial';
-    const obNos = p.openingBalanceLinkedVoucherNos ?? [];
-    const vouchers = p.vouchers ?? [];
-    const partyId = p.contextId ?? "";
-    const getOBAmountForVoucher = (no: string): number => {
-      const v = vouchers.find((x: any) => (x.voucherNumber ?? x.voucher_number ?? "") === no);
-      if (!v) return 0;
-      if (v.type === "sale" || v.type === "sale_service" || v.type === "purchase" || v.type === "purchase_service")
-        return Number((v as any).openingBalanceAllocated) || 0;
-      const allocs = (v.allocations as { voucherId: string; linkedAccountId?: string }[] | undefined) || [];
-      const obAlloc = allocs.find((a: any) => a.voucherId === OPENING_BALANCE_VOUCHER_ID);
-      if (!obAlloc) return 0;
-      if (v.type === "journal" && (obAlloc as any).linkedAccountId && partyId)
-        return String((obAlloc as any).linkedAccountId) === String(partyId) ? getAllocationTotal(obAlloc) : 0;
-      return getAllocationTotal(obAlloc);
-    };
-    const decimalPlaces = p.company.decimalPlaces ?? 2;
-    const obDetailContent = obNos.length && p.showNarration
-      ? obNos.flatMap((no, i) => {
-          const amt = vouchers.length ? getOBAmountForVoucher(no) : 0;
-          const displayNo = no === "Opening Balance" ? "Opening" : no;
-          const label = amt > 0 ? `${displayNo}) ${formatVoucherAmount(amt, decimalPlaces)}` : displayNo;
-          return [
-            ...(i > 0 ? [{ text: " + ", fontSize: 7 }] : []),
-            { text: label, color: palette.billWiseVoucher(i), fontSize: 7 },
-          ];
-        })
-      : [];
-    const statusCell: TableCell = {
-      text: obStatusLabel,
-      color: obStatusLabel === 'Paid' ? palette.paid : palette.unpaid,
-      fontSize: 9,
-      alignment: 'left',
+    const balanceCell: TableCell = {
+      text: balanceDisplayText,
+      alignment: "right",
+      bold: true,
+      color: palette.balanceSigned(signedOutstanding),
+      fontSize: getAutoFontSize(typeof balanceDisplayText === "string" ? balanceDisplayText : "", 9),
       noWrap: true,
     };
-    const mainRow: TableCell[] = [labelCell, ...placeholders];
-    if (showDr) mainRow.push(debitCell);
-    if (showCr) mainRow.push(creditCell);
-    if (showStatus) mainRow.push(statusCell);
-    if (showBalance) mainRow.push(balanceCell);
-    if (obDetailContent.length === 0) return [mainRow];
-    // Sub-row: voucher details status se balance tak span (transaction row jaisa). pdfmake needs placeholder cells for colSpan.
-    const subRow: TableCell[] = [{ text: '', colSpan: labelColSpan, style: 'narrationRow' }];
-    for (let i = 1; i < labelColSpan; i++) subRow.push({ text: '' });
-    if (showDr) subRow.push({ text: '', style: 'narrationRow' });
-    if (showCr) subRow.push({ text: '', style: 'narrationRow' });
-    subRow.push({ text: obDetailContent, colSpan: 2, alignment: 'left', style: 'narrationRow', noWrap: false });
-    subRow.push({ text: '' });
-    return [mainRow, subRow];
+    const debitCell: TableCell = {
+      text: displayOpeningBalanceDr,
+      alignment: "right",
+      bold: true,
+      color: palette.debit,
+      fontSize: getAutoFontSize(displayOpeningBalanceDr, 9),
+      noWrap: true,
+    };
+    const creditCell: TableCell = {
+      text: displayOpeningBalanceCr,
+      alignment: "right",
+      bold: true,
+      color: palette.credit,
+      fontSize: getAutoFontSize(displayOpeningBalanceCr, 9),
+      noWrap: true,
+    };
+
+    const dateCells: TableCell[] = [];
+    if (showDate) {
+      const d = spec.rowDate;
+      if (p.dateSystem === "Both") {
+        dateCells.push({
+          text: d ? formatDateBS(d) : "",
+          fontSize: 9,
+          noWrap: true,
+        });
+        dateCells.push({
+          text: d ? formatDate(d) : "",
+          fontSize: 9,
+          noWrap: true,
+        });
+      } else {
+        dateCells.push({
+          text: d ? (p.dateSystem === "AD" ? formatDate(d) : formatDateBS(d)) : "",
+          fontSize: 9,
+          noWrap: true,
+        });
+      }
+    }
+
+    const labelColSpan =
+      dateCells.length +
+      (showType ? 1 : 0) +
+      (showVoucherNo ? 1 : 0) +
+      (p.context === "daybook" ? 1 : 0) +
+      (showUser ? 1 : 0);
+
+    const row: TableCell[] = [...dateCells];
+
+    if (showType) {
+      row.push({ text: spec.pillLabel, bold: true, fontSize: 9, noWrap: true });
+    } else if (labelColSpan > 0) {
+      row.push({
+        text: spec.pillLabel,
+        colSpan: labelColSpan,
+        bold: true,
+        alignment: "left",
+        fontSize: 9,
+        noWrap: true,
+      });
+      for (let i = 1; i < labelColSpan; i++) row.push({});
+    }
+
+    if (showType) {
+      if (showVoucherNo) row.push({});
+      if (p.context === "daybook") row.push({});
+      if (showUser) row.push({});
+    }
+
+    if (labelColSpan < 1 && visibleDataCols === 0) {
+      return [[{ text: spec.pillLabel, colSpan, bold: true, alignment: "left", fontSize: 9, noWrap: true }]];
+    }
+
+    if (applyBillWiseExtras && isBillWise) {
+      const obStatusLabel =
+        obOutstanding <= 0 ? "Paid" : obOutstanding >= obAmount ? "Unpaid" : "Partial";
+      const obNos = p.openingBalanceLinkedVoucherNos ?? [];
+      const vouchers = p.vouchers ?? [];
+      const partyId = p.contextId ?? "";
+      const getOBAmountForVoucher = (no: string): number => {
+        const v = vouchers.find((x: any) => (x.voucherNumber ?? x.voucher_number ?? "") === no);
+        if (!v) return 0;
+        if (
+          v.type === "sale" ||
+          v.type === "sale_service" ||
+          v.type === "purchase" ||
+          v.type === "purchase_service"
+        )
+          return Number((v as any).openingBalanceAllocated) || 0;
+        const allocs =
+          (v.allocations as { voucherId: string; linkedAccountId?: string }[] | undefined) || [];
+        const obAlloc = allocs.find((a: any) => a.voucherId === OPENING_BALANCE_VOUCHER_ID);
+        if (!obAlloc) return 0;
+        if (v.type === "journal" && (obAlloc as any).linkedAccountId && partyId)
+          return String((obAlloc as any).linkedAccountId) === String(partyId)
+            ? getAllocationTotal(obAlloc)
+            : 0;
+        return getAllocationTotal(obAlloc);
+      };
+      const decimalPlaces = p.company.decimalPlaces ?? 2;
+      const obDetailContent =
+        obNos.length && p.showNarration
+          ? obNos.flatMap((no, i) => {
+              const amt = vouchers.length ? getOBAmountForVoucher(no) : 0;
+              const displayNo = no === "Opening Balance" ? "Opening" : no;
+              const label = amt > 0 ? `${displayNo}) ${formatVoucherAmount(amt, decimalPlaces)}` : displayNo;
+              return [
+                ...(i > 0 ? [{ text: " + ", fontSize: 7 }] : []),
+                { text: label, color: palette.billWiseVoucher(i), fontSize: 7 },
+              ];
+            })
+          : [];
+      const statusCell: TableCell = {
+        text: obStatusLabel,
+        color: obStatusLabel === "Paid" ? palette.paid : palette.unpaid,
+        fontSize: 9,
+        alignment: "left",
+        noWrap: true,
+      };
+      if (showDr) row.push(debitCell);
+      if (showCr) row.push(creditCell);
+      if (showStatus) row.push(statusCell);
+      if (showBalance) row.push(balanceCell);
+      ensureRowLength(row, colSpan);
+      if (obDetailContent.length === 0) return [row];
+      const subRow: TableCell[] = [{ text: "", colSpan: labelColSpan, style: "narrationRow" }];
+      for (let i = 1; i < labelColSpan; i++) subRow.push({ text: "" });
+      if (showDr) subRow.push({ text: "", style: "narrationRow" });
+      if (showCr) subRow.push({ text: "", style: "narrationRow" });
+      subRow.push({
+        text: obDetailContent,
+        colSpan: 2,
+        alignment: "left",
+        style: "narrationRow",
+        noWrap: false,
+      });
+      subRow.push({ text: "" });
+      ensureRowLength(subRow, colSpan);
+      return [row, subRow];
+    }
+
+    if (showDr) row.push(debitCell);
+    if (showCr) row.push(creditCell);
+    if (showBalance) row.push(balanceCell);
+    ensureRowLength(row, colSpan);
+    return [row];
+  };
+
+  const result: TableCell[][] = [];
+  openingRows.forEach((spec, index) => {
+    const applyBillWiseExtras = isBillWise && index === openingRows.length - 1;
+    result.push(...buildOneRow(spec, applyBillWiseExtras));
+  });
+
+  const narrationTrimmed = (p.openingBalanceNarration ?? "").trim();
+  if (p.showNarration && narrationTrimmed && result.length > 0) {
+    const lastMainRow = result[result.length - 1];
+    const narrationSpan = Math.max(1, colSpan - visibleDataCols);
+    const subRow: TableCell[] = [
+      {
+        text: [{ text: "Narration: ", bold: true }, narrationTrimmed],
+        colSpan: narrationSpan,
+        fontSize: 8,
+        italics: true,
+        style: "narrationRow",
+      },
+    ];
+    for (let i = 1; i < narrationSpan; i++) subRow.push({});
+    for (let i = narrationSpan; i < colSpan; i++) subRow.push({});
+    result.push(subRow);
   }
-  const row: TableCell[] = [labelCell, ...placeholders];
-  if (showDr) row.push(debitCell);
-  if (showCr) row.push(creditCell);
-  if (showBalance) row.push(balanceCell);
-  return [row];
-}
+
+  return result.length > 0 ? result : null;
+};
 
 const buildTableHeader = (p: PrintPayload): TableCell[] => {
   const boldHeader = (text: string): TableCell => ({ text, bold: true, fontSize: 9, noWrap: true }); 
@@ -1657,7 +1855,110 @@ function getOverdueDays(dueDate: any): number {
   return Math.floor((today.getTime() - dueOnly.getTime()) / (24 * 60 * 60 * 1000));
 }
 
-const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDateBS: Function, formatCurrencyForPrint: Function, formatRunning: Function, ledgerColCount: number): TableCell[][] => {
+const SPEND_WISE_PRINT_HGRID_COLOR = "#aaaaaa";
+/** App `spend-wise-gap-row` = 12px — print gap row margin (pt) se match */
+const SPEND_WISE_PRINT_GROUP_GAP_MARGIN_PT = 4.5;
+
+function spendWiseRowGroupId(row: any): string {
+  return String(row?._spendWiseGroupId ?? "").trim();
+}
+
+/** Group box band — last row on page / print slice par bhi bottom edge (pagination clip). */
+function spendWiseGroupEndsAfterRow(row: any, nextRow: any | undefined): boolean {
+  if (row?._spendWiseGroupLast === true) return true;
+  const gid = spendWiseRowGroupId(row);
+  if (!nextRow || nextRow.type === FISCAL_YEAR_PARTITION_ROW_TYPE) return true;
+  const nextGid = spendWiseRowGroupId(nextRow);
+  if (!gid || !nextGid || nextGid !== gid) return true;
+  return false;
+}
+
+function buildSpendWisePrintGroupBottomCap(colCount: number, color: string): TableCell[] {
+  return Array.from({ length: colCount }, (_, idx) => ({
+    text: "",
+    border: [idx === 0, false, idx === colCount - 1, true],
+    borderColor: [color, color, color, color],
+    margin: [0, 0, 0, 0],
+  }));
+}
+
+function buildSpendWisePrintGroupGapRow(colCount: number): TableCell[] {
+  const row: TableCell[] = [
+    {
+      text: " ",
+      colSpan: colCount,
+      style: "spendWiseGapRow",
+      border: [false, false, false, false],
+      margin: [0, SPEND_WISE_PRINT_GROUP_GAP_MARGIN_PT, 0, SPEND_WISE_PRINT_GROUP_GAP_MARGIN_PT],
+    },
+  ];
+  for (let i = 1; i < colCount; i++) row.push({});
+  return row;
+}
+
+function appendSpendWiseGroupTail(resultRows: TableCell[][], colCount: number, color: string): void {
+  resultRows.push(buildSpendWisePrintGroupBottomCap(colCount, color));
+  resultRows.push(buildSpendWisePrintGroupGapRow(colCount));
+}
+
+/** Spend-wise print group box — top/bottom + left/right side lines (screen card jaisa). */
+function applySpendWisePrintBorders(
+  cells: TableCell[],
+  opts: { top: boolean; bottom: boolean; color: string }
+): TableCell[] {
+  const count = cells.length;
+  if (count === 0) return cells;
+
+  const bottomColor = opts.bottom ? opts.color : SPEND_WISE_PRINT_HGRID_COLOR;
+
+  const ensureCellText = (c: any) => {
+    const hasRenderableContent =
+      "text" in c ||
+      "stack" in c ||
+      "table" in c ||
+      "columns" in c ||
+      "image" in c ||
+      "canvas" in c ||
+      "svg" in c ||
+      "qr" in c ||
+      "ul" in c ||
+      "ol" in c;
+    if (!hasRenderableContent) c.text = "";
+    return c;
+  };
+
+  const first: any = cells[0];
+  const colSpan = typeof first?.colSpan === "number" ? first.colSpan : 1;
+  // Narration sub-row: ek hi cell poori width span karti hai — right rail isi cell par lagao.
+  if (colSpan >= count) {
+    const c = ensureCellText(typeof first === "object" && first !== null ? { ...first } : { text: "" });
+    c.border = [true, opts.top, true, true];
+    c.borderColor = [
+      opts.color,
+      opts.top ? opts.color : SPEND_WISE_PRINT_HGRID_COLOR,
+      opts.color,
+      bottomColor,
+    ];
+    const out: TableCell[] = [c];
+    for (let i = 1; i < count; i++) out.push({});
+    return out;
+  }
+
+  return cells.map((cell, idx) => {
+    const c: any = typeof cell === "object" && cell !== null ? { ...cell } : { text: String(cell ?? "") };
+    ensureCellText(c);
+    c.border = [idx === 0, opts.top, idx === count - 1, true];
+    c.borderColor = [
+      idx === 0 ? opts.color : SPEND_WISE_PRINT_HGRID_COLOR,
+      opts.top ? opts.color : SPEND_WISE_PRINT_HGRID_COLOR,
+      idx === count - 1 ? opts.color : SPEND_WISE_PRINT_HGRID_COLOR,
+      bottomColor,
+    ];
+    return c as TableCell;
+  });
+}
+
+const buildTableRow = (row: any, nextRow: any | undefined, p: PrintPayload, formatDate: Function, formatDateBS: Function, formatCurrencyForPrint: Function, formatRunning: Function, ledgerColCount: number): TableCell[][] => {
     const palette = getPrintColorPalette(p.printColorMode);
     if (row.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
       const n = Math.max(1, ledgerColCount);
@@ -1675,6 +1976,96 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
       const mainRow: TableCell[] = [cell];
       for (let i = 1; i < n; i++) mainRow.push({});
       return [mainRow];
+    }
+
+    if (row._spendWiseEmbeddedOpening === true && p.spendWise === true) {
+      const pillLabel = row._spendWiseOpeningPillLabel || "Opening Balance";
+      const rawDate = row.date instanceof Date ? row.date : row.date ? new Date(row.date) : null;
+      const validDate = rawDate instanceof Date && !isNaN(rawDate.getTime()) ? rawDate : null;
+      const openingBalNum = Number(row.runningBalance) || 0;
+      const debit = Number(row.debit) || 0;
+      const credit = Number(row.credit) || 0;
+      const narration = String(row.narration || "").trim();
+      const spendWiseColor = palette.spendWiseBorder(Number(row._spendWiseGroupColorIndex) || 0);
+
+      const dateCells: TableCell[] = [];
+      if (isColVisible(p, "date")) {
+        if (p.dateSystem === "Both") {
+          dateCells.push({ text: validDate ? formatDateBS(validDate) : "", fontSize: 9, noWrap: true });
+          dateCells.push({ text: validDate ? formatDate(validDate) : "", fontSize: 9, noWrap: true });
+        } else {
+          dateCells.push({
+            text: validDate ? (p.dateSystem === "AD" ? formatDate(validDate) : formatDateBS(validDate)) : "",
+            fontSize: 9,
+            noWrap: true,
+          });
+        }
+      }
+
+      const mainRow: TableCell[] = [...dateCells];
+      if (isColVisible(p, "type")) mainRow.push({ text: pillLabel, bold: true, fontSize: 9, noWrap: true });
+      if (isColVisible(p, "voucherNo")) mainRow.push({ text: "", fontSize: 9 });
+      if (isColVisible(p, "user")) mainRow.push({ text: "", fontSize: 9 });
+      if (isColVisible(p, "file")) mainRow.push({ text: "-", fontSize: 9, alignment: "center", noWrap: true });
+      if (isColVisible(p, "dr")) {
+        mainRow.push({
+          text: debit > 0 ? formatCurrencyForPrint(debit, { noSuffix: true }) : "-",
+          alignment: "right",
+          color: palette.debit,
+          fontSize: 9,
+          bold: true,
+          noWrap: true,
+        });
+      }
+      if (isColVisible(p, "cr")) {
+        mainRow.push({
+          text: credit > 0 ? formatCurrencyForPrint(credit, { noSuffix: true }) : "-",
+          alignment: "right",
+          color: palette.credit,
+          fontSize: 9,
+          bold: true,
+          noWrap: true,
+        });
+      }
+      if (isColVisible(p, "runningBalance")) {
+        mainRow.push({
+          text: formatRunning(openingBalNum),
+          alignment: "right",
+          bold: true,
+          color: palette.balanceSigned(openingBalNum),
+          fontSize: 9,
+          noWrap: true,
+        });
+      }
+      ensureRowLength(mainRow, ledgerColCount);
+
+      const mainHasSubRow = Boolean(p.showNarration && narration);
+      const groupEnds = spendWiseGroupEndsAfterRow(row, nextRow);
+      const mainTop = row._spendWiseGroupFirst === true;
+      const mainBottom = groupEnds ? false : false;
+      const resultRows: TableCell[][] = [
+        applySpendWisePrintBorders(mainRow, { top: mainTop, bottom: mainBottom, color: spendWiseColor }),
+      ];
+
+      if (mainHasSubRow) {
+        const subRow: TableCell[] = [
+          {
+            text: [{ text: "Narration: ", bold: true }, narration],
+            colSpan: mainRow.length,
+            fontSize: 7,
+            italics: true,
+            style: "narrationRow",
+            margin: [10, 0, 0, 0],
+          },
+        ];
+        for (let i = 1; i < mainRow.length; i++) subRow.push({});
+        const subBottom = false;
+        resultRows.push(
+          applySpendWisePrintBorders(subRow, { top: false, bottom: subBottom, color: spendWiseColor })
+        );
+      }
+      if (groupEnds) appendSpendWiseGroupTail(resultRows, mainRow.length, spendWiseColor);
+      return resultRows;
     }
 
     const d = row.date?.toDate ? row.date.toDate() : new Date(row.date);
@@ -1885,34 +2276,13 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
       }
     }
 
-    // Spend-wise print: draw grouped container-like borders using first/child/last metadata.
-    const applySpendWiseBorders = (cells: TableCell[], opts: { top: boolean; bottom: boolean; color: string }) => {
-      const count = cells.length;
-      return cells.map((cell, idx) => {
-        const c: any = typeof cell === "object" && cell !== null ? { ...cell } : { text: String(cell ?? "") };
-        // pdfmake rejects cells that only contain border metadata; keep empty placeholders as valid text cells.
-        const hasRenderableContent =
-          "text" in c ||
-          "stack" in c ||
-          "table" in c ||
-          "columns" in c ||
-          "image" in c ||
-          "canvas" in c ||
-          "svg" in c ||
-          "qr" in c ||
-          "ul" in c ||
-          "ol" in c;
-        if (!hasRenderableContent) c.text = "";
-        // Keep only top/bottom colored lines in print (box sides optional), as requested.
-        c.border = [false, opts.top, false, opts.bottom];
-        c.borderColor = [opts.color, opts.color, opts.color, opts.color];
-        return c as TableCell;
-      });
-    };
-
+    // Spend-wise print: draw grouped container borders (top/bottom + left/right sides).
     const inSpendWiseGroup = Boolean(
       p.spendWise === true &&
-      (row._spendWiseGroupFirst === true || row._spendWiseChild === true || row._spendWiseGroupLast === true)
+      (row._spendWiseEmbeddedOpening === true ||
+        row._spendWiseGroupFirst === true ||
+        row._spendWiseChild === true ||
+        row._spendWiseGroupLast === true)
     );
     const spendWiseColor = palette.spendWiseBorder(Number(row._spendWiseGroupColorIndex) || 0);
 
@@ -1929,11 +2299,12 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
       (isBillWise && (p.showNarration && (narration || statusDetailText || overdueDaysText || isOverdueRow))) ||
       (!isBillWise && p.showNarration && narration)
     );
+    const groupEnds = spendWiseGroupEndsAfterRow(row, nextRow);
     const mainTop = row._spendWiseGroupFirst === true;
-    const mainBottom = row._spendWiseGroupLast === true && !mainHasSubRow;
+    const mainBottom = false;
 
     const mainRowFinal: TableCell[] = inSpendWiseGroup
-      ? applySpendWiseBorders(mainRow, { top: mainTop, bottom: mainBottom, color: spendWiseColor })
+      ? applySpendWisePrintBorders(mainRow, { top: mainTop, bottom: mainBottom, color: spendWiseColor })
       : mainRow;
 
     const resultRows: TableCell[][] = [mainRowFinal];
@@ -1986,19 +2357,15 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
         for (let i = 1; i < mainRow.length; i++) subRow.push({});
       }
       const subTop = false;
-      // Always show group closing line at the bottom of the last grouped row (including narration sub-row).
-      const subBottom = inSpendWiseGroup && row._spendWiseGroupLast === true;
+      const subBottom = false;
       const subRowFinal: TableCell[] = inSpendWiseGroup
-        ? applySpendWiseBorders(subRow, { top: subTop, bottom: subBottom, color: spendWiseColor })
+        ? applySpendWisePrintBorders(subRow, { top: subTop, bottom: subBottom, color: spendWiseColor })
         : subRow;
       resultRows.push(subRowFinal);
     }
 
-    // Keep a small visual gap after each spend-wise group so containers don't touch.
-    if (inSpendWiseGroup && row._spendWiseGroupLast === true) {
-      const spacer: TableCell[] = [{ text: '', colSpan: mainRow.length, style: 'narrationRow', margin: [0, 1, 0, 1] }];
-      for (let i = 1; i < mainRow.length; i++) spacer.push({});
-      resultRows.push(spacer);
+    if (inSpendWiseGroup && groupEnds) {
+      appendSpendWiseGroupTail(resultRows, mainRow.length, spendWiseColor);
     }
     
     return resultRows;

@@ -14,6 +14,12 @@ import { StatementCheckModeFooterControls } from "@/components/vouchers/Statemen
 import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { useLedgerDetailSessionMemory } from "@/hooks/useLedgerDetailSessionMemory";
+import {
+  ledgerDetailSessionStorageKey,
+  writeLedgerDetailSessionSnapshot,
+  type LedgerDetailViewMode,
+} from "@/lib/ledgerDetailSessionMemory";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import {
   sortTransactionsWithFiscalMergeForCompany,
@@ -76,6 +82,7 @@ import { format, startOfDay } from "date-fns";
 import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { openPrintDirect } from "@/lib/printDirect";
+import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import { useCompany } from "@/hooks/useCompany";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { useDateRangeTimestamps } from "@/hooks/useLedgerDetailDateRange";
@@ -223,6 +230,18 @@ export default function ItemDetails({
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const ledgerViewMode: LedgerDetailViewMode =
+    balanceMode === "bill_wise" ? "bill_wise" : "statement";
+  const ledgerSessionKey = useMemo(
+    () =>
+      companyId && initialItem?.id
+        ? ledgerDetailSessionStorageKey(companyId, "item", initialItem.id, ledgerViewMode)
+        : null,
+    [companyId, initialItem?.id, ledgerViewMode]
+  );
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [ledgerViewMode]);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -332,10 +351,6 @@ export default function ItemDetails({
     entityId: initialItem.id,
     onUpdated: onItemUpdated,
   });
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [currentItem?.id]);
 
   const mobileSearchNames = useMemo(
     () => ({
@@ -525,6 +540,12 @@ export default function ItemDetails({
 
   const handleEditVoucher = (voucher: any) => {
     setSelectedVoucher(voucher);
+    if (ledgerSessionKey && voucher?.id) {
+      writeLedgerDetailSessionSnapshot(ledgerSessionKey, {
+        page: currentPage,
+        openVoucherId: String(voucher.id),
+      });
+    }
     openingModalRef.current = true;
     openModalInUrl();
     setIsVoucherDialogOpen(true);
@@ -630,6 +651,22 @@ export default function ItemDetails({
     pageSortOrder: sortOrder,
   });
 
+  useLedgerDetailSessionMemory({
+    companyId: companyId ?? undefined,
+    context: "item",
+    contextId: currentItem?.id,
+    viewMode: ledgerViewMode,
+    totalPages,
+    currentPage,
+    setCurrentPage,
+    vouchers,
+    selectedVoucherId: selectedVoucher?.id ?? null,
+    isVoucherDialogOpen,
+    setSelectedVoucher,
+    setIsVoucherDialogOpen,
+    onRestoreVoucherDialog: isMobile ? openModalInUrl : undefined,
+  });
+
   /** Book OB row: slice list ke shuru par; Dated OB = slice se pehle txn ki date (party jaisa). */
   const ledgerOpeningPeriodStartDate = useMemo(() => {
     const list = ledgerPagingTransactions as any[];
@@ -665,40 +702,59 @@ export default function ItemDetails({
 
   const handlePrint = () => {
     if (!company || !currentItem) return;
-    // Keep item print headers aligned with the selected column visibility in table.
     const printVisibleColumns = { ...visibleColumns, status: false };
-    
     const printItemPayload = {
-        ...currentItem,
-        unitConversions: currentItem.unitConversions || [] 
+      ...currentItem,
+      unitConversions: currentItem.unitConversions || [],
     };
 
-    openPrintDirect({
-        company: {
+    openPrintDirect(
+      applyLedgerPageToPrintPayload(
+        {
+          company: {
             name: company.name,
             pan: company.pan,
             phone: company.phone,
             address: company.address,
             logoUrl: company.logoUrl,
+          },
+          dateSystem,
+          title: `Item Ledger: ${currentItem?.name}`,
+          context: "item",
+          contextId: currentItem.id,
+          dateRangeText: dateRange?.from
+            ? `${formatDate(dateRange.from)} - ${dateRange.to ? formatDate(dateRange.to) : ""}`
+            : "All Time",
+          vouchersCount: paginatedTransactions.length,
+          openingBalance: desktopPageLedgerStats.openingForPage,
+          openingBalanceDate: (currentItem as any).openingBalanceDate,
+          openingBalanceNarration: currentItem.openingBalanceNarration ?? null,
+          transactions: paginatedTransactions,
+          showNarration: showNarration,
+          includeNotes: includeNotesInTable,
+          visibleColumns: printVisibleColumns,
+          stockView: stockView,
+          displayUnit: displayUnit,
+          itemsData: [printItemPayload],
         },
-        dateSystem,
-        title: `Item Ledger: ${currentItem?.name}`,
-        context: "item",
-        contextId: currentItem.id, 
-        dateRangeText: dateRange?.from ? `${formatDate(dateRange.from)} - ${dateRange.to ? formatDate(dateRange.to) : ''}` : 'All Time',
-        vouchersCount: processedTransactions.length,
-        openingBalance: openingBalanceForPeriod,
-        openingBalanceDate: (currentItem as any).openingBalanceDate,
-        openingBalanceNarration: currentItem.openingBalanceNarration ?? null,
-        transactions: processedTransactions,
-        showNarration: showNarration,
-        includeNotes: includeNotesInTable,
-        visibleColumns: printVisibleColumns,
-        stockView: stockView,
-        displayUnit: displayUnit,
-        itemsData: [printItemPayload] 
-    }, true);
-};
+        {
+          paginatedTransactions,
+          openingForPage: desktopPageLedgerStats.openingForPage,
+          periodDrForPage: desktopPageLedgerStats.periodDrForPage,
+          periodCrForPage: desktopPageLedgerStats.periodCrForPage,
+          closingForPage: desktopPageLedgerStats.closingForPage,
+          booksOpeningBalance: masterItemBooksOpening,
+          ledgerShowBookOpeningRow: rowsPerPage <= 0 || desktopPageLedgerStats.sliceStart === 0,
+          ledgerDateFilterActive: hasLedgerDateFilter,
+          openingBalancePeriodStartDate: ledgerOpeningPeriodStartDate,
+          masterOpeningBalanceDate: (currentItem as any).openingBalanceDate,
+          dateRange,
+        }
+      ),
+      true
+    );
+  };
+
   const handlePartyColumnToggle = (checked: boolean) => {
     // Keep Party column preference sticky within the current browser session.
     setShowPartyColumn(checked);

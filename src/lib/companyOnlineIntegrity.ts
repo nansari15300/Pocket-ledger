@@ -6,10 +6,11 @@ import { demoteCompanyToLocal } from "@/lib/companyDemote";
 import type { LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { listLocalCompanies, removeLocalCompanyById } from "@/lib/localCompanyStore";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
+import { isCompanyPendingRestoreCloudPush } from "@/lib/restoreCloudBackgroundSync";
 
 /** Current user company ka owner hai ya nahi (shared vs My companies split). */
 export function isCurrentUserOwnerOfCompanyRow(
-  row: Pick<LocalCompanyDoc, "ownerId" | "ownerEmail">,
+  row: Pick<LocalCompanyDoc, "ownerId" | "ownerEmail"> | { ownerId?: string; ownerEmail?: string },
   user: { uid: string; email: string | null }
 ): boolean {
   const uid = (user.uid || "").trim();
@@ -22,6 +23,59 @@ export function isCurrentUserOwnerOfCompanyRow(
     .toLowerCase()
     .trim();
   return !!oe && !!ue && oe === ue;
+}
+
+type CompanyShareRow = {
+  ownerId?: string;
+  ownerEmail?: string;
+  sharedWith?: unknown;
+  sharedWithEmails?: unknown;
+  sharedWithEmailsLower?: unknown;
+  driveSharedJoin?: unknown;
+};
+
+/** Shared-with-you list: emails (legacy + lower) + sharedWith uid/email entries. */
+export function isCurrentUserSharedOnCompanyRow(
+  row: CompanyShareRow,
+  user: { uid: string; email: string | null }
+): boolean {
+  if ((row as { driveSharedJoin?: unknown }).driveSharedJoin === true) return true;
+  if (isCurrentUserOwnerOfCompanyRow(row, user)) return false;
+
+  const ue = String(user.email || "")
+    .toLowerCase()
+    .trim();
+  const uid = String(user.uid || "").trim();
+
+  const emailTokens = new Set<string>();
+  for (const list of [row.sharedWithEmails, row.sharedWithEmailsLower]) {
+    if (!Array.isArray(list)) continue;
+    for (const e of list) {
+      const t = String(e || "").toLowerCase().trim();
+      if (t) emailTokens.add(t);
+    }
+  }
+  if (ue && emailTokens.has(ue)) return true;
+
+  const sharedWith = Array.isArray(row.sharedWith) ? row.sharedWith : [];
+  for (const entry of sharedWith) {
+    if (!entry || typeof entry !== "object") continue;
+    const su = entry as { uid?: string; email?: string };
+    if (uid && su.uid && String(su.uid).trim() === uid) return true;
+    const se = String(su.email || "").toLowerCase().trim();
+    if (ue && se && se === ue) return true;
+  }
+  return false;
+}
+
+/** Header / registry: owner > shared > stored isOwned flag. */
+export function resolveCompanyIsOwnedForUser(
+  row: CompanyShareRow & { isOwned?: boolean },
+  user: { uid: string; email: string | null }
+): boolean {
+  if (isCurrentUserOwnerOfCompanyRow(row, user)) return true;
+  if (isCurrentUserSharedOnCompanyRow(row, user)) return false;
+  return row.isOwned === true;
 }
 
 export type ReconcileOnlineMirrorsResult = {
@@ -63,6 +117,7 @@ export async function reconcileOnlineMirrorsWithServer(user: {
 
   for (const row of rows) {
     const id = row.id;
+    if (isCompanyPendingRestoreCloudPush(id)) continue;
     const isOwner = isCurrentUserOwnerOfCompanyRow(row, user);
     const storageLocal = String(row.storageOption || "local").toLowerCase() === "local";
     const isDriveSharedJoin = (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;
@@ -88,6 +143,10 @@ export async function reconcileOnlineMirrorsWithServer(user: {
       } catch (e: unknown) {
         const code = (e as { code?: string })?.code;
         if (code === "permission-denied" || code === "PERMISSION_DENIED") {
+          // EXE cold start: auth token email abhi ready nahi — local shared row clearly valid ho to mat udao.
+          if (isCurrentUserSharedOnCompanyRow(row, user)) {
+            continue;
+          }
           await removeLocalCompanyById(id, { firebaseUid: user.uid });
           removedIds.push(id);
           changed = true;

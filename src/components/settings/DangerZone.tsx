@@ -46,29 +46,35 @@ import type { Company } from "@/hooks/useCompany";
 import { sendRecycleBinMovedAlert } from "@/lib/transactionAlerts";
 import {
   isOnlineCompanyRow,
+  isDeviceLocalCompany,
   buildDuplicateNameCountMap,
   companySelectOptionLabel,
+  mergeOwnedCompaniesForUser,
 } from "@/lib/companyStorageKind";
+import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 
 export function DangerZone() {
   const { user, customUser } = useAuth();
-  const { company, companyId, allCompanies, clearCompanyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
+  const { company, companyId, allCompanies, allCompaniesRegistry, clearCompanyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [deleteConfirmationText, setDeleteConfirmationText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [selectedCompanyToDeleteId, setSelectedCompanyToDeleteId] = useState<string>("");
 
   const ownedCompanies = useMemo(() => {
-    const list = allCompanies || [];
-    return list.filter((c) => {
-      if (c.isDeleted) return false;
-      if (c.ownerId === user?.uid) return true;
-      if (customUser?.role === "SuperAdmin" && c.ownerEmail && user?.email) {
-        return c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim();
+    const shareUser = { uid: user?.uid || "", email: user?.email ?? null };
+    return mergeOwnedCompaniesForUser(
+      [allCompaniesRegistry || [], allCompanies || []],
+      user?.uid ? shareUser : null,
+      (c, u) => {
+        if (resolveCompanyIsOwnedForUser(c, u)) return true;
+        if (customUser?.role === "SuperAdmin" && c.ownerEmail && u.email) {
+          return c.ownerEmail.toLowerCase().trim() === u.email.toLowerCase().trim();
+        }
+        return false;
       }
-      return false;
-    });
-  }, [allCompanies, user?.uid, user?.email, customUser?.role]);
+    );
+  }, [allCompanies, allCompaniesRegistry, user?.uid, user?.email, customUser?.role]);
 
   const companyToDelete = useMemo(
     () => ownedCompanies.find((c) => c.id === selectedCompanyToDeleteId),
@@ -79,8 +85,8 @@ export function DangerZone() {
     const local: Company[] = [];
     const online: Company[] = [];
     for (const c of ownedCompanies) {
-      if (isOnlineCompanyRow(c)) online.push(c);
-      else local.push(c);
+      if (isDeviceLocalCompany(c)) local.push(c);
+      else online.push(c);
     }
     return { localCompaniesToDelete: local, onlineCompaniesToDelete: online };
   }, [ownedCompanies]);

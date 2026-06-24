@@ -4,6 +4,7 @@
 import * as React from "react";
 import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
+import { applyLedgerPageToPrintPayload, stripSpendWiseSyntheticOpeningMaster } from "@/lib/ledgerPagePrint";
 import type { Account } from "@/components/bank-cash/types";
 import { ReconciliationAccountButton } from "@/components/reconciliation/ReconciliationAccountButton";
 import { Button } from "@/components/ui/button";
@@ -68,6 +69,12 @@ import {
 } from "@/components/ui/select";
 import { useDate } from "@/hooks/useDate";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { useLedgerDetailSessionMemory } from "@/hooks/useLedgerDetailSessionMemory";
+import {
+  ledgerDetailSessionStorageKey,
+  writeLedgerDetailSessionSnapshot,
+  type LedgerDetailViewMode,
+} from "@/lib/ledgerDetailSessionMemory";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import { LedgerViewModePills, LedgerViewModeToggleButton } from "@/components/ui/LedgerViewModePills";
 
@@ -148,6 +155,12 @@ import {
   packFlatListByDataLineBudgetFromEnd,
   reorderSpendWiseRowsByDate,
 } from "@/lib/spendWisePagination";
+import {
+  buildSpendWiseAddedInflowVoucherIds,
+  filterSpendWiseRowsByDateRange,
+  filterSpendWiseUnapprovedOnly,
+} from "@/lib/spendWiseDateRangeGroups";
+import { applySpendWiseStatementRunningBalances } from "@/lib/spendWiseStatementRunningBalance";
 
 interface AccountDetailsProps {
   account: Account;
@@ -228,6 +241,7 @@ export function AccountDetails({
       return next;
     });
   }, []);
+  const ledgerViewMode: LedgerDetailViewMode = spendWiseView ? "spend_wise" : "statement";
   const openingModalRef = useRef(false);
 
   // Desktop Calendar State
@@ -249,6 +263,14 @@ export function AccountDetails({
     return allAccounts.find(p => p.id === initialAccount.id) || initialAccount;
   }, [allAccounts, initialAccount]);
 
+  const ledgerSessionKey = useMemo(
+    () =>
+      companyId && account?.id
+        ? ledgerDetailSessionStorageKey(companyId, "account", account.id, ledgerViewMode)
+        : null,
+    [companyId, account?.id, ledgerViewMode]
+  );
+
   const handleAccountUpdated = useMasterEntityLivePatch<Account>({
     collection: "bank_accounts",
     entityId: initialAccount.id,
@@ -262,7 +284,7 @@ export function AccountDetails({
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [account.id]);
+  }, [ledgerViewMode]);
 
   const mobileSearchNames = useMemo(
     () => ({ ...journalAccountNames, ...(userNames || {}) }),
@@ -361,6 +383,12 @@ export function AccountDetails({
     }
     openingModalRef.current = true;
     setSelectedVoucher({ ...voucher, id: resolvedId });
+    if (ledgerSessionKey && resolvedId) {
+      writeLedgerDetailSessionSnapshot(ledgerSessionKey, {
+        page: currentPage,
+        openVoucherId: resolvedId,
+      });
+    }
     openModalInUrl();
     setIsVoucherDialogOpen(true);
   };
@@ -370,6 +398,7 @@ export function AccountDetails({
   }, [handleEditVoucher]);
   
   let { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(account, 'account', dateRange, undefined, allAccounts, transactions, undefined, filters, undefined, undefined, userNames);
+  const { processedTransactions: allProcessedTransactions } = useTransactions(account, 'account', undefined, undefined, allAccounts, transactions, undefined, filters, undefined, undefined, userNames);
 
   // If special account and user can't see balance, filter transactions to only show their own.
   if (account.isSpecial && !canViewSpecialBalance) {
@@ -379,6 +408,15 @@ export function AccountDetails({
       periodCr = processedTransactions.reduce((sum, t) => sum + (t.credit || 0), 0);
       closingBalance = periodDr - periodCr;
   }
+
+  /** Spend-wise layout hamesha poori ledger se — date range baad me sirf rows hide. */
+  const spendWiseGroupingTransactions = useMemo(() => {
+    let source = allProcessedTransactions.filter((t: any) => t.type !== "note");
+    if (account.isSpecial && !canViewSpecialBalance) {
+      source = source.filter((t) => t.userId === user?.uid);
+    }
+    return source;
+  }, [allProcessedTransactions, account.isSpecial, canViewSpecialBalance, user?.uid]);
 
   // Spend Wise: never show notes. Statement: PC preference / mobile hamesha notes (includeNotesInTable).
   const baseTransactions = useMemo(() => {
@@ -400,9 +438,13 @@ export function AccountDetails({
   const displayTransactions = useMemo(() => {
     const perfStart = perfNow();
     if (!spendWiseView || !vouchers?.length) return baseTransactions;
-    const byId = new Map(baseTransactions.map((t: any) => [t.id, t]));
-    const inRangeIds = new Set(baseTransactions.map((t: any) => t.id));
+    const buildBase = spendWiseGroupingTransactions;
+    const byId = new Map(buildBase.map((t: any) => [t.id, t]));
     const accountId = account.id;
+    const getDateMs = (v: any) => {
+      const d = v.date?.toDate ? v.date.toDate() : new Date(v.date);
+      return d.getTime();
+    };
     const isInVoucher = (v: any) =>
       (v.type === "payment_in" && v.accountId === accountId) ||
       (v.type === "direct_income" && v.accountId === accountId) ||
@@ -414,36 +456,22 @@ export function AccountDetails({
         (v.type === "contra" && v.fromAccountId === accountId);
       return hasAccount && Array.isArray(v.linkedPaymentInIds) && v.linkedPaymentInIds.includes(inId);
     };
-    // Keep opening-linked inflows near Opening Balance by rendering them in a dedicated group.
+    const isOpeningLinkedIn = (v: any) =>
+      (v.linkedOpeningBalanceAccountId ?? "") === accountId &&
+      (Number(v.linkedOpeningBalanceAmount) || 0) > 0;
     const openingLinkedInIds = new Set(
       vouchers
-        .filter((v: any) =>
-          !v.isDeleted &&
-          isInVoucher(v) &&
-          (v.linkedOpeningBalanceAccountId ?? "") === accountId &&
-          (Number(v.linkedOpeningBalanceAmount) || 0) > 0 &&
-          inRangeIds.has(v.id)
-        )
+        .filter((v: any) => !v.isDeleted && isInVoucher(v) && isOpeningLinkedIn(v))
         .map((v: any) => v.id)
     );
     const openingLinkedOutIds = new Set(
       vouchers
-        .filter((v: any) => !v.isDeleted && linkedOutFilter(v, SPEND_WISE_OPENING_BALANCE_ID) && inRangeIds.has(v.id))
+        .filter((v: any) => !v.isDeleted && linkedOutFilter(v, SPEND_WISE_OPENING_BALANCE_ID))
         .map((v: any) => v.id)
     );
     const inVouchers = vouchers
-      .filter((v: any) => {
-        if (!isInVoucher(v) || v.isDeleted) return false;
-        // Opening-linked inflow rows are shown beside Opening Balance group instead of normal stream.
-        if (openingLinkedInIds.has(v.id)) return false;
-        if (inRangeIds.has(v.id)) return true;
-        return vouchers.some((o: any) => linkedOutFilter(o, v.id) && inRangeIds.has(o.id));
-      })
-      .sort((a: any, b: any) => {
-        const da = a.date?.toDate ? a.date.toDate() : new Date(a.date);
-        const db = b.date?.toDate ? b.date.toDate() : new Date(b.date);
-        return da.getTime() - db.getTime();
-      });
+      .filter((v: any) => !v.isDeleted && isInVoucher(v))
+      .sort((a: any, b: any) => getDateMs(a) - getDateMs(b));
     const voucherToInRow = (v: any) => {
       const existing = byId.get(v.id);
       if (existing) return existing;
@@ -474,7 +502,9 @@ export function AccountDetails({
 
     inVouchers.forEach((pi: any) => {
       const t = voucherToInRow(pi);
-      const linkedOuts = vouchers.filter((v: any) => linkedOutFilter(v, pi.id));
+      const linkedOuts = vouchers
+        .filter((v: any) => !v.isDeleted && linkedOutFilter(v, pi.id))
+        .sort((a: any, b: any) => getDateMs(a) - getDateMs(b));
       const hasLinkedGroup = linkedOuts.length > 0;
       const colorIdx = nextColor();
       const spendWiseGroupId = `sw-group-in-${pi.id}`;
@@ -513,6 +543,7 @@ export function AccountDetails({
         rows.push({
           ...outRow,
           id: `${po.id}-in-${pi.id}`,
+          _baseVoucherId: po.id,
           _rowKey: nextRowKey(),
           _spendWiseGroupId: spendWiseGroupId,
           _spendWiseChild: true,
@@ -525,9 +556,10 @@ export function AccountDetails({
       });
       if (hasLinkedGroup) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-in-${pi.id}`, _rowKey: nextRowKey() });
     });
-    // Build Opening Balance group and place linked inflows right under it.
-    const openingSide = openingBalanceForPeriod >= 0 ? "dr" : "cr";
-    const openingBase = getOpeningBalanceBaseAmount(openingBalanceForPeriod, openingSide);
+    // Build Opening Balance group — books master OB se (date-range period carry se group mat todo).
+    const masterBooksOb = Number(account.openingBalance) || 0;
+    const openingSide = masterBooksOb >= 0 ? "dr" : "cr";
+    const openingBase = getOpeningBalanceBaseAmount(masterBooksOb, openingSide);
     if (openingBase > 0 && ((openingSide === "cr" && openingLinkedInIds.size > 0) || (openingSide === "dr" && openingLinkedOutIds.size > 0))) {
       const colorIdx = nextColor();
       const spendWiseGroupId = "sw-group-opening-balance";
@@ -600,8 +632,8 @@ export function AccountDetails({
       const openingChunk = rows.splice(openingStart, openingEnd - openingStart);
       rows.unshift(...openingChunk);
     }
-    const addedIds = new Set(rows.filter((r: any) => r.id && !(r as any)._spendWiseSpacer).map((r: any) => r.id));
-    const unlinked = baseTransactions.filter((t: any) => !addedIds.has(t.id));
+    const addedInflowIds = buildSpendWiseAddedInflowVoucherIds(rows);
+    const unlinked = buildBase.filter((t: any) => !addedInflowIds.has(t.id));
     unlinked.forEach((t: any, idx: number) => {
       const fullAmount = Math.abs((t.debit || 0) - (t.credit || 0));
       const alreadyShown = (linkedAmountByOutId.get(t.id) ?? 0) + (linkedAmountByInId.get(t.id) ?? 0);
@@ -625,16 +657,17 @@ export function AccountDetails({
       rows.push(remainderRow);
       if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}`, _rowKey: nextRowKey() });
     });
-    const result = rows.length ? reorderSpendWiseRowsByDate(rows) : baseTransactions;
-    // Perf debug: spend-wise grouping total time + output size, freeze hotspot trace ke liye.
+    const ordered = rows.length ? reorderSpendWiseRowsByDate(rows) : buildBase;
+    const result = filterSpendWiseRowsByDateRange(ordered, dateRange);
     perfDebugLog("bank.accountDetails.displayTransactions", perfStart, {
       vouchersCount: vouchers.length,
-      baseCount: baseTransactions.length,
+      baseCount: buildBase.length,
       resultCount: result.length,
       spendWiseView,
     });
-    return result;
-  }, [spendWiseView, baseTransactions, vouchers, account.id, openingBalanceForPeriod]);
+    const stripped = stripSpendWiseSyntheticOpeningMaster(result) as typeof result;
+    return applySpendWiseStatementRunningBalances(stripped, openingBalanceForPeriod);
+  }, [spendWiseView, baseTransactions, spendWiseGroupingTransactions, vouchers, account.id, account.openingBalance, dateRange, openingBalanceForPeriod]);
 
   const {
     unapprovedOnly,
@@ -652,13 +685,15 @@ export function AccountDetails({
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(() => {
-    const rows = filterByUnapprovedOnly(displayTransactions);
+    const rows = spendWiseView
+      ? filterSpendWiseUnapprovedOnly(displayTransactions, unapprovedOnly)
+      : filterByUnapprovedOnly(displayTransactions);
     if (spendWiseView) return rows;
     return recomputeRunningBalanceTopToBottom(
       sortTransactionsWithFiscalMergeForCompany(rows, "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
       openingBalanceForPeriod
     );
-  }, [displayTransactions, filterByUnapprovedOnly, spendWiseView, openingBalanceForPeriod, company]);
+  }, [displayTransactions, filterByUnapprovedOnly, unapprovedOnly, spendWiseView, openingBalanceForPeriod, company]);
 
   // Check mode: hide/mark rows; statement view par running balance dubara (spend-wise par filter only)
   const [statementKeyboardNav, setStatementKeyboardNav] = useState<
@@ -729,7 +764,9 @@ export function AccountDetails({
       const all = ledgerSortedTransactions as any[];
       return {
         totalPages: 1,
-        paginatedTransactions: sortAndRebalancePageTransactions(all, openingBalanceForPeriod, sortBy, sortOrder),
+        paginatedTransactions: spendWiseView
+          ? all
+          : sortAndRebalancePageTransactions(all, openingBalanceForPeriod, sortBy, sortOrder),
         desktopLedgerSliceFlatStart: 0,
       };
     }
@@ -767,6 +804,22 @@ export function AccountDetails({
       desktopLedgerSliceFlatStart: start,
     };
   }, [ledgerSortedTransactions, displayBlocks, spendWiseView, rowsPerPage, currentPage, sortBy, sortOrder, openingBalanceForPeriod]);
+
+  useLedgerDetailSessionMemory({
+    companyId: companyId ?? undefined,
+    context: "account",
+    contextId: account?.id,
+    viewMode: ledgerViewMode,
+    totalPages,
+    currentPage,
+    setCurrentPage,
+    vouchers,
+    selectedVoucherId: selectedVoucher?.id ?? null,
+    isVoucherDialogOpen,
+    setSelectedVoucher,
+    setIsVoucherDialogOpen,
+    onRestoreVoucherDialog: isMobile ? openModalInUrl : undefined,
+  });
 
   // Statement jaisa voucher-based footer counts — spend-wise linked rows alag na gino
   const ledgerFooterPagingCounts = useMemo(() => {
@@ -814,6 +867,8 @@ export function AccountDetails({
     dateRange !== undefined || Object.values(filters).some((v) => v);
   // Books opening + (date par filter) view-start: table ke opening row se align
   const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
+  /** Spend-wise: statement wala dated/book opening stack mat chalao — sirf row hide. */
+  const tableLedgerDateFilterActive = spendWiseView ? false : hasLedgerDateFilter;
   const masterAccountOpening = Number(account.openingBalance) || 0;
 
   const clearFilters = () => {
@@ -839,44 +894,97 @@ export function AccountDetails({
     return dateRangeText;
   };
 
+  const spendWiseGroupPrint = useMemo(() => {
+    if (!spendWiseView || !company) return undefined;
+    return {
+      company: {
+        name: company.name,
+        pan: company.pan,
+        phone: company.phone,
+        address: company.address,
+        decimalPlaces: company.decimalPlaces,
+        showDrCr: company.showDrCr,
+        showCurrencySymbol: company.showCurrencySymbol,
+        logoUrl: company.logoUrl,
+      },
+      titleBase: `Spend Wise Account Statement: ${account.accountName}`,
+      context: "account" as const,
+      contextId: account.id,
+      dateSystem,
+      dateRangeText: buildDateRangeText(),
+      showNarration,
+      includeNotes: includeNotesInTable,
+      visibleColumns,
+      userNames,
+    };
+  }, [
+    spendWiseView,
+    company,
+    account.accountName,
+    account.id,
+    dateSystem,
+    dateRange,
+    showNarration,
+    includeNotesInTable,
+    visibleColumns,
+    userNames,
+  ]);
+
   const handlePrintStatement = async () => {
     if (!company) return;
     const toastId = toast.loading("Preparing print...");
     // Keep print synced with current view (statement/spend-wise), shown columns, and notes toggle.
     const printVisibleColumns = visibleColumns;
-    const printTransactions = sortedTransactions.filter((t: any) => !(t as any)._spendWiseSpacer);
     try {
-      await openPrintDirect({
-        company: {
-          name: company.name,
-          pan: company.pan,
-          phone: company.phone,
-          address: company.address,
-          decimalPlaces: company.decimalPlaces,
-          showDrCr: company.showDrCr,
-          showCurrencySymbol: company.showCurrencySymbol,
-          logoUrl: company.logoUrl,
-        },
-        title: spendWiseView
-          ? `Spend Wise Account Statement: ${account.accountName}`
-          : `Account Statement: ${account.accountName}`,
-        context: "account",
-        contextId: account.id,
-        dateSystem: dateSystem,
-        dateRangeText: buildDateRangeText(),
-        vouchersCount: printTransactions.length,
-        openingBalance: openingBalanceForPeriod,
-        openingBalanceDate: (account as any).openingBalanceDate,
-        openingBalanceNarration: (account as any).openingBalanceNarration ?? null,
-        transactions: printTransactions,
-        showNarration: showNarration,
-        includeNotes: includeNotesInTable,
-        visibleColumns: printVisibleColumns,
-        userNames: userNames,
-        preserveOrder: spendWiseView,
-        spendWise: Boolean(spendWiseView),
-        billWise: false,
-      }, true);
+      await openPrintDirect(
+        applyLedgerPageToPrintPayload(
+          {
+            company: {
+              name: company.name,
+              pan: company.pan,
+              phone: company.phone,
+              address: company.address,
+              decimalPlaces: company.decimalPlaces,
+              showDrCr: company.showDrCr,
+              showCurrencySymbol: company.showCurrencySymbol,
+              logoUrl: company.logoUrl,
+            },
+            title: spendWiseView
+              ? `Spend Wise Account Statement: ${account.accountName}`
+              : `Account Statement: ${account.accountName}`,
+            context: "account",
+            contextId: account.id,
+            dateSystem: dateSystem,
+            dateRangeText: buildDateRangeText(),
+            vouchersCount: paginatedTransactions.length,
+            openingBalance: desktopPageLedgerStats.openingForPage,
+            openingBalanceDate: (account as any).openingBalanceDate,
+            openingBalanceNarration: (account as any).openingBalanceNarration ?? null,
+            transactions: paginatedTransactions,
+            showNarration: showNarration,
+            includeNotes: includeNotesInTable,
+            visibleColumns: printVisibleColumns,
+            userNames: userNames,
+            preserveOrder: spendWiseView,
+            spendWise: Boolean(spendWiseView),
+            billWise: false,
+          },
+          {
+            paginatedTransactions,
+            openingForPage: desktopPageLedgerStats.openingForPage,
+            periodDrForPage: desktopPageLedgerStats.periodDrForPage,
+            periodCrForPage: desktopPageLedgerStats.periodCrForPage,
+            closingForPage: desktopPageLedgerStats.closingForPage,
+            booksOpeningBalance: showMaskedBalance ? undefined : masterAccountOpening,
+            ledgerShowBookOpeningRow: rowsPerPage <= 0 || desktopLedgerSliceFlatStart === 0,
+            ledgerDateFilterActive: tableLedgerDateFilterActive,
+            openingBalancePeriodStartDate: ledgerOpeningPeriodStartDate,
+            masterOpeningBalanceDate: (account as any).openingBalanceDate,
+            dateRange,
+          }
+        ),
+        true
+      );
       toast.dismiss(toastId);
     } catch (e) {
       toast.dismiss(toastId);
@@ -890,38 +998,55 @@ export function AccountDetails({
     const toastId = toast.loading("Preparing print...");
     // Bill-wise print keeps Status column visible by design.
     const printVisibleColumns = { ...visibleColumns, status: true };
-    const printTransactions = sortedTransactions.filter((t: any) => !(t as any)._spendWiseSpacer);
     try {
-      await openPrintDirect({
-        company: {
-          name: company.name,
-          pan: company.pan,
-          phone: company.phone,
-          address: company.address,
-          decimalPlaces: company.decimalPlaces,
-          showDrCr: company.showDrCr,
-          showCurrencySymbol: company.showCurrencySymbol,
-          logoUrl: company.logoUrl,
-        },
-        title: `Bill Wise Account Statement: ${account.accountName}`,
-        context: "account",
-        contextId: account.id,
-        dateSystem: dateSystem,
-        dateRangeText: buildDateRangeText(),
-        vouchersCount: printTransactions.length,
-        openingBalance: openingBalanceForPeriod,
-        openingBalanceDate: (account as any).openingBalanceDate,
-        openingBalanceNarration: (account as any).openingBalanceNarration ?? null,
-        transactions: printTransactions,
-        showNarration: showNarration,
-        includeNotes: includeNotesInTable,
-        visibleColumns: printVisibleColumns,
-        userNames: userNames,
-        preserveOrder: spendWiseView,
-        billWise: true,
-        openingBalanceOutstanding: showMaskedBalance ? undefined : openingBalanceOutstanding,
-        openingBalanceLinkedVoucherNos: showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos,
-      }, true);
+      await openPrintDirect(
+        applyLedgerPageToPrintPayload(
+          {
+            company: {
+              name: company.name,
+              pan: company.pan,
+              phone: company.phone,
+              address: company.address,
+              decimalPlaces: company.decimalPlaces,
+              showDrCr: company.showDrCr,
+              showCurrencySymbol: company.showCurrencySymbol,
+              logoUrl: company.logoUrl,
+            },
+            title: `Bill Wise Account Statement: ${account.accountName}`,
+            context: "account",
+            contextId: account.id,
+            dateSystem: dateSystem,
+            dateRangeText: buildDateRangeText(),
+            vouchersCount: paginatedTransactions.length,
+            openingBalance: desktopPageLedgerStats.openingForPage,
+            openingBalanceDate: (account as any).openingBalanceDate,
+            openingBalanceNarration: (account as any).openingBalanceNarration ?? null,
+            transactions: paginatedTransactions,
+            showNarration: showNarration,
+            includeNotes: includeNotesInTable,
+            visibleColumns: printVisibleColumns,
+            userNames: userNames,
+            preserveOrder: spendWiseView,
+            billWise: true,
+            openingBalanceOutstanding: showMaskedBalance ? undefined : openingBalanceOutstanding,
+            openingBalanceLinkedVoucherNos: showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos,
+          },
+          {
+            paginatedTransactions,
+            openingForPage: desktopPageLedgerStats.openingForPage,
+            periodDrForPage: desktopPageLedgerStats.periodDrForPage,
+            periodCrForPage: desktopPageLedgerStats.periodCrForPage,
+            closingForPage: desktopPageLedgerStats.closingForPage,
+            booksOpeningBalance: showMaskedBalance ? undefined : masterAccountOpening,
+            ledgerShowBookOpeningRow: rowsPerPage <= 0 || desktopLedgerSliceFlatStart === 0,
+            ledgerDateFilterActive: tableLedgerDateFilterActive,
+            openingBalancePeriodStartDate: ledgerOpeningPeriodStartDate,
+            masterOpeningBalanceDate: (account as any).openingBalanceDate,
+            dateRange,
+          }
+        ),
+        true
+      );
       toast.dismiss(toastId);
     } catch (e) {
       toast.dismiss(toastId);
@@ -1135,7 +1260,7 @@ export function AccountDetails({
       if (hasLedgerDateFilter) return dateRange?.from;
       return undefined;
     }
-    const fullList = (isMobile ? filteredMobileTransactions : sortedTransactions) as any[];
+    const fullList = (isMobile ? filteredMobileTransactions : ledgerSortedTransactions) as any[];
     const flatStart = isMobile ? mobileLedgerSliceFlatStart : desktopLedgerSliceFlatStart;
     if (flatStart === 0) {
       if (hasLedgerDateFilter) return dateRange?.from;
@@ -1153,7 +1278,7 @@ export function AccountDetails({
     dateRange?.from,
     isMobile,
     filteredMobileTransactions,
-    sortedTransactions,
+    ledgerSortedTransactions,
     mobileLedgerSliceFlatStart,
     desktopLedgerSliceFlatStart,
   ]);
@@ -1373,7 +1498,7 @@ export function AccountDetails({
             forceBalanceMode="statement"
             openingBalance={showMaskedBalance ? 0 : mobilePageLedgerStats.openingForPage}
             booksOpeningBalance={showMaskedBalance ? undefined : masterAccountOpening}
-            ledgerDateFilterActive={hasLedgerDateFilter}
+            ledgerDateFilterActive={tableLedgerDateFilterActive}
             ledgerShowBookOpeningRow={rowsPerPage <= 0 || mobileLedgerSliceFlatStart === 0}
             openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
             dateRange={dateRange}
@@ -1399,6 +1524,7 @@ export function AccountDetails({
             isBalanceMasked={showMaskedBalance}
             scrollOnlyTransactions
             blinkMode={spendWiseBlinkMode}
+            spendWiseGroupPrint={spendWiseGroupPrint}
           />
         </div>
       </div>
@@ -1674,7 +1800,7 @@ export function AccountDetails({
 
         {/* TABLE AREA - Statement = running balance; Bill wise = per-row outstanding (same as PartyDetails) */}
         <div className="flex-1 flex flex-col min-h-0 overflow-x-auto scrollbar-slim-dim">
-          <div className={cn("py-4 flex-1 flex flex-col min-h-0 min-w-0", spendWiseView && "p-[2px]")}>
+          <div className={cn("py-4 min-w-0", spendWiseView ? "p-[2px]" : "flex-1 flex flex-col min-h-0")}>
             {/* Bank/Cash pages use their own Statement/Spend-wise toggle, so keep the shared bill-wise mode from taking over here. */}
             <TransactionsTable
               key={`account-${account.id}-${effectiveBalanceMode}`}
@@ -1685,7 +1811,7 @@ export function AccountDetails({
               forceBalanceMode="statement"
               openingBalance={showMaskedBalance ? 0 : desktopPageLedgerStats.openingForPage}
               booksOpeningBalance={showMaskedBalance ? undefined : masterAccountOpening}
-              ledgerDateFilterActive={hasLedgerDateFilter}
+              ledgerDateFilterActive={tableLedgerDateFilterActive}
               ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopLedgerSliceFlatStart === 0}
               openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
               dateRange={dateRange}
@@ -1725,6 +1851,7 @@ export function AccountDetails({
               isBalanceMasked={showMaskedBalance}
               scrollOnlyTransactions
               blinkMode={spendWiseBlinkMode}
+              spendWiseGroupPrint={spendWiseGroupPrint}
             />
           </div>
         </div>

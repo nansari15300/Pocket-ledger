@@ -3,6 +3,7 @@
 
 import * as React from "react";
 import { openPrintDirect } from "@/lib/printDirect";
+import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -17,6 +18,12 @@ import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColum
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { useLedgerDetailSessionMemory } from "@/hooks/useLedgerDetailSessionMemory";
+import {
+  ledgerDetailSessionStorageKey,
+  writeLedgerDetailSessionSnapshot,
+  type LedgerDetailViewMode,
+} from "@/lib/ledgerDetailSessionMemory";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 
 
@@ -161,9 +168,18 @@ export function ExpenseGroupDetails({
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const ledgerViewMode: LedgerDetailViewMode =
+    balanceMode === "bill_wise" ? "bill_wise" : "statement";
+  const ledgerSessionKey = useMemo(
+    () =>
+      companyId && group?.id
+        ? ledgerDetailSessionStorageKey(companyId, "group", group.id, ledgerViewMode)
+        : null,
+    [companyId, group?.id, ledgerViewMode]
+  );
   useEffect(() => {
     setCurrentPage(1);
-  }, [group.id]);
+  }, [ledgerViewMode]);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
@@ -393,6 +409,12 @@ export function ExpenseGroupDetails({
   const handleEditVoucher = (voucher: any) => {
     if (isMobile) openingModalRef.current = true;
     setSelectedVoucher(voucher);
+    if (ledgerSessionKey && voucher?.id) {
+      writeLedgerDetailSessionSnapshot(ledgerSessionKey, {
+        page: currentPage,
+        openVoucherId: String(voucher.id),
+      });
+    }
     if (isMobile) openModalInUrl();
     setIsVoucherDialogOpen(true);
   };
@@ -441,6 +463,23 @@ export function ExpenseGroupDetails({
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
   });
+
+  useLedgerDetailSessionMemory({
+    companyId: companyId ?? undefined,
+    context: "group",
+    contextId: group?.id,
+    viewMode: ledgerViewMode,
+    totalPages,
+    currentPage,
+    setCurrentPage,
+    vouchers,
+    selectedVoucherId: selectedVoucher?.id ?? null,
+    isVoucherDialogOpen,
+    setSelectedVoucher,
+    setIsVoucherDialogOpen,
+    onRestoreVoucherDialog: isMobile ? openModalInUrl : undefined,
+  });
+
   // Radix rows Select — value list me honi chahiye (LedgerDesktopFooter pagination)
   const { selectValue: rowsPerPageSelectValue, onSelectValueChange: handleRowsPerPageChange } =
     useRowsPerPageSelectControl(rowsPerPage, setRowsPerPage, setCurrentPage, ROWS_PER_PAGE_OPTIONS_DEFAULT, "10");
@@ -472,33 +511,51 @@ export function ExpenseGroupDetails({
     }
     // Keep print headers aligned with currently selected table columns.
     const printVisibleColumns = balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns;
-    openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: `Group Statement: ${group.name}`,
-      context: 'group',
-      contextId: group.id,
-      dateSystem: dateSystem,
-      dateRangeText: dateRangeText,
-      vouchersCount: processedTransactions.length,
-      openingBalance: openingBalanceForPeriod,
-      openingBalanceDate: (group as any).openingBalanceDate,
-      openingBalanceNarration: (group as any).openingBalanceNarration ?? null,
-      transactions: processedTransactions,
-      showNarration: showNarration,
-      includeNotes: includeNotesInTable,
-      visibleColumns: printVisibleColumns,
-      billWise: balanceMode === "bill_wise",
-      userNames: userNames,
-    }, true);
+    openPrintDirect(
+      applyLedgerPageToPrintPayload(
+        {
+          company: {
+            name: company.name,
+            pan: company.pan,
+            phone: company.phone,
+            address: company.address,
+            decimalPlaces: company.decimalPlaces,
+            showDrCr: company.showDrCr,
+            showCurrencySymbol: company.showCurrencySymbol,
+            logoUrl: company.logoUrl,
+          },
+          title: `Group Statement: ${group.name}`,
+          context: 'group',
+          contextId: group.id,
+          dateSystem: dateSystem,
+          dateRangeText: dateRangeText,
+          vouchersCount: paginatedTransactions.length,
+          openingBalance: desktopPaginationMeta.openingForPage,
+          openingBalanceDate: (group as any).openingBalanceDate,
+          openingBalanceNarration: (group as any).openingBalanceNarration ?? null,
+          transactions: paginatedTransactions,
+          showNarration: showNarration,
+          includeNotes: includeNotesInTable,
+          visibleColumns: printVisibleColumns,
+          billWise: balanceMode === "bill_wise",
+          userNames: userNames,
+        },
+        {
+          paginatedTransactions,
+          openingForPage: desktopPaginationMeta.openingForPage,
+          periodDrForPage: desktopPaginationMeta.periodDrForPage,
+          periodCrForPage: desktopPaginationMeta.periodCrForPage,
+          closingForPage: desktopPaginationMeta.closingForPage,
+          booksOpeningBalance: Number(group.openingBalance) || 0,
+          ledgerShowBookOpeningRow: currentPage === 1,
+          ledgerDateFilterActive: Boolean(dateRange?.from != null || dateRange?.to != null),
+          openingBalancePeriodStartDate: dateRange?.from,
+          masterOpeningBalanceDate: (group as any).openingBalanceDate,
+          dateRange,
+        }
+      ),
+      true
+    );
   };
 
   if (isMobile) {

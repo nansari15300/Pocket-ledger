@@ -4394,6 +4394,10 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-mai
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected]:not([data-pl-check-marked]) > td {
   transition: none !important;
   background-color: rgb(255 247 237 / 0.95) !important;
+  border-top-color: transparent !important;
+  border-bottom-color: transparent !important;
+  border-left-color: transparent !important;
+  border-right-color: transparent !important;
 }
 body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not([data-pl-check-marked]) > td,
 body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected]:not([data-pl-check-marked]) > td {
@@ -4401,6 +4405,14 @@ body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.narration-
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td {
   box-shadow: inset 0 2px 0 0 #fb923c !important;
+  border-radius: 0 !important;
+  overflow: visible !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:has(+ .narration-row[data-pl-txn-selected]) > td {
+  border-bottom-width: 0 !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] + .narration-row[data-pl-txn-selected] > td {
+  border-top-width: 0 !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not(:has(+ .narration-row)) > td {
   box-shadow: inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
@@ -4421,23 +4433,44 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-mai
   border-top-right-radius: 0.75rem !important;
   border-bottom-right-radius: 0.75rem !important;
 }
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:has(+ .narration-row) > td:first-child {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:has(+ .narration-row[data-pl-txn-selected]) > td:first-child {
   border-top-left-radius: 0.75rem !important;
+  border-bottom-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
 }
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:has(+ .narration-row) > td:last-child {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:has(+ .narration-row[data-pl-txn-selected]) > td:last-child {
   border-top-right-radius: 0.75rem !important;
+  border-bottom-right-radius: 0 !important;
+  border-top-left-radius: 0 !important;
+  border-bottom-left-radius: 0 !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:has(+ .narration-row[data-pl-txn-selected]) > td:not(:first-child):not(:last-child) {
+  border-radius: 0 !important;
+  box-shadow: inset 0 2px 0 0 #fb923c !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td {
   box-shadow: inset 0 -2px 0 0 #fb923c !important;
+  border-radius: 0 !important;
+  overflow: visible !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td:first-child {
-  /* Selected: narration par sirf neeche line — left vertical mat */
-  box-shadow: inset 0 -2px 0 0 #fb923c !important;
+  box-shadow: inset 2px 0 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
   border-bottom-left-radius: 0.75rem !important;
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td:last-child {
-  box-shadow: inset 0 -2px 0 0 #fb923c !important;
+  box-shadow: inset -2px 0 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
   border-bottom-right-radius: 0.75rem !important;
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+  border-bottom-left-radius: 0 !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td:not(:first-child):not(:last-child) {
+  box-shadow: inset 0 -2px 0 0 #fb923c !important;
+  border-radius: 0 !important;
 }
 
 /* Check mode marked txn — halka green fill; sirf non-selected marked par border hide */
@@ -4507,14 +4540,143 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-mai
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td {
   box-shadow: inset 0 -1px 0 0 #fb923c !important;
 }
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] > td:first-child {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow])[data-pl-txn-hovered] > td:first-child {
   /* Hover: narration par sirf neeche 1px — left/right vertical mat */
   box-shadow: inset 0 -1px 0 0 #fb923c !important;
   border-bottom-left-radius: 0.75rem !important;
 }
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] > td:last-child {
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow])[data-pl-txn-hovered] > td:last-child {
   box-shadow: inset 0 -1px 0 0 #fb923c !important;
   border-bottom-right-radius: 0.75rem !important;
+}
+
+/* Spend-wise hover — statement jaisa poori row (nested group card + outer inflow/outflow/group rows) */
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.transaction-main-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.narration-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td {
+  background-color: rgb(255 247 237 / 0.55) !important;
+  box-shadow: none !important;
+  border-top-color: transparent !important;
+  border-bottom-color: transparent !important;
+  border-radius: 0 !important;
+  overflow: visible !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+}
+body[class*="theme-"].dark [data-pl-spend-group-card] tbody tr.transaction-main-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td,
+body[class*="theme-"].dark [data-pl-spend-group-card] tbody tr.narration-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.narration-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.narration-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.narration-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] > td {
+  background-color: rgb(67 20 7 / 0.32) !important;
+}
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.transaction-main-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td {
+  border-bottom-width: 0 !important;
+}
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.transaction-main-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td {
+  border-top-width: 0 !important;
+}
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.transaction-main-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td {
+  box-shadow: inset 0 1px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.transaction-main-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:first-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:first-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:first-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:first-child {
+  box-shadow: inset 1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c !important;
+  border-top-left-radius: 0.75rem !important;
+  border-bottom-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
+}
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.transaction-main-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:last-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:last-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:last-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:last-child {
+  box-shadow: inset -1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c !important;
+  border-top-right-radius: 0.75rem !important;
+  border-bottom-right-radius: 0 !important;
+  border-top-left-radius: 0 !important;
+  border-bottom-left-radius: 0 !important;
+}
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.transaction-main-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td {
+  box-shadow: inset 0 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.transaction-main-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:first-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:first-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:first-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:first-child {
+  box-shadow: inset 1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
+  border-top-left-radius: 0.75rem !important;
+  border-bottom-left-radius: 0.75rem !important;
+}
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.transaction-main-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:last-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:last-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:last-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:last-child {
+  box-shadow: inset -1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
+  border-top-right-radius: 0.75rem !important;
+  border-bottom-right-radius: 0.75rem !important;
+}
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.transaction-main-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td {
+  box-shadow: inset 0 -1px 0 0 #fb923c !important;
+  border-radius: 0 !important;
+}
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.transaction-main-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td:first-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td:first-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td:first-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td:first-child {
+  box-shadow: inset 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
+  border-bottom-left-radius: 0.75rem !important;
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
+}
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.transaction-main-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td:last-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td:last-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td:last-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered] + .narration-row[data-pl-txn-hovered] > td:last-child {
+  box-shadow: inset -1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
+  border-bottom-right-radius: 0.75rem !important;
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+  border-bottom-left-radius: 0 !important;
+}
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.transaction-main-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:not(:first-child):not(:last-child),
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:not(:first-child):not(:last-child),
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:not(:first-child):not(:last-child),
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:not(:first-child):not(:last-child) {
+  border-radius: 0 !important;
+  box-shadow: inset 0 1px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-pl-spend-group-card] tbody tr.transaction-main-row[data-pl-spend-in-group-card]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:not(:first-child):not(:last-child),
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-group]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:not(:first-child):not(:last-child),
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-inflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:not(:first-child):not(:last-child),
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-spend-wise-outflow]:not([data-pl-txn-selected]):not([data-pl-check-marked])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:not(:first-child):not(:last-child) {
+  border-radius: 0 !important;
 }
 
 /* Spend-wise: main + narration ek pill — beech me koi line nahi */

@@ -322,16 +322,137 @@ export function backupDataHasOrphanAttachmentRefs(data: Record<string, unknown> 
   return collectAttachmentRefsFromBackupData(data).length > 0;
 }
 
+export type AttachmentRefRestoreTarget = {
+  docPath: string;
+  field: string;
+  storagePathPrefix: string;
+};
+
+const BACKUP_META_KEYS = new Set([
+  "attachmentBundle",
+  "attachmentZipManifest",
+  "includesAttachments",
+  "backupVersion",
+  "companyDetails",
+]);
+
+function inferRestoreStoragePathPrefix(
+  collectionName: string,
+  doc: Record<string, unknown>,
+  companyId: string,
+  fieldKey: string
+): string {
+  if (collectionName === "vouchers") {
+    const voucherType = String(doc.type || "journal").trim() || "journal";
+    return `voucher-files/${companyId}/${voucherType}`;
+  }
+  if (["parties", "bank_accounts", "staff", "taxes", "expense_accounts", "items"].includes(collectionName)) {
+    const seg = collectionName.replace(/_/g, "-");
+    const sub =
+      fieldKey === "fileUrl" || fieldKey === "avatarUrl" || fieldKey === "logoUrl" ? "avatar" : "documents";
+    return `companies/${companyId}/${seg}-files/${sub}`;
+  }
+  if (fieldKey === "logoUrl") return `companies/${companyId}/logo`;
+  return `companies/${companyId}/attachments`;
+}
+
+function registerAttachmentRefTarget(
+  ref: string,
+  target: AttachmentRefRestoreTarget,
+  out: Map<string, AttachmentRefRestoreTarget>
+): void {
+  if (!out.has(ref)) out.set(ref, target);
+}
+
+function scanRecordForAttachmentTargets(
+  record: Record<string, unknown>,
+  docPath: string,
+  collectionName: string,
+  companyId: string,
+  out: Map<string, AttachmentRefRestoreTarget>
+): void {
+  for (const key of ["fileUrls", "documentFileUrls"] as const) {
+    const arr = record[key];
+    if (!Array.isArray(arr)) continue;
+    for (const v of arr) {
+      if (!isAttachmentRefString(v)) continue;
+      registerAttachmentRefTarget(
+        v,
+        {
+          docPath,
+          field: key,
+          storagePathPrefix: inferRestoreStoragePathPrefix(collectionName, record, companyId, key),
+        },
+        out
+      );
+    }
+  }
+  for (const key of ["fileUrl", "avatarUrl", "logoUrl"] as const) {
+    const v = record[key];
+    if (!isAttachmentRefString(v)) continue;
+    registerAttachmentRefTarget(
+      v,
+      {
+        docPath,
+        field: key,
+        storagePathPrefix: inferRestoreStoragePathPrefix(collectionName, record, companyId, key),
+      },
+      out
+    );
+  }
+}
+
+/** Backup JSON scan — har attachment ref ka asli docPath/field (pending upload + cloud patch ke liye). */
+export function collectAttachmentRefTargetsFromBackupData(
+  backupData: Record<string, unknown>,
+  targetCompanyId: string
+): Map<string, AttachmentRefRestoreTarget> {
+  const out = new Map<string, AttachmentRefRestoreTarget>();
+  const cid = String(targetCompanyId || "").trim();
+  if (!cid) return out;
+
+  for (const [colName, val] of Object.entries(backupData)) {
+    if (BACKUP_META_KEYS.has(colName) || !Array.isArray(val)) continue;
+    for (const row of val) {
+      if (!row || typeof row !== "object") continue;
+      const docId = String((row as { id?: unknown }).id ?? "").trim();
+      if (!docId) continue;
+      scanRecordForAttachmentTargets(
+        row as Record<string, unknown>,
+        `companies/${cid}/${colName}/${docId}`,
+        colName,
+        cid,
+        out
+      );
+    }
+  }
+  return out;
+}
+
+function resolveRestoreTargetForEntry(
+  entryKey: string,
+  targetCompanyId: string,
+  targets: Map<string, AttachmentRefRestoreTarget>
+): AttachmentRefRestoreTarget {
+  const hit = targets.get(entryKey);
+  if (hit) return hit;
+  return {
+    docPath: `companies/${targetCompanyId}/vouchers/restored-orphan`,
+    field: "fileUrls",
+    storagePathPrefix: `companies/${targetCompanyId}/restored-files`,
+  };
+}
+
 /** Restore: bundle se pending `local:` files + purane ref → naya ref map. */
 export async function restoreAttachmentBundleToLocalRefs(
   bundle: AttachmentBundle,
   targetCompanyId: string,
   onProgress?: (done: number, total: number, bytesAdded: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  refTargets?: Map<string, AttachmentRefRestoreTarget>
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>();
-  const prefix = `companies/${targetCompanyId}/restored-files`;
-  const docPath = `companies/${targetCompanyId}/restored`;
+  const targets = refTargets ?? new Map<string, AttachmentRefRestoreTarget>();
   const entries = (bundle.entries || []).filter((e) => e?.key && e.dataBase64);
   const total = entries.length;
   let done = 0;
@@ -340,13 +461,14 @@ export async function restoreAttachmentBundleToLocalRefs(
     try {
       const blob = base64ToBlob(entry.dataBase64, entry.contentType);
       const id = generateLocalFileId();
+      const target = resolveRestoreTargetForEntry(entry.key, targetCompanyId, targets);
       await putPendingFile({
         id,
         blob,
         contentType: entry.contentType || blob.type || "application/octet-stream",
-        docPath,
-        field: "fileUrls",
-        storagePathPrefix: prefix,
+        docPath: target.docPath,
+        field: target.field,
+        storagePathPrefix: target.storagePathPrefix,
         fileName: entry.fileName || `restored_${id.slice(0, 8)}`,
       });
       map.set(entry.key, `${LOCAL_FILE_PREFIX}${id}`);
@@ -367,11 +489,11 @@ export async function restoreAttachmentZipToLocalRefs(
   filesByPath: Map<string, Uint8Array>,
   targetCompanyId: string,
   onProgress?: (done: number, total: number, bytesAdded: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  refTargets?: Map<string, AttachmentRefRestoreTarget>
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>();
-  const prefix = `companies/${targetCompanyId}/restored-files`;
-  const docPath = `companies/${targetCompanyId}/restored`;
+  const targets = refTargets ?? new Map<string, AttachmentRefRestoreTarget>();
   const entries = (manifest.entries || []).filter((e) => e?.key && e.zipPath);
   const total = entries.length;
   let done = 0;
@@ -382,13 +504,14 @@ export async function restoreAttachmentZipToLocalRefs(
       if (!bytes?.length) throw new Error("zip entry missing");
       const blob = new Blob([bytes as BlobPart], { type: entry.contentType || "application/octet-stream" });
       const id = generateLocalFileId();
+      const target = resolveRestoreTargetForEntry(entry.key, targetCompanyId, targets);
       await putPendingFile({
         id,
         blob,
         contentType: entry.contentType || blob.type || "application/octet-stream",
-        docPath,
-        field: "fileUrls",
-        storagePathPrefix: prefix,
+        docPath: target.docPath,
+        field: target.field,
+        storagePathPrefix: target.storagePathPrefix,
         fileName: entry.fileName || `restored_${id.slice(0, 8)}`,
       });
       map.set(entry.key, `${LOCAL_FILE_PREFIX}${id}`);
@@ -411,13 +534,21 @@ export async function restoreAttachmentsFromBackupData(
   onProgress?: (done: number, total: number, bytesAdded: number) => void,
   signal?: AbortSignal
 ): Promise<Map<string, string>> {
+  const refTargets = collectAttachmentRefTargetsFromBackupData(backupData, targetCompanyId);
   const zipMan = backupData.attachmentZipManifest as AttachmentZipManifest | undefined;
   if (Array.isArray(zipMan?.entries) && zipMan.entries.length > 0 && zipFilesByPath) {
-    return restoreAttachmentZipToLocalRefs(zipMan, zipFilesByPath, targetCompanyId, onProgress, signal);
+    return restoreAttachmentZipToLocalRefs(
+      zipMan,
+      zipFilesByPath,
+      targetCompanyId,
+      onProgress,
+      signal,
+      refTargets
+    );
   }
   const bundle = backupData.attachmentBundle as AttachmentBundle | undefined;
   if (Array.isArray(bundle?.entries) && bundle.entries.length > 0) {
-    return restoreAttachmentBundleToLocalRefs(bundle, targetCompanyId, onProgress, signal);
+    return restoreAttachmentBundleToLocalRefs(bundle, targetCompanyId, onProgress, signal, refTargets);
   }
   return new Map();
 }

@@ -43,6 +43,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { Checkbox } from "../ui/checkbox";
 import { openPrintDirect } from "@/lib/printDirect";
+import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import { useCalendarMonths } from "@/hooks/use-mobile";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 
@@ -213,27 +214,40 @@ export function AccountGroupDetails({
       else
         dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
     }
-    openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: `Group Statement: ${group.name}`,
-      context: 'group',
-      contextId: group.id,
-      dateSystem: dateSystem,
-      dateRangeText: dateRangeText,
-      vouchersCount: processedTransactions.length,
-      openingBalance: group.openingBalance || 0, 
-      transactions: processedTransactions,
-      showNarration: showNarration,
-    }, true);
+    openPrintDirect(
+      applyLedgerPageToPrintPayload(
+        {
+          company: {
+            name: company.name,
+            pan: company.pan,
+            phone: company.phone,
+            address: company.address,
+            decimalPlaces: company.decimalPlaces,
+            showDrCr: company.showDrCr,
+            showCurrencySymbol: company.showCurrencySymbol,
+            logoUrl: company.logoUrl,
+          },
+          title: `Group Statement: ${group.name}`,
+          context: 'group',
+          contextId: group.id,
+          dateSystem: dateSystem,
+          dateRangeText: dateRangeText,
+          vouchersCount: paginatedTransactions.length,
+          openingBalance: group.openingBalance || 0,
+          transactions: paginatedTransactions,
+          showNarration: showNarration,
+        },
+        {
+          paginatedTransactions,
+          openingForPage: group.openingBalance || 0,
+          ledgerShowBookOpeningRow: currentPage === 1,
+          ledgerDateFilterActive: Boolean(dateRange?.from != null || dateRange?.to != null),
+          openingBalancePeriodStartDate: dateRange?.from,
+          dateRange,
+        }
+      ),
+      true
+    );
   };
 
   return (

@@ -3,6 +3,12 @@
 
 import * as React from "react";
 import { openPrintDirect } from "@/lib/printDirect";
+import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
+import { useLedgerDetailSessionMemory } from "@/hooks/useLedgerDetailSessionMemory";
+import {
+  ledgerDetailSessionStorageKey,
+  writeLedgerDetailSessionSnapshot,
+} from "@/lib/ledgerDetailSessionMemory";
 import type { Account } from "@/components/bank-cash/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -193,6 +199,14 @@ export function AccountDetails({
     return allAccounts.find(p => p.id === initialAccount.id) || initialAccount;
   }, [allAccounts, initialAccount]);
 
+  const ledgerSessionKey = React.useMemo(
+    () =>
+      companyId && account?.id
+        ? ledgerDetailSessionStorageKey(companyId, "account", account.id, "statement")
+        : null,
+    [companyId, account?.id]
+  );
+
   // All Journal / All Contra: page 1 = latest (party tail jaisa); single account = page 1 = oldest.
   const isContraAllView = Boolean(
     isAllVouchersView && account?.id === "all" && account.accountName?.includes("Contra")
@@ -206,7 +220,7 @@ export function AccountDetails({
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [account.id, isAllVouchersView]);
+  }, [isAllVouchersView]);
 
   // Fix: "All Vouchers" view should still filter to the specific account, not all accounts
   // It should show all transaction types for this account, not all transactions for all accounts
@@ -248,6 +262,12 @@ export function AccountDetails({
 
 
   const handleEditVoucher = (voucher: any) => {
+    if (ledgerSessionKey && voucher?.id) {
+      writeLedgerDetailSessionSnapshot(ledgerSessionKey, {
+        page: currentPage,
+        openVoucherId: String(voucher.id),
+      });
+    }
     setSelectedVoucher(voucher);
     setIsVoucherDialogOpen(true);
   };
@@ -287,6 +307,21 @@ export function AccountDetails({
 
   const totalPages =
     rowsPerPage > 0 ? Math.ceil(ledgerListForDisplay.length / rowsPerPage) : 1;
+
+  useLedgerDetailSessionMemory({
+    companyId: companyId ?? undefined,
+    context: "account",
+    contextId: account?.id,
+    viewMode: "statement",
+    totalPages: Math.max(1, totalPages),
+    currentPage,
+    setCurrentPage,
+    vouchers,
+    selectedVoucherId: selectedVoucher?.id ?? null,
+    isVoucherDialogOpen,
+    setSelectedVoucher,
+    setIsVoucherDialogOpen,
+  });
 
   /** Oldest-first pages: page1 = shuru wale txn (1–10) Book OB; page2+ Dated. rowsPerPage=0 = sab ek page. */
   const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
@@ -412,64 +447,100 @@ export function AccountDetails({
     if (!company) return;
     // Keep print columns aligned with visible table columns.
     const printVisibleColumns = visibleColumns;
-    openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: `Account Statement: ${account.accountName}`,
-      context: "account",
-      contextId: account.id,
-      dateSystem: dateSystem,
-      dateRangeText: buildDateRangeText(),
-      vouchersCount: processedTransactions.length,
-      openingBalance: openingBalanceForPeriod,
-      openingBalanceDate: (account as any).openingBalanceDate,
-      openingBalanceNarration: (account as any).openingBalanceNarration ?? null,
-      transactions: processedTransactions,
-      showNarration: showNarration,
-      visibleColumns: printVisibleColumns,
-      userNames: userNames,
-      billWise: false,
-    }, true);
+    openPrintDirect(
+      applyLedgerPageToPrintPayload(
+        {
+          company: {
+            name: company.name,
+            pan: company.pan,
+            phone: company.phone,
+            address: company.address,
+            decimalPlaces: company.decimalPlaces,
+            showDrCr: company.showDrCr,
+            showCurrencySymbol: company.showCurrencySymbol,
+            logoUrl: company.logoUrl,
+          },
+          title: `Account Statement: ${account.accountName}`,
+          context: "account",
+          contextId: account.id,
+          dateSystem: dateSystem,
+          dateRangeText: buildDateRangeText(),
+          vouchersCount: processedTransactions.length,
+          openingBalance: openingBalanceForPeriod,
+          openingBalanceDate: (account as any).openingBalanceDate,
+          openingBalanceNarration: (account as any).openingBalanceNarration ?? null,
+          transactions: processedTransactions,
+          showNarration: showNarration,
+          visibleColumns: printVisibleColumns,
+          userNames: userNames,
+          billWise: false,
+        },
+        {
+          paginatedTransactions,
+          openingForPage: ledgerPageStats.openingForPage,
+          periodDrForPage: ledgerPageStats.periodDrForPage,
+          periodCrForPage: ledgerPageStats.periodCrForPage,
+          closingForPage: ledgerPageStats.closingForPage,
+          booksOpeningBalance: masterAccountOpening,
+          ledgerShowBookOpeningRow: rowsPerPage <= 0 || currentPage === 1,
+          ledgerDateFilterActive: hasLedgerDateFilter,
+          openingBalancePeriodStartDate: ledgerOpeningPeriodStartDate,
+          masterOpeningBalanceDate: (account as any).openingBalanceDate,
+          dateRange,
+        }
+      ),
+      true
+    );
   };
 
   const handlePrintBillWise = () => {
     if (!company) return;
     // Bill-wise print keeps Status column visible by design.
     const printVisibleColumns = { ...visibleColumns, status: true };
-    openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: `Bill Wise Account Statement: ${account.accountName}`,
-      context: "account",
-      contextId: account.id,
-      dateSystem: dateSystem,
-      dateRangeText: buildDateRangeText(),
-      vouchersCount: processedTransactions.length,
-      openingBalance: openingBalanceForPeriod,
-      openingBalanceDate: (account as any).openingBalanceDate,
-      openingBalanceNarration: (account as any).openingBalanceNarration ?? null,
-      transactions: processedTransactions,
-      showNarration: showNarration,
-      visibleColumns: printVisibleColumns,
-      userNames: userNames,
-      billWise: true,
-    }, true);
+    openPrintDirect(
+      applyLedgerPageToPrintPayload(
+        {
+          company: {
+            name: company.name,
+            pan: company.pan,
+            phone: company.phone,
+            address: company.address,
+            decimalPlaces: company.decimalPlaces,
+            showDrCr: company.showDrCr,
+            showCurrencySymbol: company.showCurrencySymbol,
+            logoUrl: company.logoUrl,
+          },
+          title: `Bill Wise Account Statement: ${account.accountName}`,
+          context: "account",
+          contextId: account.id,
+          dateSystem: dateSystem,
+          dateRangeText: buildDateRangeText(),
+          vouchersCount: processedTransactions.length,
+          openingBalance: openingBalanceForPeriod,
+          openingBalanceDate: (account as any).openingBalanceDate,
+          openingBalanceNarration: (account as any).openingBalanceNarration ?? null,
+          transactions: processedTransactions,
+          showNarration: showNarration,
+          visibleColumns: printVisibleColumns,
+          userNames: userNames,
+          billWise: true,
+        },
+        {
+          paginatedTransactions,
+          openingForPage: ledgerPageStats.openingForPage,
+          periodDrForPage: ledgerPageStats.periodDrForPage,
+          periodCrForPage: ledgerPageStats.periodCrForPage,
+          closingForPage: ledgerPageStats.closingForPage,
+          booksOpeningBalance: masterAccountOpening,
+          ledgerShowBookOpeningRow: rowsPerPage <= 0 || currentPage === 1,
+          ledgerDateFilterActive: hasLedgerDateFilter,
+          openingBalancePeriodStartDate: ledgerOpeningPeriodStartDate,
+          masterOpeningBalanceDate: (account as any).openingBalanceDate,
+          dateRange,
+        }
+      ),
+      true
+    );
   };
 
   // Reports hub: Excel export mirrors bank statement column shape (opening / totals footer rows).

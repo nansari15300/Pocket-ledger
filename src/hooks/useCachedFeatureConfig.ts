@@ -72,8 +72,8 @@ export function useCachedFeatureConfig(defaultConfig: Record<string, boolean> = 
     // Hamesha Firestore subscribe: online jaisa; offline / deny par cached / fallback.
     const unsub = onSnapshot(doc(firestore, "app_settings", "features"), (docSnap) => {
       const nextConfig = docSnap.exists() ? (docSnap.data() as Record<string, boolean>) : fallbackConfig;
-      setFeatureConfig(nextConfig);
-      writeCachedFeatureConfig(nextConfig);
+      setFeatureConfig({ ...nextConfig, "import-export": true });
+      writeCachedFeatureConfig({ ...nextConfig, "import-export": true });
       setLoading(false);
     }, () => {
       // Offline / permission: pehle cache dikhao; warna OFFLINE_BASE taaki menu khali na rahe.

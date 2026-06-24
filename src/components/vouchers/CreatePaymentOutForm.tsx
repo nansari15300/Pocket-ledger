@@ -56,7 +56,11 @@ import {
   normalizeFormFileUrlsForSave,
 } from "@/lib/voucherFormAttachmentSave";
 import { toast as sonnerToast } from "sonner";
-import { replaceVoucherSaveLoadingWithShortSuccess } from "@/lib/voucherSaveUi";
+import {
+  completeVoucherBackgroundProgress,
+  replaceVoucherSaveLoadingWithShortSuccess,
+  showVoucherBackgroundProgress,
+} from "@/lib/voucherSaveUi";
 import type { CopyMasterDraftRequestPayload } from "./AddVoucherDialog";
 import BsDatePicker from "../ui/BsDatePicker";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -97,7 +101,7 @@ import { LinkPaymentInToPaymentOutDialog } from "@/components/vouchers/LinkPayme
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { getAllocatedByVoucherIdFromPaymentOuts, getAllocationTotal, getTaxNetAllocatedByVoucherIdFromPaymentOuts, getPaymentInRemaining, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
-import { allocatePaymentInAmounts } from "@/lib/paymentInAllocation";
+import { allocatePaymentInAmounts, getSpendWiseInflowPartyLabel } from "@/lib/paymentInAllocation";
 import { getOpeningBalanceBaseAmount, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
 import { usePaymentOutAllocations } from "@/hooks/usePaymentAllocations";
 import { useLinkPaymentToTxnsLinkableCount } from "@/hooks/useLinkPaymentToTxnsLinkableCount";
@@ -167,25 +171,41 @@ const getVoucherPrefix = (prefixes?: Record<string, string[]>, type?: 'payment_o
 }
 
 const getPayeeTypeFromVoucher = (v: any) => {
-  if (v?.payeeType === 'staff') return 'staff';
-  if (v?.payeeType === 'party') return 'party';
-  if (v?.payeeType === 'tax') return 'tax';
-  if (v?.payeeType === 'expense') return 'expense';
-  if (v?.payeeType === 'other') return 'other';
-  if (v?.staffId) return 'staff';
-  if (v?.taxAccountId) return 'tax';
-  if (v?.type === 'direct_expense') {
-    return 'expense';
+  if (v?.type === "direct_expense") return "expense";
+  // Saved ids pehle — galat / stale `payeeType` flag se Staff khali na dikhe.
+  if (v?.partyId) return "party";
+  if (v?.staffId) return "staff";
+  if (v?.taxAccountId) return "tax";
+  if (v?.expenseAccountId) return "expense";
+  if (v?.payeeType === "staff" || v?.payeeType === "party" || v?.payeeType === "tax" || v?.payeeType === "expense" || v?.payeeType === "other") {
+    return v.payeeType;
   }
-  if (v?.expenseAccountId) return 'expense';
-  if (v?.payeeName) return 'other';
-  return 'party';
+  if (v?.toAccountId || v?.payeeName) return "other";
+  return "party";
+};
+
+/** Combobox me selected id list me na ho to bhi label dikhao (edit / sparse snapshot). */
+function withSelectedComboboxOption(
+  options: { value: string; label: string }[],
+  selectedId: string | undefined,
+  fallbackLabel?: string
+): { value: string; label: string }[] {
+  const id = String(selectedId || "").trim();
+  if (!id || options.some((o) => o.value === id)) return options;
+  const label = (fallbackLabel || "").trim() || "—";
+  return [{ value: id, label }, ...options];
 }
 
 const getInitialFormValues = (voucher?: any): PaymentOutFormValues => {
     if (voucher) {
         const payeeType = getPayeeTypeFromVoucher(voucher);
-        const toAccountId = voucher.toAccountId || (payeeType === 'expense' ? voucher.expenseAccountId : '') || "";
+        const expenseId = voucher.expenseAccountId || voucher.toAccountId || "";
+        const toAccountId =
+          payeeType === "other"
+            ? voucher.toAccountId || ""
+            : payeeType === "expense"
+              ? expenseId
+              : voucher.toAccountId || "";
         // Copy/cross-company seed me `date` kabhi string/Timestamp miss ho kar InvalidDate ban jata tha — BS picker khali dikhta tha.
         const rawDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date as string | number | Date);
         const safeDate = Number.isFinite(rawDate.getTime()) ? rawDate : startOfDay(new Date());
@@ -201,7 +221,7 @@ const getInitialFormValues = (voucher?: any): PaymentOutFormValues => {
             partyId: voucher.partyId || "",
             staffId: voucher.staffId || "",
             payeeName: voucher.payeeName || "",
-            expenseAccountId: voucher.expenseAccountId || "",
+            expenseAccountId: payeeType === "expense" ? expenseId : (voucher.expenseAccountId || ""),
             toAccountId,
             taxAccountId: voucher.taxAccountId || "",
             voucherNumber: voucher.voucherNumber || "",
@@ -556,6 +576,52 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   const expenseAccountId = form.watch("expenseAccountId");
   const toAccountId = form.watch("toAccountId");
+
+  const partyComboboxOptions = useMemo(
+    () =>
+      withSelectedComboboxOption(
+        processedPartiesForSelection.map((p) => ({ value: p.id, label: p.name })),
+        partyId,
+        processedParties.find((p) => p.id === partyId)?.name
+      ),
+    [processedPartiesForSelection, processedParties, partyId]
+  );
+  const staffComboboxOptions = useMemo(
+    () =>
+      withSelectedComboboxOption(
+        processedStaff.map((s) => ({ value: s.id, label: s.name })),
+        staffId,
+        processedStaff.find((s) => s.id === staffId)?.name
+      ),
+    [processedStaff, staffId]
+  );
+  const taxComboboxOptions = useMemo(
+    () =>
+      withSelectedComboboxOption(
+        processedTaxes.map((t) => ({ value: t.id, label: (t as any).name ?? (t as any).label ?? "" })),
+        taxAccountId,
+        (processedTaxes.find((t) => t.id === taxAccountId) as any)?.name ?? (processedTaxes.find((t) => t.id === taxAccountId) as any)?.label
+      ),
+    [processedTaxes, taxAccountId]
+  );
+  const expenseComboboxOptions = useMemo(
+    () =>
+      withSelectedComboboxOption(
+        expenseAccounts.map((e) => ({ value: e.id, label: e.name })),
+        expenseAccountId,
+        expenseAccounts.find((e) => e.id === expenseAccountId)?.name
+      ),
+    [expenseAccounts, expenseAccountId]
+  );
+  const otherToComboboxOptions = useMemo(
+    () =>
+      withSelectedComboboxOption(
+        expenseAccounts.map((e) => ({ value: e.id, label: e.name })),
+        toAccountId,
+        expenseAccounts.find((e) => e.id === toAccountId)?.name
+      ),
+    [expenseAccounts, toAccountId]
+  );
 
   /** Dusri tab/me master delete hone par selected ID stale ho to toast + clear (ghost label avoid). */
   useEffect(() => {
@@ -1103,6 +1169,41 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
 }, [voucher, defaultVoucherData, form, isEditingAndConverting]);
 
+  /** Live snapshot / mirror baad me aaye to opposite account fields dubara bharo (pehli reset skip ho chuki ho). */
+  useEffect(() => {
+    if (!voucher?.id) return;
+    const pt = getPayeeTypeFromVoucher(voucher);
+    const expenseId = voucher.expenseAccountId || voucher.toAccountId || "";
+    const setIfEmpty = (name: keyof PaymentOutFormValues, next: string | undefined) => {
+      const val = String(next || "").trim();
+      if (!val) return;
+      const cur = String(form.getValues(name) || "").trim();
+      if (!cur) form.setValue(name, val, { shouldDirty: false });
+    };
+    if (pt !== form.getValues("payeeType")) form.setValue("payeeType", pt, { shouldDirty: false });
+    setIfEmpty("partyId", voucher.partyId);
+    setIfEmpty("staffId", voucher.staffId);
+    setIfEmpty("taxAccountId", voucher.taxAccountId);
+    if (pt === "expense") {
+      setIfEmpty("expenseAccountId", expenseId);
+      setIfEmpty("toAccountId", expenseId);
+    } else {
+      setIfEmpty("toAccountId", voucher.toAccountId);
+    }
+    setIfEmpty("payeeName", voucher.payeeName);
+  }, [
+    voucher?.id,
+    voucher?.partyId,
+    voucher?.staffId,
+    voucher?.taxAccountId,
+    voucher?.expenseAccountId,
+    voucher?.toAccountId,
+    voucher?.payeeName,
+    voucher?.payeeType,
+    voucher?.type,
+    form,
+  ]);
+
   // Outbox flush ke baad `local:` → HTTPS: parent sync; stale snapshot ignore (EXE remove+add fix).
   useEffect(() => {
     if (!voucher?.id || savedVoucherId !== voucher.id) return;
@@ -1503,45 +1604,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           throw new Error("Failed to save voucher and get ID.");
       }
 
-        // Bill-wise bilateral: sync allocations to target vouchers (Purchase/Sale/Payment In) so link shows on target too
-        if (voucherType === "payment_out" && companyId && savedDoc?.id && Array.isArray(sanitizedData.allocations)) {
-          try {
-            await syncBillWiseAllocationsToTargetVouchers(companyId, savedDoc.id, sanitizedData.allocations, previousAllocationsForSync);
-          } catch (e) {
-            console.error(e);
-            sonnerToast.error("Payment saved but bill-wise link sync to target vouchers failed.");
-          }
-        }
-        if (voucherType === "payment_out" && Array.isArray(sanitizedData.allocations)) {
-          // Refresh baseline after a successful save/sync so next edit can diff/add/remove correctly.
-          initialAllocationsRef.current = sanitizedData.allocations.map((a: any) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
-        }
-        // Save ke baad string URLs — sync ke baad `local:` → HTTPS (web edit thumb + EXE stale parent guard).
-        {
-          const rawUrls = (sanitizedData.fileUrls || []).filter((u: unknown): u is string => typeof u === "string");
-          const vid = savedDoc.id;
-          const persistedUrls =
-            vid && companyId
-              ? await applyVoucherAttachmentsAfterFormSave({
-                  companyId,
-                  voucherId: vid,
-                  rawFileUrls: rawUrls,
-                  storageFolder: String(voucherType),
-                })
-              : rawUrls;
-          savedFileUrlsSnapshotRef.current = [...persistedUrls];
-          setFiles(persistedUrls);
-          initialFilesRef.current = persistedUrls;
-        }
-        if (shouldAutoFlushOutboxAfterEnqueue()) {
-          void flushVoucherOutbox().catch((err) => {
-            console.warn("[CreatePaymentOutForm] post-save outbox flush", err);
-          });
-        }
-
         const docId = savedDoc.id;
         const approveBanner = !!(approveAfterSave && docId);
-        // Save & Close: dialog turant band — approve/alerts/print background (`postSaveTail`).
+        const billWiseAllocations =
+          voucherType === "payment_out" && Array.isArray(sanitizedData.allocations)
+            ? sanitizedData.allocations
+            : null;
+        const rawFileUrlsForPostSave = (sanitizedData.fileUrls || []).filter(
+          (u: unknown): u is string => typeof u === "string"
+        );
+        const needsBackgroundSync =
+          !!(billWiseAllocations && companyId && docId) ||
+          !!(docId && companyId && rawFileUrlsForPostSave.length > 0);
+
         if (approveBanner) {
           replaceVoucherSaveLoadingWithShortSuccess(
             toastId,
@@ -1556,7 +1631,64 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
         setIsLoading(false);
 
+        const bgProgressId = needsBackgroundSync ? showVoucherBackgroundProgress("Saving links…") : null;
+
         const postSaveTail = async () => {
+          let bgSyncPartialFailure = false;
+          try {
+            if (billWiseAllocations && companyId && docId) {
+              try {
+                await syncBillWiseAllocationsToTargetVouchers(
+                  companyId,
+                  docId,
+                  billWiseAllocations,
+                  previousAllocationsForSync
+                );
+              } catch (e) {
+                console.error(e);
+                bgSyncPartialFailure = true;
+                sonnerToast.error("Payment saved but bill-wise link sync to target vouchers failed.");
+              }
+            }
+            if (voucherType === "payment_out" && billWiseAllocations) {
+              initialAllocationsRef.current = billWiseAllocations.map((a: any) => ({
+                voucherId: a.voucherId,
+                amount: getAllocationTotal(a),
+              }));
+            }
+            if (docId && companyId) {
+              const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
+                companyId,
+                voucherId: docId,
+                rawFileUrls: rawFileUrlsForPostSave,
+                storageFolder: String(voucherType),
+              });
+              savedFileUrlsSnapshotRef.current = [...persistedUrls];
+              setFiles(persistedUrls);
+              initialFilesRef.current = persistedUrls;
+            }
+            if (shouldAutoFlushOutboxAfterEnqueue()) {
+              void flushVoucherOutbox().catch((err) => {
+                console.warn("[CreatePaymentOutForm] post-save outbox flush", err);
+              });
+            }
+            if (bgProgressId) {
+              completeVoucherBackgroundProgress(bgProgressId, {
+                ok: !bgSyncPartialFailure,
+                title: bgSyncPartialFailure ? "Some links could not be saved" : "Links saved",
+              });
+            }
+          } catch (err) {
+            if (bgProgressId) {
+              completeVoucherBackgroundProgress(bgProgressId, {
+                ok: false,
+                title: "Link sync failed",
+                description: err instanceof Error ? err.message : undefined,
+              });
+            }
+            throw err;
+          }
+
           if (approveBanner && !isEdit) {
             await approveVoucherWithHistory(companyId, docId, user.uid, approverName);
           }
@@ -1898,10 +2030,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
       const linkable = Math.max(0, amount - alreadyLinked);
       const linkedFromThis = allocated[id] ?? 0;
-      const from =
-        v.type === "contra"
-          ? (paymentInDialogNames[v.fromAccountId] ?? "—")
-          : (paymentInDialogNames[v.partyId] ?? paymentInDialogNames[v.staffId] ?? paymentInDialogNames[v.taxAccountId] ?? paymentInDialogNames[v.incomeAccountId] ?? v.payeeName ?? "—");
+      const from = getSpendWiseInflowPartyLabel(v, paymentInDialogNames);
       return {
         id,
         voucherNumber: v.voucherNumber ?? "—",
@@ -2307,7 +2436,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <div className="min-w-0 w-full overflow-hidden">
                               <Combobox
                                 triggerClassName="w-full min-w-0"
-                                options={processedPartiesForSelection.map(p => ({ value: p.id, label: p.name }))}
+                                options={partyComboboxOptions}
                                 value={field.value}
                                 onChange={(val, newName) => {
                                   if (val === 'add-new') {
@@ -2344,7 +2473,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <div className="min-w-0 w-full overflow-hidden">
                               <Combobox
                                 triggerClassName="w-full min-w-0"
-                                options={processedStaff.map(s => ({ value: s.id, label: s.name }))}
+                                options={staffComboboxOptions}
                                 value={field.value}
                                 onChange={(val, newName) => {
                                   if (val === 'add-new') {
@@ -2354,7 +2483,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     field.onChange(val);
                                   }
                                 }}
-                                placeholder="Select staff"
+                                placeholder={vouchersLoading && staffComboboxOptions.length === 0 ? "Loading staff…" : "Select staff"}
                                 addNewLabel="+ Add New Staff"
                                 disabled={deleteDisabledWhenLinked}
                               />
@@ -2381,7 +2510,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <div className="min-w-0 w-full overflow-hidden">
                               <Combobox
                                 triggerClassName="w-full min-w-0"
-                                options={processedTaxes.map(t => ({ value: t.id, label: t.name }))}
+                                options={taxComboboxOptions}
                                 value={field.value}
                                 onChange={(val, newName) => {
                                   if (val === 'add-new') {
@@ -2418,7 +2547,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <div className="min-w-0 w-full overflow-hidden">
                               <Combobox
                                 triggerClassName="w-full min-w-0"
-                                options={expenseAccounts.map(e => ({ value: e.id, label: e.name }))}
+                                options={expenseComboboxOptions}
                                 value={field.value}
                                 onChange={(val, newName) => {
                                   if (val === 'add-new') {
@@ -2567,7 +2696,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             )}
                           </div>
                           <Combobox
-                            options={processedPartiesForSelection.map(p => ({ value: p.id, label: p.name }))}
+                            options={partyComboboxOptions}
                             value={field.value}
                             onChange={(val, newName) => {
                               if (val === 'add-new') {
@@ -2604,7 +2733,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 )}
                             </div>
                            <Combobox
-                                options={processedStaff.map(s => ({ value: s.id, label: s.name }))}
+                                options={staffComboboxOptions}
                                 value={field.value}
                                  onChange={(val, newName) => {
                                     if (val === 'add-new') {
@@ -2614,7 +2743,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         field.onChange(val);
                                     }
                                 }}
-                                placeholder="Select a staff member"
+                                placeholder={vouchersLoading && staffComboboxOptions.length === 0 ? "Loading staff…" : "Select a staff member"}
                                 addNewLabel="+ Add New Staff"
                                 disabled={deleteDisabledWhenLinked}
                             />
@@ -2641,7 +2770,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             )}
                           </div>
                             <Combobox
-                                options={processedTaxes.map(t => ({ value: t.id, label: t.name }))}
+                                options={taxComboboxOptions}
                                 value={field.value}
                                 onChange={(val, newName) => {
                                     if (val === 'add-new') {
@@ -2678,7 +2807,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             )}
                           </div>
                             <Combobox
-                                options={expenseAccounts.map(e => ({ value: e.id, label: e.name }))}
+                                options={expenseComboboxOptions}
                                 value={field.value}
                                 onChange={(val, newName) => {
                                     if (val === 'add-new') {

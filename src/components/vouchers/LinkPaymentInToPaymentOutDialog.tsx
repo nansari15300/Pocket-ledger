@@ -15,6 +15,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { Link2, RotateCcw } from "lucide-react";
 import { getOpeningBalanceBaseAmount, getOpeningBalanceVoucherLabel, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
+import { getSpendWiseInflowPartyLabel } from "@/lib/paymentInAllocation";
 
 const safeToDate = (date: unknown): Date | null => {
   if (!date) return null;
@@ -84,7 +85,7 @@ export function LinkPaymentInToPaymentOutDialog({
   showAllRows = false,
   accountOpeningBalance = 0,
 }: LinkPaymentInToPaymentOutDialogProps) {
-  const { formatDate, formatCurrency } = useDate();
+  const { formatDateBySystem, formatCurrency } = useDate();
   const [checked, setChecked] = React.useState<Set<string>>(new Set(selectedIds));
   /** Order in which user ticked rows: first-ticked gets allocation first. */
   const [selectedOrder, setSelectedOrder] = React.useState<string[]>(selectedIds?.length ? [...selectedIds] : []);
@@ -169,15 +170,7 @@ export function LinkPaymentInToPaymentOutDialog({
         const linkable = Math.max(0, amount - alreadyLinked);
         // For contra rows, render CNTR In/CNTR Out according to the current account leg.
         const voucherNumber = getContraVoucherNumberForInAccount(v, accountId);
-        const from =
-          v.type === "contra"
-            ? (names[v.fromAccountId] ?? "—")
-            : names[v.partyId] ||
-              names[v.staffId] ||
-              names[v.taxAccountId] ||
-              names[v.incomeAccountId] ||
-              v.payeeName ||
-              "—";
+        const from = getSpendWiseInflowPartyLabel(v, names);
         return { id: v.id, voucherNumber, date, amount, alreadyLinked, linkable, from };
       });
     const openingBase = getOpeningBalanceBaseAmount(accountOpeningBalance, "dr");
@@ -306,7 +299,7 @@ export function LinkPaymentInToPaymentOutDialog({
         )}
         hideCloseButton
       >
-        <DialogHeader className="space-y-0.5">
+        <DialogHeader className="shrink-0 space-y-0.5">
           <p className="text-xs text-muted-foreground leading-tight">Link for spend wise</p>
           <DialogTitle className="leading-tight">{displayOnly ? `Current voucher ${displayOnlyVariant === 'out' ? 'payment out' : 'in voucher'}${accountName ? ` from ${accountName}` : ""}` : `Select Payment In / Direct Income / Contra (in)${accountName ? ` from ${accountName}` : ""}`}</DialogTitle>
           {!displayOnly && (
@@ -321,12 +314,10 @@ export function LinkPaymentInToPaymentOutDialog({
               {needsMore && (
                 <span className="text-amber-600 font-medium">Choose more</span>
               )}
-              <Button type="button" variant="secondary" size="sm" onClick={handleAutoLink}>
-                Auto Link
-              </Button>
             </div>
           )}
         </DialogHeader>
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-slim-dim flex flex-col gap-2">
         {/* To Voucher (current voucher): the Payment Out we're editing — show at top like Payment In dialog. */}
         {currentVoucherSummary && !displayOnly && (
           <div className="space-y-1.5 rounded-lg border bg-muted/30 p-3 shrink-0">
@@ -348,7 +339,7 @@ export function LinkPaymentInToPaymentOutDialog({
                 </thead>
                 <tbody>
                   <tr className="border-b last:border-b-0">
-                    <td className="p-2 text-muted-foreground whitespace-nowrap">{currentVoucherSummary.date ? formatDate(currentVoucherSummary.date) : "—"}</td>
+                    <td className="p-2 text-muted-foreground whitespace-nowrap">{currentVoucherSummary.date ? formatDateBySystem(currentVoucherSummary.date) : "—"}</td>
                     <td className="p-2 font-medium whitespace-nowrap">{currentVoucherSummary.voucherNumber}</td>
                     <td className="p-2 whitespace-nowrap">{currentVoucherSummary.from}</td>
                     <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(currentVoucherSummary.amount)} Dr</td>
@@ -370,7 +361,7 @@ export function LinkPaymentInToPaymentOutDialog({
           <p className="text-sm text-muted-foreground shrink-0 -mt-0.5 hidden md:block">Payment In / Direct Income / Contra (in) of this account (only linkable or already selected)</p>
         )}
         {/* Single scroll container: horizontal + vertical so mobile shows full table; thin dim scrollbar */}
-        <div className="flex-1 min-h-0 border rounded-md overflow-auto scrollbar-slim-dim">
+        <div className="min-h-0 border rounded-md overflow-x-auto">
           {displayList.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4 text-center">
               {paymentInListFiltered.length === 0
@@ -418,7 +409,7 @@ export function LinkPaymentInToPaymentOutDialog({
                           disabled={displayOnly || (!checked.has(row.id) && (selectionFull || row.linkable <= 0))}
                         />
                       </td>
-                      <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? formatDate(row.date) : "—"}</td>
+                      <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? formatDateBySystem(row.date) : "—"}</td>
                       <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
                       <td className="p-2 whitespace-nowrap">{row.from}</td>
                       <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(row.amount)}</td>
@@ -432,25 +423,26 @@ export function LinkPaymentInToPaymentOutDialog({
             </div>
           )}
         </div>
+        </div>
         {!displayOnly && needsMore && (
-          <p className="text-sm text-amber-600 font-medium px-1">Selected total is less than required. Choose more vouchers to cover the amount.</p>
+          <p className="text-sm text-amber-600 font-medium px-1 shrink-0">Selected total is less than required. Choose more vouchers to cover the amount.</p>
         )}
-        <DialogFooter className="!flex-row flex flex-wrap items-center gap-2 w-full justify-between sm:justify-between">
+        <DialogFooter className="shrink-0 !flex-row flex flex-wrap items-center gap-2 w-full justify-between sm:justify-between">
           <Button size="sm" onClick={() => onOpenChange(false)} className="h-9 rounded-full shrink-0 bg-orange-500 hover:bg-orange-600 text-white border-0">
             {displayOnly ? "Close" : "Cancel"}
           </Button>
           {!displayOnly && (
             <div className="flex flex-row flex-wrap items-center gap-2 shrink-0">
+              <Button type="button" size="sm" onClick={handleReset} className="h-9 rounded-full bg-violet-600 hover:bg-violet-700 text-white border-0">
+                <RotateCcw className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
+                Reset
+              </Button>
               {requiredAmount > 0 && (
                 <Button type="button" size="sm" onClick={handleAutoLink} className="h-9 rounded-full bg-blue-600 hover:bg-blue-700 text-white border-0">
                   <Link2 className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
                   Auto Link
                 </Button>
               )}
-              <Button type="button" size="sm" onClick={handleReset} className="h-9 rounded-full bg-violet-600 hover:bg-violet-700 text-white border-0">
-                <RotateCcw className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
-                Reset
-              </Button>
               <Button onClick={handleConfirm} className="h-9 rounded-full bg-green-600 hover:bg-green-700 text-white border-0">Done</Button>
             </div>
           )}

@@ -4,6 +4,7 @@
 import * as React from "react";
 import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
+import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import type { Tax, TaxGroup } from "@/components/tax/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -80,6 +81,12 @@ import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColum
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { useLedgerDetailSessionMemory } from "@/hooks/useLedgerDetailSessionMemory";
+import {
+  ledgerDetailSessionStorageKey,
+  writeLedgerDetailSessionSnapshot,
+  type LedgerDetailViewMode,
+} from "@/lib/ledgerDetailSessionMemory";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
@@ -200,16 +207,25 @@ export function TaxDetails({
     [tax?.fileUrl, tax?.id]
   );
 
+  const { balanceMode, setBalanceMode } = useBalanceMode();
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const ledgerViewMode: LedgerDetailViewMode =
+    balanceMode === "bill_wise" ? "bill_wise" : "statement";
+  const ledgerSessionKey = useMemo(
+    () =>
+      companyId && tax?.id
+        ? ledgerDetailSessionStorageKey(companyId, "tax", tax.id, ledgerViewMode)
+        : null,
+    [companyId, tax?.id, ledgerViewMode]
+  );
   useEffect(() => {
     setCurrentPage(1);
-  }, [tax?.id]);
+  }, [ledgerViewMode]);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
-  const { balanceMode, setBalanceMode } = useBalanceMode();
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -372,9 +388,15 @@ export function TaxDetails({
   const handleEditVoucher = useCallback((voucher: any) => {
     openingModalRef.current = true;
     setSelectedVoucher(voucher);
+    if (ledgerSessionKey && voucher?.id) {
+      writeLedgerDetailSessionSnapshot(ledgerSessionKey, {
+        page: currentPage,
+        openVoucherId: String(voucher.id),
+      });
+    }
     openModalInUrl();
     setIsVoucherDialogOpen(true);
-  }, [openModalInUrl]);
+  }, [openModalInUrl, ledgerSessionKey, currentPage]);
 
   // PC: preference; mobile: hamesha notes (includeNotesInTable)
   const displayTransactions = useMemo(
@@ -474,6 +496,22 @@ export function TaxDetails({
     pageSortOrder: sortOrder,
   });
 
+  useLedgerDetailSessionMemory({
+    companyId: companyId ?? undefined,
+    context: "tax",
+    contextId: tax?.id,
+    viewMode: ledgerViewMode,
+    totalPages,
+    currentPage,
+    setCurrentPage,
+    vouchers,
+    selectedVoucherId: selectedVoucher?.id ?? null,
+    isVoucherDialogOpen,
+    setSelectedVoucher,
+    setIsVoucherDialogOpen,
+    onRestoreVoucherDialog: isMobile ? openModalInUrl : undefined,
+  });
+
 
   const buildDateRangeText = () => {
     const from = dateRange?.from;
@@ -495,32 +533,50 @@ export function TaxDetails({
     if (!company || !tax) return Promise.resolve();
     // Keep print headers aligned with currently selected table columns.
     const printVisibleColumns = billWise ? { ...visibleColumns, status: true } : visibleColumns;
-    return openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: `Tax Statement: ${tax.name}`,
-      context: "tax",
-      contextId: tax.id,
-      dateSystem: dateSystem,
-      dateRangeText: buildDateRangeText(),
-      vouchersCount: processedTransactions.length,
-      openingBalance: openingBalanceForPeriod,
-      openingBalanceDate: (tax as any).openingBalanceDate,
-      openingBalanceNarration: tax.openingBalanceNarration ?? null,
-      transactions: processedTransactions,
-      showNarration: showNarration,
-      includeNotes: includeNotesInTable,
-      visibleColumns: printVisibleColumns,
-      billWise: billWise,
-    }, true);
+    return openPrintDirect(
+      applyLedgerPageToPrintPayload(
+        {
+          company: {
+            name: company.name,
+            pan: company.pan,
+            phone: company.phone,
+            address: company.address,
+            decimalPlaces: company.decimalPlaces,
+            showDrCr: company.showDrCr,
+            showCurrencySymbol: company.showCurrencySymbol,
+            logoUrl: company.logoUrl,
+          },
+          title: `Tax Statement: ${tax.name}`,
+          context: "tax",
+          contextId: tax.id,
+          dateSystem: dateSystem,
+          dateRangeText: buildDateRangeText(),
+          vouchersCount: paginatedTransactions.length,
+          openingBalance: desktopPaginationMeta.openingForPage,
+          openingBalanceDate: (tax as any).openingBalanceDate,
+          openingBalanceNarration: tax.openingBalanceNarration ?? null,
+          transactions: paginatedTransactions,
+          showNarration: showNarration,
+          includeNotes: includeNotesInTable,
+          visibleColumns: printVisibleColumns,
+          billWise: billWise,
+        },
+        {
+          paginatedTransactions,
+          openingForPage: desktopPaginationMeta.openingForPage,
+          periodDrForPage: desktopPaginationMeta.periodDrForPage,
+          periodCrForPage: desktopPaginationMeta.periodCrForPage,
+          closingForPage: desktopPaginationMeta.closingForPage,
+          booksOpeningBalance: Number((tax as any).openingBalance) || 0,
+          ledgerShowBookOpeningRow: currentPage === 1,
+          ledgerDateFilterActive: Boolean(dateRange?.from != null || dateRange?.to != null),
+          openingBalancePeriodStartDate: dateRange?.from,
+          masterOpeningBalanceDate: (tax as any).openingBalanceDate,
+          dateRange,
+        }
+      ),
+      true
+    );
   };
 
   const handlePrint = () => {

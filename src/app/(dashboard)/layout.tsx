@@ -52,6 +52,7 @@ import { ElectronTabStripSyncBridge } from "@/components/layout/ElectronTabStrip
 import { RecurringVoucherAutoRunner } from "@/components/vouchers/RecurringVoucherAutoRunner";
 import { PendingAttachmentSyncBridge } from "@/components/vouchers/PendingAttachmentSyncBridge";
 import { BackupRunGlobalBanner } from "@/components/settings/BackupRunGlobalBanner";
+import { RestoreCloudPushGlobalBanner } from "@/components/RestoreCloudPushGlobalBanner";
 import { AutoBackupScheduler } from "@/components/settings/AutoBackupScheduler";
 import { collection, doc, getDocs, getDoc, onSnapshot, deleteDoc, setDoc, serverTimestamp, query, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase"; // device-limit overlay: companies/{id}/devices + users lookup
@@ -899,6 +900,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       )}
                     >
                       <AppHeader />
+                      <RestoreCloudPushGlobalBanner />
                       <BackupRunGlobalBanner />
                       <CompanyDemotedBanner />
                       <PlanAuthoritativeSyncBanner />

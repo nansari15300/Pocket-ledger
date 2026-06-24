@@ -136,6 +136,15 @@ service cloud.firestore {
         (authEmailLower() != '' && c.data.get('handoverTo', '').lower() == authEmailLower())
       );
     }
+    function canReadCompanyData(data) {
+      return isAdmin() ||
+        data.get('ownerId', '') == request.auth.uid ||
+        (authEmailLower() != '' &&
+          data.get('ownerEmail', '').lower() == authEmailLower()) ||
+        hasSharedCompanyAccess(data) ||
+        (authEmailLower() != '' &&
+          data.get('handoverTo', '').lower() == authEmailLower());
+    }
     function isCompanyOwner(companyId) {
       let c = get(/databases/$(database)/documents/companies/$(companyId));
       return isSignedIn() && c != null && c.data != null && (
@@ -286,16 +295,22 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
         request.resource.data.ownerId == request.auth.uid;
 
-      // Admin can list/get all companies; others only own, ownerEmail, shared, or handover.
-      allow get, list: if isSignedIn() && (
-        isAdmin() ||
-        resource.data.ownerId == request.auth.uid ||
-        (authEmailLower() != '' &&
-          resource.data.get('ownerEmail', '').lower() == authEmailLower()) ||
-        hasSharedCompanyAccess(resource.data) ||
-        (authEmailLower() != '' &&
-          resource.data.get('handoverTo', '').lower() == authEmailLower())
-      );
+      // get by doc id — full membership check
+      allow get: if isSignedIn() && canReadCompanyData(resource.data);
+
+      // Collection queries: har branch client `where(...)` se 1:1 align — combined OR ek rule me → shared array-contains permission-denied
+      allow list: if isSignedIn() && isAdmin();
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow list: if isSignedIn() && authEmailLower() != ''
+        && resource.data.get('ownerEmail', '').lower() == authEmailLower();
+      allow list: if isSignedIn() && request.auth.token.email != null
+        && request.auth.token.email in resource.data.get('sharedWithEmails', []);
+      allow list: if isSignedIn() && authEmailLower() != ''
+        && authEmailLower() in resource.data.get('sharedWithEmails', []);
+      allow list: if isSignedIn() && authEmailLower() != ''
+        && authEmailLower() in resource.data.get('sharedWithEmailsLower', []);
+      allow list: if isSignedIn() && authEmailLower() != ''
+        && resource.data.get('handoverTo', '').lower() == authEmailLower();
 
       allow update: if isCompanyOwner(companyId) || isAdmin();
       // Shared / handover member — Edit Company profile save (name, address, …)

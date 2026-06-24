@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter }
 import { Button } from "@/components/ui/button";
 import { Download, Upload, Loader2, FileWarning, ShieldCheck, ShieldOff, Eye, EyeOff, Folder, Info } from "lucide-react";
 import { useCompany } from "@/hooks/useCompany";
+import type { Company } from "@/hooks/useCompany";
 import {
   collection,
   getDocs,
@@ -22,8 +23,6 @@ import {
   limit,
   startAfter,
   documentId,
-  updateDoc,
-  deleteField,
 } from "firebase/firestore";
 import type { QueryDocumentSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
@@ -46,8 +45,12 @@ import {
   upsertCompanyDocInBrowserDb,
   notifyBrowserDbCollectionUpdated,
   listCompanyDocsFromBrowserDb,
+  deleteAllCompanyDocsForCompany,
 } from "@/lib/localCompanyDocMirror";
-import { pushAllLocalCompanyDocsToFirestore } from "@/lib/migrateLocalCompanySubcollectionsToFirestore";
+import {
+  hydratePendingLocalFileRefsDeep,
+  hydrateVoucherLocalAttachmentsForServer,
+} from "@/lib/hydrateVoucherLocalAttachmentsForServer";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import {
@@ -70,6 +73,13 @@ import {
   startCompanyBackupRun,
 } from "@/lib/companyBackupRunner";
 import { COLLECTIONS_TO_BACKUP } from "@/lib/companyBackupCore";
+import {
+  beginRestoreCloudFilesUpload,
+  persistPendingRestoreCloudPush,
+  queuePendingRestoreCloudPushFilesOnly,
+  uploadRestoreDataToCloudImmediately,
+} from "@/lib/restoreCloudBackgroundSync";
+import type { CompanyBackupSourceMode } from "@/lib/companyBackupCore";
 import { useCompanyBackupRun } from "@/hooks/useCompanyBackupRun";
 import { readBackupLocationDisplayLabel, formatNativeFolderDisplayPath } from "@/lib/backupLocationDisplay";
 import {
@@ -449,6 +459,26 @@ function rewriteBackupCompanyIdsDeep(backupCompanyId: string, targetCompanyId: s
   return val;
 }
 
+/** Replace open company vs nayi company id (purana flow). */
+export type RestoreTargetMode = "replace_current" | "new_company";
+
+async function clearFirestoreCompanySubcollectionsForRestore(fsCompanyId: string): Promise<void> {
+  const cid = String(fsCompanyId || "").trim();
+  if (!cid) return;
+  for (const colName of collectionsToBackup) {
+    const colRef = collection(firestore, `companies/${cid}/${colName}`);
+    for (;;) {
+      const snap = await getDocs(query(colRef, limit(400)));
+      if (snap.empty) break;
+      const batch = writeBatch(firestore);
+      for (const d of snap.docs) {
+        batch.delete(d.ref);
+      }
+      await batch.commit();
+    }
+  }
+}
+
 /** Restore confirm: user picks final `name` — default slot (target); ya backup file wala naam (agar khali ho to doosra fallback). */
 function resolveRestoreFinalCompanyName(
   choice: "target" | "backup",
@@ -459,6 +489,26 @@ function resolveRestoreFinalCompanyName(
   const b = String(backupName ?? "").trim();
   if (choice === "backup") return b || t;
   return t || b;
+}
+
+function resolveRestoreIncludeAttachments(
+  restoreIncludeAttachments: boolean,
+  backupData: Record<string, unknown> | null
+): boolean {
+  return restoreIncludeAttachments && backupDataHasAttachmentBundle(backupData);
+}
+
+/** Cloud restore: `local:` pending blobs → Firebase Storage HTTPS (app / doosre device resolve kar sakein). */
+async function hydrateRestoredFieldsForCloudUpload(
+  fsCompanyId: string,
+  collectionName: string,
+  fields: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  if (collectionName === "vouchers") {
+    const voucherHydrated = await hydrateVoucherLocalAttachmentsForServer(fsCompanyId, fields);
+    return hydratePendingLocalFileRefsDeep(fsCompanyId, voucherHydrated);
+  }
+  return hydratePendingLocalFileRefsDeep(fsCompanyId, fields);
 }
 
 export function BackupRestore() {
@@ -591,10 +641,12 @@ export function BackupRestore() {
   const [restoreToLocalSqlite, setRestoreToLocalSqlite] = useState(true);
   /** Restore ke baad `companies.name`: default = jis slot mein restore ho raha hai (target); alternate = backup file ka naam */
   const [restoreCompanyNameChoice, setRestoreCompanyNameChoice] = useState<"target" | "backup">("target");
+  const [restoreTargetMode, setRestoreTargetMode] = useState<RestoreTargetMode>("replace_current");
   /** Create Backup bina company password — popup (mobile layout safe); user Close kare tab tak. */
   const [backupPasswordHintOpen, setBackupPasswordHintOpen] = useState(false);
   /** Backup confirm: data-only vs attachment embed (Option A). */
   const [backupIncludeAttachments, setBackupIncludeAttachments] = useState(false);
+  const [backupSourceMode, setBackupSourceMode] = useState<CompanyBackupSourceMode>("local_only");
   const [backupAttachmentGateHint, setBackupAttachmentGateHint] = useState<string | null>(null);
   /** Restore: bundle ho to attachments restore karna hai ya sirf URLs. */
   const [restoreIncludeAttachments, setRestoreIncludeAttachments] = useState(false);
@@ -632,18 +684,20 @@ export function BackupRestore() {
     return { signal, report };
   };
 
+  // Reset restore choices only when the confirm dialog opens — not when attachment hints update while open.
   useEffect(() => {
-    if (isOverwriteConfirmOpen) {
-      setRestoreToLocalSqlite(true);
-      setRestoreCompanyNameChoice("target");
-      const hasBundle = backupDataHasAttachmentBundle(backupDataToRestore);
-      setRestoreIncludeAttachments(hasBundle && attachmentFeatureOn);
-    }
-  }, [isOverwriteConfirmOpen, backupDataToRestore, attachmentFeatureOn]);
+    if (!isOverwriteConfirmOpen) return;
+    setRestoreToLocalSqlite(true);
+    setRestoreCompanyNameChoice("target");
+    setRestoreTargetMode("replace_current");
+    const hasBundle = backupDataHasAttachmentBundle(backupDataToRestore);
+    setRestoreIncludeAttachments(hasBundle && attachmentFeatureOn);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: open-only reset
+  }, [isOverwriteConfirmOpen]);
 
   useEffect(() => {
-    // Attachment backup dialog: plan limit hint.
-    if (!isEncryptedBackupConfirmOpen || !user?.uid) {
+    // Attachment backup dialog: plan limit hint (online merge + attachments only).
+    if (!isEncryptedBackupConfirmOpen || !user?.uid || backupSourceMode === "local_only") {
       setBackupAttachmentGateHint(null);
       return;
     }
@@ -655,22 +709,23 @@ export function BackupRestore() {
       }
       setBackupAttachmentGateHint(formatAttachmentUsageRemaining(gate.cap, gate.used));
     })();
-  }, [isEncryptedBackupConfirmOpen, user?.uid, accountPlanId, attachmentFeatureOn]);
+  }, [isEncryptedBackupConfirmOpen, user?.uid, accountPlanId, attachmentFeatureOn, backupSourceMode]);
 
   useEffect(() => {
     if (!isOverwriteConfirmOpen || !user?.uid || !backupDataHasAttachmentBundle(backupDataToRestore)) {
       setRestoreAttachmentGateHint(null);
       return;
     }
-    void (async () => {
-      const gate = await checkAttachmentRestoreAllowed(user.uid, accountPlanId);
-      if (!attachmentFeatureOn) {
-        setRestoreAttachmentGateHint("Not included on your plan — restore Data only.");
-        return;
-      }
-      setRestoreAttachmentGateHint(formatAttachmentUsageRemaining(gate.cap, gate.used));
-    })();
-  }, [isOverwriteConfirmOpen, backupDataToRestore, user?.uid, accountPlanId, attachmentFeatureOn]);
+    if (staticBackupClient || restoreToLocalSqlite) {
+      setRestoreAttachmentGateHint(
+        "Device restore: files stay on this app/browser storage — not auto-downloaded from server later."
+      );
+      return;
+    }
+    setRestoreAttachmentGateHint(
+      "Cloud restore: files are written to this device first; after reload they upload to Firestore in the background."
+    );
+  }, [isOverwriteConfirmOpen, backupDataToRestore, user?.uid, restoreToLocalSqlite, staticBackupClient]);
 
   useEffect(() => {
     // Hydrate backup location prefs for this device.
@@ -956,6 +1011,11 @@ export function BackupRestore() {
   };
 
   const handleBackupClick = () => {
+    setBackupSourceMode(
+      staticBackupClient || (typeof navigator !== "undefined" && !navigator.onLine)
+        ? "local_only"
+        : "online_merge"
+    );
     if (company?.password) {
       setBackupPasswordHintOpen(false);
       setBackupIncludeAttachments(false);
@@ -1038,24 +1098,45 @@ export function BackupRestore() {
 
     setIsEncryptedBackupConfirmOpen(false);
 
-    // Web: sirf data-only backup — attachments embed static/APK/EXE par.
-    const withAttachments = staticBackupClient && includeAttachments;
+    // Attachments: static app, ya local-only recovery (device cache — server optional).
+    const withAttachments =
+      includeAttachments && (staticBackupClient || backupSourceMode === "local_only");
+
+    let backupCompany = company;
+    if (backupSourceMode === "local_only") {
+      const localRow = await getLocalCompanyById(companyId, { includeDeleted: true });
+      if (localRow) {
+        backupCompany = { ...company, ...(localRow as Record<string, unknown>), id: companyId } as typeof company;
+      }
+    }
 
     const result = await startCompanyBackupRun({
-      company,
+      company: backupCompany,
       companyId,
       ownerUid: user.uid,
       accountPlanId,
       includeAttachments: withAttachments,
+      backupSourceMode,
     });
 
     if (result.ok === true) {
       const embedded = result.attachmentEmbeddedCount ?? 0;
       const refs = result.attachmentRefCount ?? 0;
       if (result.includeAttachments) {
+        const missing = Math.max(0, refs - embedded);
         toast({
-          title: "Success",
-          description: `Backup saved: ${result.where} (${embedded} file${embedded === 1 ? "" : "s"} embedded)`,
+          title: missing > 0 ? "Backup saved — some files missing" : "Success",
+          variant: missing > 0 ? "destructive" : "default",
+          description:
+            missing > 0
+              ? `${embedded} of ${refs} files embedded in backup. ${missing} file(s) had no bytes on this device — open those vouchers here first, then backup again with “With attachments”.`
+              : `Backup saved: ${result.where} (${embedded} file${embedded === 1 ? "" : "s"} embedded)`,
+        });
+      } else if (refs > 0 && backupSourceMode === "local_only") {
+        toast({
+          variant: "destructive",
+          title: "Backup saved — attachments not included",
+          description: `${refs} file link${refs === 1 ? "" : "s"} in data but only ${embedded} embedded. Enable “With attachments” on this device while files still open.`,
         });
       } else if (refs > 0) {
         // Checkbox tha lekin koi blob resolve nahi hua — size data-only jaisa hi rahega.
@@ -1282,7 +1363,9 @@ export function BackupRestore() {
   const handleLocalOverwriteRestore = async (
     backupData: any,
     resolvedCompanyName: string,
-    restoreAttachments: boolean
+    restoreAttachments: boolean,
+    restoreTargetMode: RestoreTargetMode,
+    options?: { cloudRestore?: boolean }
   ) => {
     if (!companyId || !user?.uid || !backupData) return;
 
@@ -1364,7 +1447,8 @@ export function BackupRestore() {
       /* offline / no Firestore — local restore allow */
     }
 
-    // Naya `companyId` banate hain — currently open company ka Firestore owner mismatch ab block nahi (purana slot touch nahi hota).
+    const replaceCurrent = restoreTargetMode === "replace_current";
+    const cloudRestore = options?.cloudRestore === true;
 
     setIsRestoring(true);
     setIsOverwriteConfirmOpen(false);
@@ -1372,24 +1456,40 @@ export function BackupRestore() {
     try {
       const { signal, report } = beginRestoreProgress(backupData, restoreAttachments);
 
-      // Har restore par naya doc id — same backup do baar restore par SQLite rows mix nahi honge.
-      const newCompanyId = generateCompanyId(
-        resolvedCompanyName.trim() || String(backupCompanyDetails.name ?? "company")
-      );
+      const targetCompanyId = replaceCurrent
+        ? String(companyId || "").trim()
+        : generateCompanyId(
+            resolvedCompanyName.trim() || String(backupCompanyDetails.name ?? "company")
+          );
+      if (!targetCompanyId) {
+        toast({ variant: "destructive", title: "Restore Failed", description: "No company selected to restore into." });
+        return;
+      }
+
+      const existingBeforeReplace = replaceCurrent
+        ? await getLocalCompanyById(targetCompanyId, { includeDeleted: true })
+        : null;
+
+      if (replaceCurrent) {
+        report.tick("Preparing", "Clearing current company data on this device…");
+        await deleteAllCompanyDocsForCompany(targetCompanyId);
+      }
 
       let dataToWrite = backupData;
       if (restoreAttachments && backupDataHasAttachmentBundle(backupData)) {
-        const gate = await checkAttachmentRestoreAllowed(user.uid, accountPlanId);
-        if (!gate.allowed) {
-          toast({ variant: "destructive", title: "Attachment restore blocked", description: gate.message });
-          setIsRestoring(false);
-          setRestoreProgress(null);
-          return;
+        if (!staticBackupClient) {
+          const gate = await checkAttachmentRestoreAllowed(user.uid, accountPlanId);
+          if (!gate.allowed) {
+            toast({ variant: "destructive", title: "Attachment restore blocked", description: gate.message });
+            setIsRestoring(false);
+            setRestoreProgress(null);
+            return;
+          }
         }
         const map = await restoreAttachmentsFromBackupData(
           backupData,
           restoreZipFilesRef.current,
-          newCompanyId,
+          targetCompanyId,
           (_done, _total, bytes) => report.tick("Restoring attachments", "", 1, bytes),
           signal
         );
@@ -1410,11 +1510,11 @@ export function BackupRestore() {
         for (const docData of docsToRestore) {
           report.throwIfAborted();
           const { id: originalId, ...data } = docData;
-          const rewritten = rewriteBackupCompanyIdsDeep(backupCompanyIdFromFile, newCompanyId, data) as Record<string, unknown>;
+          const rewritten = rewriteBackupCompanyIdsDeep(backupCompanyIdFromFile, targetCompanyId, data) as Record<string, unknown>;
           const rw = rewritten as { isDeleted?: boolean; date?: unknown; dueDate?: unknown; due_date?: unknown; openingBalanceDate?: unknown; createdAt?: unknown; amount?: unknown; total?: number };
           const finalData: Record<string, unknown> = {
             ...rewritten,
-            companyId: newCompanyId,
+            companyId: targetCompanyId,
             isDeleted: rw.isDeleted ?? false,
             date: safeTimestamp(rw.date),
             openingBalanceDate: safeTimestamp(rw.openingBalanceDate),
@@ -1423,16 +1523,16 @@ export function BackupRestore() {
           };
           // Sale/Purchase overdue depends on dueDate; keep restored voucher backups selectable and visible in overdue list.
           if (colName === "vouchers") finalData.dueDate = safeTimestamp(rw.dueDate ?? rw.due_date);
-          await upsertCompanyDocInBrowserDb(newCompanyId, colName, originalId, finalData as Record<string, unknown>, {
+          await upsertCompanyDocInBrowserDb(targetCompanyId, colName, originalId, finalData as Record<string, unknown>, {
             notify: false,
             force: true,
           });
           report.tick("Writing records", colName.replace(/_/g, " "));
         }
-        notifyBrowserDbCollectionUpdated(newCompanyId, colName);
+        notifyBrowserDbCollectionUpdated(targetCompanyId, colName);
       }
 
-      const existing = await getLocalCompanyById(newCompanyId, { includeDeleted: true });
+      const existing = await getLocalCompanyById(targetCompanyId, { includeDeleted: true });
       const restoredCompanyDetails = (dataToWrite.companyDetails || backupData.companyDetails) as Array<Record<string, unknown>>;
       const { id: _bid, ownerId: _boid, ownerEmail: _boe, ...restDetails } = restoredCompanyDetails[0];
       const rest = restDetails as Record<string, unknown>;
@@ -1448,9 +1548,9 @@ export function BackupRestore() {
       } = restNoFiscal as Record<string, unknown>;
 
       const localCompanyRow: Record<string, unknown> = {
-        ...(existing || {}),
+        ...(existing || existingBeforeReplace || {}),
         ...restNoFiscalLocalSafe,
-        id: newCompanyId,
+        id: targetCompanyId,
         ownerId: user.uid,
         ownerEmail: user.email ?? (existing as { ownerEmail?: string })?.ownerEmail,
         fiscalYearStart: fyStart ?? fiscalFieldToLocalIso((existing as { fiscalYearStart?: unknown })?.fiscalYearStart),
@@ -1459,13 +1559,15 @@ export function BackupRestore() {
           (rest as { localCompanyUsers?: unknown }).localCompanyUsers ??
           (existing as { localCompanyUsers?: unknown })?.localCompanyUsers,
         updatedAt: Date.now(),
-        storageOption: "local",
+        storageOption: cloudRestore ? "local" : "local",
         syncedFromCloud: false,
-        syncPolicy: "offline",
-        // User ne confirm dialog mein jo naam choose kiya (target vs backup) — spread se backup `name` override
+        syncPolicy: cloudRestore ? "online" : "offline",
+        ...(cloudRestore ? { authoritativeCompanyId: targetCompanyId } : {}),
         name: resolvedCompanyName.trim() || String((restNoFiscalLocalSafe as { name?: string }).name ?? (existing as { name?: string })?.name ?? ""),
       };
-      delete localCompanyRow.authoritativeCompanyId;
+      if (!cloudRestore) {
+        delete localCompanyRow.authoritativeCompanyId;
+      }
 
       report.tick("Finalizing", "Saving company row…");
       await upsertLocalCompany(localCompanyRow as Parameters<typeof upsertLocalCompany>[0]);
@@ -1474,34 +1576,78 @@ export function BackupRestore() {
       reloadLocalCompanyRegistry();
       triggerSync();
 
-      // Firestore root kabhi purane `authoritativeCompanyId` (backup wali company A) rakhta hai — shared user
-      // `companies/{galatId}/vouchers` padhta hai → 0 data. SQLite sahi `companyId` par hai; cloud align + push.
-      try {
-        report.tick("Finalizing", "Aligning cloud copy…");
-        const cref = doc(firestore, "companies", newCompanyId);
-        const cs = await getDoc(cref);
-        if (cs.exists()) {
-          await updateDoc(cref, { authoritativeCompanyId: deleteField() });
-        }
-        const { pushed, errors } = await pushAllLocalCompanyDocsToFirestore(newCompanyId);
-        if (errors.length) {
-          console.warn("[BackupRestore] post-local-restore cloud push:", errors.slice(0, 5));
-        } else if (pushed > 0) {
-          console.log("[BackupRestore] post-local-restore pushed docs:", pushed);
-        }
-      } catch (e) {
-        console.warn("[BackupRestore] post-local-restore Firestore align/push skipped:", e);
-      }
+      let deferCloudSkipReload = false;
 
-      if (restoreAttachments && backupDataHasAttachmentBundle(backupData)) {
+      if (cloudRestore) {
+        const cloudJob = {
+          companyId: targetCompanyId,
+          ownerUid: user.uid,
+          ownerEmail: user.email ?? "",
+          companyName:
+            resolvedCompanyName.trim() ||
+            String((restNoFiscalLocalSafe as { name?: string }).name ?? company?.name ?? ""),
+          replaceCurrent,
+        };
+        persistPendingRestoreCloudPush({
+          ...cloudJob,
+          phase: "data",
+          dataUploaded: false,
+          createdAtMs: Date.now(),
+        });
+
+        report.tick("Uploading to cloud", "Sending company data to server…");
+        const cloudData = await uploadRestoreDataToCloudImmediately(cloudJob);
+        if (!cloudData.ok) {
+          console.warn("[BackupRestore] immediate cloud data upload:", cloudData.message);
+          queuePendingRestoreCloudPushFilesOnly(cloudJob);
+          deferCloudSkipReload = true;
+          toast({
+            variant: "destructive",
+            title: "Cloud data upload issue",
+            description:
+              cloudData.message ||
+              "Local restore OK — files safe on device. Retry upload when online (no restart).",
+            duration: 12_000,
+          });
+        } else {
+          await beginRestoreCloudFilesUpload(cloudJob);
+          deferCloudSkipReload = true;
+          toast({
+            title: "Restore complete — uploading files",
+            description:
+              "Company data is restored. Browse the app now; uploaded files appear as the header bar progresses. New tabs resume from the same %.",
+            duration: 12_000,
+          });
+        }
+      }
+      // Local device (SQLite) restore: no Firestore upload — data stays on this device only.
+
+      if (restoreAttachments && backupDataHasAttachmentBundle(backupData) && !staticBackupClient) {
         await incrementAttachmentRestoreUsage(user.uid);
       }
 
+      setCompanyId(targetCompanyId);
+
+      if (cloudRestore && deferCloudSkipReload) {
+        toast({
+          title: "Restore complete on this device",
+          description:
+            "Company is ready to use. Cloud upload continues in the background — header bar shows progress (same % in new tabs).",
+          duration: 10_000,
+        });
+        return;
+      }
+
       report.tick("Complete", "Reloading app…");
-      setCompanyId(newCompanyId);
       toast({
         title: "Restore Successful",
-        description: `Opened as a new company (${newCompanyId}). Reloading…`,
+        description: cloudRestore
+          ? replaceCurrent
+            ? `Company "${resolvedCompanyName.trim() || company?.name}" restored. Cloud upload complete — reloading once.`
+            : `New company restored (${targetCompanyId}). Cloud upload complete — reloading once.`
+          : replaceCurrent
+            ? `Company "${resolvedCompanyName.trim() || company?.name}" data replaced on this device only. Reloading…`
+            : `New local company created (${targetCompanyId}). Your other companies are unchanged. Reloading…`,
       });
       window.location.reload();
     } catch (error: any) {
@@ -1527,7 +1673,8 @@ export function BackupRestore() {
   const handleOverwriteRestore = async (
     backupData: any,
     resolvedCompanyName: string,
-    restoreAttachments: boolean
+    restoreAttachments: boolean,
+    restoreTargetMode: RestoreTargetMode
   ) => {
     if (!companyId || !user?.uid || !backupData) return;
 
@@ -1612,31 +1759,51 @@ export function BackupRestore() {
         }
     }
 
-    // Purani selected company delete nahi — naya Firestore `companies/{newId}` subtree banega.
+    const replaceCurrent = restoreTargetMode === "replace_current";
 
     setIsRestoring(true);
     setIsOverwriteConfirmOpen(false);
 
     try {
         const { signal, report } = beginRestoreProgress(backupData, restoreAttachments);
-        const newCompanyId = generateCompanyId(
-          resolvedCompanyName.trim() || String(backupCompanyDetails.name ?? "company")
-        );
+        const targetCompanyId = replaceCurrent
+          ? String(companyId || "").trim()
+          : generateCompanyId(
+              resolvedCompanyName.trim() || String(backupCompanyDetails.name ?? "company")
+            );
+        if (!targetCompanyId) {
+          toast({ variant: "destructive", title: "Restore Failed", description: "No company selected to restore into." });
+          return;
+        }
+
+        if (replaceCurrent) {
+          report.tick("Preparing", "Clearing current company data in cloud…");
+          await clearFirestoreCompanySubcollectionsForRestore(targetCompanyId);
+          try {
+            report.tick("Preparing", "Clearing local mirror on this device…");
+            await deleteAllCompanyDocsForCompany(targetCompanyId);
+          } catch (e) {
+            console.warn("[BackupRestore] local clear before cloud replace skipped:", e);
+          }
+        }
+
         const backupCompanyIdFromFile = String(backupData.companyDetails?.[0]?.id ?? "").trim();
 
         let dataToWrite = backupData;
         if (restoreAttachments && backupDataHasAttachmentBundle(backupData)) {
-          const gate = await checkAttachmentRestoreAllowed(user.uid, accountPlanId);
-          if (!gate.allowed) {
-            toast({ variant: "destructive", title: "Attachment restore blocked", description: gate.message });
-            setIsRestoring(false);
-            setRestoreProgress(null);
-            return;
+          if (!staticBackupClient) {
+            const gate = await checkAttachmentRestoreAllowed(user.uid, accountPlanId);
+            if (!gate.allowed) {
+              toast({ variant: "destructive", title: "Attachment restore blocked", description: gate.message });
+              setIsRestoring(false);
+              setRestoreProgress(null);
+              return;
+            }
           }
           const map = await restoreAttachmentsFromBackupData(
             backupData,
             restoreZipFilesRef.current,
-            newCompanyId,
+            targetCompanyId,
             (_done, _total, bytes) => report.tick("Restoring attachments", "", 1, bytes),
             signal
           );
@@ -1645,23 +1812,36 @@ export function BackupRestore() {
 
         let batch = writeBatch(firestore);
         const safeTimestamp = (val: any): Timestamp | null => {
-            // Cloud restore uses the same parser as voucher forms so dueDate survives JSON/plain timestamp backups.
             const date = parseFirestoreDateFieldToJsDate(val);
             return date ? Timestamp.fromDate(date) : null;
         };
         
         let count = 0;
+        const shouldUploadAttachmentsToCloud =
+          restoreAttachments && backupDataHasAttachmentBundle(backupData);
         for (const colName of collectionsToBackup) {
             report.throwIfAborted();
             const docsToRestore = dataToWrite[colName] || [];
             for (const docData of docsToRestore) {
                 report.throwIfAborted();
                 const { id: originalId, ...data } = docData;
-                const rewritten = rewriteBackupCompanyIdsDeep(
+                let rewritten = rewriteBackupCompanyIdsDeep(
                   backupCompanyIdFromFile,
-                  newCompanyId,
+                  targetCompanyId,
                   data
                 ) as Record<string, unknown>;
+                if (shouldUploadAttachmentsToCloud) {
+                  report.tick("Uploading attachments", `${colName.replace(/_/g, " ")}…`);
+                  try {
+                    rewritten = await hydrateRestoredFieldsForCloudUpload(
+                      targetCompanyId,
+                      colName,
+                      rewritten
+                    );
+                  } catch (e) {
+                    console.warn("[BackupRestore] cloud attachment upload skipped for doc", originalId, e);
+                  }
+                }
                 const rw = rewritten as {
                   isDeleted?: boolean;
                   date?: unknown;
@@ -1674,7 +1854,7 @@ export function BackupRestore() {
                 };
                 const finalData: Record<string, unknown> = {
                     ...rewritten,
-                    companyId: newCompanyId,
+                    companyId: targetCompanyId,
                     isDeleted: rw.isDeleted ?? false,
                     date: safeTimestamp(rw.date),
                     openingBalanceDate: safeTimestamp(rw.openingBalanceDate),
@@ -1684,10 +1864,9 @@ export function BackupRestore() {
                         ? rw.total || 0
                         : Number(rw.amount),
                 };
-                // Overdue vouchers require dueDate after restore; old backups may have due_date instead.
                 if (colName === "vouchers") finalData.dueDate = safeTimestamp(rw.dueDate ?? rw.due_date);
 
-                const docRef = doc(firestore, `companies/${newCompanyId}/${colName}`, originalId);
+                const docRef = doc(firestore, `companies/${targetCompanyId}/${colName}`, originalId);
                 batch.set(docRef, finalData);
                 
                 count++;
@@ -1713,36 +1892,45 @@ export function BackupRestore() {
               resolvedCompanyName.trim() || String((details as { name?: string }).name ?? "");
             const detailsRewritten = rewriteBackupCompanyIdsDeep(
               backupCompanyIdFromFile,
-              newCompanyId,
+              targetCompanyId,
               details
             ) as Record<string, unknown>;
-            // Naya root doc — `set` taaki pehle se na ho to bhi likh sake; authoritative path = naya id.
-            batch.set(doc(firestore, "companies", newCompanyId), {
-              ...detailsRewritten,
+            let companyRootFields = detailsRewritten;
+            if (shouldUploadAttachmentsToCloud) {
+              report.tick("Uploading attachments", "Company profile files…");
+              try {
+                companyRootFields = await hydratePendingLocalFileRefsDeep(targetCompanyId, detailsRewritten);
+              } catch (e) {
+                console.warn("[BackupRestore] company root attachment upload skipped", e);
+              }
+            }
+            batch.set(doc(firestore, "companies", targetCompanyId), {
+              ...companyRootFields,
               name: finalName,
               ownerId: user.uid,
               ownerEmail: user.email ?? "",
-              authoritativeCompanyId: newCompanyId,
-            });
+              authoritativeCompanyId: targetCompanyId,
+            }, { merge: replaceCurrent });
         }
 
         report.tick("Finalizing", "Saving to Firestore…");
         await batch.commit();
 
-        if (restoreAttachments && backupDataHasAttachmentBundle(backupData)) {
+        if (restoreAttachments && backupDataHasAttachmentBundle(backupData) && !staticBackupClient) {
           await incrementAttachmentRestoreUsage(user.uid);
         }
 
         report.tick("Finalizing", "Refreshing local registry…");
-        // Online restore ke baad local company registry / listeners align (static + web dono)
         reloadLocalCompanyRegistry();
         triggerSync();
 
         report.tick("Complete", "Reloading app…");
-        setCompanyId(newCompanyId);
+        setCompanyId(targetCompanyId);
         toast({
           title: "Restore Successful",
-          description: `New cloud company ${newCompanyId}. Page will now reload.`,
+          description: replaceCurrent
+            ? `Company "${resolvedCompanyName.trim() || company?.name}" data replaced in cloud. Page will now reload.`
+            : `New cloud company ${targetCompanyId}. Page will now reload.`,
         });
         window.location.reload();
     } catch (error: any) {
@@ -2266,8 +2454,33 @@ export function BackupRestore() {
                   This backup will be encrypted with your company password. That password is required to restore the data.
                 </p>
                 <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+                  <Label className="text-sm font-medium text-foreground">Backup source</Label>
+                  <RadioGroup
+                    value={backupSourceMode}
+                    onValueChange={(v) => {
+                      setBackupSourceMode(v as CompanyBackupSourceMode);
+                    }}
+                    className="grid gap-2"
+                  >
+                    <label className="flex cursor-pointer items-start gap-2 text-left">
+                      <RadioGroupItem value="local_only" id="backup-source-local" className="mt-0.5" />
+                      <span>
+                        <span className="font-medium text-foreground">Local device only</span> — SQLite on this
+                        device. No Firestore / internet check. Use when offline or Firebase company was deleted.
+                      </span>
+                    </label>
+                    <label className="flex cursor-pointer items-start gap-2 text-left">
+                      <RadioGroupItem value="online_merge" id="backup-source-online" className="mt-0.5" />
+                      <span>
+                        <span className="font-medium text-foreground">Online + local merge</span> — when online,
+                        also read Firestore and merge with local SQLite (normal backup).
+                      </span>
+                    </label>
+                  </RadioGroup>
+                </div>
+                <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
                   <Label className="text-sm font-medium text-foreground">Backup contents</Label>
-                  {staticBackupClient && attachmentFeatureOn ? (
+                  {staticBackupClient || backupSourceMode === "local_only" ? (
                   <RadioGroup
                     value={backupIncludeAttachments ? "attachments" : "data"}
                     onValueChange={(v) => setBackupIncludeAttachments(v === "attachments")}
@@ -2276,29 +2489,47 @@ export function BackupRestore() {
                     <label className="flex cursor-pointer items-start gap-2 text-left">
                       <RadioGroupItem value="data" id="backup-mode-data" className="mt-0.5" />
                       <span>
-                        <span className="font-medium text-foreground">Data only</span> — documents and attachment links (URLs). Smaller file, no plan attachment quota.
+                        <span className="font-medium text-foreground">Data only</span> — documents and attachment links (URLs). Smaller file.
                       </span>
                     </label>
                     <label
-                      className={`flex items-start gap-2 text-left ${!attachmentFeatureOn ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
+                      className={`flex items-start gap-2 text-left ${
+                        backupSourceMode !== "local_only" && !attachmentFeatureOn
+                          ? "opacity-60 cursor-not-allowed"
+                          : "cursor-pointer"
+                      }`}
                     >
                       <RadioGroupItem
                         value="attachments"
                         id="backup-mode-attachments"
                         className="mt-0.5"
-                        disabled={!attachmentFeatureOn}
+                        disabled={backupSourceMode !== "local_only" && !attachmentFeatureOn}
                       />
                       <span>
-                        <span className="font-medium text-foreground">With attachments</span> — compressed zip inside encrypted .plbp (company password lock, uses monthly plan quota).
-                        {backupAttachmentGateHint ? (
-                          <span className="block text-xs mt-1">{backupAttachmentGateHint}</span>
-                        ) : null}
+                        <span className="font-medium text-foreground">
+                          {backupSourceMode === "local_only"
+                            ? "With attachments (local device)"
+                            : "With attachments"}
+                        </span>
+                        {backupSourceMode === "local_only" ? (
+                          <span className="block text-xs mt-1 leading-relaxed">
+                            Embeds files already on this device (SQLite / local cache). No server download — use when Firebase Storage files were deleted.
+                          </span>
+                        ) : (
+                          <span className="block text-xs mt-1 leading-relaxed">
+                            Compressed zip inside encrypted .plbp (uses monthly plan quota).
+                            {backupAttachmentGateHint ? (
+                              <span className="block mt-1">{backupAttachmentGateHint}</span>
+                            ) : null}
+                          </span>
+                        )}
                       </span>
                     </label>
                   </RadioGroup>
                   ) : (
                     <p className="text-sm leading-relaxed">
-                      <span className="font-medium text-foreground">Data only</span> — company records and attachment links (URLs). Attachment embed is available in the mobile/desktop app after pre-download.
+                      <span className="font-medium text-foreground">Data only</span> — company records and attachment
+                      links (URLs). Attachment embed is available in the mobile/desktop app after pre-download.
                     </p>
                   )}
                 </div>
@@ -2307,7 +2538,14 @@ export function BackupRestore() {
           </AlertDialogHeader>
           <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={() => void handleBackup(staticBackupClient && backupIncludeAttachments)}>
+                <AlertDialogAction
+                  onClick={() =>
+                    void handleBackup(
+                      backupIncludeAttachments &&
+                        (staticBackupClient || backupSourceMode === "local_only")
+                    )
+                  }
+                >
                   Proceed
                 </AlertDialogAction>
           </AlertDialogFooter>
@@ -2364,18 +2602,27 @@ export function BackupRestore() {
 
 
       <AlertDialog open={isOverwriteConfirmOpen} onOpenChange={setIsOverwriteConfirmOpen}>
-        <AlertDialogContent>
+        <AlertDialogContent className="flex max-h-[90vh] w-full max-w-lg flex-col gap-0 overflow-hidden p-0">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-6">
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
                 <FileWarning className="h-6 w-6 text-destructive" /> Are you absolutely sure?
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-sm text-muted-foreground">
-                <p>
-                  Restore creates a <strong className="text-foreground">new company</strong> with a new id. Data in{" "}
-                  <strong className="text-foreground">{company?.name}</strong> and your other companies stays as-is — same
-                  backup restored twice will not mix rows. Only the company owner can restore.
-                </p>
+                {restoreTargetMode === "replace_current" ? (
+                  <p>
+                    Restore will <strong className="text-foreground">replace all data</strong> in the open company{" "}
+                    <strong className="text-foreground">{company?.name}</strong> (same id). Other companies stay
+                    unchanged. Only the company owner can restore.
+                  </p>
+                ) : (
+                  <p>
+                    Restore creates a <strong className="text-foreground">new company</strong> with a new id. Data in{" "}
+                    <strong className="text-foreground">{company?.name}</strong> and your other companies stays as-is.
+                    Only the company owner can restore.
+                  </p>
+                )}
                 <p>
                   Type the confirmation text below (backup decryption already verified the file). To confirm, type{" "}
                   <code className="bg-muted px-2 py-1 rounded-md font-mono text-foreground">{company?.name.trim().toLowerCase()}</code>{" "}
@@ -2386,9 +2633,37 @@ export function BackupRestore() {
           </AlertDialogHeader>
           {company && (
             <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+              <Label className="text-sm font-medium text-foreground">How to restore</Label>
+              <RadioGroup
+                value={restoreTargetMode}
+                onValueChange={(v) => setRestoreTargetMode(v as RestoreTargetMode)}
+                className="grid gap-2"
+              >
+                <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
+                  <RadioGroupItem value="replace_current" id="restore-target-replace" className="mt-0.5" />
+                  <span>
+                    <span className="font-medium text-foreground">1 — Replace current company</span> — overwrite{" "}
+                    <strong>{company.name}</strong> data (same company id). Current vouchers, parties, etc. will be
+                    replaced by backup.
+                  </span>
+                </label>
+                <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
+                  <RadioGroupItem value="new_company" id="restore-target-new" className="mt-0.5" />
+                  <span>
+                    <span className="font-medium text-foreground">2 — Restore as new company</span> — keep current
+                    company as-is; backup becomes a separate company with a new id.
+                  </span>
+                </label>
+              </RadioGroup>
+            </div>
+          )}
+          {company && (
+            <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
               <Label className="text-sm font-medium text-foreground">Restore destination</Label>
               <p className="text-xs text-muted-foreground">
-                Local aur online dono companies ke liye: &quot;This device&quot; = browser SQLite (offline); Firestore = cloud sync.
+                <strong>This device</strong> = SQLite only on this PC/browser — no server upload.{" "}
+                <strong>Firestore (cloud)</strong> = restore here first, then upload to your online company in the
+                background (attachments from the header bar after reload).
               </p>
               <RadioGroup
                 value={restoreToLocalSqlite ? "local" : "cloud"}
@@ -2404,7 +2679,7 @@ export function BackupRestore() {
                 <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
                   <RadioGroupItem value="cloud" id="restore-dest-cloud" className="mt-0.5" />
                   <span>
-                    <span className="font-medium text-foreground">Firestore (cloud)</span> — other devices can sync; use when you intentionally want cloud as source of truth.
+                    <span className="font-medium text-foreground">Firestore (cloud)</span> — same SQLite restore + app reload; then uploads to Firestore in the background (other devices can sync later).
                   </span>
                 </label>
               </RadioGroup>
@@ -2416,10 +2691,10 @@ export function BackupRestore() {
                 Company name after restore
               </Label>
               <p className="text-xs text-muted-foreground">
-                This name is stored on the <strong className="text-foreground">new</strong> restored company only (id is always
-                new). Pick backup name if you want the label to match the file.
+                {restoreTargetMode === "replace_current"
+                  ? "Choose the display name for the restored company (same id as the open company)."
+                  : "This name is stored on the new restored company only (id is always new). Pick backup name if you want the label to match the file."}
               </p>
-              {/* Native select: Radix Select + AlertDialog focus trap issues avoid */}
               <select
                 id="restore-company-name-select"
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -2427,7 +2702,10 @@ export function BackupRestore() {
                 onChange={(e) => setRestoreCompanyNameChoice(e.target.value as "target" | "backup")}
               >
                 <option value="target">
-                  {String(company.name ?? "").trim() || "(current slot)"} — use this name for the new copy (default)
+                  {String(company.name ?? "").trim() || "(current slot)"}
+                  {restoreTargetMode === "replace_current"
+                    ? " — keep this name (default)"
+                    : " — use this name for the new copy (default)"}
                 </option>
                 <option value="backup">
                   {String(backupDataToRestore.companyDetails[0].name ?? "").trim() || "(backup)"} — from backup file
@@ -2457,16 +2735,26 @@ export function BackupRestore() {
                   <span>Data only — keep URLs from backup (files may be missing offline).</span>
                 </label>
                 <label
-                  className={`flex items-start gap-2 text-left text-sm ${!attachmentFeatureOn ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
+                  className={`flex items-start gap-2 text-left text-sm ${
+                    !attachmentFeatureOn && !staticBackupClient && !restoreToLocalSqlite
+                      ? "opacity-60 cursor-not-allowed"
+                      : "cursor-pointer"
+                  }`}
                 >
                   <RadioGroupItem
                     value="attachments"
                     id="restore-mode-attachments"
                     className="mt-0.5"
-                    disabled={!attachmentFeatureOn}
+                    disabled={!attachmentFeatureOn && !staticBackupClient && !restoreToLocalSqlite}
                   />
                   <span>
                     With attachments — write files to this device and update links.
+                    {restoreToLocalSqlite || staticBackupClient ? (
+                      <span className="block text-xs mt-1 text-muted-foreground">
+                        Restore on the same app/EXE where you will use the company. Web browser and desktop app have
+                        separate storage — files do not sync automatically.
+                      </span>
+                    ) : null}
                     {restoreAttachmentGateHint ? (
                       <span className="block text-xs mt-1 text-muted-foreground">{restoreAttachmentGateHint}</span>
                     ) : null}
@@ -2480,7 +2768,8 @@ export function BackupRestore() {
             onChange={(e) => setConfirmationText(e.target.value)}
             placeholder="Type company name to confirm"
           />
-          <AlertDialogFooter>
+          </div>
+          <AlertDialogFooter className="shrink-0 border-t bg-background p-6 pt-4">
             <div className="flex justify-between items-center w-full">
                 <AlertDialogCancel onClick={() => setBackupDataToRestore(null)}>Cancel</AlertDialogCancel>
                 <AlertDialogAction
@@ -2506,14 +2795,17 @@ export function BackupRestore() {
                     );
                     setIsOverwriteConfirmOpen(false);
                     // Sirf radio — pehle `shouldRestoreToLocalOnly` se local company par cloud option hide + kabhi-kabhi galat branch (SQLite restore skip)
-                    const withAttachments =
-                      restoreIncludeAttachments &&
-                      backupDataHasAttachmentBundle(data);
-                    if (restoreToLocalSqlite) {
-                      await handleLocalOverwriteRestore(data, resolvedName, withAttachments);
-                    } else {
-                      await handleOverwriteRestore(data, resolvedName, withAttachments);
-                    }
+                    const withAttachments = resolveRestoreIncludeAttachments(
+                      restoreIncludeAttachments,
+                      data
+                    );
+                    await handleLocalOverwriteRestore(
+                      data,
+                      resolvedName,
+                      withAttachments,
+                      restoreTargetMode,
+                      { cloudRestore: !restoreToLocalSqlite }
+                    );
                   })();
                 }}
                 disabled={isRestoring || confirmationText.trim().toLowerCase() !== company?.name.trim().toLowerCase()}

@@ -10,10 +10,12 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
+import { Link2, RotateCcw } from "lucide-react";
 import { getOpeningBalanceBaseAmount, getOpeningBalanceVoucherLabel, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
+import { getSpendWiseOutflowPartyLabel } from "@/lib/paymentInAllocation";
 
 const safeToDate = (date: unknown): Date | null => {
   if (!date) return null;
@@ -74,7 +76,8 @@ export function LinkPaymentOutToPaymentInDialog({
   currentVoucherSummary,
   accountOpeningBalance = 0,
 }: LinkPaymentOutToPaymentInDialogProps) {
-  const { formatDate, formatCurrency, formatCurrencyForPrint } = useDate();
+  const { formatDateBySystem, formatCurrency, formatCurrencyForPrint } = useDate();
+  const isMobile = useIsMobile();
   const [checked, setChecked] = React.useState<Set<string>>(new Set(selectedIds));
   const [selectedOrder, setSelectedOrder] = React.useState<string[]>(selectedIds?.length ? [...selectedIds] : []);
 
@@ -103,10 +106,7 @@ export function LinkPaymentOutToPaymentInDialog({
         const alreadyLinked = Object.values(amounts).reduce<number>((s, val) => s + (Number(val) || 0), 0);
         const currentLinked: number = Number(currentVoucherLinkedAmounts?.[v.id] ?? 0) || 0;
         const linkable = Math.max(0, amount - alreadyLinked + currentLinked);
-        const to =
-          v.type === "contra"
-            ? (names[v.toAccountId] ?? "—")
-            : names[v.partyId] ?? names[v.staffId] ?? names[v.expenseAccountId] ?? names[v.toAccountId] ?? v.payeeName ?? "—";
+        const to = getSpendWiseOutflowPartyLabel(v, names);
         return { id: v.id, voucherNumber: v.voucherNumber ?? "—", date, amount, alreadyLinked, linkable, to, currentLinked };
       });
     const openingBase = getOpeningBalanceBaseAmount(accountOpeningBalance, "cr");
@@ -217,6 +217,11 @@ export function LinkPaymentOutToPaymentInDialog({
     setSelectedOrder(ids);
   };
 
+  const handleReset = () => {
+    setChecked(new Set());
+    setSelectedOrder([]);
+  };
+
   const handleConfirm = () => {
     const ids = selectedOrder.filter((id) => checked.has(id));
     const byId = new Map(paymentOutList.map((r) => [r.id, r]));
@@ -234,8 +239,13 @@ export function LinkPaymentOutToPaymentInDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl md:max-w-[54.6rem] max-h-[85vh] flex flex-col overflow-hidden">
-        <DialogHeader>
+      <DialogContent
+        className={cn(
+          "max-w-2xl md:max-w-[54.6rem] max-h-[85vh] flex flex-col overflow-hidden rounded-lg pt-3 px-[3px]",
+          isMobile && "left-[2px] right-[2px] translate-x-0 w-auto max-w-none h-[85vh] max-h-[85vh] pt-2"
+        )}
+      >
+        <DialogHeader className="shrink-0 space-y-0.5">
           {/* Keep spend-wise popup header consistent across all link dialogs. */}
           <p className="text-xs text-muted-foreground leading-tight">Link for spend wise</p>
           <DialogTitle>Select Payment Out / Direct Expense / Contra (out){accountName ? ` from ${accountName}` : ""}</DialogTitle>
@@ -247,15 +257,13 @@ export function LinkPaymentOutToPaymentInDialog({
               <span className="text-muted-foreground">Amount received: <strong className="text-foreground">{formatCurrency(requiredAmount)}</strong></span>
               <span className="text-muted-foreground">Selected: <strong className="text-foreground">{formatCurrency(selectedTotal)}</strong></span>
               {needsMore && <span className="text-amber-600 font-medium">Choose more</span>}
-              <Button type="button" size="sm" onClick={handleAutoLink} className="bg-blue-600 hover:bg-blue-700 text-white border-0">
-                Auto Link
-              </Button>
             </div>
           )}
         </DialogHeader>
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-slim-dim flex flex-col gap-2">
         {/* From Voucher (current voucher): only the voucher we're working on */}
         {currentVoucherSummary && (
-          <div className="space-y-1.5 rounded-lg border bg-muted/30 p-3">
+          <div className="space-y-1.5 rounded-lg border bg-muted/30 p-3 shrink-0">
             <p className="text-sm font-medium text-muted-foreground">
               {/* Show account in section title so user can verify current voucher's account context. */}
               From Voucher (current voucher){accountName ? ` - Account: ${accountName}` : ""}
@@ -274,7 +282,7 @@ export function LinkPaymentOutToPaymentInDialog({
                 </thead>
                 <tbody>
                   <tr className="border-b last:border-b-0">
-                    <td className="p-2 text-muted-foreground whitespace-nowrap">{currentVoucherSummary.date ? formatDate(currentVoucherSummary.date) : "—"}</td>
+                    <td className="p-2 text-muted-foreground whitespace-nowrap">{currentVoucherSummary.date ? formatDateBySystem(currentVoucherSummary.date) : "—"}</td>
                     <td className="p-2 font-medium whitespace-nowrap">{currentVoucherSummary.voucherNumber}</td>
                     <td className="p-2 whitespace-nowrap">{currentVoucherSummary.from}</td>
                     <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(currentVoucherSummary.amount)} Dr</td>
@@ -296,9 +304,8 @@ export function LinkPaymentOutToPaymentInDialog({
           {/* Show account in section title so user can identify which account's vouchers are listed. */}
           To Voucher{accountName ? ` - Account: ${accountName}` : ""} — Payment Out / Direct Expense / Contra (out) of this account (only linkable or already selected)
         </p>
-        <ScrollArea className="flex-1 min-h-0 border rounded-md">
-          <div className="p-0 min-w-0 max-w-full overflow-x-auto">
-            {displayList.length === 0 ? (
+        <div className="min-h-0 border rounded-md overflow-x-auto">
+          {displayList.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
                 {paymentOutList.length === 0
                   ? "No Payment Out, Direct Expense or Contra (out) found for this account."
@@ -336,7 +343,7 @@ export function LinkPaymentOutToPaymentInDialog({
                           disabled={!checked.has(row.id) && selectionFull}
                         />
                       </td>
-                      <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? formatDate(row.date) : "—"}</td>
+                      <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? formatDateBySystem(row.date) : "—"}</td>
                       <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
                       <td className="p-2 whitespace-nowrap">{row.to}</td>
                       <td className="p-2 text-right font-medium text-red-600 whitespace-nowrap">
@@ -366,16 +373,28 @@ export function LinkPaymentOutToPaymentInDialog({
                 </tbody>
               </table>
             )}
-          </div>
-        </ScrollArea>
+        </div>
+        </div>
         {needsMore && (
-          <p className="text-sm text-amber-600 font-medium px-1">Selected total is less than amount received. Choose more vouchers to cover the amount.</p>
+          <p className="text-sm text-amber-600 font-medium px-1 shrink-0">Selected total is less than amount received. Choose more vouchers to cover the amount.</p>
         )}
-        <DialogFooter>
-          <Button onClick={() => onOpenChange(false)} className="bg-orange-500 hover:bg-orange-600 text-white border-0">
+        <DialogFooter className="shrink-0 !flex-row flex flex-wrap items-center gap-2 w-full justify-between sm:justify-between">
+          <Button onClick={() => onOpenChange(false)} className="h-9 rounded-full shrink-0 bg-orange-500 hover:bg-orange-600 text-white border-0">
             Cancel
           </Button>
-          <Button onClick={handleConfirm} className="bg-green-600 hover:bg-green-700 text-white border-0">Done</Button>
+          <div className="flex flex-row flex-wrap items-center gap-2 shrink-0">
+            <Button type="button" size="sm" onClick={handleReset} className="h-9 rounded-full bg-violet-600 hover:bg-violet-700 text-white border-0">
+              <RotateCcw className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
+              Reset
+            </Button>
+            {requiredAmount > 0 && (
+              <Button type="button" size="sm" onClick={handleAutoLink} className="h-9 rounded-full bg-blue-600 hover:bg-blue-700 text-white border-0">
+                <Link2 className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
+                Auto Link
+              </Button>
+            )}
+            <Button onClick={handleConfirm} className="h-9 rounded-full bg-green-600 hover:bg-green-700 text-white border-0">Done</Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

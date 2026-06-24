@@ -1,3 +1,7 @@
+"use client";
+
+import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
+
 function normalizePath(p: string): string {
   return (p || "").replace(/\/+$/, "") || "/";
 }
@@ -14,6 +18,7 @@ function isOwnedByUser<
 
 /**
  * Main app (not `/admin/*`): SuperAdmin sees only owned companies — no shared-with list.
+ * Static/APK/EXE: web jaisa shared bhi dikhao (SuperAdmin ko bhi shared-with list).
  */
 export function filterSharedOnlyCompaniesForSuperAdminInMainApp<
   T extends { ownerId?: string; ownerEmail?: string; isOwned?: boolean },
@@ -25,5 +30,6 @@ export function filterSharedOnlyCompaniesForSuperAdminInMainApp<
 ): T[] {
   if (!isSuperAdmin || !user) return companies;
   if (normalizePath(pathname ?? "").startsWith("/admin")) return companies;
+  if (isEmbeddedOfflinePreloadClient()) return companies;
   return companies.filter((c) => isOwnedByUser(c, user));
 }

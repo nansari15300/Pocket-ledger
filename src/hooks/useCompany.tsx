@@ -12,7 +12,11 @@ import {
   syncEmbeddedFirestoreTransportFromNavigator,
 } from "@/lib/firebase";
 import type { PermissionConfig } from "./usePermissions";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import {
+  isLiveFirestoreCompanyRegistry,
+  isLocalOnlyMode,
+  isOfflineSqliteCompanyRegistry,
+} from "@/lib/localMode";
 import {
   getLocalCompanyById,
   listLocalCompanies,
@@ -25,8 +29,14 @@ import { higherPlanByTier, normalizePlanIdForClient, planTierIndex, type PlanId 
 import type { BillingFrozenPlanSnapshot } from "@/lib/billingFrozenPlanSnapshots";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import type { CompanyDemoteReason } from "@/lib/companyDemote";
-import { isCurrentUserOwnerOfCompanyRow, reconcileOnlineMirrorsWithServer } from "@/lib/companyOnlineIntegrity";
+import {
+  isCurrentUserOwnerOfCompanyRow,
+  isCurrentUserSharedOnCompanyRow,
+  reconcileOnlineMirrorsWithServer,
+  resolveCompanyIsOwnedForUser,
+} from "@/lib/companyOnlineIntegrity";
 import { BUMP_LOCAL_COMPANY_REGISTRY_EVENT } from "@/lib/applyStripePlanToLocalCompany";
+import { isRestoreCloudUploadLocked, readPendingRestoreCloudPush } from "@/lib/restoreCloudBackgroundSync";
 import { clearCompanyPlanLocalCache, readCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
 import {
   syncCompanyPlanFromServer,
@@ -50,7 +60,12 @@ import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySu
 import { getActiveGate, writeActiveGateId } from "@/lib/gates/gateStore";
 import { filterCompaniesForActiveGate, pickGateAwareAutoSelectCompanyId } from "@/lib/gates/gateRuntime";
 import { PL_GATE_CHANGED_EVENT } from "@/lib/gates/gateTypes";
-import { sharedCompanyQueryKey, sharedCompanyQuerySpecs } from "@/lib/sharedWithEmailsQuery";
+import { sharedCompanyQueryKey, sharedCompanyQuerySpecs, resolveFirestoreAuthEmail } from "@/lib/sharedWithEmailsQuery";
+import {
+  mirrorOnlineCompaniesFromFirestore,
+  purgeGhostOnlineCompanyMirrors,
+  resolveMirrorUserEmail,
+} from "@/lib/mirrorOnlineCompaniesFromFirestore";
 import { clearSelectedCompanyId, readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { shouldSuppressTransientCompanyClear, shouldDeferMissingCompanyRedirectNative } from "@/lib/apkLedgerRouteShield";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
@@ -66,10 +81,10 @@ import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import {
   embeddedClientRequiresServerPlanSyncWhenOnline,
-  embeddedClientUsesFirestoreCompanyList,
   shouldSkipPeriodicPlanSyncForLocalOnlyMode,
 } from "@/lib/planSyncClientPolicy";
 import { shouldSkipEmbeddedStartupAuthChurn } from "@/lib/embeddedWarmBootstrapFlags";
+import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 
 export type DisplaySettings = {
     showDebit?: boolean;
@@ -561,6 +576,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   /** Mount par session/local se read — refresh boot grace me isi id ko clear mat karo. */
   const bootPinnedCompanyIdRef = useRef<string>("");
   const [gateEpoch, setGateEpoch] = useState(0);
+  /** Gate id change vs list refresh — sirf gate switch par incompatible selection clear karo. */
+  const prevGateIdForSelectionRef = useRef<string>(getActiveGate().id);
   useEffect(() => {
     const onGate = () => setGateEpoch((n) => n + 1);
     window.addEventListener(PL_GATE_CHANGED_EVENT, onGate);
@@ -610,6 +627,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const deferredLocalRegistryMirrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** `localRegistryEpoch` pehli value store — mount par mirror nahi; sirf bump par turant mirror. */
   const lastLocalRegistryEpochForMirrorRef = useRef<number | null>(null);
+  /** Firestore `triggerUpdate` — `reloadLocalCompanyRegistry` par SQLite rows turant selector me. */
+  const triggerRegistryUpdateRef = useRef<(() => void) | null>(null);
   const isSuperAdmin = customUser?.role === "SuperAdmin";
   const isSuperAdminByEmail = useMemo(() => {
     const e = (user?.email || "").toLowerCase().trim();
@@ -860,8 +879,16 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         : allCompaniesUnfilteredLiveRef.current;
     if (registrySource.length === 0) return;
     const activeGate = getActiveGate();
+    const gateSwitched = prevGateIdForSelectionRef.current !== activeGate.id;
+    prevGateIdForSelectionRef.current = activeGate.id;
     const allowedForGate = filterCompaniesForActiveGate(registrySource, activeGate);
     if (!allowedForGate.some((c) => c.id === companyId)) {
+      const selectedRow = registrySource.find((c) => c.id === companyId);
+      // List/Firestore refresh: user ne Local tab se device company chuni ho to online gate par bhi mat hatao.
+      if (!gateSwitched && selectedRow && isCompanyVisibleInMainApp(selectedRow)) {
+        plDbgCompanyRecovery("gateFilter:keepExplicitSelection", { companyId, gateId: activeGate.id });
+        return;
+      }
       if (shouldDeferRefreshBootCompanyClear(companyId, mountedAtRef.current, bootPinnedCompanyIdRef.current)) {
         return;
       }
@@ -872,6 +899,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   }, [companyId, gateEpoch, clearCompanyId, loading, allCompaniesForUi]);
 
   const setCompanyId = useCallback((newCompanyId: string) => {
+    if (isRestoreCloudUploadLocked()) {
+      const job = readPendingRestoreCloudPush();
+      const nextId = String(newCompanyId || "").trim();
+      if (job && job.companyId !== nextId) return;
+    }
     // Debug: APK par save ke baad company switch race — hr set dikhao (flag ON par only).
     plNavDbg("useCompany.setCompanyId", { hint: plNavDbgIdHint(newCompanyId), len: String(newCompanyId || "").length });
     writeSelectedCompanyId(newCompanyId);
@@ -933,19 +965,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     const planExpiryFromMs =
       typeof rawMs === "number" && Number.isFinite(rawMs) ? Timestamp.fromMillis(rawMs) : undefined;
     const plan = getPlanFromPlans(livePlansRef.current, planId as PlanId);
-    const ownerEmail = (raw.ownerEmail || "").toLowerCase().trim();
-    const currentEmail = (user?.email || "").toLowerCase().trim();
-    const ownerId = (raw.ownerId || "").trim();
     const currentUid = (user?.uid || "").trim();
-    const sharedEmails = Array.isArray(raw.sharedWithEmails) ? raw.sharedWithEmails : [];
-    const isOwnedByCurrentUser =
-      (!!ownerId && !!currentUid && ownerId === currentUid) ||
-      (!!ownerEmail && !!currentEmail && ownerEmail === currentEmail);
-    const isSharedWithCurrentUser =
-      !!currentEmail &&
-      sharedEmails.some((e) => String(e || "").toLowerCase().trim() === currentEmail);
     const isDriveSharedJoin =
       (raw as { driveSharedJoin?: unknown }).driveSharedJoin === true;
+    const shareUser = { uid: currentUid, email: user?.email ?? null };
+    const isOwnedByCurrentUser = isCurrentUserOwnerOfCompanyRow(raw, shareUser);
+    const isSharedWithCurrentUser = isCurrentUserSharedOnCompanyRow(raw, shareUser);
     return {
       ...raw,
       planId,
@@ -957,7 +982,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         ? false
         : isOwnedByCurrentUser
           ? true
-          : !isSharedWithCurrentUser,
+          : isSharedWithCurrentUser
+            ? false
+            : resolveCompanyIsOwnedForUser(raw, shareUser),
       allowAttachments:
         typeof raw.allowAttachments === "boolean"
           ? raw.allowAttachments
@@ -984,130 +1011,99 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       const touchLoading = opts.mode === "immediate-empty";
       if (touchLoading) setLoading(true);
       try {
+        const mirrorEmail = resolveMirrorUserEmail(user, customUser);
+        // Owned pull sirf uid se chal sakta hai; shared ke liye email baad me retry — pehle email na hone par poora mirror skip hota tha.
+        const mirrorUser = user?.uid ? { uid: user.uid, email: mirrorEmail || "" } : null;
+
+        let ownedMirrorIds = new Set<string>();
+        let sharedOnlyMirrorIds = new Set<string>();
         let cloudMirrorAllowedIds: Set<string> | null = null;
-        if (user?.uid) {
+        let mirroredRows: Awaited<ReturnType<typeof mirrorOnlineCompaniesFromFirestore>>["rows"] = [];
+
+        if (mirrorUser) {
           try {
-            // Fresh APK: cache khali — server se pull (network on ke baad).
-            if (embeddedClientUsesFirestoreCompanyList()) {
-              await ensureEmbeddedFirestoreOnlineForCloudCompanyLoad();
-            }
-            const ownerIdCandidates = resolveOwnerIdQueryCandidates(user.uid, customUser?.userDocId);
-            // Owner migration-safe pull: uid + legacy users-doc id dono par company rows collect karo.
-            const ownedQueries = ownerIdCandidates.map((ownerId) =>
-              query(collection(firestore, "companies"), where("ownerId", "==", ownerId))
-            );
-            const sharedQuerySpecs = sharedCompanyQuerySpecs(user.email);
-            const ownedByEmailQ = user.email
-              ? query(collection(firestore, "companies"), where("ownerEmail", "==", user.email))
-              : null;
-            const pullSnap = async (q: ReturnType<typeof query>) => {
-              if (embeddedClientUsesFirestoreCompanyList() && typeof navigator !== "undefined" && navigator.onLine !== false) {
-                try {
-                  return await getDocsFromServer(q);
-                } catch {
-                  return await getDocs(q);
-                }
-              }
-              return await getDocs(q);
-            };
-            const ownedSnaps = await Promise.all(ownedQueries.map((q) => pullSnap(q)));
-            const sharedSnaps =
-              sharedQuerySpecs.length > 0
-                ? await Promise.all(
-                    sharedQuerySpecs.map((spec) =>
-                      pullSnap(
-                        query(
-                          collection(firestore, "companies"),
-                          where(spec.field, "array-contains", spec.value)
-                        )
-                      )
-                    )
-                  )
-                : [];
-            const ownedByEmailSnap = ownedByEmailQ ? await pullSnap(ownedByEmailQ) : { docs: [] as any[] };
-            const sharedDocsById = new Map<string, (typeof ownedSnaps)[0]["docs"][number]>();
-            for (const snap of sharedSnaps) {
-              for (const d of snap.docs) sharedDocsById.set(d.id, d);
-            }
-            const mergedDocs = [
-              ...ownedSnaps.flatMap((snap) => snap.docs),
-              ...ownedByEmailSnap.docs,
-              ...sharedDocsById.values(),
-            ];
-            cloudMirrorAllowedIds = new Set(mergedDocs.map((d) => String(d.id || "")).filter(Boolean));
-            for (const d of mergedDocs) {
-              // `pullSnap` union se `data()` spread — explicit cast taaki static build TypeScript pass ho.
-              const docData = (d.data() ?? {}) as Record<string, unknown>;
-              const raw = { id: d.id, ...docData } as Record<string, unknown>;
-              const rid = String(raw.id ?? "");
-              if (!rid) continue;
-              const isCloudDeleted = raw.isDeleted === true;
-              const existing = await getLocalCompanyById(rid, { includeDeleted: true });
-              const localMs =
-                typeof (existing as unknown as { updatedAt?: unknown })?.updatedAt === "number"
-                  ? (existing as unknown as { updatedAt: number }).updatedAt
-                  : 0;
-              const cloudMs = companyDocUpdatedAtMs(raw);
-              if (existing && String((existing as { storageOption?: string }).storageOption || "").toLowerCase() === "local") {
-                continue;
-              }
-              if (existing && localMs > cloudMs) continue;
-              const firestoreSharedWith = Array.isArray(raw.sharedWith) ? raw.sharedWith : [];
-              const prevUsers = existing
-                ? parseLocalCompanyUserRows((existing as { localCompanyUsers?: unknown }).localCompanyUsers)
-                : [];
-              const mergedLocalUsers = mergeSharedWithIntoLocalCompanyUsers(prevUsers, firestoreSharedWith as any);
-              if (isCloudDeleted) {
-                await upsertLocalCompany({
-                  ...(raw as Record<string, unknown>),
-                  id: rid,
-                  isDeleted: true,
-                  storageOption: "firebase",
-                  syncPolicy: "online",
-                  syncedFromCloud: true,
-                  localCompanyUsers: mergedLocalUsers,
-                } as any);
-                continue;
-              }
-              await upsertLocalCompany({
-                ...(raw as Record<string, unknown>),
-                storageOption: "firebase",
-                syncPolicy: "online",
-                syncedFromCloud: true,
-                localCompanyUsers: mergedLocalUsers,
-              } as any);
-            }
-          } catch {
+            const ownerIdCandidates = resolveOwnerIdQueryCandidates(user!.uid, customUser?.userDocId);
+            const result = await mirrorOnlineCompaniesFromFirestore(mirrorUser, ownerIdCandidates);
+            mirroredRows = result.rows;
+            ownedMirrorIds = result.ownedIds;
+            sharedOnlyMirrorIds = result.sharedOnlyIds;
+            cloudMirrorAllowedIds = result.cloudAllowedIds;
+          } catch (e) {
+            console.warn("[useCompany] mirrorOnlineCompaniesFromFirestore failed", e);
             cloudMirrorAllowedIds = null;
           }
         }
-        // **APK airplane / flaky net:** Firestore query kabhi-success + `docs: []` de sakta hai cache miss par — khali Set = sab ids "ghost" ⇒ pura registry wipe (“no company”). Sirf tab purge jab kam se kam ek server id pakka mile.
+
         if (
           cloudMirrorAllowedIds !== null &&
           cloudMirrorAllowedIds.size > 0 &&
-          user?.uid
+          mirrorUser
         ) {
-          const locals = await listLocalCompanies({ includeDeleted: true });
-          for (const row of locals) {
-            const id = row.id;
-            if (!id || cloudMirrorAllowedIds.has(id)) continue;
-            const isOwner = isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user.email ?? null });
-            const isPureLocalRow = String((row as { storageOption?: string }).storageOption || "").toLowerCase() === "local";
-            const isDriveSharedJoin =
-              (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;
-            if (isOwner && isPureLocalRow) continue;
-            // Drive se join ki local company — Firestore id list me nahi hoti, purge mat karo.
-            if (isDriveSharedJoin) continue;
-            // Device-local owner company — Firestore mirror ghost list se kabhi mat hatao (localhost refresh bug).
-            if (isPureLocalRow) continue;
-            if (localCompanyRowIsDeleted(row)) continue;
-            await removeLocalCompanyById(id, { firebaseUid: user.uid });
-          }
+          await purgeGhostOnlineCompanyMirrors(mirrorUser, cloudMirrorAllowedIds);
         }
+        const shareUser = mirrorUser ?? {
+          uid: user?.uid || "",
+          email: resolveMirrorUserEmail(user, customUser) || null,
+        };
+        const stampCloudMirrorRow = (norm: Company, isOwned: boolean): Company => ({
+          ...norm,
+          isOwned,
+          storageOption: "firebase",
+          syncedFromCloud: true,
+        });
+
+        const companyById = new Map<string, Company>();
+        for (const row of mirroredRows) {
+          const norm = normalizeLocalCompany({
+            id: row.id,
+            ...row.data,
+            storageOption: "firebase",
+            syncedFromCloud: true,
+            isOwned: row.isOwned,
+          } as Company);
+          if (!isCompanyVisibleInMainApp(norm)) continue;
+          const isOwned = ownedMirrorIds.has(norm.id)
+            ? true
+            : sharedOnlyMirrorIds.has(norm.id)
+              ? false
+              : resolveCompanyIsOwnedForUser(norm, shareUser);
+          companyById.set(norm.id, stampCloudMirrorRow(norm, isOwned));
+        }
+
         const localCompanies = await listLocalCompanies();
-        const normalizedLocalCompanies = localCompanies
-          .map((c) => normalizeLocalCompany(c as unknown as Company))
-          .filter(isCompanyVisibleInMainApp);
+        for (const c of localCompanies) {
+          const norm = normalizeLocalCompany(c as unknown as Company);
+          if (!isCompanyVisibleInMainApp(norm)) continue;
+          const fromMirror = companyById.get(norm.id);
+          if (fromMirror) {
+            companyById.set(norm.id, mergeOnlineCompanyWithLocalPlanOverlay(fromMirror, norm));
+            continue;
+          }
+          if (!user?.uid) {
+            companyById.set(norm.id, norm);
+            continue;
+          }
+          let isOwned = resolveCompanyIsOwnedForUser(norm, shareUser);
+          if (ownedMirrorIds.has(norm.id)) {
+            companyById.set(norm.id, stampCloudMirrorRow(norm, true));
+            continue;
+          }
+          if (sharedOnlyMirrorIds.has(norm.id)) {
+            companyById.set(norm.id, stampCloudMirrorRow(norm, false));
+            continue;
+          }
+          const isSharedMirror =
+            !isOwned &&
+            isCurrentUserSharedOnCompanyRow(norm, shareUser) &&
+            (norm as { syncedFromCloud?: boolean }).syncedFromCloud === true;
+          if (isSharedMirror) {
+            companyById.set(norm.id, stampCloudMirrorRow(norm, false));
+            continue;
+          }
+          companyById.set(norm.id, { ...norm, isOwned });
+        }
+
+        const normalizedLocalCompanies = Array.from(companyById.values());
         await Promise.all(normalizedLocalCompanies.map((c) => upsertLocalCompany(c as any)));
         latestLocalNormalizedCompaniesRef.current = normalizedLocalCompanies;
         const filteredLocals = filterSharedOnlyCompaniesForSuperAdminInMainApp(
@@ -1161,7 +1157,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         if (touchLoading) setLoading(false);
       }
     },
-    [user, customUser?.userDocId, normalizeLocalCompany, isSuperAdminUser, clearCompanyId, router]
+    [user, customUser?.userDocId, customUser?.email, normalizeLocalCompany, isSuperAdminUser, clearCompanyId, router]
   );
 
   /**
@@ -1381,10 +1377,15 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- burst sirf company switch par
   }, [companyId, user?.uid, authLoading, gateEpoch]);
 
-  // Local-only (pure web): turant sirf SQLite se list; static/APK Firestore listener path use karta hai — yahan mat chalao.
+  // Static/APK offline: SQLite + getDocs mirror. Online par web jaisa live listeners (niche wala effect).
   useEffect(() => {
-    if (!isLocalOnlyMode() || embeddedClientUsesFirestoreCompanyList()) return;
+    if (!isOfflineSqliteCompanyRegistry(isBrowserOnline)) return;
+    // Storage clean / fresh install: auth restore hone se pehle mirror mat chalao — shared email-query fail ho jati hai.
+    if (authLoading) return;
     let cancelled = false;
+    let retryMirrorT1: number | undefined;
+    let retryMirrorT2: number | undefined;
+    let retryMirrorT3: number | undefined;
     if (deferredLocalRegistryMirrorTimerRef.current) {
       clearTimeout(deferredLocalRegistryMirrorTimerRef.current);
       deferredLocalRegistryMirrorTimerRef.current = null;
@@ -1419,7 +1420,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         if (!liveCompanyId) {
           setCompany(null);
           setLoading(false);
-          // Email kabhi late hydrate hota hai; uid milte hi mirror allow karo taaki APK list blank na rahe.
+          // Cache clear: SQLite khali + uid — email late ho to bhi owned Firestore pull chale.
           needImmediateFullMirror = normalizedLocalCompanies.length === 0 && !!user?.uid;
         } else {
           const sel = await getLocalCompanyById(liveCompanyId);
@@ -1437,80 +1438,106 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       } catch {
         if (companyIdLiveRef.current) setCompany(null);
         setLoading(false);
-        // Transient email-null window me bhi uid-based mirror retry chalne do.
         needImmediateFullMirror = !!user?.uid;
       }
 
       if (cancelled) return;
+      const mirrorEmail = resolveMirrorUserEmail(user, customUser);
       if (!user?.uid) return;
 
+      const runMirror = (mode: LocalRegistryMirrorMode) =>
+        performLocalRegistryFirestoreMirror({ mode }).catch((e) => {
+          console.warn("[useCompany] performLocalRegistryFirestoreMirror failed", { mode, error: e });
+        });
+
+      const scheduleSharedMirrorRetries = () => {
+        retryMirrorT1 = window.setTimeout(() => void runMirror("registry-bump"), 3500);
+        retryMirrorT2 = window.setTimeout(() => void runMirror("registry-bump"), 12000);
+        // Storage clean ke baad auth/email kabhi 12s se late — ek aur pull.
+        retryMirrorT3 = window.setTimeout(() => void runMirror("registry-bump"), 25_000);
+      };
+
       if (needImmediateFullMirror) {
-        await performLocalRegistryFirestoreMirror({ mode: "immediate-empty" }).catch(() => {});
+        await runMirror("immediate-empty");
+      } else if (isEmbeddedOfflinePreloadClient() || isLocalOnlyMode()) {
+        // Static/EXE/APK: owned SQLite me ho to bhi shared turant pull — web listener jaisa.
+        await runMirror("deferred");
       } else {
         deferredLocalRegistryMirrorTimerRef.current = setTimeout(() => {
           deferredLocalRegistryMirrorTimerRef.current = null;
-          void performLocalRegistryFirestoreMirror({ mode: "deferred" }).catch(() => {});
+          void runMirror("deferred");
         }, embeddedStaticRegistryDeferMs());
+      }
+
+      // Email late / shared miss: dubara mirror (login ke 3s / 12s / 25s baad).
+      if (!mirrorEmail || isEmbeddedOfflinePreloadClient() || isLocalOnlyMode()) {
+        scheduleSharedMirrorRetries();
       }
     })();
 
     return () => {
       cancelled = true;
+      if (retryMirrorT1 != null) window.clearTimeout(retryMirrorT1);
+      if (retryMirrorT2 != null) window.clearTimeout(retryMirrorT2);
+      if (retryMirrorT3 != null) window.clearTimeout(retryMirrorT3);
       if (deferredLocalRegistryMirrorTimerRef.current) {
         clearTimeout(deferredLocalRegistryMirrorTimerRef.current);
         deferredLocalRegistryMirrorTimerRef.current = null;
       }
     };
-  }, [user, normalizeLocalCompany, isSuperAdminUser, performLocalRegistryFirestoreMirror]);
+  }, [
+    user,
+    user?.email,
+    customUser,
+    customUser?.email,
+    authLoading,
+    isBrowserOnline,
+    normalizeLocalCompany,
+    isSuperAdminUser,
+    performLocalRegistryFirestoreMirror,
+    localRegistryEpoch,
+  ]);
 
-  /**
-   * Static/APK login: pehle Firestore network on, phir SQLite cache + getDocs fallback.
-   * Sirf listener par mat chhodo — fresh install par cache khali + network race = "no company".
-   */
+  // Cache clear / fresh install: SQLite khali ho to online local-only par bhi turant Firestore pull (pehle sirf offline path).
   useEffect(() => {
-    if (!embeddedClientUsesFirestoreCompanyList()) return;
-    if (!user?.uid || authLoading) return;
-
+    if (!isLocalOnlyMode() || authLoading || !user?.uid) return;
     let cancelled = false;
-    // Listener effect har rerender par aa sakta hai; yahan repeated network-enable avoid karke Firestore targets stable rakho.
-    void ensureEmbeddedFirestoreOnlineForCloudCompanyLoad();
-    void syncEmbeddedFirestoreTransportFromNavigator();
-
     void (async () => {
       try {
-        const rawLocals = await listLocalCompanies();
+        const locals = await listLocalCompanies();
         if (cancelled) return;
-        const normalizedLocalCompanies = rawLocals
-          .map((c) => normalizeLocalCompany(c as unknown as Company))
-          .filter(isCompanyVisibleInMainApp);
-        if (normalizedLocalCompanies.length > 0) {
-          latestLocalNormalizedCompaniesRef.current = normalizedLocalCompanies;
-          const filteredFast = filterSharedOnlyCompaniesForSuperAdminInMainApp(
-            normalizedLocalCompanies,
-            user,
-            isSuperAdminUser,
-            pathnameRef.current
-          );
-          setAllCompaniesRegistry(normalizedLocalCompanies);
-          setAllCompanies(filteredFast);
-          setLoading(false);
-        }
-      } catch {
-        /* SQLite read fail — niche Firestore mirror try karega */
+        const visible = locals.filter((c) => isCompanyVisibleInMainApp(c as Company));
+        if (visible.length > 0) return;
+        await performLocalRegistryFirestoreMirror({ mode: "immediate-empty" });
+      } catch (e) {
+        console.warn("[useCompany] cold-start empty-registry mirror failed", e);
       }
-
-      if (cancelled) return;
-      await performLocalRegistryFirestoreMirror({ mode: "immediate-empty" }).catch(() => {});
     })();
-
     return () => {
       cancelled = true;
     };
-  }, [user?.uid, authLoading, normalizeLocalCompany, isSuperAdminUser, performLocalRegistryFirestoreMirror]);
+  }, [
+    user?.uid,
+    user?.email,
+    customUser?.email,
+    authLoading,
+    performLocalRegistryFirestoreMirror,
+  ]);
+
+  // Pehle sirf uid se owned mirror ho chuka ho — email aate hi shared companies dubara pull.
+  const prevMirrorEmailRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isLocalOnlyMode() || authLoading || !user?.uid) return;
+    const emailNow = resolveMirrorUserEmail(user, customUser) || "";
+    const prev = prevMirrorEmailRef.current;
+    prevMirrorEmailRef.current = emailNow || null;
+    if (!emailNow || prev) return;
+    void performLocalRegistryFirestoreMirror({ mode: "registry-bump" }).catch(() => {});
+  }, [user?.uid, user?.email, customUser?.email, authLoading, performLocalRegistryFirestoreMirror]);
 
   // `reloadLocalCompanyRegistry` bump: turant Firestore mirror (Stripe/demote) + deferred timer cancel taaki double-sync na ho.
   useEffect(() => {
-    if (!isLocalOnlyMode() && !embeddedClientUsesFirestoreCompanyList()) return;
+    if (!isOfflineSqliteCompanyRegistry(isBrowserOnline) && !isLocalOnlyMode()) return;
     if (lastLocalRegistryEpochForMirrorRef.current === null) {
       lastLocalRegistryEpochForMirrorRef.current = localRegistryEpoch;
       return;
@@ -1522,7 +1549,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       deferredLocalRegistryMirrorTimerRef.current = null;
     }
     void performLocalRegistryFirestoreMirror({ mode: "registry-bump" }).catch(() => {});
-  }, [localRegistryEpoch, performLocalRegistryFirestoreMirror]);
+    triggerRegistryUpdateRef.current?.();
+  }, [localRegistryEpoch, performLocalRegistryFirestoreMirror, isBrowserOnline]);
 
   useEffect(() => {
     if (isLocalOnlyMode()) return;
@@ -1538,7 +1566,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       }
       return;
     }
-    const logoutClearDelayMs = embeddedClientUsesFirestoreCompanyList() ? 2600 : 400;
+    const logoutClearDelayMs = isLocalOnlyMode() ? 2600 : 400;
     clearCompanyOnLogoutTimerRef.current = setTimeout(() => {
       clearCompanyOnLogoutTimerRef.current = null;
       try {
@@ -1596,9 +1624,31 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     });
     shared.forEach((c: Company) => {
         if (!companyMap.has(c.id)) {
-            companyMap.set(c.id, { ...c, isOwned: isOwnedByUser(c) });
+            companyMap.set(c.id, {
+              ...c,
+              isOwned: isOwnedByUser(c) ? true : false,
+            });
         }
     });
+
+    const shareUser = { uid: user?.uid || "", email: user?.email ?? null };
+
+    // Snapshot race: pehle pull/listener se aayi shared rows mat hatao jab nayi snap partial ho.
+    if (shareUser.uid) {
+      for (const c of latestOnlineMergedUnfilteredRef.current) {
+        if (companyMap.has(c.id)) continue;
+        if (!isCompanyVisibleInMainApp(c)) continue;
+        if (isCurrentUserOwnerOfCompanyRow(c, shareUser)) continue;
+        const offlineLocal =
+          String((c.storageOption || "local")).toLowerCase() === "local" &&
+          (c as { syncedFromCloud?: boolean }).syncedFromCloud !== true;
+        if (offlineLocal) continue;
+        if (c.isOwned === false || isCurrentUserSharedOnCompanyRow(c, shareUser)) {
+          companyMap.set(c.id, { ...c, isOwned: false });
+        }
+      }
+    }
+
     // Merge local DB companies — live plan entitlements ke liye normalizeLocalCompany (online jaisa).
     for (const c of localCompanies || []) {
       if (deletedOnFirestore.has(c.id)) continue;
@@ -1627,8 +1677,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             !isPureLocalRow ||
             (row as { syncedFromCloud?: boolean }).syncedFromCloud === true;
           if (isOnlineMirrorRow) {
-            // EXE multi-tab: owned snapshot pehle, shared baad — SQLite shared mirror tab tak mat hatao.
-            companyMap.set(c.id, { ...normalized, isOwned: isOwnedByUser(normalized) });
+            const shareUser = { uid: user.uid, email: user?.email ?? null };
+            const isSharedRow = isCurrentUserSharedOnCompanyRow(normalized, shareUser);
+            companyMap.set(c.id, {
+              ...normalized,
+              isOwned: isSharedRow ? false : isOwnedByUser(normalized),
+            });
             continue;
           }
           // Shared online mirror revoke — device-local owner rows upar `isPureLocalRow && isOwnerRow` se safe.
@@ -1695,11 +1749,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   }, [user?.uid, user?.email, normalizeLocalCompany, isSuperAdminUser]);
 
   useEffect(() => {
-    // Static/APK: Firebase company list chalao — sirf pure web local-only me listeners band.
-    if (isLocalOnlyMode() && !embeddedClientUsesFirestoreCompanyList()) {
-      // Local-only mode: Firebase company listeners disable (no server dependency).
+    // Static/APK offline: SQLite registry (upar wala effect). Online + web: live Firestore onSnapshot.
+    if (!isLiveFirestoreCompanyRegistry(isBrowserOnline)) {
       return;
     }
+    if (authLoading) return;
     if (!user?.uid) {
       setAllCompanies([]);
       setAllCompaniesRegistry([]);
@@ -1724,13 +1778,15 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       ownerIdCandidates.length > 1
         ? query(collection(firestore, "companies"), where("ownerId", "==", ownerIdCandidates[1]!))
         : null;
-    const sharedQuerySpecs = sharedCompanyQuerySpecs(user.email);
+    const firestoreAuthEmail = resolveFirestoreAuthEmail(user.email);
+    const sharedQuerySpecs = sharedCompanyQuerySpecs(firestoreAuthEmail);
     // Email login — ownerEmail se owned companies (sirf SuperAdmin nahi, sab users)
-    const ownedByEmailQuery = user.email
-      ? query(collection(firestore, "companies"), where("ownerEmail", "==", user.email))
+    const ownerEmailLower = firestoreAuthEmail.toLowerCase();
+    const ownedByEmailQuery = ownerEmailLower
+      ? query(collection(firestore, "companies"), where("ownerEmail", "==", ownerEmailLower))
       : null;
 
-    const needsOwnedByEmail = !!user.email;
+    const needsOwnedByEmail = !!ownerEmailLower;
     /** Offline / slow Firestore: dono snapshot refs null reh sakte — pehle `listLocalCompanies` se trigger bina iske company list + loading kabhi settle nahi hoti (online backup → local restore → refresh par blank). */
     const emptySnap = (): { docs: readonly unknown[] } => ({ docs: [] });
     /** Har snapshot par taaza SQLite — purana cache delete ke baad bhi company dikhata tha; recycle bin move ke baad live list */
@@ -1766,6 +1822,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       }
       if (err?.code === 'permission-denied' || err?.code === 'PERMISSION_DENIED' || String(err?.message || '').includes('permission')) {
         console.warn('[PERMISSION_DENIED TRACK] source=useCompany query=owned (companies where ownerId==uid)', { code: err?.code });
+        ownedSnapRef.current = emptySnap();
+        triggerUpdate();
+        return;
       }
       console.error("Owned Companies listener error:", err);
     });
@@ -1779,6 +1838,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         }
       }
       sharedSnapRef.current = { docs: [...byId.values()] };
+    };
+
+    const markSharedVariantFailed = (spec: ReturnType<typeof sharedCompanyQuerySpecs>[number]) => {
+      const key = sharedCompanyQueryKey(spec);
+      sharedSnapByVariantRef.current.set(key, emptySnap());
+      mergeSharedSnapshots();
+      triggerUpdate();
     };
 
     const unsubSharedList =
@@ -1807,8 +1873,10 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
                     "[PERMISSION_DENIED TRACK] source=useCompany query=shared (companies sharedWithEmails/Lower)",
                     { code: err?.code, field: spec.field, value: spec.value }
                   );
+                } else {
+                  console.warn("Shared Companies listener error:", err);
                 }
-                console.error("Shared Companies listener error:", err);
+                markSharedVariantFailed(spec);
               }
             )
           )
@@ -1856,8 +1924,10 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     if (!ownedByEmailQuery) ownedByEmailSnapRef.current = null;
 
     triggerUpdate();
+    triggerRegistryUpdateRef.current = triggerUpdate;
 
     return () => {
+      triggerRegistryUpdateRef.current = null;
         unsubOwned();
         unsubOwnedLegacy();
         unsubSharedList.forEach((u) => u());
@@ -1868,11 +1938,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         sharedSnapByVariantRef.current.clear();
         ownedByEmailSnapRef.current = null;
     }
-}, [user?.uid, user?.email, customUser?.userDocId, authLoading, isSuperAdmin, handleSnapshotUpdate, registryVersion, companyFirestoreListenerRetryEpoch, scheduleCompanyFirestoreListenerRetry]);
+}, [user?.uid, user?.email, customUser?.userDocId, authLoading, isSuperAdmin, handleSnapshotUpdate, registryVersion, companyFirestoreListenerRetryEpoch, scheduleCompanyFirestoreListenerRetry, isBrowserOnline]);
 
-  /** Chuni gayi company par direct doc snapshot — static/APK bhi online firebase companies ke liye chalao. */
+  /** Chuni gayi company par direct doc snapshot — web + static/APK online. Offline static: SQLite row. */
   useEffect(() => {
-    if (isLocalOnlyMode() && !embeddedClientUsesFirestoreCompanyList()) return;
+    if (!isLiveFirestoreCompanyRegistry(isBrowserOnline)) return;
     if (!companyId?.trim() || !user?.uid) return;
 
     let cancelled = false;
@@ -1934,11 +2004,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       cancelled = true;
       unsub();
     };
-  }, [companyId, user?.uid, normalizeLocalCompany, scheduleCompanyFirestoreListenerRetry]);
+  }, [companyId, user?.uid, normalizeLocalCompany, scheduleCompanyFirestoreListenerRetry, isBrowserOnline]);
 
-  // Har "online" SQLite row ke liye Firestore root verify: doc gayab → owner = local me demote, shared = row delete.
+  // Har "online" SQLite row ke liye Firestore root verify — static/APK: mirror ke baad (shared SQLite abhi khali na ho).
   useEffect(() => {
     if (!user?.uid || authLoading) return;
+    if (isLocalOnlyMode()) return;
     let cancelled = false;
     const selectedAtStart = companyId;
     (async () => {
@@ -2010,7 +2081,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
     // Online shared: khali list par bhi grace (sidebar nav)
     let graceMs = allCompanies.length === 0 ? 0 : 2000;
-    if (user?.uid && (!isLocalOnlyMode() || embeddedClientUsesFirestoreCompanyList())) {
+    if (user?.uid) {
       graceMs = allCompanies.length === 0 ? LIST_RECOVERY_ONLINE_EMPTY_GRACE_MS : LIST_RECOVERY_ONLINE_NONEMPTY_GRACE_MS;
     }
     if (Date.now() - mountedAtRef.current < graceMs) return;
@@ -2063,7 +2134,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         return;
       }
       // Shared user: SQLite mirror baad me — Firestore doc se recover + upsert (sidebar /company clear kam)
-      if (!localRow && user?.uid && (!isLocalOnlyMode() || embeddedClientUsesFirestoreCompanyList())) {
+      if (!localRow && user?.uid) {
         try {
           const snap = await getDoc(doc(firestore, "companies", companyId));
           if (snap.exists()) {
@@ -2233,15 +2304,15 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   /** SuperAdmin: /admin vs main app — list sirf filter se update; Firestore/SQLite route pe dubara nahi. */
   useEffect(() => {
     if (!user) return;
-    const raw = isLocalOnlyMode()
-      ? latestLocalNormalizedCompaniesRef.current
-      : latestOnlineMergedUnfilteredRef.current;
+    // Static/APK offline: mirror setAllCompanies — pathname par ref se dubara likhne se shared rows gayab ho jati thi.
+    if (isOfflineSqliteCompanyRegistry(isBrowserOnline)) return;
+    const raw = latestOnlineMergedUnfilteredRef.current;
     if (raw.length === 0) return;
     setAllCompaniesRegistry(raw);
     setAllCompanies(
       filterSharedOnlyCompaniesForSuperAdminInMainApp(raw, user, isSuperAdminUser, pathname)
     );
-  }, [pathname, user, isSuperAdminUser]);
+  }, [pathname, user, isSuperAdminUser, isBrowserOnline]);
 
   const companyWithLocalFiscal = useMemo(
     () => mergeCompanyWithLocalFiscal(company, companyId),

@@ -9,6 +9,8 @@ import { doc, writeBatch, Timestamp, type Firestore } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS } from "@/lib/firestoreToLocalCompanyPull";
+import { isLocalFileRef } from "@/lib/localPendingFiles";
+import { yieldToMain } from "@/lib/yieldToMain";
 
 const BATCH_MAX = 450;
 
@@ -39,6 +41,25 @@ function sanitizeValue(v: unknown): unknown {
   return v;
 }
 
+function stripLocalFileRefsFromDoc(obj: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...obj };
+  for (const key of ["fileUrls", "documentFileUrls"] as const) {
+    if (!Array.isArray(out[key])) continue;
+    const filtered = (out[key] as unknown[]).filter((v) => !isLocalFileRef(String(v ?? "")));
+    if (filtered.length === 0) delete out[key];
+    else out[key] = filtered;
+  }
+  for (const key of ["fileUrl", "avatarUrl", "logoUrl"] as const) {
+    if (isLocalFileRef(String(out[key] ?? ""))) delete out[key];
+  }
+  const unassigned = out.unassignedFile;
+  if (unassigned && typeof unassigned === "object") {
+    const url = (unassigned as Record<string, unknown>).url;
+    if (isLocalFileRef(String(url ?? ""))) delete out.unassignedFile;
+  }
+  return out;
+}
+
 function sanitizeDocForFirestore(obj: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {
@@ -67,34 +88,54 @@ async function commitWrites(
  * Local browser DB se saari mirror subcollections Firestore `companies/{fsCompanyId}/…` pe likho.
  * Company root doc pehle se hona chahiye (permissions).
  */
-export async function pushAllLocalCompanyDocsToFirestore(fsCompanyId: string): Promise<{
+export async function pushAllLocalCompanyDocsToFirestore(
+  fsCompanyId: string,
+  options?: {
+    sqliteCompanyId?: string;
+    omitLocalFileRefs?: boolean;
+    onCollectionProgress?: (collectionName: string, index: number, total: number) => void;
+  }
+): Promise<{
   pushed: number;
   errors: string[];
 }> {
   const errors: string[] = [];
   let pushed = 0;
+  const sqliteCompanyId = String(options?.sqliteCompanyId || fsCompanyId).trim() || fsCompanyId;
+  const cols = COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS;
+  const totalCols = cols.length;
 
-  for (const collectionName of COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS) {
+  for (let colIndex = 0; colIndex < cols.length; colIndex++) {
+    const collectionName = cols[colIndex]!;
+    options?.onCollectionProgress?.(collectionName, colIndex, totalCols);
     try {
-      const rows = await listCompanyDocsFromBrowserDb(fsCompanyId, collectionName, { forBackupMerge: true });
+      await yieldToMain();
+      let rows = await listCompanyDocsFromBrowserDb(sqliteCompanyId, collectionName, { forBackupMerge: true });
+      if (!rows.length && sqliteCompanyId !== fsCompanyId) {
+        rows = await listCompanyDocsFromBrowserDb(fsCompanyId, collectionName, { forBackupMerge: true });
+      }
       if (!rows.length) continue;
 
       const ops: Array<{ ref: ReturnType<typeof doc>; data: Record<string, unknown> }> = [];
-      for (const row of rows) {
+      for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+        const row = rows[rowIndex]!;
         const docId = String((row as { id?: string }).id ?? "");
         if (!docId) continue;
         const { id: _omit, ...rest } = row as Record<string, unknown> & { id: string };
-        const data = sanitizeDocForFirestore(rest as Record<string, unknown>);
+        const base = options?.omitLocalFileRefs ? stripLocalFileRefsFromDoc(rest) : rest;
+        const data = sanitizeDocForFirestore(base as Record<string, unknown>);
         if (data.companyId == null || String(data.companyId).trim() === "") {
           data.companyId = fsCompanyId;
         }
         const ref = doc(firestore, `companies/${fsCompanyId}/${collectionName}`, docId);
         ops.push({ ref, data });
+        if (rowIndex > 0 && rowIndex % 40 === 0) await yieldToMain();
       }
 
       if (ops.length) {
         await commitWrites(firestore, ops);
         pushed += ops.length;
+        await yieldToMain();
       }
     } catch (e) {
       errors.push(`${collectionName}: ${e instanceof Error ? e.message : String(e)}`);

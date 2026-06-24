@@ -3,6 +3,7 @@ const {
   BrowserWindow,
   BrowserView,
   Menu,
+  Tray,
   ipcMain,
   dialog,
   nativeImage,
@@ -12,7 +13,7 @@ const googleAuthExternal = require("./googleAuthExternal");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const staticAppServer = require("./staticAppServer");
+const localAppServer = require("./localAppServer");
 
 /** Har app launch par naya id — EXE multi-tab PIN unlock isi session me share (cold start par dubara PIN). */
 let appBootSessionId = "";
@@ -111,26 +112,222 @@ function rewriteReconciliationDocumentUrl(requestUrl) {
   return null;
 }
 
-staticAppServer.setServerDeps({
+localAppServer.setServerDeps({
   staticPublicDir: path.join(__dirname, "out"),
   isPackaged: app.isPackaged,
   rewriteReconciliationDocumentUrl,
   isAllowedFirebaseProxyTarget,
 });
 
+/** Packaged app: UI BrowserView tabs (main window webContents khali rehta hai). */
+let serverDataBridgeWindow = null;
+
+function scoreLocalhostAppUrl(url) {
+  const u = String(url || "");
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(u)) return 0;
+  return 1;
+}
+
+function getAppTabWebContentsList() {
+  const out = [];
+  const seen = new Set();
+  const push = (wc) => {
+    if (!wc || wc.isDestroyed()) return;
+    const id = wc.id;
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push(wc);
+  };
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    const state = windowTabs.get(win.id);
+    if (state?.tabs?.length) {
+      for (const tab of state.tabs) {
+        push(tab.webContents);
+      }
+    }
+    push(win.webContents);
+  }
+  if (serverDataBridgeWindow && !serverDataBridgeWindow.isDestroyed()) {
+    push(serverDataBridgeWindow.webContents);
+  }
+  return out.sort((a, b) => scoreLocalhostAppUrl(a.getURL()) - scoreLocalhostAppUrl(b.getURL()));
+}
+
+async function waitForWindowBridgeFn(wc, fnName, timeoutMs = 25000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (!wc || wc.isDestroyed()) return false;
+    try {
+      const ok = await wc.executeJavaScript(`typeof window[${JSON.stringify(fnName)}] === "function"`, true);
+      if (ok) return true;
+    } catch (_) {}
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return false;
+}
+
+/** Hidden localhost tab — sharing on par company list + login bridge (tray-only server ke liye). */
+async function ensureServerDataBridgeWindow() {
+  if (!app.isPackaged) return null;
+  const cfg = localAppServer.loadConfig(userDataPath());
+  if (!localAppServer.shouldHostLocalServer(cfg) || !cfg.userWantsRunning) return null;
+  const bound = localAppServer.getServerListenAddress();
+  const port = bound?.port || localAppServer.getStaticServerPort();
+  if (!port) return null;
+  const bridgeUrl = `http://127.0.0.1:${port}/`;
+  if (!serverDataBridgeWindow || serverDataBridgeWindow.isDestroyed()) {
+    serverDataBridgeWindow = new BrowserWindow({
+      show: false,
+      skipTaskbar: true,
+      width: 640,
+      height: 480,
+      webPreferences: {
+        preload: path.join(__dirname, "app-content-preload.js"),
+        nodeIntegration: false,
+        contextIsolation: true,
+      },
+    });
+    installPlServerRequestHeaders(serverDataBridgeWindow.webContents.session);
+    serverDataBridgeWindow.on("closed", () => {
+      serverDataBridgeWindow = null;
+    });
+  }
+  const wc = serverDataBridgeWindow.webContents;
+  const current = wc.getURL() || "";
+  if (!current.includes(`127.0.0.1:${port}`) && !current.includes(`localhost:${port}`)) {
+    await wc.loadURL(bridgeUrl);
+  }
+  await waitForWindowBridgeFn(wc, "__plListShareableLocalCompanies");
+  return wc;
+}
+
+async function runInServerAppRenderer(script, opts = {}) {
+  const requireFn = opts.requireFn || "";
+  const accept = opts.accept;
+  const contentsList = getAppTabWebContentsList();
+  for (const wc of contentsList) {
+    try {
+      const url = wc.getURL();
+      if (!url || url.startsWith("devtools://")) continue;
+      if (requireFn) {
+        const ready = await wc.executeJavaScript(
+          `typeof window[${JSON.stringify(requireFn)}] === "function"`,
+          true
+        );
+        if (!ready) continue;
+      }
+      const result = await wc.executeJavaScript(script, true);
+      if (typeof accept === "function" ? accept(result) : result != null) return result;
+    } catch (_) {
+      /* next tab */
+    }
+  }
+  const bridge = await ensureServerDataBridgeWindow();
+  if (bridge && !bridge.isDestroyed()) {
+    if (requireFn) await waitForWindowBridgeFn(bridge, requireFn);
+    try {
+      const result = await bridge.executeJavaScript(script, true);
+      if (typeof accept === "function" ? accept(result) : result != null) return result;
+    } catch (_) {}
+  }
+  return null;
+}
+
+localAppServer.setShareableCompaniesProvider(async () => {
+  const rows = await runInServerAppRenderer(
+    `(async () => {
+      try {
+        if (typeof window.__plListShareableLocalCompanies !== "function") return [];
+        return await window.__plListShareableLocalCompanies();
+      } catch (_) {
+        return [];
+      }
+    })()`,
+    {
+      requireFn: "__plListShareableLocalCompanies",
+      accept: (r) => Array.isArray(r) && r.length > 0,
+    }
+  );
+  return Array.isArray(rows) ? rows : [];
+});
+
+localAppServer.setLocalCompanyAuthProvider(async (companyId, username, password) => {
+  const result = await runInServerAppRenderer(
+    `(async () => {
+      try {
+        if (typeof window.__plValidateLocalCompanyLogin !== "function") {
+          return { ok: false, error: "bridge_missing" };
+        }
+        return await window.__plValidateLocalCompanyLogin(${JSON.stringify(companyId)}, ${JSON.stringify(username)}, ${JSON.stringify(password)});
+      } catch (e) {
+        return { ok: false, error: e && e.message ? e.message : "Login failed" };
+      }
+    })()`,
+    { requireFn: "__plValidateLocalCompanyLogin" }
+  );
+  if (result && typeof result === "object" && result.ok === true) return result;
+  if (result && typeof result === "object" && result.error && result.error !== "bridge_missing") {
+    return result;
+  }
+  return {
+    ok: false,
+    error:
+      "Server data bridge is not ready. On the server PC keep Pocket Ledger open (or wait ~10s after starting sharing), then try again.",
+  };
+});
+
 function userDataPath() {
   return app.getPath("userData");
 }
 
-/** Packaged EXE UI — localhost static `out/` server (online-only; PL Server removed). */
+/** Packaged EXE UI — localhost static server; sharing off hone par bhi chalna chahiye. */
 async function ensureAppUiStaticServer() {
+  const cfg = localAppServer.loadConfig(userDataPath());
+  if (!localAppServer.shouldHostLocalServer(cfg)) {
+    throw new Error("PL_LOCAL_SERVER_ROLE_CLIENT_ONLY");
+  }
   try {
-    return await staticAppServer.startStaticServer(userDataPath());
+    return await localAppServer.startStaticServer(userDataPath(), { forAppUi: true });
   } catch (e) {
+    if (String(e?.message || e) === "PL_LOCAL_SERVER_ROLE_CLIENT_ONLY") {
+      throw e;
+    }
     if (String(e?.message || e) === "PL_PACKAGED_STATIC_PORT_EXHAUSTED") {
       dialog.showErrorBox(
         "Pocket Ledger",
-        "Local ports are all busy (tried default port and fallbacks).\n\n" +
+        "Local server ports are all busy (tried configured port and fallbacks).\n\n" +
+          "Close other apps using those ports, then reopen.\n" +
+          "Your sign-in stays on the same port — changing ports looks like a logout."
+      );
+    }
+    throw e;
+  }
+}
+
+async function startStaticServer() {
+  const cfg = localAppServer.loadConfig(userDataPath());
+  if (!localAppServer.shouldHostLocalServer(cfg)) {
+    throw new Error("PL_LOCAL_SERVER_ROLE_CLIENT_ONLY");
+  }
+  if (!cfg.userWantsRunning) {
+    throw new Error("PL_LOCAL_SERVER_STOPPED");
+  }
+  try {
+    const port = await localAppServer.startStaticServer(userDataPath());
+    const cfgAfter = localAppServer.loadConfig(userDataPath());
+    if (cfgAfter.userWantsRunning) {
+      void ensureServerDataBridgeWindow().catch(() => {});
+    }
+    return port;
+  } catch (e) {
+    if (String(e?.message || e) === "PL_LOCAL_SERVER_ROLE_CLIENT_ONLY") {
+      throw e;
+    }
+    if (String(e?.message || e) === "PL_PACKAGED_STATIC_PORT_EXHAUSTED") {
+      dialog.showErrorBox(
+        "Pocket Ledger",
+        "Local server ports are all busy (tried configured port and fallbacks).\n\n" +
           "Close other apps using those ports, then reopen.\n" +
           "Your sign-in stays on the same port — changing ports looks like a logout."
       );
@@ -140,10 +337,34 @@ async function ensureAppUiStaticServer() {
 }
 
 function stopStaticServer() {
-  return staticAppServer.stopStaticServer();
+  return localAppServer.stopStaticServer();
 }
 
-/** Shortcut / second instance: window band ho to naya kholna, warna pehle wala dikhao. */
+/** Packaged EXE: server background me chal raha ho to system tray se stop / open. */
+let serverTray = null;
+
+function getTrayIconImage() {
+  const icon = getWindowIcon();
+  if (icon && typeof icon === "object" && typeof icon.isEmpty === "function" && !icon.isEmpty()) {
+    return icon;
+  }
+  try {
+    const img = nativeImage.createFromPath(getIconPath());
+    if (!img.isEmpty()) return img;
+  } catch (_) {}
+  return null;
+}
+
+function destroyServerTray() {
+  if (serverTray) {
+    try {
+      serverTray.destroy();
+    } catch (_) {}
+    serverTray = null;
+  }
+}
+
+/** Shortcut / second instance / tray: window band ho to naya kholna, warna pehle wala dikhao. */
 async function focusOrOpenMainWindow() {
   const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed());
   if (wins.length > 0) {
@@ -154,6 +375,204 @@ async function focusOrOpenMainWindow() {
     return;
   }
   await createWindow();
+}
+
+async function stopLocalServerAndPersist() {
+  localAppServer.saveConfig(userDataPath(), { userWantsRunning: false });
+  const cfg = localAppServer.loadConfig(userDataPath());
+  if (app.isPackaged && localAppServer.shouldHostLocalServer(cfg)) {
+    const expectedHost = localAppServer.listenHostForConfig(cfg);
+    const bound = localAppServer.getServerListenAddress();
+    if (!bound) {
+      await localAppServer.startStaticServer(userDataPath(), { forAppUi: true });
+    } else if (bound.host !== expectedHost) {
+      await localAppServer.restartStaticServer(userDataPath(), { forAppUi: true });
+    }
+    syncLocalServerTray();
+    return;
+  }
+  await stopStaticServer();
+  syncLocalServerTray();
+}
+
+async function startSharedLocalServer() {
+  localAppServer.saveConfig(userDataPath(), { userWantsRunning: true });
+  const cfg = localAppServer.loadConfig(userDataPath());
+  const expectedHost = localAppServer.listenHostForConfig(cfg);
+  const bound = localAppServer.getServerListenAddress();
+  let port;
+  if (!bound) {
+    port = await startStaticServer();
+  } else if (bound.host !== expectedHost) {
+    port = await localAppServer.restartStaticServer(userDataPath());
+    void ensureServerDataBridgeWindow().catch(() => {});
+  } else {
+    port = bound.port;
+    void ensureServerDataBridgeWindow().catch(() => {});
+  }
+  return port;
+}
+
+function syncLocalServerTray() {
+  if (!app.isPackaged) {
+    destroyServerTray();
+    return;
+  }
+  const cfg = localAppServer.loadConfig(userDataPath());
+  if (!localAppServer.shouldHostLocalServer(cfg)) {
+    destroyServerTray();
+    return;
+  }
+  const st = localAppServer.getStatus(userDataPath());
+  if (!st.appUiServing && !cfg.userWantsRunning) {
+    destroyServerTray();
+    return;
+  }
+
+  const portLabel = st.port != null ? `port ${st.port}` : "running";
+  const statusLine = st.sharingActive
+    ? `Sharing on for others (${portLabel})`
+    : st.appUiServing
+      ? `This PC only — remote sharing off (${portLabel})`
+      : "Local server stopped";
+
+  const template = [
+    { label: statusLine, enabled: false },
+    { type: "separator" },
+    {
+      label: "Open Pocket Ledger",
+      click: () => {
+        void focusOrOpenMainWindow();
+      },
+    },
+  ];
+  if (st.sharingActive) {
+    template.push({
+      label: "Stop sharing (keep app open)",
+      click: () => {
+        void stopLocalServerAndPersist();
+      },
+    });
+  } else if (!st.sharingActive && cfg.userWantsRunning === false && st.appUiServing) {
+    template.push({
+      label: "Start sharing for others",
+      click: () => {
+        void startSharedLocalServer().then(() => syncLocalServerTray());
+      },
+    });
+  }
+  template.push(
+    { type: "separator" },
+    {
+      label: "Quit Pocket Ledger",
+      click: () => {
+        void (async () => {
+          await stopLocalServerAndPersist();
+          app.quit();
+        })();
+      },
+    }
+  );
+
+  const menu = Menu.buildFromTemplate(template);
+  const trayIcon = getTrayIconImage();
+  if (!trayIcon) return;
+
+  if (!serverTray) {
+    serverTray = new Tray(trayIcon);
+    serverTray.setToolTip("Pocket Ledger");
+    serverTray.on("double-click", () => {
+      void focusOrOpenMainWindow();
+    });
+  } else {
+    serverTray.setImage(trayIcon);
+  }
+  serverTray.setContextMenu(menu);
+  if (st.appUiServing && st.port != null) {
+    serverTray.setToolTip(
+      st.sharingActive
+        ? `Pocket Ledger — sharing on port ${st.port}`
+        : `Pocket Ledger — this PC only (port ${st.port})`
+    );
+  }
+}
+
+function notifyServerStillRunningInTray(st) {
+  if (!serverTray || !st?.running) return;
+  try {
+    if (typeof serverTray.displayBalloon === "function") {
+      serverTray.displayBalloon({
+        iconType: "info",
+        title: "Pocket Ledger server",
+        content: `Still running on port ${st.port}. Right-click the tray icon → Stop server.`,
+      });
+    }
+  } catch (_) {}
+}
+
+/** Gate → Connect: remote server origin → access token for webRequest header injection. */
+const remoteGateAuthByOrigin = new Map();
+
+function isPlServerRequest(urlStr, port, remoteBase) {
+  try {
+    const u = new URL(urlStr);
+    const h = (u.hostname || "").toLowerCase();
+    const reqPort = String(u.port || (u.protocol === "https:" ? "443" : "80"));
+    if (remoteGateAuthByOrigin.has(u.origin)) return true;
+    if (port && reqPort === String(port)) {
+      if (h === "localhost" || h === "127.0.0.1" || h === "[::1]") return true;
+      if (/^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(h)) return true;
+      // Public WAN IP on sharing port (router port-forward / remote Gate clients).
+      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return true;
+    }
+    if (remoteBase) {
+      const remote = new URL(remoteBase);
+      if (u.origin === remote.origin) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function appendRemoteClientFlag(urlStr) {
+  try {
+    const u = new URL(urlStr);
+    u.searchParams.set("pl_remote_client", "1");
+    return u.toString();
+  } catch {
+    const sep = urlStr.includes("?") ? "&" : "?";
+    return `${urlStr}${sep}pl_remote_client=1`;
+  }
+}
+
+/** Pocket Ledger BrowserView — app marker + access token for local/remote server URLs. */
+function installPlServerRequestHeaders(session) {
+  if (!session?.webRequest) return;
+  const legacyToken = localAppServer.getOrCreateClientToken(userDataPath());
+  const cfg = localAppServer.loadConfig(userDataPath());
+  const remoteBase = localAppServer.normalizeRemoteServerUrl(cfg.remoteServerUrl);
+  const accessTok = String(cfg.clientAccessToken || "").trim();
+  session.webRequest.onBeforeSendHeaders({ urls: ["http://*/*", "https://*/*"] }, (details, callback) => {
+    const port = localAppServer.getStaticServerPort();
+    const headers = { ...details.requestHeaders };
+    if (isPlServerRequest(details.url || "", port, remoteBase)) {
+      headers[localAppServer.PL_ELECTRON_MARKER_HEADER] = localAppServer.PL_ELECTRON_MARKER_VALUE;
+      headers[localAppServer.PL_CLIENT_HEADER] = legacyToken;
+      let gateTok = "";
+      try {
+        const origin = new URL(details.url || "").origin;
+        gateTok = remoteGateAuthByOrigin.get(origin) || "";
+      } catch {
+        /* ignore */
+      }
+      const tok = gateTok || accessTok;
+      if (tok) {
+        headers[localAppServer.PL_ACCESS_HEADER] = tok;
+      }
+    }
+    callback({ requestHeaders: headers });
+  });
 }
 
 function adjustZoom(targetContents, delta) {
@@ -420,6 +839,14 @@ function previousTab(win) {
 async function getAppEntryUrl() {
   // Dev Next (`npm run dev`) port 3000 — packaged EXE static server alag fallback ports par.
   if (isDevMode()) return "http://localhost:3000";
+  const cfg = localAppServer.loadConfig(userDataPath());
+  if (localAppServer.shouldUseRemoteEntry(cfg)) {
+    const remote = localAppServer.normalizeRemoteServerUrl(cfg.remoteServerUrl);
+    if (!remote) {
+      throw new Error("PL_REMOTE_SERVER_URL_MISSING");
+    }
+    return appendRemoteClientFlag(remote);
+  }
   const port = await ensureAppUiStaticServer();
   // Packaged app route loading must be HTTP to avoid file:// local-resource blocking.
   return `http://localhost:${port}/`;
@@ -442,6 +869,39 @@ async function reloadAllAppBrowserViews() {
   }
 }
 
+/** After port change: keep the same route (e.g. /dashboard) instead of sending users back to login "/". */
+async function reloadAllAppBrowserViewsPreservePath(port) {
+  const newBase = `http://127.0.0.1:${port}`;
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    const state = windowTabs.get(win.id);
+    if (!state) continue;
+    for (const view of state.tabs) {
+      if (!view.webContents || view.webContents.isDestroyed()) continue;
+      let target = `${newBase}/`;
+      try {
+        const cur = view.webContents.getURL();
+        if (cur && !cur.startsWith("devtools://")) {
+          const u = new URL(cur);
+          if (
+            u.protocol === "http:" &&
+            (u.hostname === "127.0.0.1" || u.hostname === "localhost")
+          ) {
+            target = `${newBase}${u.pathname}${u.search}${u.hash}`;
+          }
+        }
+      } catch (_) {
+        /* ignore malformed URL */
+      }
+      try {
+        await view.webContents.loadURL(target);
+      } catch (_) {
+        /* tab may be mid-navigation */
+      }
+    }
+  }
+}
+
 async function openNewTab(win) {
   const entryUrl = await getAppEntryUrl();
   const view = new BrowserView({
@@ -451,6 +911,8 @@ async function openNewTab(win) {
       contextIsolation: true,
     },
   });
+  installPlServerRequestHeaders(view.webContents.session);
+
   // Normalize zoom shortcuts for different keyboard layouts in each tab webContents.
   view.webContents.on("before-input-event", (event, input) => {
     if (!input.control) return;
@@ -488,7 +950,15 @@ async function openNewTab(win) {
   try {
     await view.webContents.loadURL(entryUrl);
   } catch (e) {
-    throw e;
+    const msg = String(e?.message || e);
+    if (msg.includes("PL_REMOTE_SERVER_URL_MISSING")) {
+      dialog.showErrorBox(
+        "Pocket Ledger",
+        "Client mode: enter Server address in Settings → Server, save, then restart the app."
+      );
+    } else {
+      throw e;
+    }
   }
 }
 
@@ -748,8 +1218,150 @@ if (gotSingleInstanceLock) {
     event.returnValue = getAppBootSessionId();
   });
 
+  ipcMain.on("pl-set-remote-gate-auth", (event, payload) => {
+    try {
+      const serverUrl = String(payload?.serverUrl || "").trim();
+      const accessToken = String(payload?.accessToken || "").trim();
+      const normalized = localAppServer.normalizeRemoteServerUrl(serverUrl);
+      if (!normalized) {
+        event.returnValue = { ok: false };
+        return;
+      }
+      const origin = new URL(normalized).origin;
+      if (accessToken) remoteGateAuthByOrigin.set(origin, accessToken);
+      else remoteGateAuthByOrigin.delete(origin);
+      event.returnValue = { ok: true, origin };
+    } catch {
+      event.returnValue = { ok: false };
+    }
+  });
+
+  const bootCfg = localAppServer.loadConfig(userDataPath());
+  localAppServer.applyLoginItemSettings(app, bootCfg.autoStartOnBoot);
+
   ipcMain.handle("pl-google-auth-external", async () => {
     return googleAuthExternal.signInWithGoogleExternal(shell);
+  });
+
+  ipcMain.handle("pl-local-server-get-status", async () => {
+    return localAppServer.getStatus(userDataPath());
+  });
+
+  ipcMain.handle("pl-local-server-get-config", async () => {
+    return localAppServer.loadConfig(userDataPath());
+  });
+
+  ipcMain.handle("pl-local-server-set-config", async (_event, partial) => {
+    const next = localAppServer.saveConfig(userDataPath(), partial || {});
+    if (typeof partial?.autoStartOnBoot === "boolean") {
+      localAppServer.applyLoginItemSettings(app, next.autoStartOnBoot);
+    }
+    return next;
+  });
+
+  ipcMain.handle("pl-local-server-start", async () => {
+    const cfg = localAppServer.loadConfig(userDataPath());
+    if (!localAppServer.shouldHostLocalServer(cfg)) {
+      return { ok: false, error: "client-only", status: localAppServer.getStatus(userDataPath()) };
+    }
+    const port = await startSharedLocalServer();
+    syncLocalServerTray();
+    return { ok: true, port, status: localAppServer.getStatus(userDataPath()) };
+  });
+
+  ipcMain.handle("pl-local-server-stop", async () => {
+    await stopLocalServerAndPersist();
+    return { ok: true, status: localAppServer.getStatus(userDataPath()) };
+  });
+
+  ipcMain.handle("pl-local-server-restart", async (_event, partial) => {
+    const portBeforeRestart = localAppServer.getStaticServerPort();
+    if (partial && typeof partial === "object") {
+      localAppServer.saveConfig(userDataPath(), partial);
+      if (typeof partial.autoStartOnBoot === "boolean") {
+        localAppServer.applyLoginItemSettings(app, partial.autoStartOnBoot);
+      }
+    }
+    const cfg = localAppServer.loadConfig(userDataPath());
+    const bound = localAppServer.getServerListenAddress();
+    const nextHost = localAppServer.listenHostForConfig(cfg);
+    const hostMatches =
+      bound &&
+      (bound.host === nextHost ||
+        (nextHost === "0.0.0.0" && (bound.host === "::" || bound.host === "0.0.0.0")));
+    const portMatches = bound && (!cfg.userWantsRunning || bound.port === Number(cfg.port));
+    const canKeepSocket =
+      bound && hostMatches && portMatches && localAppServer.shouldHostLocalServer(cfg);
+
+    if (canKeepSocket) {
+      syncLocalServerTray();
+      return { ok: true, port: bound.port, status: localAppServer.getStatus(userDataPath()) };
+    }
+
+    await stopStaticServer();
+    if (!localAppServer.shouldHostLocalServer(cfg)) {
+      syncLocalServerTray();
+      return { ok: true, port: null, status: localAppServer.getStatus(userDataPath()) };
+    }
+    let port;
+    if (app.isPackaged) {
+      if (cfg.userWantsRunning) {
+        port = await localAppServer.startStaticServer(userDataPath());
+      } else {
+        port = await localAppServer.startStaticServer(userDataPath(), { forAppUi: true });
+      }
+    } else if (cfg.userWantsRunning) {
+      port = await localAppServer.startStaticServer(userDataPath());
+    } else {
+      syncLocalServerTray();
+      return { ok: true, port: null, status: localAppServer.getStatus(userDataPath()) };
+    }
+    syncLocalServerTray();
+    if (app.isPackaged && port) {
+      if (portBeforeRestart && portBeforeRestart !== port) {
+        void reloadAllAppBrowserViewsPreservePath(port);
+      } else if (!portBeforeRestart) {
+        void reloadAllAppBrowserViewsPreservePath(port);
+      }
+    }
+    return { ok: true, port, status: localAppServer.getStatus(userDataPath()) };
+  });
+
+  ipcMain.handle("pl-local-server-list-access-tokens", async () => {
+    return localAppServer.accessTokens.listAccessTokens(userDataPath());
+  });
+
+  ipcMain.handle("pl-local-server-create-access-token", async (_event, input) => {
+    return localAppServer.accessTokens.createAccessToken(userDataPath(), input || {});
+  });
+
+  ipcMain.handle("pl-local-server-update-access-token", async (_event, payload) => {
+    const id = String(payload?.id || "");
+    const updated = localAppServer.accessTokens.updateAccessToken(userDataPath(), id, payload?.input || {});
+    if (!updated) return { ok: false };
+    return { ok: true, token: updated };
+  });
+
+  ipcMain.handle("pl-local-server-get-access-token-secret", async (_event, id) => {
+    const secret = localAppServer.accessTokens.getAccessTokenSecret(userDataPath(), String(id || ""));
+    if (!secret) return { ok: false };
+    return { ok: true, ...secret };
+  });
+
+  ipcMain.handle("pl-local-server-rotate-access-token", async (_event, payload) => {
+    const id = String(payload?.id || "");
+    const rotated = localAppServer.accessTokens.rotateAccessToken(
+      userDataPath(),
+      id,
+      payload?.input || {}
+    );
+    if (!rotated) return { ok: false };
+    return { ok: true, ...rotated };
+  });
+
+  ipcMain.handle("pl-local-server-revoke-access-token", async (_event, id) => {
+    const ok = localAppServer.accessTokens.revokeAccessToken(userDataPath(), String(id || ""));
+    return { ok };
   });
 
   ipcMain.handle("window-chrome-action", async (event, action) => {
@@ -966,18 +1578,28 @@ if (gotSingleInstanceLock) {
 
   buildAppMenu();
   await createWindow();
+  syncLocalServerTray();
   app.on("activate", () => {
     void focusOrOpenMainWindow();
   });
   });
 }
 
-// Packaged static server band karo jab app quit ho.
+// Ensure temporary local server is closed on every quit path.
 app.on("before-quit", () => {
+  destroyServerTray();
   stopStaticServer();
 });
 
 app.on("window-all-closed", () => {
+  const cfg = localAppServer.loadConfig(userDataPath());
+  const st = localAppServer.getStatus(userDataPath());
+  if (app.isPackaged && localAppServer.shouldHostLocalServer(cfg) && st.appUiServing) {
+    syncLocalServerTray();
+    if (st.sharingActive) notifyServerStillRunningInTray(st);
+    return;
+  }
+  destroyServerTray();
   stopStaticServer();
   if (process.platform !== "darwin") app.quit();
 });

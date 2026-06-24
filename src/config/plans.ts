@@ -102,7 +102,9 @@ export type EntitlementKey =
   /** Local company → cloud upload: max attachment payload (MB); 0 = unlimited. */
   | "maxLocalToOnlineAttachmentMB"
   /** Online Firestore companies (`storageOption: firebase`) — off = create/edit me local/online choice hide. */
-  | "allowFirebaseOnlineCompanies";
+  | "allowFirebaseOnlineCompanies"
+  /** EXE LAN server (Settings → Server) — share local companies on network. */
+  | "allowLocalAppServer";
 
 export type Entitlements = Record<EntitlementKey, number | boolean>;
 
@@ -171,6 +173,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxLocalToOnlineAttachmentMB: 0,
       savedAccountSwitchEnabled: false,
       allowFirebaseOnlineCompanies: false,
+      allowLocalAppServer: false,
     },
     features: [
       "Unlimited local (offline) companies",
@@ -224,6 +227,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxLocalToOnlineAttachmentMB: 500,
       savedAccountSwitchEnabled: true,
       allowFirebaseOnlineCompanies: true,
+      allowLocalAppServer: true,
     },
     features: [
       "1 online company + unlimited offline",
@@ -279,6 +283,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxLocalToOnlineAttachmentMB: 2000,
       savedAccountSwitchEnabled: true,
       allowFirebaseOnlineCompanies: true,
+      allowLocalAppServer: true,
     },
     features: [
       "3 online companies + unlimited offline",
@@ -333,6 +338,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       maxLocalToOnlineAttachmentMB: 5000,
       savedAccountSwitchEnabled: true,
       allowFirebaseOnlineCompanies: true,
+      allowLocalAppServer: true,
     },
     features: [
       "10 online companies + unlimited offline",

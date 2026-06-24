@@ -16,6 +16,9 @@ import { usePresence } from "@/hooks/usePresence";
 import { ThemeProvider } from "@/hooks/useTheme";
 import { CapacitorAndroidBackButton } from "@/components/CapacitorAndroidBackButton";
 import { VoucherOutboxFlushManager } from "@/components/VoucherOutboxFlushManager";
+import { LocalCompanyCloudSyncManager } from "@/components/LocalCompanyCloudSyncManager";
+import { CapacitorDriveOAuthReturnHandler } from "@/components/CapacitorDriveOAuthReturnHandler";
+import { PendingRestoreCloudPushManager } from "@/components/PendingRestoreCloudPushManager";
 import { StaticFastResumeSyncManager } from "@/components/StaticFastResumeSyncManager";
 import { OnlineResumeRouteShield } from "@/components/OnlineResumeRouteShield";
 import { OfflineWarmSyncManager } from "@/components/OfflineWarmSyncManager";
@@ -29,6 +32,8 @@ import { FirstLoginWarmGateProvider } from "@/contexts/FirstLoginWarmGateContext
 import { MobileDetailSummaryCollapseProvider } from "@/contexts/MobileDetailSummaryCollapseContext";
 import { EmbeddedAttachmentPrefetchProvider } from "@/contexts/EmbeddedAttachmentPrefetchContext";
 import { CrossCompanyAttachmentAccessBridge } from "@/components/CrossCompanyAttachmentAccessBridge";
+import { ServerShareableCompaniesBridge } from "@/components/ServerShareableCompaniesBridge";
+import { PlServerAccessBootstrap } from "@/components/settings/PlServerAccessBootstrap";
 import { primeLocalFileRefMetaRuntimeCache } from "@/lib/localPendingFiles";
 import { isPerfDebugEnabled } from "@/lib/perfDebug";
 
@@ -75,6 +80,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
             <GateProvider>
             <CompanyProvider>
                 <CrossCompanyAttachmentAccessBridge />
+                <ServerShareableCompaniesBridge />
+                <PlServerAccessBootstrap />
                 <EmbeddedLogoutProvider>
                 <EmbeddedAttachmentPrefetchProvider>
                 {/* APK/static pehli login: full warm chalte waqt background warm band — gate overlay set karti hai */}
@@ -95,6 +102,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
                         <DialogBackHandlerProvider>
                             <VoucherProvider>
                                 <VoucherOutboxFlushManager />
+                                <LocalCompanyCloudSyncManager />
+                                <CapacitorDriveOAuthReturnHandler />
+                                <PendingRestoreCloudPushManager />
                                 <TooltipProvider>
                                     <MobileDetailSummaryCollapseProvider>
                                       {children}

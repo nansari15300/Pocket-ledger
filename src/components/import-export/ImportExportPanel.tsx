@@ -7,15 +7,10 @@ import { ArrowDownToLine, ArrowUpFromLine, FileSpreadsheet, Loader2, ChevronLeft
 import { useCompany } from "@/hooks/useCompany";
 import { useToast } from "@/hooks/use-toast";
 import {
-  collection,
-  getDocs,
-  query,
-  addDoc,
-  serverTimestamp,
-  doc,
-  setDoc,
-} from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
+  getOrCreateImportExportGroup,
+  listImportExportDocsByNameKey,
+  upsertImportExportDoc,
+} from "@/lib/import-export/companyCollectionIO";
 import {
   ENTITY_CONFIGS,
   getEntityConfig,
@@ -219,37 +214,9 @@ export function ImportExportPanel() {
         const existingByCol = new Map<string, { id: string; name: string }[]>();
         const getExisting = async (col: string, nameKey: string) => {
           if (existingByCol.has(col)) return existingByCol.get(col)!;
-          const snap = await getDocs(query(collection(firestore, `companies/${companyId}/${col}`)));
-          const list = snap.docs.map((d) => {
-            const data = d.data() as Record<string, string>;
-            return { id: d.id, name: String(data[nameKey] ?? data.name ?? d.id).trim().toLowerCase() };
-          });
+          const list = await listImportExportDocsByNameKey(companyId, col, nameKey);
           existingByCol.set(col, list);
           return list;
-        };
-        const groupCache = new Map<string, Record<string, string>>();
-        const getOrCreateGroup = async (groupCol: string, groupName: string) => {
-          const key = `${groupCol}:${groupName.trim().toLowerCase()}`;
-          if (!groupCache.has(groupCol)) groupCache.set(groupCol, {});
-          const cache = groupCache.get(groupCol)!;
-          const gKey = groupName.trim().toLowerCase();
-          if (cache[gKey]) return cache[gKey];
-          const snap = await getDocs(query(collection(firestore, `companies/${companyId}/${groupCol}`)));
-          snap.docs.forEach((d) => {
-            const n = String((d.data() as { name?: string }).name ?? d.id).trim().toLowerCase();
-            cache[n] = d.id;
-          });
-          if (cache[gKey]) return cache[gKey];
-          const newRef = doc(collection(firestore, `companies/${companyId}/${groupCol}`));
-          setDoc(newRef, {
-            name: groupName.trim(),
-            companyId,
-            debit: 0,
-            credit: 0,
-            balance: 0,
-          });
-          cache[gKey] = newRef.id;
-          return newRef.id;
         };
         let created = 0;
         let merged = 0;
@@ -294,16 +261,14 @@ export function ImportExportPanel() {
           let groupId: string | undefined;
           const groupName = row.groupName as string | undefined;
           if (groupName && meta.groupCollection) {
-            groupId = await getOrCreateGroup(meta.groupCollection, String(groupName));
+            groupId = await getOrCreateImportExportGroup(companyId, meta.groupCollection, String(groupName), {
+              companyId,
+            });
           }
-          const colRef = collection(firestore, `companies/${companyId}/${meta.collection}`);
           const docData = buildAccountDocFromRow(type, row, groupId, companyId, ownerId);
-          if (existingId) {
-            const { balance: _b, debit: _d, credit: _c, ...updateData } = docData as Record<string, unknown>;
-            await setDoc(doc(firestore, `companies/${companyId}/${meta.collection}`, existingId), { ...updateData, updatedAt: serverTimestamp() }, { merge: true });
-          } else {
-            const newRef = await addDoc(colRef, { ...docData, createdAt: serverTimestamp() });
-            existingList.push({ id: newRef.id, name: nameLower });
+          const docId = await upsertImportExportDoc(companyId, meta.collection, existingId, docData);
+          if (!existingId) {
+            existingList.push({ id: docId, name: nameLower });
             created++;
           }
         }

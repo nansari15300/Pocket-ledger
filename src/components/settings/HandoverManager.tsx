@@ -53,14 +53,16 @@ import { toast } from "sonner";
 import type { Company } from "@/hooks/useCompany";
 import { acceptCompanyHandover } from "@/lib/actions";
 import {
-  isOnlineCompanyRow,
+  isDeviceLocalCompany,
   buildDuplicateNameCountMap,
   companySelectOptionLabel,
+  mergeOwnedCompaniesForUser,
 } from "@/lib/companyStorageKind";
+import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 
 export function HandoverManager() {
   const { user, customUser } = useAuth();
-  const { setCompanyId, allCompanies } = useCompany();
+  const { setCompanyId, allCompanies, allCompaniesRegistry } = useCompany();
   const [ownedCompanies, setOwnedCompanies] = useState<Company[]>([]);
   const [incomingHandovers, setIncomingHandovers] = useState<any[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
@@ -75,22 +77,29 @@ export function HandoverManager() {
 
   // Fetch owned companies from the context (ownerId or, for SuperAdmin, ownerEmail match)
   useEffect(() => {
-    if (!user || !allCompanies) return;
-    const userOwnedCompanies = allCompanies.filter((c) => {
-      if (c.isDeleted) return false;
-      if (c.ownerId === user.uid) return true;
-      if (customUser?.role === "SuperAdmin" && c.ownerEmail && user.email) {
-        return c.ownerEmail.toLowerCase().trim() === user.email.toLowerCase().trim();
+    if (!user?.uid) {
+      setOwnedCompanies([]);
+      return;
+    }
+    const shareUser = { uid: user.uid, email: user.email ?? null };
+    const userOwnedCompanies = mergeOwnedCompaniesForUser(
+      [allCompaniesRegistry || [], allCompanies || []],
+      shareUser,
+      (c, u) => {
+        if (resolveCompanyIsOwnedForUser(c, u)) return true;
+        if (customUser?.role === "SuperAdmin" && c.ownerEmail && u.email) {
+          return c.ownerEmail.toLowerCase().trim() === u.email.toLowerCase().trim();
+        }
+        return false;
       }
-      return false;
-    });
+    );
     setOwnedCompanies(userOwnedCompanies);
     setSelectedCompanyId((prev) => {
       if (userOwnedCompanies.length === 0) return "";
       if (!prev || !userOwnedCompanies.some((c) => c.id === prev)) return userOwnedCompanies[0].id;
       return prev;
     });
-  }, [user, customUser?.role, allCompanies]);
+  }, [user, customUser?.role, allCompanies, allCompaniesRegistry]);
 
 
   // Fetch incoming handovers
@@ -119,8 +128,8 @@ export function HandoverManager() {
     const local: Company[] = [];
     const online: Company[] = [];
     for (const c of ownedCompanies) {
-      if (isOnlineCompanyRow(c)) online.push(c);
-      else local.push(c);
+      if (isDeviceLocalCompany(c)) local.push(c);
+      else online.push(c);
     }
     return { localHandoverCompanies: local, onlineHandoverCompanies: online };
   }, [ownedCompanies]);

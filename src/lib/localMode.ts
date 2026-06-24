@@ -15,3 +15,16 @@ export function isForceLocalCompanyCreationBuild(): boolean {
 export function isLocalOnlyMode(): boolean {
   return computeIsLocalOnlyMode();
 }
+
+/**
+ * Static/APK/EXE offline: company list sirf SQLite se.
+ * Online: `isLiveFirestoreCompanyRegistry` — web jaisa Firestore onSnapshot.
+ */
+export function isOfflineSqliteCompanyRegistry(browserOnline: boolean): boolean {
+  return isLocalOnlyMode() && !browserOnline;
+}
+
+/** Web Firebase mode, ya static/APK jab online ho — live Firestore company registry. */
+export function isLiveFirestoreCompanyRegistry(browserOnline: boolean): boolean {
+  return !isLocalOnlyMode() || browserOnline;
+}

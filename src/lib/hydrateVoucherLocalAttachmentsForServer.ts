@@ -13,6 +13,8 @@ import {
   resolvePendingAttachmentCloudSyncProvider,
 } from "@/lib/localPendingFiles";
 import { Timestamp } from "firebase/firestore";
+import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";
+import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
 
 function safeStorageFileName(name: string | undefined): string {
   const n = (name || "file").replace(/[/\\?%*:|"<>]/g, "_").trim();
@@ -39,20 +41,26 @@ export async function hydrateVoucherLocalAttachmentsForServer(
   // `find` miss ho kar flush throw → `local:` server tak kabhi nahi pahunchta. Preview jaisa per-id path use karo.
   let out: Record<string, unknown> = { ...docFields };
 
-  const urlsRaw = out.fileUrls;
-  if (Array.isArray(urlsRaw)) {
+  if (out.fileUrls !== undefined && out.fileUrls !== null) {
+    const urlsRaw = normalizeFileUrlsField(out.fileUrls);
     const next: string[] = [];
     let anyLocal = false;
+    const voucherId = String(out.id ?? "").trim();
     for (const entry of urlsRaw) {
-      if (typeof entry !== "string" || !entry) continue;
       if (!isLocalFileRef(entry)) {
         next.push(entry);
         continue;
       }
       anyLocal = true;
       const item = await getPendingPayloadForLocalRef(entry);
-      // IndexedDB clear / tab badal — `local:` bina blob: pehle poora flush throw → outbox bar‑bar fail; server ko bina is file ke bhejo
       if (!item?.blob) {
+        const resolved = voucherId
+          ? await tryResolveRemoteUrlForStaleLocalAttachment(cid, voucherId, entry, urlsRaw)
+          : null;
+        if (resolved) {
+          next.push(resolved);
+          continue;
+        }
         console.warn(
           `[sync] Attachment bytes missing for ${entry} — server push without this file; UI se dubara attach kar sakte ho.`
         );
@@ -76,9 +84,7 @@ export async function hydrateVoucherLocalAttachmentsForServer(
       await removePendingFile(item.id);
       next.push(httpsUrl);
     }
-    if (anyLocal) {
-      out = { ...out, fileUrls: next };
-    }
+    out = { ...out, fileUrls: anyLocal ? next : urlsRaw };
   }
 
   const uf = out.unassignedFile;
@@ -136,17 +142,21 @@ function shouldRecurseIntoObjectForLocalHydrate(val: unknown): boolean {
 }
 
 /** Ek `local:` ref ko Storage pe daal ke download URL — pending meta ka `storagePathPrefix` use (party/item/…). */
-async function uploadOnePendingLocalRefToHttps(fsCompanyId: string, entry: string): Promise<string> {
+async function uploadOnePendingLocalRefToHttps(fsCompanyId: string, entry: string): Promise<string | null> {
   const cid = String(fsCompanyId || "").trim();
   if (await resolvePendingAttachmentCloudSyncProvider(cid)) {
-    // Masters/avatar hydrate path bhi local cloud-sync me Firebase fallback use na kare.
-    throw new Error("Local cloud-sync attachment must upload through the selected provider, not Firebase Storage.");
+    console.warn(
+      "[sync] Local cloud-sync attachment must upload through the selected provider, not Firebase Storage:",
+      entry
+    );
+    return null;
   }
   const item = await getPendingPayloadForLocalRef(entry);
   if (!item?.blob) {
-    throw new Error(
-      `[sync] Pending attachment bytes missing for ${entry} (masters/avatar/item). Re-attach or clear.`
+    console.warn(
+      `[sync] Pending attachment bytes missing for ${entry} (masters/avatar/item) — skip; re-attach if needed.`
     );
+    return null;
   }
   const prefix = String(item.storagePathPrefix || "").trim() || `orphan-files/${cid}`;
   const objectPath = `${prefix}/${Date.now()}_${safeStorageFileName(item.fileName)}`;
@@ -182,10 +192,12 @@ export async function hydratePendingLocalFileRefsDeep(
   async function walk(v: unknown): Promise<unknown> {
     if (typeof v === "string") {
       if (!isLocalFileRef(v)) return v;
-      return await uploadOnePendingLocalRefToHttps(cid, v);
+      const uploaded = await uploadOnePendingLocalRefToHttps(cid, v);
+      return uploaded ?? v;
     }
     if (Array.isArray(v)) {
-      return await Promise.all(v.map((x) => walk(x)));
+      const mapped = await Promise.all(v.map((x) => walk(x)));
+      return mapped.filter((x) => x !== null && x !== undefined && x !== "");
     }
     if (!shouldRecurseIntoObjectForLocalHydrate(v)) return v;
     const o = v as Record<string, unknown>;

@@ -37,7 +37,10 @@ export function buildSpendWiseDisplayBlocks(list: any[], spendWise: boolean): an
 /** Block ki pehli data row se chronological sort key — statement jaisa date + createdAt + id. */
 function spendWiseBlockSortKey(block: any[]): [number, number, string] {
   const opening = block.some(
-    (r) => r?.id === "__opening_balance_group__" || (r?.type === "opening_balance" && r?._spendWiseGroupFirst)
+    (r) =>
+      r?.id === "__opening_balance_group__" ||
+      r?._spendWiseGroupId === "sw-group-opening-balance" ||
+      (r?.type === "opening_balance" && r?._spendWiseGroupFirst)
   );
   if (opening) return [-1, 0, ""];
 
@@ -67,6 +70,51 @@ export function reorderSpendWiseRowsByDate(list: any[]): any[] {
   return sorted.flat();
 }
 
+function spendWiseRowGroupId(row: any): string {
+  if (!row || row._spendWiseSpacer) return "";
+  return String(row._spendWiseGroupId || "");
+}
+
+/** Page slice ko poora spend-wise group tak extend karo — parent/child alag cards me na toote. */
+export function extendSpendWisePageSliceToWholeGroups(
+  list: any[],
+  start: number,
+  end: number
+): { start: number; end: number } {
+  if (start >= end || !list.length) return { start, end };
+  let s = Math.max(0, start);
+  let e = Math.min(list.length, end);
+
+  const gidAtStart = spendWiseRowGroupId(list[s]);
+  if (gidAtStart) {
+    while (s > 0) {
+      const prev = list[s - 1] as any;
+      if (prev?._spendWiseSpacer) {
+        s--;
+        continue;
+      }
+      if (spendWiseRowGroupId(prev) === gidAtStart) s--;
+      else break;
+    }
+  }
+
+  const lastIdx = e - 1;
+  const gidAtEnd = spendWiseRowGroupId(list[lastIdx]);
+  if (gidAtEnd) {
+    while (e < list.length) {
+      const next = list[e] as any;
+      if (next?._spendWiseSpacer) {
+        e++;
+        continue;
+      }
+      if (spendWiseRowGroupId(next) === gidAtEnd) e++;
+      else break;
+    }
+  }
+
+  return { start: s, end: e };
+}
+
 /** Newest page first: page 1 = last `maxDataRows` *data* lines, slice includes spacers between those indices. */
 export function packFlatListByDataLineBudgetFromEnd(
   list: any[],
@@ -88,7 +136,7 @@ export function packFlatListByDataLineBudgetFromEnd(
     const take = Math.min(maxDataRows, remaining);
     const fromDataIdx = dataIdx[remaining - take]!;
     const toDataIdx = dataIdx[remaining - 1]!;
-    pageRanges.push({ start: fromDataIdx, end: toDataIdx + 1 });
+    pageRanges.push(extendSpendWisePageSliceToWholeGroups(list, fromDataIdx, toDataIdx + 1));
     remaining -= take;
   }
   return pageRanges;
@@ -116,7 +164,7 @@ export function packFlatListByDataLineBudgetFromStart(
     const take = Math.min(maxDataRows, remaining);
     const fromDataIdx = dataIdx[offset]!;
     const toDataIdx = dataIdx[offset + take - 1]!;
-    pageRanges.push({ start: fromDataIdx, end: toDataIdx + 1 });
+    pageRanges.push(extendSpendWisePageSliceToWholeGroups(list, fromDataIdx, toDataIdx + 1));
     offset += take;
     remaining -= take;
   }

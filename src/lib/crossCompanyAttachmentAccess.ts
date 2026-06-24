@@ -1,5 +1,7 @@
 "use client";
 
+import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
+
 import type { AttachmentHoldPayloadV1 } from "@/lib/attachmentHoldClipboard";
 import { persistableAttachmentRefFromHoldPayload } from "@/lib/attachmentHoldClipboard";
 import { tryGetStoragePathFromFirebaseDownloadUrl, normalizeFirebaseStorageObjectPathForSdk, looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
@@ -188,8 +190,8 @@ export function filterVoucherAttachmentsForCompanyContext<T extends Record<strin
 ): T {
   const policy = accessibleCompanyIds ?? getCrossCompanyAttachmentAccessPolicy().accessibleCompanyIds;
   const out: Record<string, unknown> = { ...voucher };
-  const raw = out.fileUrls;
-  if (Array.isArray(raw)) {
+  const raw = normalizeFileUrlsField(out.fileUrls);
+  if (out.fileUrls !== undefined && out.fileUrls !== null) {
     out.fileUrls = raw.filter(
       (u) => typeof u !== "string" || isCrossCompanyAttachmentVisibleToUser(u, activeCompanyId, policy)
     );

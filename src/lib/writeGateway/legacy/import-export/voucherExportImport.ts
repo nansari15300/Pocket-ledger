@@ -1,10 +1,13 @@
 "use client";
 
 import * as XLSX from "xlsx";
-import { collection, getDocs, query, addDoc, serverTimestamp } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
 import type { EntityColumn } from "@/lib/import-export/entityConfig";
 import { sheetToRowsWithColumns } from "@/lib/import-export/excelUtils";
+import {
+  listImportExportCollectionDocs,
+  listImportExportDocsByNameKey,
+  upsertImportExportDoc,
+} from "@/lib/import-export/companyCollectionIO";
 
 /** Voucher tabs: sheet name + types in that tab (Type column shows which). */
 export const VOUCHER_SHEETS: { sheetName: string; types: string[] }[] = [
@@ -75,26 +78,25 @@ function voucherToRow(v: Record<string, unknown>, names: Record<string, string>)
 export async function exportVouchersByTabs(
   companyId: string
 ): Promise<{ sheetName: string; rows: Record<string, unknown>[] }[]> {
-  const base = `companies/${companyId}`;
-  const vouchersSnap = await getDocs(query(collection(firestore, `${base}/vouchers`)));
-  const vouchers = vouchersSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as Record<string, unknown>[];
+  const voucherDocs = await listImportExportCollectionDocs(companyId, "vouchers");
+  const vouchers = voucherDocs.map(({ id, data }) => ({ id, ...data })) as Record<string, unknown>[];
 
   const names: Record<string, string> = {};
-  const partiesSnap = await getDocs(collection(firestore, `${base}/parties`));
-  partiesSnap.docs.forEach((d) => {
-    names[`parties:${d.id}`] = (d.data() as { name?: string }).name ?? d.id;
+  const parties = await listImportExportCollectionDocs(companyId, "parties");
+  parties.forEach(({ id, data }) => {
+    names[`parties:${id}`] = String(data.name ?? id);
   });
-  const accountsSnap = await getDocs(collection(firestore, `${base}/bank_accounts`));
-  accountsSnap.docs.forEach((d) => {
-    names[`bank_accounts:${d.id}`] = (d.data() as { accountName?: string }).accountName ?? d.id;
+  const bankAccounts = await listImportExportCollectionDocs(companyId, "bank_accounts");
+  bankAccounts.forEach(({ id, data }) => {
+    names[`bank_accounts:${id}`] = String(data.accountName ?? id);
   });
-  const staffSnap = await getDocs(collection(firestore, `${base}/staff`));
-  staffSnap.docs.forEach((d) => {
-    names[`staff:${d.id}`] = (d.data() as { name?: string }).name ?? d.id;
+  const staff = await listImportExportCollectionDocs(companyId, "staff");
+  staff.forEach(({ id, data }) => {
+    names[`staff:${id}`] = String(data.name ?? id);
   });
-  const expenseSnap = await getDocs(collection(firestore, `${base}/expense_accounts`));
-  expenseSnap.docs.forEach((d) => {
-    names[`expense_accounts:${d.id}`] = (d.data() as { name?: string }).name ?? d.id;
+  const expenseAccounts = await listImportExportCollectionDocs(companyId, "expense_accounts");
+  expenseAccounts.forEach(({ id, data }) => {
+    names[`expense_accounts:${id}`] = String(data.name ?? id);
   });
 
   const typeSet = (types: string[]) => new Set(types);
@@ -167,7 +169,6 @@ export async function resolveAccountNameToId(
   companyId: string,
   name: string
 ): Promise<{ kind: "party" | "bank" | "staff" | "expense"; id: string } | null> {
-  const base = `companies/${companyId}`;
   const n = String(name ?? "").trim().toLowerCase();
   if (!n) return null;
   const collections = [
@@ -177,8 +178,8 @@ export async function resolveAccountNameToId(
     { col: "expense_accounts", nameKey: "name", kind: "expense" as const },
   ];
   for (const { col, nameKey, kind } of collections) {
-    const snap = await getDocs(query(collection(firestore, `${base}/${col}`)));
-    const found = snap.docs.find((d) => String((d.data() as Record<string, string>)[nameKey] ?? "").trim().toLowerCase() === n);
+    const list = await listImportExportDocsByNameKey(companyId, col, nameKey);
+    const found = list.find((e) => e.name === n);
     if (found) return { kind, id: found.id };
   }
   return null;
@@ -190,8 +191,6 @@ export async function importVouchers(
   ownerId: string,
   rows: Record<string, unknown>[]
 ): Promise<{ created: number }> {
-  const base = `companies/${companyId}`;
-  const vouchersRef = collection(firestore, `${base}/vouchers`);
   let created = 0;
   for (const row of rows) {
     const voucherType = String(row.voucherType ?? "").trim().toLowerCase();
@@ -235,7 +234,10 @@ export async function importVouchers(
       docData.partyId = (dr?.kind === "party" ? dr.id : cr?.kind === "party" ? cr.id : null) ?? null;
       docData.fromAccountId = (dr?.kind === "bank" ? dr.id : cr?.kind === "bank" ? cr.id : null) ?? null;
     }
-    await addDoc(vouchersRef, { ...docData, createdAt: serverTimestamp() });
+    await upsertImportExportDoc(companyId, "vouchers", null, {
+      ...docData,
+      createdAt: new Date(),
+    });
     created++;
   }
   return { created };

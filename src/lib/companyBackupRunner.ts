@@ -145,6 +145,7 @@ export type StartCompanyBackupRunInput = {
   ownerUid: string;
   accountPlanId: string;
   includeAttachments: boolean;
+  backupSourceMode?: import("@/lib/companyBackupCore").CompanyBackupSourceMode;
 };
 
 export async function startCompanyBackupRun(input: StartCompanyBackupRunInput): Promise<ExecuteCompanyBackupResult> {

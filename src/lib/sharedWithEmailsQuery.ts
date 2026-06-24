@@ -1,10 +1,20 @@
 /**
-
  * Firestore `sharedWithEmails` `array-contains` is case-sensitive.
-
  * `sharedWithEmailsLower` stores lowercase only — query + rules align reliably.
-
  */
+
+import { auth } from "@/lib/firebase";
+
+/** Shared query/listener: Firebase Auth token email (rules `request.auth.token.email` se match). */
+export function resolveFirestoreAuthEmail(fallback?: string | null): string {
+  try {
+    const tokenEmail = auth.currentUser?.email;
+    if (tokenEmail && String(tokenEmail).trim()) return String(tokenEmail).trim();
+  } catch {
+    /* ignore */
+  }
+  return String(fallback || "").trim();
+}
 
 export function toSharedWithEmailsLower(email: string): string {
 
@@ -48,28 +58,30 @@ export type SharedCompanyQuerySpec = {
 
 
 
-/** Firestore shared-company listeners: lowercase field + legacy casing variants. */
-
-export function sharedCompanyQuerySpecs(email: string | null | undefined): SharedCompanyQuerySpec[] {
-
-  const lower = toSharedWithEmailsLower(email || "");
-
+/** Firestore shared-company listeners: legacy `sharedWithEmails` pehle (purane rules), phir `sharedWithEmailsLower`. */
+export function sharedCompanyQuerySpecs(
+  email: string | null | undefined,
+  opts?: { includeLegacySharedWithEmails?: boolean }
+): SharedCompanyQuerySpec[] {
+  const authEmail = resolveFirestoreAuthEmail(email);
+  const lower = toSharedWithEmailsLower(authEmail);
   if (!lower) return [];
 
-  const specs: SharedCompanyQuerySpec[] = [{ field: "sharedWithEmailsLower", value: lower }];
+  const specs: SharedCompanyQuerySpec[] = [];
 
-  for (const variant of sharedWithEmailQueryVariants(email)) {
-
-    if (!specs.some((s) => s.field === "sharedWithEmails" && s.value === variant)) {
-
-      specs.push({ field: "sharedWithEmails", value: variant });
-
+  if (opts?.includeLegacySharedWithEmails !== false) {
+    for (const variant of sharedWithEmailQueryVariants(authEmail)) {
+      if (!specs.some((s) => s.field === "sharedWithEmails" && s.value === variant)) {
+        specs.push({ field: "sharedWithEmails", value: variant });
+      }
     }
+  }
 
+  if (!specs.some((s) => s.field === "sharedWithEmailsLower" && s.value === lower)) {
+    specs.push({ field: "sharedWithEmailsLower", value: lower });
   }
 
   return specs;
-
 }
 
 

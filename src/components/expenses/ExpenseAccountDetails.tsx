@@ -3,6 +3,7 @@
 
 import * as React from "react";
 import { openPrintDirect } from "@/lib/printDirect";
+import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import type { ExpenseAccount, ExpenseGroup } from "./types";
 import { Button } from "@/components/ui/button";
 import {
@@ -104,6 +105,12 @@ import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColum
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { useLedgerDetailSessionMemory } from "@/hooks/useLedgerDetailSessionMemory";
+import {
+  ledgerDetailSessionStorageKey,
+  writeLedgerDetailSessionSnapshot,
+  type LedgerDetailViewMode,
+} from "@/lib/ledgerDetailSessionMemory";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 
 
@@ -228,9 +235,21 @@ export function ExpenseAccountDetails({
     [account.fileUrl, account.id]
   );
 
+  const ledgerViewMode: LedgerDetailViewMode =
+    balanceMode === "bill_wise" ? "bill_wise" : "statement";
+  const ledgerSessionKey = useMemo(
+    () =>
+      companyId && account?.id
+        ? ledgerDetailSessionStorageKey(companyId, "expense", account.id, ledgerViewMode)
+        : null,
+    [companyId, account?.id, ledgerViewMode]
+  );
   useEffect(() => {
     setCurrentPage(1);
-  }, [account.id, isAllVouchersView]);
+  }, [ledgerViewMode]);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [isAllVouchersView]);
 
   // Fix: "All Vouchers" view should still filter to the specific account, not all accounts
   // It should show all transaction types for this account, not all transactions for all accounts
@@ -346,6 +365,12 @@ export function ExpenseAccountDetails({
   const handleEditVoucher = (voucher: any) => {
     if (isMobile) openingModalRef.current = true;
     setSelectedVoucher(voucher);
+    if (ledgerSessionKey && voucher?.id) {
+      writeLedgerDetailSessionSnapshot(ledgerSessionKey, {
+        page: currentPage,
+        openVoucherId: String(voucher.id),
+      });
+    }
     if (isMobile) openModalInUrl();
     setIsVoucherDialogOpen(true);
   };
@@ -368,54 +393,6 @@ export function ExpenseAccountDetails({
   );
 
 
-  const handlePrint = () => {
-    if (!company) return;
-    const from = dateRange?.from;
-    const to = dateRange?.to;
-    let dateRangeText = "All Time";
-    if (from) {
-      const fromBS = formatDateBS(from);
-      const toBS = to ? formatDateBS(to) : fromBS;
-      const fromAD = formatDate(from);
-      const toAD = to ? formatDate(to) : fromAD;
-
-      if (dateSystem === "AD")
-        dateRangeText = `AD: ${fromAD} to ${toAD}`;
-      else if (dateSystem === "BS")
-        dateRangeText = `BS: ${fromBS} to ${toBS}`;
-      else
-        dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
-    }
-    // Keep print headers aligned with currently selected table columns.
-    const printVisibleColumns = balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns;
-    openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: `Account Statement: ${account.name}`,
-      context: "expense",
-      contextId: account.id,
-      dateSystem: dateSystem,
-      dateRangeText: dateRangeText,
-      vouchersCount: processedTransactions.length,
-      openingBalance: openingBalanceForPeriod,
-      openingBalanceDate: (account as any).openingBalanceDate,
-      openingBalanceNarration: account.openingBalanceNarration ?? null,
-      transactions: processedTransactions,
-      showNarration: showNarration,
-      includeNotes: includeNotesInTable,
-      visibleColumns: printVisibleColumns,
-      billWise: balanceMode === "bill_wise",
-    }, true);
-  };
-  
   const balanceText = useMemo(() => {
     if (closingBalance === 0) return "Settled Up";
     return closingBalance < 0 ? "Income" : "Expense";
@@ -532,6 +509,23 @@ export function ExpenseAccountDetails({
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
   });
+
+  useLedgerDetailSessionMemory({
+    companyId: companyId ?? undefined,
+    context: "expense",
+    contextId: account?.id,
+    viewMode: ledgerViewMode,
+    totalPages,
+    currentPage,
+    setCurrentPage,
+    vouchers,
+    selectedVoucherId: selectedVoucher?.id ?? null,
+    isVoucherDialogOpen,
+    setSelectedVoucher,
+    setIsVoucherDialogOpen,
+    onRestoreVoucherDialog: isMobile ? openModalInUrl : undefined,
+  });
+
   // Radix rows Select — value list me honi chahiye (LedgerDesktopFooter pagination)
   const { selectValue: rowsPerPageSelectValue, onSelectValueChange: handleRowsPerPageChange } =
     useRowsPerPageSelectControl(rowsPerPage, setRowsPerPage, setCurrentPage, ROWS_PER_PAGE_OPTIONS_DEFAULT, "10");
@@ -555,6 +549,57 @@ export function ExpenseAccountDetails({
     if (dateSystem === "BS") return `BS: ${fromBS} to ${toBS}`;
     return `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
   };
+
+  const handlePrint = () => {
+    if (!company) return;
+    const dateRangeText = buildDateRangeText();
+    const printVisibleColumns = balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns;
+    openPrintDirect(
+      applyLedgerPageToPrintPayload(
+        {
+          company: {
+            name: company.name,
+            pan: company.pan,
+            phone: company.phone,
+            address: company.address,
+            decimalPlaces: company.decimalPlaces,
+            showDrCr: company.showDrCr,
+            showCurrencySymbol: company.showCurrencySymbol,
+            logoUrl: company.logoUrl,
+          },
+          title: `Account Statement: ${account.name}`,
+          context: "expense",
+          contextId: account.id,
+          dateSystem: dateSystem,
+          dateRangeText: dateRangeText,
+          vouchersCount: paginatedTransactions.length,
+          openingBalance: desktopPaginationMeta.openingForPage,
+          openingBalanceDate: (account as any).openingBalanceDate,
+          openingBalanceNarration: account.openingBalanceNarration ?? null,
+          transactions: paginatedTransactions,
+          showNarration: showNarration,
+          includeNotes: includeNotesInTable,
+          visibleColumns: printVisibleColumns,
+          billWise: balanceMode === "bill_wise",
+        },
+        {
+          paginatedTransactions,
+          openingForPage: desktopPaginationMeta.openingForPage,
+          periodDrForPage: desktopPaginationMeta.periodDrForPage,
+          periodCrForPage: desktopPaginationMeta.periodCrForPage,
+          closingForPage: desktopPaginationMeta.closingForPage,
+          booksOpeningBalance: masterExpenseOpening,
+          ledgerShowBookOpeningRow: currentPage === 1,
+          ledgerDateFilterActive: Boolean(dateRange?.from != null || dateRange?.to != null),
+          openingBalancePeriodStartDate: dateRange?.from,
+          masterOpeningBalanceDate: (account as any).openingBalanceDate,
+          dateRange,
+        }
+      ),
+      true
+    );
+  };
+
   const dateRangeLabel = buildDateRangeText();
 
   const handleMobileBack = useCallback(() => {

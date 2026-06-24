@@ -16,6 +16,12 @@ import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColum
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { useLedgerDetailSessionMemory } from "@/hooks/useLedgerDetailSessionMemory";
+import {
+  ledgerDetailSessionStorageKey,
+  writeLedgerDetailSessionSnapshot,
+  type LedgerDetailViewMode,
+} from "@/lib/ledgerDetailSessionMemory";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import {
   sortTransactionsWithFiscalMergeForCompany,
@@ -57,6 +63,7 @@ import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { Checkbox } from "../ui/checkbox";
 import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
+import { applyLedgerPageToPrintPayload, stripSpendWiseSyntheticOpeningMaster } from "@/lib/ledgerPagePrint";
 import { useTransactions } from "@/hooks/use-transactions";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -78,6 +85,12 @@ import {
   packFlatListByDataLineBudgetFromEnd,
   reorderSpendWiseRowsByDate,
 } from "@/lib/spendWisePagination";
+import {
+  buildSpendWiseAddedInflowVoucherIds,
+  filterSpendWiseRowsByDateRange,
+  filterSpendWiseUnapprovedOnly,
+} from "@/lib/spendWiseDateRangeGroups";
+import { applySpendWiseStatementRunningBalances } from "@/lib/spendWiseStatementRunningBalance";
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from "@/lib/firebase";
 import usePermissions from "@/hooks/usePermissions";
@@ -186,9 +199,17 @@ export function AccountGroupDetails({
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const ledgerViewMode: LedgerDetailViewMode = spendWiseView ? "spend_wise" : "statement";
+  const ledgerSessionKey = useMemo(
+    () =>
+      companyId && group?.id
+        ? ledgerDetailSessionStorageKey(companyId, "group", group.id, ledgerViewMode)
+        : null,
+    [companyId, group?.id, ledgerViewMode]
+  );
   useEffect(() => {
     setCurrentPage(1);
-  }, [group.id]);
+  }, [ledgerViewMode]);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
@@ -262,6 +283,7 @@ export function AccountGroupDetails({
   );
 
   let { openingBalanceForPeriod, processedTransactions, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(groupTransactionEntity, "group", dateRange, undefined, processedAccounts, undefined, undefined, filters, undefined, undefined, userNames);
+  const { processedTransactions: allProcessedTransactions } = useTransactions(groupTransactionEntity, "group", undefined, undefined, processedAccounts, undefined, undefined, filters, undefined, undefined, userNames);
 
   // If special account and user can't see balance, filter transactions to only show their own.
   if (containsSpecialAccount && !canViewSpecialBalance) {
@@ -271,6 +293,14 @@ export function AccountGroupDetails({
       periodCr = processedTransactions.reduce((sum, t) => sum + (t.credit || 0), 0);
       closingBalance = periodDr - periodCr;
   }
+
+  const spendWiseGroupingTransactions = useMemo(() => {
+    let source = allProcessedTransactions.filter((t: any) => t.type !== "note");
+    if (containsSpecialAccount && !canViewSpecialBalance) {
+      source = source.filter((t) => t.userId === user?.uid);
+    }
+    return source;
+  }, [allProcessedTransactions, containsSpecialAccount, canViewSpecialBalance, user?.uid]);
 
   // Spend Wise: never show notes. Statement: PC preference / mobile hamesha notes (includeNotesInTable).
   const baseTransactions = useMemo(() => {
@@ -292,9 +322,8 @@ export function AccountGroupDetails({
   const displayTransactions = useMemo(() => {
     const perfStart = perfNow();
     if (!spendWiseView || !vouchers?.length) return baseTransactions;
-    // Date range overwrite: if any transaction in a group is in range, show full group (all linked rows)
-    const inRangeIds = new Set(baseTransactions.map((t: any) => t.id));
-    const byId = new Map(baseTransactions.map((t: any) => [t.id, t]));
+    const buildBase = spendWiseGroupingTransactions;
+    const byId = new Map(buildBase.map((t: any) => [t.id, t]));
     const accountIdSet = new Set(accountIdsInGroup);
     const isInVoucher = (v: any) =>
       (v.type === "payment_in" && accountIdSet.has(v.accountId)) ||
@@ -312,32 +341,21 @@ export function AccountGroupDetails({
       const d = v.date?.toDate ? v.date.toDate() : new Date(v.date);
       return d.getTime();
     };
-    /** Include group if any row (payment_in or linked payment_out) is in date range â€” then show full group. */
-    // Keep opening-linked inflows near Opening Balance by rendering them in a dedicated group.
+    const isOpeningLinkedIn = (v: any) =>
+      accountIdSet.has(v.linkedOpeningBalanceAccountId) &&
+      (Number(v.linkedOpeningBalanceAmount) || 0) > 0;
     const openingLinkedInIds = new Set(
       vouchers
-        .filter((v: any) =>
-          !v.isDeleted &&
-          isInVoucher(v) &&
-          accountIdSet.has(v.linkedOpeningBalanceAccountId) &&
-          (Number(v.linkedOpeningBalanceAmount) || 0) > 0 &&
-          inRangeIds.has(v.id)
-        )
+        .filter((v: any) => !v.isDeleted && isInVoucher(v) && isOpeningLinkedIn(v))
         .map((v: any) => v.id)
     );
     const openingLinkedOutIds = new Set(
       vouchers
-        .filter((v: any) => !v.isDeleted && linkedOutFilter(v, SPEND_WISE_OPENING_BALANCE_ID) && inRangeIds.has(v.id))
+        .filter((v: any) => !v.isDeleted && linkedOutFilter(v, SPEND_WISE_OPENING_BALANCE_ID))
         .map((v: any) => v.id)
     );
     const inVouchers = vouchers
-      .filter((v: any) => {
-        if (!isInVoucher(v) || v.isDeleted) return false;
-        // Opening-linked inflow rows are shown beside Opening Balance group instead of normal stream.
-        if (openingLinkedInIds.has(v.id)) return false;
-        if (inRangeIds.has(v.id)) return true;
-        return vouchers.some((o: any) => linkedOutFilter(o, v.id) && inRangeIds.has(o.id));
-      })
+      .filter((v: any) => !v.isDeleted && isInVoucher(v))
       .sort((a: any, b: any) => getDateMs(a) - getDateMs(b));
     const rows: any[] = [];
     let groupColorIndex = 0;
@@ -375,10 +393,11 @@ export function AccountGroupDetails({
 
     inVouchers.forEach((pi: any) => {
       const groupId = pi.id;
+      const spendWiseGroupId = `sw-group-in-${pi.id}`;
       let rowIndexInGroup = 0;
       const t = voucherToInRow(pi);
       const linkedOuts = vouchers
-        .filter((v: any) => linkedOutFilter(v, pi.id))
+        .filter((v: any) => !v.isDeleted && linkedOutFilter(v, pi.id))
         .sort((a: any, b: any) => getDateMs(a) - getDateMs(b));
       const hasLinkedGroup = linkedOuts.length > 0;
       const colorIdx = nextColor();
@@ -387,6 +406,7 @@ export function AccountGroupDetails({
         rows.push({
           ...t,
           _rowKey: `grp-${groupId}-${rowIndexInGroup++}`,
+          _spendWiseGroupId: spendWiseGroupId,
           _spendWiseGroupFirst: true,
           _spendWiseGroupLast: false,
           _spendWiseRunningBalance: groupRunning,
@@ -396,6 +416,7 @@ export function AccountGroupDetails({
         rows.push({
           ...t,
           _rowKey: `grp-${groupId}-${rowIndexInGroup++}`,
+          _spendWiseGroupId: spendWiseGroupId,
           _spendWiseGroupFirst: true,
           _spendWiseGroupLast: true,
           _spendWiseRunningBalance: groupRunning,
@@ -417,7 +438,9 @@ export function AccountGroupDetails({
         rows.push({
           ...outRow,
           id: `${po.id}-in-${pi.id}`,
+          _baseVoucherId: po.id,
           _rowKey: `grp-${groupId}-${rowIndexInGroup++}`,
+          _spendWiseGroupId: spendWiseGroupId,
           _spendWiseChild: true,
           _spendWiseGroupFirst: false,
           _spendWiseGroupLast: isLastOutInThisGroup,
@@ -428,11 +451,13 @@ export function AccountGroupDetails({
       });
       if (hasLinkedGroup) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-in-${pi.id}`, _rowKey: `grp-spacer-end-${groupId}` });
     });
-    // Build Opening Balance group and place linked inflows right under it.
-    const openingSide = openingBalanceForPeriod >= 0 ? "dr" : "cr";
-    const openingBase = getOpeningBalanceBaseAmount(openingBalanceForPeriod, openingSide);
+    // Build Opening Balance group — books master OB se (date-range period carry se group mat todo).
+    const masterBooksOb = Number(group.openingBalance) || openingBalanceForPeriod;
+    const openingSide = masterBooksOb >= 0 ? "dr" : "cr";
+    const openingBase = getOpeningBalanceBaseAmount(masterBooksOb, openingSide);
     if (openingBase > 0 && ((openingSide === "cr" && openingLinkedInIds.size > 0) || (openingSide === "dr" && openingLinkedOutIds.size > 0))) {
       const openingGroupId = "__opening_balance_group__";
+      const spendWiseGroupId = "sw-group-opening-balance";
       let rowIndexInGroup = 0;
       const colorIdx = nextColor();
       const openingIsCr = openingSide === "cr";
@@ -440,6 +465,7 @@ export function AccountGroupDetails({
       rows.push({
         id: openingGroupId,
         _rowKey: `grp-${openingGroupId}-${rowIndexInGroup++}`,
+        _spendWiseGroupId: spendWiseGroupId,
         type: "opening_balance",
         voucherNumber: getOpeningBalanceVoucherLabel(openingSide),
         date: undefined,
@@ -472,6 +498,7 @@ export function AccountGroupDetails({
           debit: openingIsCr ? linkedAmount : 0,
           credit: openingIsCr ? 0 : linkedAmount,
           _rowKey: `grp-${openingGroupId}-${rowIndexInGroup++}`,
+          _spendWiseGroupId: spendWiseGroupId,
           _spendWiseChild: true,
           _spendWiseGroupFirst: false,
           _spendWiseGroupLast: idx === openingLinkedRows.length - 1,
@@ -498,9 +525,9 @@ export function AccountGroupDetails({
       const openingChunk = rows.splice(openingStart, openingEnd - openingStart);
       rows.unshift(...openingChunk);
     }
-    const addedIds = new Set(rows.filter((r: any) => r.id && !(r as any)._spendWiseSpacer).map((r: any) => r.id));
-    const unlinked = baseTransactions
-      .filter((t: any) => !addedIds.has(t.id))
+    const addedInflowIds = buildSpendWiseAddedInflowVoucherIds(rows);
+    const unlinked = buildBase
+      .filter((t: any) => !addedInflowIds.has(t.id))
       .sort((a: any, b: any) => getDateMs(a) - getDateMs(b));
     unlinked.forEach((t: any, idx: number) => {
       const fullAmount = Math.abs((t.debit || 0) - (t.credit || 0));
@@ -513,6 +540,7 @@ export function AccountGroupDetails({
         ...voucherToRow(t),
         id: t.id,
         _rowKey: alreadyShown > 0 ? `unlinked-${t.id}-remainder` : `unlinked-${t.id}`,
+        _spendWiseGroupId: `sw-group-unlinked-${t.id}`,
         debit: isOutflow ? 0 : remainder,
         credit: isOutflow ? remainder : 0,
         _spendWiseGroupFirst: true,
@@ -523,16 +551,17 @@ export function AccountGroupDetails({
       rows.push(remainderRow);
       if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}`, _rowKey: `spacer-unlinked-${t.id}` });
     });
-    const result = rows.length ? reorderSpendWiseRowsByDate(rows) : baseTransactions;
-    // Perf debug: group spend-wise builder duration + row expansion visibility.
+    const ordered = rows.length ? reorderSpendWiseRowsByDate(rows) : buildBase;
+    const result = filterSpendWiseRowsByDateRange(ordered, dateRange);
     perfDebugLog("bank.groupDetails.displayTransactions", perfStart, {
       vouchersCount: vouchers.length,
-      baseCount: baseTransactions.length,
+      baseCount: buildBase.length,
       resultCount: result.length,
       spendWiseView,
     });
-    return result;
-  }, [spendWiseView, baseTransactions, vouchers, accountIdsInGroup, openingBalanceForPeriod]);
+    const stripped = stripSpendWiseSyntheticOpeningMaster(result) as typeof result;
+    return applySpendWiseStatementRunningBalances(stripped, openingBalanceForPeriod);
+  }, [spendWiseView, baseTransactions, spendWiseGroupingTransactions, vouchers, accountIdsInGroup, group.openingBalance, dateRange, openingBalanceForPeriod]);
 
   const {
     unapprovedOnly,
@@ -549,13 +578,15 @@ export function AccountGroupDetails({
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(() => {
-    const rows = filterByUnapprovedOnly(displayTransactions);
+    const rows = spendWiseView
+      ? filterSpendWiseUnapprovedOnly(displayTransactions, unapprovedOnly)
+      : filterByUnapprovedOnly(displayTransactions);
     if (spendWiseView) return rows;
     return recomputeRunningBalanceTopToBottom(
       sortTransactionsWithFiscalMergeForCompany(rows, "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
       openingBalanceForPeriod
     );
-  }, [displayTransactions, filterByUnapprovedOnly, spendWiseView, openingBalanceForPeriod, company]);
+  }, [displayTransactions, filterByUnapprovedOnly, unapprovedOnly, spendWiseView, openingBalanceForPeriod, company]);
 
   /** Statement: one row per block; spend-wise: blocks for search â€” pagination uses @/lib/spendWisePagination (data-line budget + split borders). */
   const displayBlocks = useMemo(
@@ -707,6 +738,7 @@ export function AccountGroupDetails({
   const isFilterActive = dateRange !== undefined || Object.values(filters).some(v => v);
   /** Party/bank ledger: dated opening row ke liye range-from. */
   const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
+  const tableLedgerDateFilterActive = spendWiseView ? false : hasLedgerDateFilter;
   const booksOpeningForAccountGroup = Number((group as any).openingBalance) || 0;
   
   const clearFilters = () => {
@@ -730,6 +762,12 @@ export function AccountGroupDetails({
     }
     const voucherToOpen = { ...voucher, id: resolvedId };
     setSelectedVoucher(voucherToOpen);
+    if (ledgerSessionKey && resolvedId) {
+      writeLedgerDetailSessionSnapshot(ledgerSessionKey, {
+        page: currentPage,
+        openVoucherId: resolvedId,
+      });
+    }
     openModalInUrl();
     setIsVoucherDialogOpen(true);
   };
@@ -792,6 +830,22 @@ export function AccountGroupDetails({
     router,
   });
 
+  useLedgerDetailSessionMemory({
+    companyId: companyId ?? undefined,
+    context: "group",
+    contextId: group?.id,
+    viewMode: ledgerViewMode,
+    totalPages,
+    currentPage,
+    setCurrentPage,
+    vouchers,
+    selectedVoucherId: selectedVoucher?.id ?? null,
+    isVoucherDialogOpen,
+    setSelectedVoucher,
+    setIsVoucherDialogOpen,
+    onRestoreVoucherDialog: isMobile ? openModalInUrl : undefined,
+  });
+
   const handleShowNarrationChange = (checked: boolean) => {
     setShowNarration(checked);
     sessionStorage.setItem("showNarration", String(checked));
@@ -809,6 +863,42 @@ export function AccountGroupDetails({
     if (dateSystem === "BS") return `BS: ${fromBS} to ${toBS}`;
     return `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
   };
+
+  const spendWiseGroupPrint = useMemo(() => {
+    if (!spendWiseView || !company) return undefined;
+    return {
+      company: {
+        name: company.name,
+        pan: company.pan,
+        phone: company.phone,
+        address: company.address,
+        decimalPlaces: company.decimalPlaces,
+        showDrCr: company.showDrCr,
+        showCurrencySymbol: company.showCurrencySymbol,
+        logoUrl: company.logoUrl,
+      },
+      titleBase: `Spend Wise Group Statement: ${group.name}`,
+      context: "group" as const,
+      contextId: group.id,
+      dateSystem,
+      dateRangeText: buildDateRangeText(),
+      showNarration,
+      includeNotes: includeNotesInTable,
+      visibleColumns,
+      userNames,
+    };
+  }, [
+    spendWiseView,
+    company,
+    group.name,
+    group.id,
+    dateSystem,
+    dateRange,
+    showNarration,
+    includeNotesInTable,
+    visibleColumns,
+    userNames,
+  ]);
 
   const accountNamesMap = useMemo(
     () => ({
@@ -1136,38 +1226,55 @@ export function AccountGroupDetails({
     }
     try {
       // Keep print synced with current view order, shown columns, and notes toggle.
-      const printTransactions = sortedTransactions.filter((t: any) => !(t as any)._spendWiseSpacer);
-      await openPrintDirect({
-        company: {
-          name: company.name,
-          pan: company.pan,
-          phone: company.phone,
-          address: company.address,
-          decimalPlaces: company.decimalPlaces,
-          showDrCr: company.showDrCr,
-          showCurrencySymbol: company.showCurrencySymbol,
-          logoUrl: company.logoUrl,
-        },
-        title: spendWiseView
-          ? `Spend Wise Group Statement: ${group.name}`
-          : `Group Statement: ${group.name}`,
-        context: 'group',
-        contextId: group.id,
-        dateSystem: dateSystem,
-        dateRangeText: dateRangeText,
-        vouchersCount: printTransactions.length,
-        openingBalance: isBalanceMasked ? 0 : openingBalanceForPeriod,
-        openingBalanceDate: (group as any).openingBalanceDate,
-        openingBalanceNarration: (group as any).openingBalanceNarration ?? null,
-        transactions: printTransactions,
-        showNarration: showNarration,
-        includeNotes: includeNotesInTable,
-        visibleColumns: visibleColumns,
-        preserveOrder: spendWiseView,
-        spendWise: Boolean(spendWiseView),
-        billWise: false,
-        userNames: userNames,
-      }, true);
+      await openPrintDirect(
+        applyLedgerPageToPrintPayload(
+          {
+            company: {
+              name: company.name,
+              pan: company.pan,
+              phone: company.phone,
+              address: company.address,
+              decimalPlaces: company.decimalPlaces,
+              showDrCr: company.showDrCr,
+              showCurrencySymbol: company.showCurrencySymbol,
+              logoUrl: company.logoUrl,
+            },
+            title: spendWiseView
+              ? `Spend Wise Group Statement: ${group.name}`
+              : `Group Statement: ${group.name}`,
+            context: 'group',
+            contextId: group.id,
+            dateSystem: dateSystem,
+            dateRangeText: dateRangeText,
+            vouchersCount: paginatedTransactions.length,
+            openingBalance: isBalanceMasked ? 0 : desktopPageLedgerStats.openingForPage,
+            openingBalanceDate: (group as any).openingBalanceDate,
+            openingBalanceNarration: (group as any).openingBalanceNarration ?? null,
+            transactions: paginatedTransactions,
+            showNarration: showNarration,
+            includeNotes: includeNotesInTable,
+            visibleColumns: visibleColumns,
+            preserveOrder: spendWiseView,
+            spendWise: Boolean(spendWiseView),
+            billWise: false,
+            userNames: userNames,
+          },
+          {
+            paginatedTransactions,
+            openingForPage: isBalanceMasked ? 0 : desktopPageLedgerStats.openingForPage,
+            periodDrForPage: isBalanceMasked ? undefined : desktopPageLedgerStats.periodDrForPage,
+            periodCrForPage: isBalanceMasked ? undefined : desktopPageLedgerStats.periodCrForPage,
+            closingForPage: isBalanceMasked ? undefined : desktopPageLedgerStats.closingForPage,
+            booksOpeningBalance: isBalanceMasked ? undefined : booksOpeningForAccountGroup,
+            ledgerShowBookOpeningRow: rowsPerPage <= 0 || desktopLedgerSliceFlatStart === 0,
+            ledgerDateFilterActive: tableLedgerDateFilterActive,
+            openingBalancePeriodStartDate: ledgerOpeningPeriodStartDate,
+            masterOpeningBalanceDate: (group as any).openingBalanceDate,
+            dateRange,
+          }
+        ),
+        true
+      );
     } catch (e) {
       console.error("Print failed:", e);
       toast.error(e instanceof Error ? e.message : "Print failed. Please try again.");
@@ -1257,7 +1364,7 @@ export function AccountGroupDetails({
               forceBalanceMode="statement"
               openingBalance={isBalanceMasked ? 0 : mobilePageLedgerStats.openingForPage}
               booksOpeningBalance={isBalanceMasked ? undefined : booksOpeningForAccountGroup}
-              ledgerDateFilterActive={hasLedgerDateFilter}
+              ledgerDateFilterActive={tableLedgerDateFilterActive}
               ledgerShowBookOpeningRow={rowsPerPage <= 0 || mobileLedgerSliceFlatStart === 0}
               openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
               dateRange={dateRange}
@@ -1283,6 +1390,7 @@ export function AccountGroupDetails({
               scrollOnlyTransactions
               disableLayoutAnimation={disableTableLayoutAnimation}
               blinkMode={spendWiseBlinkMode}
+              spendWiseGroupPrint={spendWiseGroupPrint}
               {...statementCheck.tableProps}
             />
             </div>
@@ -1659,7 +1767,7 @@ export function AccountGroupDetails({
               visibleColumns={visibleColumns}
               openingBalance={isBalanceMasked ? 0 : desktopPageLedgerStats.openingForPage}
               booksOpeningBalance={isBalanceMasked ? undefined : booksOpeningForAccountGroup}
-              ledgerDateFilterActive={hasLedgerDateFilter}
+              ledgerDateFilterActive={tableLedgerDateFilterActive}
               ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopLedgerSliceFlatStart === 0}
               openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
               dateRange={dateRange}
@@ -1696,6 +1804,7 @@ export function AccountGroupDetails({
               isBalanceMasked={isBalanceMasked}
               disableLayoutAnimation={disableTableLayoutAnimation}
               blinkMode={spendWiseBlinkMode}
+              spendWiseGroupPrint={spendWiseGroupPrint}
               {...statementCheck.tableProps}
             />
             {paginatedTransactions.length === 0 && (

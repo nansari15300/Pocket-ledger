@@ -118,6 +118,7 @@ const allMenuItems: MenuItem[] = [
 
 const bottomMenuItems: MenuItem[] = [
     { id: 'messages', href: "/messages", label: "Messages", icon: Mail },
+    { id: 'drive-sync', href: settingsViewHref("local_cloud_sync"), label: "Google Drive sync", icon: Cloud },
     { id: 'billing', href: "/billing", label: "Billing & Plans", icon: CreditCard, permission: "configure_company_settings" },
     { id: 'distributor-signup', href: "/distributor-signup", label: "Be a Distributor", icon: UserPlus },
     { id: 'backup', href: "/backup", label: "Backup & Restore", icon: Database, permissionAny: ["export_data", "import_data"] },
@@ -217,6 +218,7 @@ export function AppSidebar() {
       "purchase-note": false,
       quotations: false,
       messages: true,
+      "drive-sync": true,
       billing: true,
       "distributor-signup": false,
       backup: true,
@@ -517,7 +519,7 @@ export function AppSidebar() {
 
   const visibleMenuItems = React.useMemo(() => {
     if (!featureConfig) return allMenuItems;
-    const byFeature = allMenuItems.filter((item) => featureConfig[item.id] !== false);
+    const byFeature = allMenuItems.filter((item) => item.id === "import-export" || featureConfig[item.id] !== false);
     return filterByPermission(byFeature, can);
   }, [featureConfig, can]);
 
@@ -539,6 +541,7 @@ export function AppSidebar() {
       if (item.id === "distributor-signup" && customUser?.role === "Distributor") {
         return false;
       }
+      if (item.id === "import-export") return true;
       return featureConfig[item.id] !== false;
     });
     return filterByPermission(byFeature, can);

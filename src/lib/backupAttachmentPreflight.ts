@@ -101,6 +101,8 @@ export async function preflightBackupAttachmentsBeforeEmbed(options: {
   /** Pichle backup location se — in refs ke liye server download skip. */
   incrementalCache?: IncrementalAttachmentCache;
   signal?: AbortSignal;
+  /** Local-only backup: server download skip; jo device par hai wahi embed. */
+  skipOnlineAttachmentFetch?: boolean;
   onProgress?: (p: { done: number; total: number; detail: string }) => void;
 }): Promise<BackupAttachmentPreflightResult> {
   const allRefs = collectAttachmentRefsFromBackupData(options.backupData);
@@ -128,8 +130,9 @@ export async function preflightBackupAttachmentsBeforeEmbed(options: {
   }
 
   const online = typeof navigator !== "undefined" && navigator.onLine;
+  const skipOnlineFetch = options.skipOnlineAttachmentFetch === true;
   let prefetch = emptyPrefetch;
-  const localFirst = backupPrefersLocalSnapshot();
+  const localFirst = backupPrefersLocalSnapshot() || skipOnlineFetch;
 
   let missingRefs: string[] = [];
 
@@ -137,15 +140,23 @@ export async function preflightBackupAttachmentsBeforeEmbed(options: {
     options.onProgress?.({
       done: 0,
       total: refsNeedingFetch.length,
-      detail: "Checking local attachment files…",
+      detail: skipOnlineFetch
+        ? "Checking local attachment files only (no server download)…"
+        : "Checking local attachment files…",
     });
     const first = await verifyRefsResolvable(refsNeedingFetch, options.signal, (done, total) => {
-      options.onProgress?.({ done, total, detail: "Checking local attachment files…" });
+      options.onProgress?.({
+        done,
+        total,
+        detail: skipOnlineFetch
+          ? "Checking local attachment files only (no server download)…"
+          : "Checking local attachment files…",
+      });
     });
     missingRefs = first.missing;
 
     const needDownload = missingRefs.filter(isRemoteAttachmentRef);
-    if (online && needDownload.length > 0 && !options.signal?.aborted) {
+    if (!skipOnlineFetch && online && needDownload.length > 0 && !options.signal?.aborted) {
       options.onProgress?.({
         done: 0,
         total: needDownload.length,
@@ -161,7 +172,7 @@ export async function preflightBackupAttachmentsBeforeEmbed(options: {
       missingRefs = missingRefs.filter((r) => !fixedAfterRetry.has(r));
     }
   } else {
-    if (online && remoteRefs.length > 0) {
+    if (!skipOnlineFetch && online && remoteRefs.length > 0) {
       options.onProgress?.({
         done: 0,
         total: remoteRefs.length,
@@ -185,7 +196,7 @@ export async function preflightBackupAttachmentsBeforeEmbed(options: {
     missingRefs = first.missing;
 
     const retryRemote = missingRefs.filter(isRemoteAttachmentRef);
-    if (online && retryRemote.length > 0 && !options.signal?.aborted) {
+    if (!skipOnlineFetch && online && retryRemote.length > 0 && !options.signal?.aborted) {
       options.onProgress?.({
         done: 0,
         total: retryRemote.length,

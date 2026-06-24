@@ -43,11 +43,13 @@ import {
   VOUCHER_ATTACHMENT_SAVED_EVENT,
   voucherAttachmentUiFingerprint,
 } from "@/lib/voucherFormAttachmentSave";
+import { normalizeVoucherRowAttachmentsForUi, getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize";
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { getBillWiseAllocatedToTarget, getPaymentStatus as getPaymentStatusResult, isSaleOrPurchaseBillVoucherType } from "@/lib/payment-allocation-utils";
 import { shouldSuppressTransientCompanyClear } from "@/lib/apkLedgerRouteShield";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { embeddedClientPrefersQuietBackgroundSync, embeddedSqliteBumpDebounceMs, sqliteBumpCollectionNeededOnLedgerRoute } from "@/lib/embeddedWarmBootstrapFlags";
+import { RESTORE_CLOUD_VOUCHERS_REFRESH_EVENT } from "@/lib/restoreCloudBackgroundSync";
 import { resolveInterCompanyLegsForVoucher } from "@/lib/interCompany/interCompanyPostingLegs";
 import {
   interCompanyVoucherViewerSide,
@@ -139,7 +141,8 @@ function sortDocsByDateField(data: any[], orderByField: string): any[] {
 /** React/forms me SQLite-only mirror META leak na ho — runtime list state sirf strip. */
 function stripMirrorMetaForEntityListRow(row: any): any {
   if (!row || typeof row !== "object") return row;
-  return stripLocalMirrorMetaForUiRow(row as Record<string, unknown>);
+  const stripped = stripLocalMirrorMetaForUiRow(row as Record<string, unknown>);
+  return normalizeVoucherRowAttachmentsForUi(stripped);
 }
 
 /** SQLite bootstrap / prefetch: Firestore-merge jaisi strip taaki META forms me na jaye. */
@@ -308,7 +311,8 @@ function mergeEntityListsByIdOrKeepPrev(prev: any[], cached: any[], orderByField
     if (
       rowMissingResolvedTimestamp(old, row) ||
       rowMissingProfileFields(old, row) ||
-      rowMissingVoucherAttachmentFields(old, row)
+      rowMissingVoucherAttachmentFields(old, row) ||
+      (getVoucherAttachmentUrlsForUi(old).length === 0 && getVoucherAttachmentUrlsForUi(row).length > 0)
     ) {
       needsUpgrade = true;
       return row;
@@ -1462,8 +1466,21 @@ export const VoucherProvider = ({
       mergeCollectionFromSqliteBump(coll);
     };
     window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
+    const onRestoreVouchersRefresh = (ev: Event) => {
+      const d = (ev as CustomEvent<{ companyId?: string }>).detail;
+      if (!d?.companyId || d.companyId !== companyId) return;
+      listCompanyDocsFromBrowserDb(companyId, "vouchers", { forBackupMerge: true })
+        .then((cached) => {
+          if (!cached.length) return;
+          const aliveCached = (cached as any[]).filter(isAliveDoc).map(normalizeVoucherRowAttachmentsForUi);
+          setVouchers((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached, "date"));
+        })
+        .catch(() => {});
+    };
+    window.addEventListener(RESTORE_CLOUD_VOUCHERS_REFRESH_EVENT, onRestoreVouchersRefresh);
     return () => {
       window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
+      window.removeEventListener(RESTORE_CLOUD_VOUCHERS_REFRESH_EVENT, onRestoreVouchersRefresh);
       for (const t of Object.values(sqliteBumpMergeTimersRef.current)) clearTimeout(t);
       sqliteBumpMergeTimersRef.current = {};
     };
@@ -2288,6 +2305,15 @@ export const useVouchers = () => {
   }
   return context;
 };
+
+/** Shell route par voucher forms ke liye saare masters (party/staff/tax/bank/expense/…) loaded hon. */
+export function routeHasVoucherFormMastersLoaded(pathname: string): boolean {
+  const paths = activeMasterCollectionPathsForRoute(pathname, false);
+  for (const p of VOUCHER_FORM_MASTER_COLLECTION_PATHS) {
+    if (!paths.has(p)) return false;
+  }
+  return true;
+}
 
 /** Shell route par `bank_accounts` prefetch ho rahe hon (voucher dialog ke liye). */
 export function routeHasVoucherBankAccountsLoaded(pathname: string): boolean {

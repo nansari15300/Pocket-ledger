@@ -46,7 +46,7 @@ import type { InterCompanyRibbonTab } from "@/components/inter-company/InterComp
 import { isInterCompanyVoucherEditDeleteBlocked } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { useCompany, CompanyContext } from "@/hooks/useCompany";
 import usePermissions from "@/hooks/usePermissions";
-import { routeHasVoucherBankAccountsLoaded, useVouchers, VoucherProvider } from "@/hooks/useVouchers";
+import { routeHasVoucherFormMastersLoaded, useVouchers, VoucherProvider } from "@/hooks/useVouchers";
 import { determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { HistoryDialog } from "./HistoryDialog";
 import { toast } from "sonner";
@@ -66,6 +66,7 @@ import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/
 import { VoucherAttachmentFallbackContext } from "@/contexts/VoucherAttachmentFallbackContext";
 import { readInterCompanyLink } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { mergeVoucherFileUrlsForEditDialog } from "@/lib/resolveVoucherAttachmentRemoteUrl";
+import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
@@ -359,8 +360,8 @@ const getVoucherType = (voucher: any, defaultData: any, defaultTab: string): Vou
 function mergeAttachmentFieldsFromRowForEffectiveVoucher(live: any, row: any): any {
   if (!live) return live;
   const out = { ...live };
-  const liveUrls = Array.isArray(live.fileUrls) ? live.fileUrls.filter(Boolean) : [];
-  const rowUrls = Array.isArray(row?.fileUrls) ? row.fileUrls.filter(Boolean) : [];
+  const liveUrls = normalizeFileUrlsField(live.fileUrls);
+  const rowUrls = normalizeFileUrlsField(row?.fileUrls);
   const mergedUrls = mergeVoucherFileUrlsForEditDialog(liveUrls, rowUrls);
   if (mergedUrls.length > 0) {
     out.fileUrls = mergedUrls;
@@ -378,6 +379,31 @@ function mergeAttachmentFieldsFromRowForEffectiveVoucher(live: any, row: any): a
     !isLocalFileRef(String(rowUn))
   ) {
     out.unassignedFile = row.unassignedFile;
+  }
+  return out;
+}
+
+/** Ledger row / mirror me payee fields ho sakte hain jab Firestore snapshot sparse ho. */
+function mergePayeeFieldsFromRowForEffectiveVoucher(live: any, row: any): any {
+  if (!live || !row) return live;
+  const out = { ...live };
+  const keys = [
+    "payeeType",
+    "partyId",
+    "staffId",
+    "taxAccountId",
+    "expenseAccountId",
+    "incomeAccountId",
+    "toAccountId",
+    "payeeName",
+    "fromAccountId",
+  ] as const;
+  for (const key of keys) {
+    const liveVal = live[key];
+    const rowVal = row[key];
+    if ((liveVal == null || liveVal === "") && rowVal != null && rowVal !== "") {
+      out[key] = rowVal;
+    }
   }
   return out;
 }
@@ -2100,8 +2126,11 @@ export function AddVoucherDialog(props: any) {
 
   // Preserve clicked contra leg + ledger row context + attachments when live Firestore doc replaces table row.
   const effectiveVoucherBase = liveVoucher
-    ? mergeAttachmentFieldsFromRowForEffectiveVoucher(
-        mergeLedgerRowContextFromRow(liveVoucher, voucher, ledgerEntityId),
+    ? mergePayeeFieldsFromRowForEffectiveVoucher(
+        mergeAttachmentFieldsFromRowForEffectiveVoucher(
+          mergeLedgerRowContextFromRow(liveVoucher, voucher, ledgerEntityId),
+          voucher
+        ),
         voucher
       )
     : voucher
@@ -2112,8 +2141,14 @@ export function AddVoucherDialog(props: any) {
     const row = effectiveVoucherBase as Record<string, unknown>;
     // Edit form date: Drive-synced rows me timestamp-object ho sakta hai, isliye yahan Date normalize karke sab forms ko stable value do.
     const dateMs = toEpochMs(row.date) ?? toEpochMs(row.createdAt) ?? toEpochMs(row.updatedAt);
-    if (!dateMs) return effectiveVoucherBase;
-    return { ...row, date: new Date(dateMs) };
+    const fileUrls =
+      row.fileUrls !== undefined && row.fileUrls !== null
+        ? normalizeFileUrlsField(row.fileUrls)
+        : row.fileUrls;
+    const withUrls =
+      fileUrls !== row.fileUrls ? { ...row, fileUrls } : row;
+    if (!dateMs) return withUrls;
+    return { ...withUrls, date: new Date(dateMs) };
   }, [effectiveVoucherBase]);
   // Dialog chrome / link-locks sirf saved edit par: copied-draft session me null rakho (nahi to source voucher id se locks lag jate hain).
   const voucherForDialogChrome = postCopyNewFormSeed ? null : effectiveVoucher;
@@ -4022,14 +4057,12 @@ export function AddVoucherDialog(props: any) {
    */
   const needsNestedVoucherProvider = useMemo(() => {
     const shellId = String(ctxCompanyId || "").trim();
-    if (apkLedgerPinsShellCompanyContext) return false;
-    // Header company change: target ≠ sidebar shell → nested masters (create/edit/copy sab).
     const dest = String(targetCompanyId || shellId).trim();
     if (dest !== shellId) return true;
-    // Party/staff/tax/items/incomes: shell route par bank_accounts lazy nahi — dialog khulte hi load.
-    if (isOpen && !routeHasVoucherBankAccountsLoaded(pathname)) return true;
+    // Bank-cash / party / staff / tax route: shell par partial masters — dialog khulte full scope load (web/EXE/APK).
+    if (isOpen && !routeHasVoucherFormMastersLoaded(pathname)) return true;
     return false;
-  }, [apkLedgerPinsShellCompanyContext, targetCompanyId, ctxCompanyId, isOpen, pathname]);
+  }, [targetCompanyId, ctxCompanyId, isOpen, pathname]);
 
   /** Auto switch Settings modal se commit nahi — sirf main voucher Save; forms ko block karne ki zaroorat nahi. */
   const recurringVoucherSaveBlocked = false;

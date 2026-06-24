@@ -3,6 +3,7 @@
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { isLocalFileRef, LOCAL_FILE_PREFIX } from "@/lib/localPendingFiles";
+import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
@@ -63,9 +64,7 @@ async function readVoucherFileUrlsForStaleLocalResolve(
       const snap = await getDoc(doc(firestore, "companies", fsCid, "vouchers", vid));
       if (snap.exists()) {
         const data = snap.data() as { fileUrls?: unknown };
-        const fileUrls = Array.isArray(data.fileUrls)
-          ? data.fileUrls.filter((u): u is string => typeof u === "string" && u.length > 0)
-          : [];
+        const fileUrls = normalizeFileUrlsField(data.fileUrls);
         if (fileUrls.length > 0) {
           return { fileUrls, source: "firestore_getDoc" };
         }
@@ -79,9 +78,7 @@ async function readVoucherFileUrlsForStaleLocalResolve(
     const rows = await listCompanyDocsFromBrowserDb(regCid, "vouchers");
     const row = rows.find((r: { id?: string }) => r.id === vid) as { fileUrls?: unknown } | undefined;
     if (!row) return { fileUrls: [], source: "none" };
-    const fileUrls = Array.isArray(row.fileUrls)
-      ? row.fileUrls.filter((u): u is string => typeof u === "string" && u.length > 0)
-      : [];
+    const fileUrls = normalizeFileUrlsField(row.fileUrls);
     return { fileUrls, source: "sqlite_mirror_list" };
   } catch {
     return { fileUrls: [], source: "none" };

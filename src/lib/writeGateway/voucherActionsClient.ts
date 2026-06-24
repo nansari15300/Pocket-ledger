@@ -77,20 +77,16 @@ import {
 } from "@/lib/voucherLocalAttachmentUpload";
 import { parseAttachmentHoldClipboardText } from "@/lib/attachmentHoldClipboard";
 import { dispatchVoucherLivePatch, dispatchVoucherAttachmentSaved, materializeVoucherAttachmentsInSavePayload } from "@/lib/voucherFormAttachmentSave";
+import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 
 /** Edit save: transient `blob:` preview URLs ya khali `fileUrls` se `local:` / Drive refs mat hatao. */
 function persistableVoucherAttachmentUrls(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  const out: string[] = [];
-  for (const entry of raw) {
-    const s = typeof entry === "string" ? entry.trim() : "";
-    if (!s || s.startsWith("blob:") || s.startsWith("data:")) continue;
-    out.push(s);
-  }
-  return out;
+  return normalizeFileUrlsField(raw).filter(
+    (s) => !s.startsWith("blob:") && !s.startsWith("data:")
+  );
 }
 
 /** SQLite/outbox edit merge — incoming me `fileUrls` key ho to explicit replace (khali `[]` = user ne hata diya). */

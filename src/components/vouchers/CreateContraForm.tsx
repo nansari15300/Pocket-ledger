@@ -40,7 +40,11 @@ import {
 } from "@/lib/voucherLocalAttachmentUpload";
 import { applyVoucherAttachmentsAfterFormSave } from "@/lib/voucherFormAttachmentSave";
 import { toast as sonnerToast } from "sonner";
-import { replaceVoucherSaveLoadingWithShortSuccess } from "@/lib/voucherSaveUi";
+import {
+  completeVoucherBackgroundProgress,
+  replaceVoucherSaveLoadingWithShortSuccess,
+  showVoucherBackgroundProgress,
+} from "@/lib/voucherSaveUi";
 import BsDatePicker from "../ui/BsDatePicker";
 import { Combobox } from "@/components/ui/combobox";
 import { FilePreview } from "../vouchers/FilePreview";
@@ -79,7 +83,7 @@ import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
 import { LinkPaymentInToPaymentOutDialog } from "@/components/vouchers/LinkPaymentInToPaymentOutDialog";
 import { LinkPaymentOutToPaymentInDialog } from "@/components/vouchers/LinkPaymentOutToPaymentInDialog";
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
-import { allocatePaymentInAmounts } from "@/lib/paymentInAllocation";
+import { allocatePaymentInAmounts, getSpendWiseInflowPartyLabel, getSpendWiseOutflowPartyLabel } from "@/lib/paymentInAllocation";
 import { getOpeningBalanceBaseAmount, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
 
 const fileSchema = z.object({
@@ -147,7 +151,7 @@ export function CreateContraForm({
 }) {
   const { toast } = useToast();
   const { user, customUser } = useAuth();
-  const { formatCurrency, formatCurrencyForPrint, formatDate, dateSystem } = useDate();
+  const { formatCurrency, formatCurrencyForPrint, formatDate, formatDateBySystem, dateSystem } = useDate();
   const { vouchers: allVouchers, loading: vouchersLoading, processedAccounts: allProcessedAccounts, processedParties, processedStaff, processedTaxes, processedExpenseAccounts } = useVouchers();
   const { company, companyId } = useCompany();
   const { can, role, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
@@ -378,6 +382,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           linkedOnOthers: alreadyLinked,
           linkable: Math.max(0, amt - alreadyLinked),
           from: "Opening Balance",
+          to: "Opening Balance",
         };
       }
       const v = allVouchers.find((x: any) => x.id === id && isInVoucherForAccountContra(x, spendWiseInAccountId));
@@ -387,10 +392,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
       const linkable = Math.max(0, amt - alreadyLinked);
       const linkedFromThis = allocated[id] ?? 0;
-      const from =
-        v.type === "contra"
-          ? (paymentInDialogNames[v.fromAccountId] ?? "—")
-          : (paymentInDialogNames[v.partyId] ?? paymentInDialogNames[v.staffId] ?? paymentInDialogNames[v.taxAccountId] ?? paymentInDialogNames[v.incomeAccountId] ?? v.payeeName ?? "—");
+      const from = getSpendWiseInflowPartyLabel(v, paymentInDialogNames);
       return {
         id,
         voucherNumber: v.voucherNumber ?? "—",
@@ -465,16 +467,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const amounts = v.linkedPaymentInAmounts && typeof v.linkedPaymentInAmounts === "object" ? v.linkedPaymentInAmounts : {};
       const linked = amounts[currentContraVoucherId] != null ? Number(amounts[currentContraVoucherId]) : amt / (v.linkedPaymentInIds?.length || 1);
       const typeLabel = v.type === "payment_out" ? "Payment Out" : v.type === "direct_expense" ? "Direct Expense" : "Contra";
-      let from = "—";
-      if (v.type === "contra") {
-        const acc = allProcessedAccounts?.find((a: any) => a.id === v.fromAccountId);
-        from = acc?.accountName ?? "—";
-      } else {
-        const p = processedParties?.find((x: any) => x.id === v.partyId);
-        const s = processedStaff?.find((x: any) => x.id === v.staffId);
-        const e = processedExpenseAccounts?.find((x: any) => x.id === v.expenseAccountId || x.id === v.toAccountId);
-        from = p?.name ?? s?.name ?? e?.name ?? "—";
-      }
+      const to = getSpendWiseOutflowPartyLabel(v, paymentInDialogNames);
       return {
         id: v.id,
         voucherNumber: v.voucherNumber ?? "—",
@@ -482,7 +475,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         amount: amt,
         linked,
         typeLabel,
-        from,
+        from: to,
+        to,
       };
     });
     const openingBase = getOpeningBalanceBaseAmount(spendWiseOutAccountOpeningBalance, "cr");
@@ -496,10 +490,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         linked: currentLinkedOB,
         typeLabel: "Opening Balance",
         from: "Opening Balance",
+        to: "Opening Balance",
       });
     }
     return rows.sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
-  }, [showSpendWiseOppositeSection, allVouchers, currentContraVoucherId, spendWiseOutAccountId, processedParties, processedStaff, allProcessedAccounts, processedExpenseAccounts, spendWiseOutAccountOpeningBalance, voucher]);
+  }, [showSpendWiseOppositeSection, allVouchers, currentContraVoucherId, spendWiseOutAccountId, paymentInDialogNames, spendWiseOutAccountOpeningBalance, voucher]);
 
   /** Card display: when Done is clicked (pending set), show pending links live; otherwise server data. */
   const displayLinkedToMeRows = useMemo(() => {
@@ -518,6 +513,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             linked,
             typeLabel: "Opening Balance",
             from: "Opening Balance",
+        to: "Opening Balance",
           };
         }
         const v = allVouchers.find((x: any) => x.id === id);
@@ -527,22 +523,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const date = v.date?.toDate ? v.date.toDate() : (v.date ? new Date(v.date) : null);
         const amt = Number(v.total ?? v.amount ?? 0) || 0;
         const linked = pendingLinkedPaymentOut.amountsByVoucherId[id] ?? 0;
-        let from = "—";
-        if (v.type === "contra") {
-          const acc = allProcessedAccounts?.find((a: any) => a.id === v.fromAccountId);
-          from = acc?.accountName ?? "—";
-        } else {
-          const p = processedParties?.find((x: any) => x.id === v.partyId);
-          const s = processedStaff?.find((x: any) => x.id === v.staffId);
-          const e = processedExpenseAccounts?.find((x: any) => x.id === v.expenseAccountId || x.id === v.toAccountId);
-          from = p?.name ?? s?.name ?? e?.name ?? "—";
-        }
-        return { id: v.id, voucherNumber: v.voucherNumber ?? "—", date, amount: amt, linked, typeLabel: v.type === "payment_out" ? "Payment Out" : v.type === "direct_expense" ? "Direct Expense" : "Contra", from };
+        const to = getSpendWiseOutflowPartyLabel(v, paymentInDialogNames);
+        return { id: v.id, voucherNumber: v.voucherNumber ?? "—", date, amount: amt, linked, typeLabel: v.type === "payment_out" ? "Payment Out" : v.type === "direct_expense" ? "Direct Expense" : "Contra", from: to, to };
       })
       .filter(Boolean);
     const typed = rows as { id: string; voucherNumber: string; date: Date | null; amount: number; linked: number; typeLabel: string; from: string }[];
     return typed.sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
-  }, [pendingLinkedPaymentOut, spendWiseLinkedToMeRows, allVouchers, spendWiseOutAccountId, allProcessedAccounts, processedParties, processedStaff, processedExpenseAccounts, spendWiseOutAccountOpeningBalance]);
+  }, [pendingLinkedPaymentOut, spendWiseLinkedToMeRows, allVouchers, spendWiseOutAccountId, paymentInDialogNames, spendWiseOutAccountOpeningBalance]);
 
   /** Count must match Link Pay Out dialog's To Voucher rows (linkable + already selected rows). */
   const spendWiseOutDialogRowCount = useMemo(() => {
@@ -1068,43 +1055,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 convertedToVoucherNumber: submissionData.voucherNumber,
               });
           }
-          if (pendingLinkedPaymentOut && user?.uid) {
-            const contraId = savedDoc.id;
-            const previouslyLinkedIds = new Set(spendWiseLinkedToMeRows.map((r) => r.id));
-            const allToUpdate = new Set([...previouslyLinkedIds, ...pendingLinkedPaymentOut.ids]);
-            for (const poId of allToUpdate) {
-              if (poId === SPEND_WISE_OPENING_BALANCE_ID) continue;
-              const v = allVouchers?.find((x: any) => x.id === poId);
-              if (!v) continue;
-              const existingIds = Array.isArray(v.linkedPaymentInIds) ? [...v.linkedPaymentInIds] : [];
-              const existingAmounts = v.linkedPaymentInAmounts && typeof v.linkedPaymentInAmounts === "object" ? { ...v.linkedPaymentInAmounts } : {};
-              const newIds = existingIds.filter((id) => id !== contraId);
-              delete existingAmounts[contraId];
-              if (pendingLinkedPaymentOut.ids.includes(poId)) {
-                const amt = pendingLinkedPaymentOut.amountsByVoucherId[poId] ?? 0;
-                if (amt > 0) {
-                  newIds.push(contraId);
-                  existingAmounts[contraId] = amt;
-                }
-              }
-              await updateVoucherSpendWiseLinks(companyId, poId, newIds, existingAmounts, user.uid);
-            }
-            const openingLinked = Number(pendingLinkedPaymentOut.amountsByVoucherId[SPEND_WISE_OPENING_BALANCE_ID] ?? 0) || 0;
-            // Persist Opening Balance spend-wise link on current contra (In leg) so it remains visible after save/reopen.
-            // Spend-wise opening link patch local/offline + online helper se apply karo.
-            await patchVoucherFields(companyId, contraId, {
-              linkedOpeningBalanceAmount: openingLinked,
-              linkedOpeningBalanceAccountId: openingLinked > 0 ? spendWiseOutAccountId : null,
-            });
-            setPendingLinkedPaymentOut(null);
-          }
       } else {
           throw new Error("Failed to save voucher and get ID.");
       }
 
         const docId = savedDoc.id;
         const approveBanner = !!(approveAfterSave && docId);
-        // Save & Close: dialog turant band — approve/alerts background (`postSaveTail`).
+        const spendWisePending = pendingLinkedPaymentOut;
+        const spendWiseLinkedRowIds = spendWiseLinkedToMeRows.map((r) => r.id);
+        const rawFileUrlsForPostSave = (submissionData.fileUrls as string[]).filter(
+          (u): u is string => typeof u === "string" && Boolean(String(u).trim())
+        );
+        const needsBackgroundSync =
+          !!(spendWisePending && user?.uid) ||
+          !!(companyId && docId && rawFileUrlsForPostSave.length > 0);
+
         if (approveBanner) {
           replaceVoucherSaveLoadingWithShortSuccess(
             toastId,
@@ -1118,21 +1083,72 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
         setIsLoading(false);
 
-        if (companyId && docId) {
-          const rawUrls = (submissionData.fileUrls as string[]).filter(
-            (u): u is string => typeof u === "string" && Boolean(String(u).trim())
-          );
-          const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
-            companyId,
-            voucherId: docId,
-            rawFileUrls: rawUrls,
-            storageFolder: "contra",
-          });
-          setFiles(persistedUrls);
-          initialFilesRef.current = persistedUrls;
-        }
+        const bgProgressId = needsBackgroundSync ? showVoucherBackgroundProgress("Saving links…") : null;
 
         const postSaveTail = async () => {
+          let bgSyncPartialFailure = false;
+          try {
+            if (spendWisePending && user?.uid) {
+              const contraId = docId;
+              const previouslyLinkedIds = new Set(spendWiseLinkedRowIds);
+              const allToUpdate = new Set([...previouslyLinkedIds, ...spendWisePending.ids]);
+              for (const poId of allToUpdate) {
+                if (poId === SPEND_WISE_OPENING_BALANCE_ID) continue;
+                const v = allVouchers?.find((x: any) => x.id === poId);
+                if (!v) continue;
+                const existingIds = Array.isArray(v.linkedPaymentInIds) ? [...v.linkedPaymentInIds] : [];
+                const existingAmounts =
+                  v.linkedPaymentInAmounts && typeof v.linkedPaymentInAmounts === "object"
+                    ? { ...v.linkedPaymentInAmounts }
+                    : {};
+                const newIds = existingIds.filter((id) => id !== contraId);
+                delete existingAmounts[contraId];
+                if (spendWisePending.ids.includes(poId)) {
+                  const amt = spendWisePending.amountsByVoucherId[poId] ?? 0;
+                  if (amt > 0) {
+                    newIds.push(contraId);
+                    existingAmounts[contraId] = amt;
+                  }
+                }
+                await updateVoucherSpendWiseLinks(companyId, poId, newIds, existingAmounts, user.uid);
+              }
+              const openingLinked =
+                Number(spendWisePending.amountsByVoucherId[SPEND_WISE_OPENING_BALANCE_ID] ?? 0) || 0;
+              await patchVoucherFields(companyId, contraId, {
+                linkedOpeningBalanceAmount: openingLinked,
+                linkedOpeningBalanceAccountId: openingLinked > 0 ? spendWiseOutAccountId : null,
+              });
+              setPendingLinkedPaymentOut(null);
+            }
+
+            if (companyId && docId) {
+              const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
+                companyId,
+                voucherId: docId,
+                rawFileUrls: rawFileUrlsForPostSave,
+                storageFolder: "contra",
+              });
+              setFiles(persistedUrls);
+              initialFilesRef.current = persistedUrls;
+            }
+
+            if (bgProgressId) {
+              completeVoucherBackgroundProgress(bgProgressId, {
+                ok: !bgSyncPartialFailure,
+                title: bgSyncPartialFailure ? "Some links could not be saved" : "Links saved",
+              });
+            }
+          } catch (err) {
+            if (bgProgressId) {
+              completeVoucherBackgroundProgress(bgProgressId, {
+                ok: false,
+                title: "Link sync failed",
+                description: err instanceof Error ? err.message : undefined,
+              });
+            }
+            throw err;
+          }
+
           if (approveBanner && !isEditForApprove) {
             await approveVoucherWithHistory(companyId, docId, user.uid, approverName);
           }
@@ -2023,9 +2039,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           <tbody>
                             {(selectedContraLeg === 'in' ? displayLinkedToMeRows : spendWiseDisplayRows).map((row: any) => (
                               <tr key={row.id} className="border-b last:border-b-0">
-                                <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? formatDate(row.date) : "—"}</td>
+                                <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? formatDateBySystem(row.date) : "—"}</td>
                                 <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
-                                <td className="p-2 whitespace-nowrap">{row.from}</td>
+                                <td className="p-2 whitespace-nowrap">{selectedContraLeg === 'in' ? (row.to ?? row.from) : row.from}</td>
                                 <td className={cn("p-2 text-right font-medium whitespace-nowrap", selectedContraLeg === 'in' ? "text-red-600" : "text-green-600")}>
                                   {formatCurrency(row.amount, { noSuffix: true, noAnimation: true })} {selectedContraLeg === 'in' ? 'Cr' : 'Dr'}
                                 </td>

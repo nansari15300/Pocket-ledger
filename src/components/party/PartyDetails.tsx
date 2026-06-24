@@ -5,6 +5,7 @@
 import * as React from "react";
 import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
+import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import type { Party, Group } from "@/components/party/types";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
@@ -105,6 +106,12 @@ import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColum
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { useLedgerDetailSessionMemory } from "@/hooks/useLedgerDetailSessionMemory";
+import {
+  ledgerDetailSessionStorageKey,
+  writeLedgerDetailSessionSnapshot,
+  type LedgerDetailViewMode,
+} from "@/lib/ledgerDetailSessionMemory";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 
 import { useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
@@ -294,10 +301,18 @@ export function PartyDetails({
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
-  // Party badlein ya "All Vouchers" toggle karein to page index reset — warna purane page par galat rows.
+  const ledgerViewMode: LedgerDetailViewMode =
+    balanceMode === "bill_wise" ? "bill_wise" : "statement";
+  const ledgerSessionKey = useMemo(
+    () =>
+      companyId && party?.id
+        ? ledgerDetailSessionStorageKey(companyId, "party", party.id, ledgerViewMode)
+        : null,
+    [companyId, party?.id, ledgerViewMode]
+  );
   useEffect(() => {
     setCurrentPage(1);
-  }, [party.id, isAllVouchersView]);
+  }, [isAllVouchersView]);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
   const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => {
@@ -512,6 +527,12 @@ export function PartyDetails({
   const handleEditVoucher = (voucher: any) => {
     openingModalRef.current = true;
     setSelectedVoucher(voucher);
+    if (ledgerSessionKey && voucher?.id) {
+      writeLedgerDetailSessionSnapshot(ledgerSessionKey, {
+        page: currentPage,
+        openVoucherId: String(voucher.id),
+      });
+    }
     openModalInUrl();
     setIsVoucherDialogOpen(true);
   };
@@ -525,6 +546,12 @@ export function PartyDetails({
   const handleDeleteVoucher = (voucher: any) => {
     openingModalRef.current = true;
     setSelectedVoucher(voucher);
+    if (ledgerSessionKey && voucher?.id) {
+      writeLedgerDetailSessionSnapshot(ledgerSessionKey, {
+        page: currentPage,
+        openVoucherId: String(voucher.id),
+      });
+    }
     openModalInUrl();
     setIsVoucherDialogOpen(true);
   };
@@ -625,6 +652,22 @@ export function PartyDetails({
     pageSortOrder: sortOrder,
   });
 
+  useLedgerDetailSessionMemory({
+    companyId: companyId ?? undefined,
+    context: "party",
+    contextId: party?.id,
+    viewMode: ledgerViewMode,
+    totalPages,
+    currentPage,
+    setCurrentPage,
+    vouchers,
+    selectedVoucherId: selectedVoucher?.id ?? null,
+    isVoucherDialogOpen,
+    setSelectedVoucher,
+    setIsVoucherDialogOpen,
+    onRestoreVoucherDialog: isMobile ? openModalInUrl : undefined,
+  });
+
   /** Tail window: `before` = purane txn (kam index) abhi slice me nahi; `after` = naye (zyada index) hidden — MobileTransactionsPager ke count */
   const mobilePagerEdgeCounts = useMemo(() => {
     const total = searchFilteredTransactions.length;
@@ -704,46 +747,64 @@ export function PartyDetails({
     return variant === "bill_wise" ? `Bill Wise ${title}` : title;
   };
 
-  const printTransactions = (transactionsToPrint: any[], variant: "statement" | "bill_wise") => {
+  const printTransactions = (variant: "statement" | "bill_wise") => {
     if (!company) return Promise.resolve();
     const dateRangeText = buildDateRangeText();
     // Match printed columns and note visibility with current table controls.
     const printVisibleColumns = variant === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns;
-    return openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: getPrintTitle(variant),
-      context: "party",
-      contextId: party.id,
-      dateSystem: dateSystem,
-      dateRangeText: dateRangeText || "All Time",
-      vouchersCount: transactionsToPrint.length,
-      openingBalance: openingBalanceForPeriod,
-      openingBalanceDate: (party as any).openingBalanceDate,
-      openingBalanceNarration: party.openingBalanceNarration ?? null,
-      transactions: transactionsToPrint.map((t: any) => ({ ...t, dueDate: t.dueDate ?? t.due_date })),
-      showNarration: showNarration,
-      includeNotes: showNotes,
-      visibleColumns: printVisibleColumns,
-      userNames: mergedUserNames,
-      journalAccountNames: resolvedJournalAccountNames,
-      billWise: variant === "bill_wise",
-      ...(variant === "bill_wise" && { openingBalanceOutstanding, openingBalanceLinkedVoucherNos, vouchers }),
-    }, true);
+    return openPrintDirect(
+      applyLedgerPageToPrintPayload(
+        {
+          company: {
+            name: company.name,
+            pan: company.pan,
+            phone: company.phone,
+            address: company.address,
+            decimalPlaces: company.decimalPlaces,
+            showDrCr: company.showDrCr,
+            showCurrencySymbol: company.showCurrencySymbol,
+            logoUrl: company.logoUrl,
+          },
+          title: getPrintTitle(variant),
+          context: "party",
+          contextId: party.id,
+          dateSystem: dateSystem,
+          dateRangeText: dateRangeText || "All Time",
+          vouchersCount: paginatedTransactions.length,
+          openingBalance: desktopPaginationMeta.openingForPage,
+          openingBalanceDate: (party as any).openingBalanceDate,
+          openingBalanceNarration: party.openingBalanceNarration ?? null,
+          transactions: paginatedTransactions.map((t: any) => ({ ...t, dueDate: t.dueDate ?? t.due_date })),
+          showNarration: showNarration,
+          includeNotes: showNotes,
+          visibleColumns: printVisibleColumns,
+          userNames: mergedUserNames,
+          journalAccountNames: resolvedJournalAccountNames,
+          billWise: variant === "bill_wise",
+          ...(variant === "bill_wise" && { openingBalanceOutstanding, openingBalanceLinkedVoucherNos, vouchers }),
+        },
+        {
+          paginatedTransactions,
+          openingForPage: desktopPaginationMeta.openingForPage,
+          periodDrForPage: desktopPaginationMeta.periodDrForPage,
+          periodCrForPage: desktopPaginationMeta.periodCrForPage,
+          closingForPage: desktopPaginationMeta.closingForPage,
+          booksOpeningBalance: Number(party.openingBalance) || 0,
+          ledgerShowBookOpeningRow: rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0,
+          ledgerDateFilterActive: Boolean(dateRange?.from != null || dateRange?.to != null),
+          openingBalancePeriodStartDate: ledgerOpeningPeriodStartDate,
+          masterOpeningBalanceDate: (party as any).openingBalanceDate,
+          dateRange,
+        }
+      ),
+      true
+    );
   };
 
   const handlePrint = () => {
     (async () => {
       try {
-        await printTransactions(statusFilteredTransactions, balanceMode === "bill_wise" ? "bill_wise" : "statement");
+        await printTransactions(balanceMode === "bill_wise" ? "bill_wise" : "statement");
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Print failed. Please try again.");
       }

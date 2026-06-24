@@ -58,6 +58,8 @@ import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { upsertLocalCompany } from "@/lib/localCompanyStore";
 import { type LocalCompanyUserRecord, upsertUserInList } from "@/lib/localCompanyUsers";
 import { planAllowsFirebaseOnline } from "@/lib/planSyncEntitlements";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Label } from "@/components/ui/label";
 
 const MAX_FILE_SIZE_MB = 0.5;
 
@@ -117,7 +119,7 @@ export function CreateCompanyForm({
   const { toast } = useToast();
   const { user, customUser } = useAuth();
   // `company` = abhi selected company (plan hint); owned list se highest tier — pehle hamesha "basic" plan check tha
-  const { setCompanyId, allCompanies, company } = useCompany();
+  const { setCompanyId, allCompanies, allCompaniesRegistry, company, reloadLocalCompanyRegistry } = useCompany();
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const livePlans = useLivePlans();
   const accountPlanId = useMemo(
@@ -143,8 +145,8 @@ export function CreateCompanyForm({
   );
   /** Online company creation only; slot guard still applies. */
   const hasFreeOnlineSlot = allowFirebaseOnline && maxOnlineSlots > 0 && usedOnlineSlots < maxOnlineSlots;
-  const storageChoiceMade = true;
-  const willCreateAsLocal = false;
+  const [storageMode, setStorageMode] = useState<"local" | "online">("local");
+  const willCreateAsLocal = !allowFirebaseOnline || storageMode === "local";
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -239,7 +241,7 @@ export function CreateCompanyForm({
     const maxO = maxOnlineCompaniesForPlan(planIdForSlots, getPlanFromPlans(livePlans, planIdForSlots));
     const usedO = user?.uid ? countOnlineCompanySlotsForOwner(allCompanies, user.uid) : 0;
     const freeOnlineSlotNow = maxO > 0 && usedO < maxO;
-    const createAsLocalOnly = false;
+    const createAsLocalOnly = willCreateAsLocal;
 
     if (!user?.uid) {
       toast({
@@ -251,8 +253,7 @@ export function CreateCompanyForm({
       return;
     }
 
-    // Company creation is online-only across app UI.
-    if (!freeOnlineSlotNow) {
+    if (!createAsLocalOnly && !freeOnlineSlotNow) {
       toast({
         variant: "destructive",
         title: "Online company required",
@@ -331,8 +332,12 @@ export function CreateCompanyForm({
     }
 
     const nameNorm = values.companyName.trim().toLowerCase();
-    const ownedByName = allCompanies.filter(
-      (c) => c.ownerId === effectiveUserId && (c.name || "").trim().toLowerCase() === nameNorm
+    const registryRows = [...allCompanies, ...(allCompaniesRegistry || [])];
+    const ownedByName = registryRows.filter(
+      (c, i, arr) =>
+        arr.findIndex((x) => x.id === c.id) === i &&
+        c.ownerId === effectiveUserId &&
+        (c.name || "").trim().toLowerCase() === nameNorm
     );
     if (ownedByName.length > 0) {
       if (createAsLocalOnly) {
@@ -448,6 +453,8 @@ export function CreateCompanyForm({
           fiscalYearStart: toLocalIso(values.fiscalYearStart),
           fiscalYearEnd: toLocalIso(values.fiscalYearEnd),
           storageOption: "local",
+          syncPolicy: "offline",
+          syncedFromCloud: false,
           ownerId: effectiveUserId,
           ownerEmail: effectiveUserEmail,
           createdAt: Date.now(),
@@ -560,6 +567,8 @@ export function CreateCompanyForm({
         title: "Company created",
         description: `"${values.companyName}" has been saved.`,
       });
+
+      reloadLocalCompanyRegistry();
 
       if (onCompanyCreated) {
         onCompanyCreated(companyId);
@@ -751,7 +760,46 @@ export function CreateCompanyForm({
           />
         </div>
 
-        {!hasFreeOnlineSlot && (
+        {allowFirebaseOnline ? (
+          <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+            <Label className="text-sm font-medium text-foreground">Company type</Label>
+            <p className="text-xs text-muted-foreground">
+              Offline companies stay on this device (SQLite). Online companies sync to Firestore and count toward your
+              plan&apos;s online company slots ({usedOnlineSlots}/{maxOnlineSlots || "—"} used).
+            </p>
+            <RadioGroup
+              value={storageMode}
+              onValueChange={(v) => setStorageMode(v as "local" | "online")}
+              className="grid gap-2"
+            >
+              <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
+                <RadioGroupItem value="local" id="create-storage-local" className="mt-0.5" />
+                <span>
+                  <span className="font-medium text-foreground">Offline (this device)</span> — local SQLite; best for
+                  single-PC / no cloud sync.
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
+                <RadioGroupItem
+                  value="online"
+                  id="create-storage-online"
+                  className="mt-0.5"
+                  disabled={!hasFreeOnlineSlot}
+                />
+                <span className={!hasFreeOnlineSlot ? "text-muted-foreground" : ""}>
+                  <span className="font-medium text-foreground">Online (Firestore)</span> — cloud company; other
+                  devices can sync when signed in with access.
+                </span>
+              </label>
+            </RadioGroup>
+          </div>
+        ) : (
+          <p className="rounded-md border border-dashed border-muted-foreground/30 bg-muted/20 p-2 text-xs text-muted-foreground">
+            Your plan creates offline companies on this device only. Upgrade at Billing for online (cloud) companies.
+          </p>
+        )}
+
+        {!willCreateAsLocal && !hasFreeOnlineSlot && (
           <p className="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 p-2 text-xs text-muted-foreground">
             {maxOnlineSlots === 0
               ? "Companies are cloud-sync only. Upgrade your plan at Billing to create a company."
@@ -883,9 +931,9 @@ export function CreateCompanyForm({
           />
         )}
 
-        {passwordEnabled && !willCreateAsLocal && (
+        {passwordEnabled && willCreateAsLocal && (
         <div className="space-y-4 rounded-md border border-black bg-muted/25 p-3 dark:border-black dark:bg-muted/15">
-          {/* Online company: optional extra users (email share) — local path me hide. */}
+          {/* Local company: optional extra users on this device. */}
           <FormItem>
             <div className="flex items-center justify-between rounded-md border p-3">
               <div>
@@ -1128,7 +1176,11 @@ export function CreateCompanyForm({
           <Button
             type="submit"
             className="w-full"
-            disabled={isLoading || !storageChoiceMade || !form.formState.isValid}
+            disabled={
+              isLoading ||
+              !form.formState.isValid ||
+              (storageMode === "online" && !hasFreeOnlineSlot)
+            }
           >
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Create Company

@@ -3,6 +3,7 @@
 
 import * as React from "react";
 import { openPrintDirect } from "@/lib/printDirect";
+import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { ReconciliationAccountButton } from "@/components/reconciliation/ReconciliationAccountButton";
 import { Button } from "@/components/ui/button";
@@ -101,6 +102,12 @@ import { StatementCheckModeFooterControls } from "@/components/vouchers/Statemen
 import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { useLedgerDetailSessionMemory } from "@/hooks/useLedgerDetailSessionMemory";
+import {
+  ledgerDetailSessionStorageKey,
+  writeLedgerDetailSessionSnapshot,
+  type LedgerDetailViewMode,
+} from "@/lib/ledgerDetailSessionMemory";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import {
   sortTransactionsWithFiscalMergeForCompany,
@@ -230,16 +237,28 @@ export function StaffDetails({
     [journalAccountNames, userNames]
   );
 
+  const { balanceMode, setBalanceMode } = useBalanceMode();
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const ledgerViewMode: LedgerDetailViewMode =
+    balanceMode === "bill_wise" ? "bill_wise" : "statement";
+  const ledgerSessionKey = useMemo(
+    () =>
+      companyId && staff?.id
+        ? ledgerDetailSessionStorageKey(companyId, "staff", staff.id, ledgerViewMode)
+        : null,
+    [companyId, staff?.id, ledgerViewMode]
+  );
   useEffect(() => {
     setCurrentPage(1);
-  }, [staff.id, isAllVouchersView]);
+  }, [ledgerViewMode]);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [isAllVouchersView]);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
-  const { balanceMode, setBalanceMode } = useBalanceMode();
   // Report mobile: list vs running-balance chart (Party report parity).
   const [mobileReportView, setMobileReportView] = useState<"list" | "chart">("list");
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -403,9 +422,15 @@ export function StaffDetails({
   const handleEditVoucher = useCallback((voucher: any) => {
     openingModalRef.current = true;
     setSelectedVoucher(voucher);
+    if (ledgerSessionKey && voucher?.id) {
+      writeLedgerDetailSessionSnapshot(ledgerSessionKey, {
+        page: currentPage,
+        openVoucherId: String(voucher.id),
+      });
+    }
     openModalInUrl();
     setIsVoucherDialogOpen(true);
-  }, [openModalInUrl]);
+  }, [openModalInUrl, ledgerSessionKey, currentPage]);
 
   const handleHistoryVoucher = useCallback((voucher: any) => {
     openingModalRef.current = true;
@@ -506,6 +531,22 @@ export function StaffDetails({
     pageSortOrder: sortOrder,
   });
 
+  useLedgerDetailSessionMemory({
+    companyId: companyId ?? undefined,
+    context: "staff",
+    contextId: staff?.id,
+    viewMode: ledgerViewMode,
+    totalPages,
+    currentPage,
+    setCurrentPage,
+    vouchers,
+    selectedVoucherId: selectedVoucher?.id ?? null,
+    isVoucherDialogOpen,
+    setSelectedVoucher,
+    setIsVoucherDialogOpen,
+    onRestoreVoucherDialog: isMobile ? openModalInUrl : undefined,
+  });
+
   const buildDateRangeText = () => {
     const from = dateRange?.from;
     const to = dateRange?.to;
@@ -526,70 +567,105 @@ export function StaffDetails({
     if (!company) return;
     // Match print with current table columns and note visibility.
     const printVisibleColumns = visibleColumns;
-    openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: `Staff Statement: ${staff.name}`,
-      context: "staff",
-      contextId: staff.id,
-      dateSystem: dateSystem,
-      dateRangeText: buildDateRangeText(),
-      vouchersCount: processedTransactions.length,
-      openingBalance: openingBalanceForPeriod,
-      openingBalanceDate: (staff as any).openingBalanceDate,
-      openingBalanceNarration: staff.openingBalanceNarration ?? null,
-      transactions: displayTransactions,
-      showNarration: showNarration,
-      includeNotes: includeNotesInTable,
-      visibleColumns: printVisibleColumns,
-      userNames: userNames,
-      billWise: false,
-    }, true);
+    openPrintDirect(
+      applyLedgerPageToPrintPayload(
+        {
+          company: {
+            name: company.name,
+            pan: company.pan,
+            phone: company.phone,
+            address: company.address,
+            decimalPlaces: company.decimalPlaces,
+            showDrCr: company.showDrCr,
+            showCurrencySymbol: company.showCurrencySymbol,
+            logoUrl: company.logoUrl,
+          },
+          title: `Staff Statement: ${staff.name}`,
+          context: "staff",
+          contextId: staff.id,
+          dateSystem: dateSystem,
+          dateRangeText: buildDateRangeText(),
+          vouchersCount: paginatedTransactions.length,
+          openingBalance: desktopPaginationMeta.openingForPage,
+          openingBalanceDate: (staff as any).openingBalanceDate,
+          openingBalanceNarration: staff.openingBalanceNarration ?? null,
+          transactions: paginatedTransactions,
+          showNarration: showNarration,
+          includeNotes: includeNotesInTable,
+          visibleColumns: printVisibleColumns,
+          userNames: userNames,
+          billWise: false,
+        },
+        {
+          paginatedTransactions,
+          openingForPage: desktopPaginationMeta.openingForPage,
+          periodDrForPage: desktopPaginationMeta.periodDrForPage,
+          periodCrForPage: desktopPaginationMeta.periodCrForPage,
+          closingForPage: desktopPaginationMeta.closingForPage,
+          booksOpeningBalance: masterStaffOpening,
+          ledgerShowBookOpeningRow: currentPage === 1,
+          ledgerDateFilterActive: hasLedgerDateFilter,
+          openingBalancePeriodStartDate: dateRange?.from,
+          masterOpeningBalanceDate: (staff as any).openingBalanceDate,
+          dateRange,
+        }
+      ),
+      true
+    );
   };
 
   const handlePrintBillWise = () => {
     if (!company) return;
     // Bill-wise print keeps Status column visible by design.
     const printVisibleColumns = { ...visibleColumns, status: true };
-    openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: `Bill Wise Staff Statement: ${staff.name}`,
-      context: "staff",
-      contextId: staff.id,
-      dateSystem: dateSystem,
-      dateRangeText: buildDateRangeText(),
-      vouchersCount: processedTransactions.length,
-      openingBalance: openingBalanceForPeriod,
-      openingBalanceDate: (staff as any).openingBalanceDate,
-      openingBalanceNarration: staff.openingBalanceNarration ?? null,
-      transactions: displayTransactions,
-      showNarration: showNarration,
-      includeNotes: includeNotesInTable,
-      visibleColumns: printVisibleColumns,
-      userNames: userNames,
-      billWise: true,
-      openingBalanceOutstanding,
-      openingBalanceLinkedVoucherNos,
-    }, true);
+    openPrintDirect(
+      applyLedgerPageToPrintPayload(
+        {
+          company: {
+            name: company.name,
+            pan: company.pan,
+            phone: company.phone,
+            address: company.address,
+            decimalPlaces: company.decimalPlaces,
+            showDrCr: company.showDrCr,
+            showCurrencySymbol: company.showCurrencySymbol,
+            logoUrl: company.logoUrl,
+          },
+          title: `Bill Wise Staff Statement: ${staff.name}`,
+          context: "staff",
+          contextId: staff.id,
+          dateSystem: dateSystem,
+          dateRangeText: buildDateRangeText(),
+          vouchersCount: paginatedTransactions.length,
+          openingBalance: desktopPaginationMeta.openingForPage,
+          openingBalanceDate: (staff as any).openingBalanceDate,
+          openingBalanceNarration: staff.openingBalanceNarration ?? null,
+          transactions: paginatedTransactions,
+          showNarration: showNarration,
+          includeNotes: includeNotesInTable,
+          visibleColumns: printVisibleColumns,
+          userNames: userNames,
+          billWise: true,
+          openingBalanceOutstanding,
+          openingBalanceLinkedVoucherNos,
+        },
+        {
+          paginatedTransactions,
+          openingForPage: desktopPaginationMeta.openingForPage,
+          periodDrForPage: desktopPaginationMeta.periodDrForPage,
+          periodCrForPage: desktopPaginationMeta.periodCrForPage,
+          closingForPage: desktopPaginationMeta.closingForPage,
+          booksOpeningBalance: masterStaffOpening,
+          ledgerShowBookOpeningRow: currentPage === 1,
+          ledgerDateFilterActive: hasLedgerDateFilter,
+          openingBalancePeriodStartDate: dateRange?.from,
+          masterOpeningBalanceDate: (staff as any).openingBalanceDate,
+          dateRange,
+        }
+      ),
+      true
+    );
   };
-
 
   useEffect(() => {
     if (isMobile && dateRange?.from) {

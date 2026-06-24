@@ -1,7 +1,6 @@
 "use client";
 
-import { collection, getDocs, query, doc, setDoc } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
+import { listImportExportCollectionDocs } from "@/lib/import-export/companyCollectionIO";
 
 function toDateStr(v: unknown): string {
   if (v == null) return "";
@@ -32,26 +31,24 @@ function flatRow(
 }
 
 export async function exportAccountMaster(companyId: string): Promise<Record<string, unknown>[]> {
-  const base = `companies/${companyId}`;
   const rows: Record<string, unknown>[] = [];
 
   const groupNames = async (col: string): Promise<Record<string, string>> => {
-    const snap = await getDocs(query(collection(firestore, `${base}/${col}`)));
+    const docs = await listImportExportCollectionDocs(companyId, col);
     const out: Record<string, string> = {};
-    snap.docs.forEach((d) => {
-      out[d.id] = (d.data() as { name?: string }).name ?? d.id;
+    docs.forEach(({ id, data }) => {
+      out[id] = String((data as { name?: string }).name ?? id);
     });
     return out;
   };
 
   const groups = await groupNames("groups");
-  const partiesSnap = await getDocs(query(collection(firestore, `${base}/parties`)));
-  partiesSnap.docs.forEach((d) => {
-    const data = d.data() as Record<string, unknown>;
+  const parties = await listImportExportCollectionDocs(companyId, "parties");
+  parties.forEach(({ id, data }) => {
     rows.push(
       flatRow(
         "Party",
-        String(data.name ?? d.id),
+        String(data.name ?? id),
         data.groupId ? (groups[String(data.groupId)] ?? String(data.groupId)) : "",
         Number(data.openingBalance ?? 0),
         toDateStr(data.openingBalanceDate),
@@ -66,13 +63,12 @@ export async function exportAccountMaster(companyId: string): Promise<Record<str
   });
 
   const accountGroups = await groupNames("account_groups");
-  const bankSnap = await getDocs(query(collection(firestore, `${base}/bank_accounts`)));
-  bankSnap.docs.forEach((d) => {
-    const data = d.data() as Record<string, unknown>;
+  const bankAccounts = await listImportExportCollectionDocs(companyId, "bank_accounts");
+  bankAccounts.forEach(({ id, data }) => {
     rows.push(
       flatRow(
         "Bank",
-        String(data.accountName ?? d.id),
+        String(data.accountName ?? id),
         data.groupId ? (accountGroups[String(data.groupId)] ?? String(data.groupId)) : "",
         Number(data.openingBalance ?? 0),
         toDateStr(data.openingBalanceDate),
@@ -87,13 +83,12 @@ export async function exportAccountMaster(companyId: string): Promise<Record<str
   });
 
   const staffGroups = await groupNames("staff_groups");
-  const staffSnap = await getDocs(query(collection(firestore, `${base}/staff`)));
-  staffSnap.docs.forEach((d) => {
-    const data = d.data() as Record<string, unknown>;
+  const staff = await listImportExportCollectionDocs(companyId, "staff");
+  staff.forEach(({ id, data }) => {
     rows.push(
       flatRow(
         "Staff",
-        String(data.name ?? d.id),
+        String(data.name ?? id),
         data.groupId ? (staffGroups[String(data.groupId)] ?? String(data.groupId)) : "",
         Number(data.openingBalance ?? 0),
         toDateStr(data.openingBalanceDate),
@@ -109,13 +104,12 @@ export async function exportAccountMaster(companyId: string): Promise<Record<str
   });
 
   const taxGroups = await groupNames("tax_groups");
-  const taxesSnap = await getDocs(query(collection(firestore, `${base}/taxes`)));
-  taxesSnap.docs.forEach((d) => {
-    const data = d.data() as Record<string, unknown>;
+  const taxes = await listImportExportCollectionDocs(companyId, "taxes");
+  taxes.forEach(({ id, data }) => {
     rows.push(
       flatRow(
         "Tax",
-        String(data.name ?? d.id),
+        String(data.name ?? id),
         data.groupId ? (taxGroups[String(data.groupId)] ?? String(data.groupId)) : "",
         0,
         "",
@@ -125,13 +119,12 @@ export async function exportAccountMaster(companyId: string): Promise<Record<str
   });
 
   const itemGroups = await groupNames("item_groups");
-  const itemsSnap = await getDocs(query(collection(firestore, `${base}/items`)));
-  itemsSnap.docs.forEach((d) => {
-    const data = d.data() as Record<string, unknown>;
+  const items = await listImportExportCollectionDocs(companyId, "items");
+  items.forEach(({ id, data }) => {
     rows.push(
       flatRow(
         "Items",
-        String(data.name ?? d.id),
+        String(data.name ?? id),
         data.groupId ? (itemGroups[String(data.groupId)] ?? String(data.groupId)) : "",
         Number(data.openingBalance ?? 0),
         toDateStr(data.openingBalanceDate),
@@ -147,14 +140,13 @@ export async function exportAccountMaster(companyId: string): Promise<Record<str
   });
 
   const expenseGroups = await groupNames("expense_groups");
-  const expenseSnap = await getDocs(query(collection(firestore, `${base}/expense_accounts`)));
-  expenseSnap.docs.forEach((d) => {
-    const data = d.data() as Record<string, unknown>;
+  const expenseAccounts = await listImportExportCollectionDocs(companyId, "expense_accounts");
+  expenseAccounts.forEach(({ id, data }) => {
     const type = data.type === "Income" ? "Income" : "Expense";
     rows.push(
       flatRow(
         type,
-        String(data.name ?? d.id),
+        String(data.name ?? id),
         data.groupId ? (expenseGroups[String(data.groupId)] ?? String(data.groupId)) : "",
         Number(data.openingBalance ?? 0),
         toDateStr(data.openingBalanceDate),

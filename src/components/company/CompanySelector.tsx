@@ -39,7 +39,6 @@ import { doc, getDoc } from "firebase/firestore";
 import { auth, firestore } from "@/lib/firebase";
 import { useEmbeddedLogout } from "@/contexts/EmbeddedLogoutContext";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { embeddedClientUsesFirestoreCompanyList } from "@/lib/planSyncClientPolicy";
 import { maybeMarkEmbeddedPendingCompanyDataWarm } from "@/lib/embeddedPendingCompanyWarm";
 import {
   shouldPromptCompanyUnlockAsync,
@@ -73,14 +72,66 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
+import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 import { usePathname } from "next/navigation";
 import { useGate } from "@/contexts/GateContext";
 import { pickGateAwareAutoSelectCompanyId } from "@/lib/gates/gateRuntime";
-import { PL_GATE_CHANGED_EVENT } from "@/lib/gates/gateTypes";
+import { useRestoreCloudUploadLock } from "@/hooks/useRestoreCloudUploadLock";
+import { isRestoreCloudUploadLocked, readPendingRestoreCloudPush } from "@/lib/restoreCloudBackgroundSync";
+import {
+  partitionCompaniesForSelector,
+  defaultSelectorTab,
+  ensureSelectedInTabList,
+  isSharedOnlineCompany,
+  type CompanyListTab,
+} from "@/lib/companyStorageKind";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 /** Company picker visibility: admin-hidden rows (`movedToAdminRecycleAt`) normal app me na dikhao. */
 function isCompanyVisibleInSelector(c: CompanyData): boolean {
   return c.isDeleted !== true && (c as CompanyData & { movedToAdminRecycleAt?: unknown }).movedToAdminRecycleAt == null;
+}
+
+function CompanySelectorTabBar({
+  value,
+  onChange,
+  localCount,
+  onlineCount,
+  compact,
+}: {
+  value: CompanyListTab;
+  onChange: (tab: CompanyListTab) => void;
+  localCount: number;
+  onlineCount: number;
+  compact?: boolean;
+}) {
+  const tabBtn = (tab: CompanyListTab, label: string, count: number) => (
+    <button
+      key={tab}
+      type="button"
+      className={cn(
+        "flex-1 rounded-sm font-medium transition-colors",
+        compact ? "px-2 py-1.5 text-xs" : "px-3 py-2 text-sm",
+        value === tab ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+      )}
+      onPointerDown={(e) => e.preventDefault()}
+      onClick={() => onChange(tab)}
+    >
+      {label}
+      {count > 0 ? ` (${count})` : ""}
+    </button>
+  );
+  return (
+    <div
+      className={cn(
+        "flex w-full gap-1 rounded-md bg-muted p-1",
+        compact && "mb-1"
+      )}
+    >
+      {tabBtn("local", "Local", localCount)}
+      {tabBtn("online", "Online", onlineCount)}
+    </div>
+  );
 }
 
 /** Offline login + online company password dono: same "Remember for" options (localStorage expiry alag module). */
@@ -166,17 +217,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   }, [user?.email]);
   const isSuperAdminUser = customUser?.role === "SuperAdmin" || isSuperAdminByEmail;
   // Local mode: list useCompany context se (local DB + mirror) — alag listLocalCompanies se sab ko isOwned true galat tha.
-  const { setCompanyId, allCompanies: contextCompanies, loading: contextCompanyLoading, triggerSync, reloadLocalCompanyRegistry } = useCompany();
-  const { filterCompanies, activeGate } = useGate();
-  const [gateFilterEpoch, setGateFilterEpoch] = useState(0);
-
-  useEffect(() => {
-    const bump = () => setGateFilterEpoch((n) => n + 1);
-    window.addEventListener(PL_GATE_CHANGED_EVENT, bump);
-    return () => {
-      window.removeEventListener(PL_GATE_CHANGED_EVENT, bump);
-    };
-  }, []);
+  const { setCompanyId, companyId, allCompanies: contextCompanies, loading: contextCompanyLoading, triggerSync, reloadLocalCompanyRegistry } = useCompany();
   const [dialogState, setDialogState] = useState<{
     type: "share" | "addLocalUser" | "delete" | null;
     company: CompanyData | null;
@@ -226,26 +267,23 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   }, [companies, user?.email]);
 
   useEffect(() => {
-    const isOwnedByUser = (c: CompanyData) =>
-      c.ownerId === user?.uid ||
-      (!!c.ownerEmail &&
-        !!user?.email &&
-        c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
+    const shareUser = { uid: user?.uid || "", email: user?.email ?? null };
+    const resolveOwned = (c: CompanyData) =>
+      user?.uid ? resolveCompanyIsOwnedForUser(c, shareUser) : Boolean(c.isOwned);
 
     const mergeIntoMap = (map: Map<string, CompanyData>, rows: CompanyData[]) => {
       rows.forEach((c) => {
         if (!isCompanyVisibleInSelector(c)) return;
         map.set(c.id, {
           ...c,
-          isOwned: c.isOwned ?? isOwnedByUser(c),
+          isOwned: resolveOwned(c),
         });
       });
     };
 
-    if (isLocalOnlyMode() && !embeddedClientUsesFirestoreCompanyList()) {
-      const map = new Map<string, CompanyData>();
-      mergeIntoMap(map, contextCompanies || []);
-      setCompanies(Array.from(map.values()));
+    if (isLocalOnlyMode()) {
+      const raw = contextCompanies || [];
+      setCompanies(raw.filter(isCompanyVisibleInSelector));
       return;
     }
     if (!user) {
@@ -264,13 +302,13 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         map.set(c.id, {
           ...c,
           storageOption: "local",
-          isOwned: driveSharedJoin ? false : (c.isOwned ?? isOwnedByUser(c)),
+          isOwned: driveSharedJoin ? false : resolveOwned(c),
         });
         return;
       }
       map.set(c.id, {
         ...c,
-        isOwned: c.isOwned ?? isOwnedByUser(c),
+        isOwned: resolveOwned(c),
       });
     });
     setCompanies(Array.from(map.values()));
@@ -278,6 +316,17 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
 
 
   const handleSelectCompany = async (company: CompanyData) => {
+    if (isRestoreCloudUploadLocked()) {
+      const job = readPendingRestoreCloudPush();
+      if (job && job.companyId !== company.id) {
+        toast({
+          variant: "destructive",
+          title: "Cloud upload in progress",
+          description: "Wait until the header upload bar reaches 100% before switching to another company.",
+        });
+        return;
+      }
+    }
     if (isOfflineCompanyStorage(company)) {
       const remembered =
         readStoredOfflineUnlockSession(user?.uid, company.id) ||
@@ -406,13 +455,14 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
 
   const allCompanies = useMemo(() => {
     const companyMap = new Map<string, CompanyData>();
-    const isOwnedByUser = (c: CompanyData) =>
-      c.ownerId === user?.uid ||
-      (!!c.ownerEmail && !!user?.email && c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
+    const shareUser = { uid: user?.uid || "", email: user?.email ?? null };
     companies.forEach(c => {
         if (c.isDeleted) return;
         if (!companyMap.has(c.id)) {
-            companyMap.set(c.id, { ...c, isOwned: c.isOwned ?? isOwnedByUser(c) });
+            companyMap.set(c.id, {
+              ...c,
+              isOwned: user?.uid ? resolveCompanyIsOwnedForUser(c, shareUser) : Boolean(c.isOwned),
+            });
         }
     });
     const merged = Array.from(companyMap.values());
@@ -424,32 +474,33 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     );
   }, [companies, user, isSuperAdminUser, pathname]);
 
-  const gateScopedCompanies = useMemo(
-    () => filterCompanies(allCompanies),
-    [allCompanies, filterCompanies, gateFilterEpoch]
+  const selectorCompanies = allCompanies;
+  const buckets = useMemo(
+    () => partitionCompaniesForSelector(selectorCompanies),
+    [selectorCompanies]
   );
-  const ownedCompanies = gateScopedCompanies.filter((c) => c.isOwned);
-  const sharedCompanies = gateScopedCompanies.filter((c) => !c.isOwned);
-  // Header dropdown jaisa: offline/local storage vs cloud-owned alag section (select page par bhi same grouping).
-  const isOfflineCompany = (c: CompanyData) =>
-    ((c as CompanyData & { storageOption?: string }).storageOption || "local").toLowerCase() === "local";
-  const localOwnedCompanies = useMemo(
-    () => ownedCompanies.filter((c) => isOfflineCompany(c)),
-    [ownedCompanies]
+  const {
+    localTabCompanies,
+    onlineTabCompanies,
+  } = buckets;
+  const localList = useMemo(
+    () => ensureSelectedInTabList(localTabCompanies, companyId, selectorCompanies, "local"),
+    [localTabCompanies, companyId, selectorCompanies]
   );
-  const cloudOwnedCompanies = useMemo(
-    () => ownedCompanies.filter((c) => !isOfflineCompany(c)),
-    [ownedCompanies]
+  const onlineList = useMemo(
+    () => ensureSelectedInTabList(onlineTabCompanies, companyId, selectorCompanies, "online"),
+    [onlineTabCompanies, companyId, selectorCompanies]
   );
-  // Shared + local storage: "Shared With You" me sab mat milao — offline shared alag dikhayo (dropdown jaisa intent)
-  const sharedLocalCompanies = useMemo(
-    () => sharedCompanies.filter((c) => isOfflineCompany(c)),
-    [sharedCompanies]
+  const myOnlineDisplay = useMemo(() => onlineList.filter((c) => c.isOwned), [onlineList]);
+  const sharedOnlineDisplay = useMemo(
+    () => onlineList.filter((c) => isSharedOnlineCompany(c)),
+    [onlineList]
   );
-  const sharedCloudCompanies = useMemo(
-    () => sharedCompanies.filter((c) => !isOfflineCompany(c)),
-    [sharedCompanies]
-  );
+  const [listTab, setListTab] = useState<CompanyListTab>(() => defaultSelectorTab(companyId, buckets));
+
+  useEffect(() => {
+    setListTab(defaultSelectorTab(companyId, buckets));
+  }, [companyId, localTabCompanies.length, onlineTabCompanies.length]);
 
   const handleLogout = () => {
     requestEmbeddedLogout();
@@ -457,8 +508,8 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
 
   const [ownerNames, setOwnerNames] = useState<Record<string, string>>({});
   const sharedOwnerIdsKey = useMemo(
-    () => [...new Set(sharedCompanies.map((c) => c.ownerId).filter(Boolean))].sort().join(","),
-    [sharedCompanies]
+    () => [...new Set(sharedOnlineDisplay.map((c) => c.ownerId).filter(Boolean))].sort().join(","),
+    [sharedOnlineDisplay]
   );
   useEffect(() => {
     if (!sharedOwnerIdsKey) return;
@@ -485,15 +536,22 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   const CompanyItem = ({ company }: { company: CompanyData }) => {
     // Offline/local owned: Share ki jagah Add User (local API company user) — online owned par Share = Firestore share
     const offlineOwned = company.isOwned && isOfflineCompanyStorage(company);
+    const isSelected = company.id === companyId;
     return (
-    <li key={company.id} className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors">
+    <li
+      key={company.id}
+      className={cn(
+        "flex items-center justify-between rounded-lg border bg-card p-3 transition-colors hover:bg-muted/50",
+        isSelected && "border-primary/50 bg-primary/5 ring-1 ring-primary/20"
+      )}
+    >
       <button
-        className="flex-1 flex items-center gap-4 text-left"
+        className="flex flex-1 items-center gap-4 text-left"
         onClick={() => handleSelectCompany(company)}
       >
-        <Building2 className="h-6 w-6 text-muted-foreground" />
-        <span className="text-lg font-medium">{company.name}</span>
-        
+        <Building2 className="h-6 w-6 shrink-0 text-muted-foreground" />
+        <span className="flex-1 text-lg font-medium">{company.name}</span>
+        {isSelected ? <Check className="h-5 w-5 shrink-0 text-green-600" aria-label="Selected" /> : null}
       </button>
       {company.isOwned && (
          <DropdownMenu>
@@ -526,11 +584,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     );
   };
 
-  const hasAnyCompany =
-    localOwnedCompanies.length > 0 ||
-    sharedLocalCompanies.length > 0 ||
-    cloudOwnedCompanies.length > 0 ||
-    sharedCloudCompanies.length > 0;
+  const hasAnyCompany = localList.length > 0 || onlineList.length > 0;
 
   return (
     <>
@@ -557,7 +611,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
               </Button>
             </div>
           </CardHeader>
-          <CardContent className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain pr-1">
+          <CardContent className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-1">
             {!hasAnyCompany && (
               <div className="rounded-lg border border-dashed bg-muted/30 px-4 py-10 text-center space-y-4">
                 <p className="text-sm text-muted-foreground">
@@ -569,47 +623,75 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                 </Button>
               </div>
             )}
-            {/* Order: 1) owned local 2) shared local 3) owned online 4) shared online — user-requested labels */}
-            {localOwnedCompanies.length > 0 && (
-              <div className="rounded-lg border border-dashed bg-muted/25 p-3">
-                <h3 className="mb-2 text-sm font-medium text-muted-foreground">My Company Local</h3>
-                <ul className="space-y-3">
-                  {localOwnedCompanies.map((company) => (
-                    <CompanyItem key={company.id} company={company} />
-                  ))}
-                </ul>
-              </div>
-            )}
-            {sharedLocalCompanies.length > 0 && (
-              <div className="rounded-lg border border-dashed border-muted-foreground/25 bg-muted/20 p-3">
-                <h3 className="mb-2 text-sm font-medium text-muted-foreground">Shared Companies Local</h3>
-                <ul className="space-y-3">
-                  {sharedLocalCompanies.map((company) => (
-                    <CompanyItem key={company.id} company={company} />
-                  ))}
-                </ul>
-              </div>
-            )}
-            {cloudOwnedCompanies.length > 0 && (
-              <div>
-                <h3 className="mb-2 text-sm font-medium text-muted-foreground">My Online Companies</h3>
-                <ul className="space-y-3">
-                  {cloudOwnedCompanies.map((company) => (
-                    <CompanyItem key={company.id} company={company} />
-                  ))}
-                </ul>
-              </div>
-            )}
-            {sharedCloudCompanies.length > 0 && (
-              <div>
-                <h3 className="mb-2 text-sm font-medium text-muted-foreground">Shared Online Companies</h3>
-                <ul className="space-y-3">
-                  {sharedCloudCompanies.map((company) => (
-                    <CompanyItem key={company.id} company={company} />
-                  ))}
-                </ul>
-              </div>
-            )}
+            {hasAnyCompany ? (
+              <Tabs
+                value={listTab}
+                onValueChange={(v) => setListTab(v as CompanyListTab)}
+                className="w-full"
+              >
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="local">
+                    Local{localList.length > 0 ? ` (${localList.length})` : ""}
+                  </TabsTrigger>
+                  <TabsTrigger value="online">
+                    Online{onlineList.length > 0 ? ` (${onlineList.length})` : ""}
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="local" className="mt-4 space-y-4">
+                  {localList.length === 0 ? (
+                    <p className="rounded-md border border-dashed bg-muted/20 px-3 py-6 text-center text-sm text-muted-foreground">
+                      No local companies on this device. Create an offline company or restore a backup to Local.
+                    </p>
+                  ) : (
+                    <ul className="space-y-3">
+                      {localList.map((company) => (
+                        <CompanyItem key={company.id} company={company} />
+                      ))}
+                    </ul>
+                  )}
+                </TabsContent>
+                <TabsContent value="online" className="mt-4 space-y-4">
+                  {onlineList.length === 0 ? (
+                    <p className="rounded-md border border-dashed bg-muted/20 px-3 py-6 text-center text-sm text-muted-foreground">
+                      No online companies yet. Create an online company or accept a share invite.
+                    </p>
+                  ) : (
+                    <div className="space-y-5">
+                      {myOnlineDisplay.length > 0 ? (
+                        <div className="space-y-3">
+                          <h3 className="text-sm font-medium text-muted-foreground">My online companies</h3>
+                          <ul className="space-y-3">
+                            {myOnlineDisplay.map((company) => (
+                              <CompanyItem key={company.id} company={company} />
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                      {sharedOnlineDisplay.length > 0 ? (
+                        <div className="space-y-3">
+                          <h3 className="text-sm font-medium text-muted-foreground">Shared online companies</h3>
+                          <ul className="space-y-3">
+                            {sharedOnlineDisplay.map((company) => (
+                              <li key={company.id} className="space-y-1">
+                                <CompanyItem company={company} />
+                                {(company.ownerEmail || ownerNames[company.ownerId]) ? (
+                                  <p className="pl-10 text-xs text-muted-foreground">
+                                    Shared by:{" "}
+                                    {ownerNames[company.ownerId]
+                                      ? `${ownerNames[company.ownerId]} (${company.ownerEmail || ""})`
+                                      : company.ownerEmail || ""}
+                                  </p>
+                                ) : null}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                </TabsContent>
+              </Tabs>
+            ) : null}
           </CardContent>
           {hasAnyCompany ? (
             <CardFooter className="shrink-0 flex flex-col sm:flex-row gap-2 justify-center border-t bg-card pt-4">
@@ -895,6 +977,7 @@ export function CompanyActions({
   /** Header dropdown: offline unlock ke liye "remember" — CompanySelector jaisa hi behaviour. */
   const [rememberUnlockDays, setRememberUnlockDays] = useState(0);
   const [rememberSharedUsername, setRememberSharedUsername] = useState(false);
+  const uploadLocked = useRestoreCloudUploadLock();
 
   const activeCompany =
     (companyId ? companies.find((c) => c.id === companyId) : null) ||
@@ -902,14 +985,23 @@ export function CompanyActions({
     companies[0];
 
   useEffect(() => {
+    if (uploadLocked) return;
     // Multi-tab: keep tab-specific selection stable; auto-pick first only when no saved company exists anywhere.
     if (!companyId && companies.length > 0 && !hasAnySelectedCompanyId()) {
       const pick = pickGateAwareAutoSelectCompanyId(companies, activeGate);
       if (pick) setCompanyId(pick);
     }
-  }, [companyId, companies, setCompanyId, activeGate]);
+  }, [companyId, companies, setCompanyId, activeGate, uploadLocked]);
 
   const handleSelectCompany = async (selectedCompany: CompanyData) => {
+    if (uploadLocked) {
+      toast({
+        variant: "destructive",
+        title: "Cloud upload in progress",
+        description: "Wait until the header upload bar reaches 100% before switching company.",
+      });
+      return;
+    }
     if (isOfflineCompanyStorage(selectedCompany)) {
       const remembered =
         readStoredOfflineUnlockSession(user?.uid, selectedCompany.id) ||
@@ -1028,34 +1120,37 @@ export function CompanyActions({
     }
   };
   
-  const ownedCompanies = companies.filter(c => c.isOwned);
-  const sharedCompanies = companies.filter(c => !c.isOwned);
-  // Local/company grouping helper: local storage companies ko dropdown me separate section me dikhana hai.
-  const isOfflineCompany = (company: CompanyData) =>
-    ((company as CompanyData & { storageOption?: string }).storageOption || "local").toLowerCase() === "local";
-  // Keep local companies grouped for clearer visibility in selector.
-  const localOwnedCompanies = useMemo(
-    () => ownedCompanies.filter((company) => isOfflineCompany(company)),
-    [ownedCompanies]
+  const buckets = useMemo(() => partitionCompaniesForSelector(companies), [companies]);
+  const {
+    localTabCompanies,
+    onlineTabCompanies,
+  } = buckets;
+  const localList = useMemo(
+    () => ensureSelectedInTabList(localTabCompanies, companyId, companies, "local"),
+    [localTabCompanies, companyId, companies]
   );
-  // Non-local (cloud/firebase) owned companies stay in cloud list.
-  const cloudOwnedCompanies = useMemo(
-    () => ownedCompanies.filter((company) => !isOfflineCompany(company)),
-    [ownedCompanies]
+  const onlineList = useMemo(
+    () => ensureSelectedInTabList(onlineTabCompanies, companyId, companies, "online"),
+    [onlineTabCompanies, companyId, companies]
   );
-  const sharedLocalCompanies = useMemo(
-    () => sharedCompanies.filter((company) => isOfflineCompany(company)),
-    [sharedCompanies]
+  const myOnlineDisplay = useMemo(() => onlineList.filter((c) => c.isOwned), [onlineList]);
+  const sharedOnlineDisplay = useMemo(
+    () => onlineList.filter((c) => isSharedOnlineCompany(c)),
+    [onlineList]
   );
-  const sharedCloudCompanies = useMemo(
-    () => sharedCompanies.filter((company) => !isOfflineCompany(company)),
-    [sharedCompanies]
-  );
+  const [listTab, setListTab] = useState<CompanyListTab>(() => defaultSelectorTab(companyId, buckets));
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (menuOpen) {
+      setListTab(defaultSelectorTab(companyId, buckets));
+    }
+  }, [menuOpen, companyId, localTabCompanies.length, onlineTabCompanies.length, buckets]);
 
   const [ownerNames, setOwnerNames] = useState<Record<string, string>>({});
   const sharedOwnerIdsKey = useMemo(
-    () => [...new Set(sharedCompanies.map((c) => c.ownerId).filter(Boolean))].sort().join(","),
-    [sharedCompanies]
+    () => [...new Set(sharedOnlineDisplay.map((c) => c.ownerId).filter(Boolean))].sort().join(","),
+    [sharedOnlineDisplay]
   );
   useEffect(() => {
     if (!sharedOwnerIdsKey) return;
@@ -1085,12 +1180,14 @@ export function CompanyActions({
 
   return (
     <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+        <DropdownMenuTrigger asChild disabled={uploadLocked}>
           <Button
             variant="outline"
+            disabled={uploadLocked}
             className={cn(
               "flex h-9 min-w-0 justify-start gap-0 font-normal",
+              uploadLocked && "cursor-not-allowed opacity-60",
               // Mobile header: parent `flex-1` — `w-full` + truncate lambi naam ke liye.
               triggerLayout === "mobile" && "w-full max-w-none px-2",
               // Desktop: baaki controls poori dikhein; company box hi shrink + truncate.
@@ -1106,80 +1203,87 @@ export function CompanyActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuPortal>
-        <DropdownMenuContent className="w-64" onPointerDownOutside={stopCloseIfMainSidebar} onInteractOutside={stopCloseIfMainSidebar}>
-          {(localOwnedCompanies.length > 0 ||
-            sharedLocalCompanies.length > 0 ||
-            cloudOwnedCompanies.length > 0 ||
-            sharedCloudCompanies.length > 0) && (
-              <DropdownMenuGroup>
-                {localOwnedCompanies.length > 0 && (
-                  <div className="mb-2 rounded-md border bg-muted/20 p-1">
-                    <DropdownMenuLabel className="pl-8 text-[11px] text-muted-foreground">My Company Local</DropdownMenuLabel>
-                    {localOwnedCompanies.map((company) => (
+        <DropdownMenuContent className="w-72" onPointerDownOutside={stopCloseIfMainSidebar} onInteractOutside={stopCloseIfMainSidebar}>
+          {(localList.length > 0 || onlineList.length > 0) && (
+            <DropdownMenuGroup className="p-2">
+              <CompanySelectorTabBar
+                compact
+                value={listTab}
+                onChange={setListTab}
+                localCount={localList.length}
+                onlineCount={onlineList.length}
+              />
+              {listTab === "local" ? (
+                localList.length === 0 ? (
+                  <p className="px-2 py-3 text-xs text-muted-foreground">No local companies on this device.</p>
+                ) : (
+                  <div className="mt-2 max-h-64 space-y-0.5 overflow-y-auto rounded-md border bg-muted/20 p-1">
+                    {localList.map((company) => (
                       <DropdownMenuItem key={company.id} onSelect={() => handleSelectCompany(company)}>
                         <Building2 className="mr-2 h-4 w-4 shrink-0" />
                         <span className="flex-1 truncate">{company.name}</span>
-                        {company.id === companyId && <Check className="ml-2 h-4 w-4 shrink-0 text-green-600" />}
-                      </DropdownMenuItem>
-                    ))}
-                  </div>
-                )}
-                {sharedLocalCompanies.length > 0 && (
-                  <div className="mb-2 rounded-md border border-dashed bg-muted/25 p-1">
-                    <DropdownMenuLabel className="pl-8 text-[11px] text-muted-foreground">Shared Companies Local</DropdownMenuLabel>
-                    {sharedLocalCompanies.map((company) => (
-                      <DropdownMenuItem key={company.id} onSelect={() => handleSelectCompany(company)} className="flex flex-col items-stretch py-2 group">
-                        <div className="flex items-center gap-2 w-full">
-                          <Building2 className="h-4 w-4 shrink-0" />
-                          <span className="flex-1 truncate font-medium">{company.name}</span>
-                          {company.id === companyId && <Check className="h-4 w-4 shrink-0 text-green-600" />}
-                        </div>
-                        {(company.ownerEmail || ownerNames[company.ownerId]) && (
-                          <div className="text-xs text-muted-foreground truncate mt-0.5 pl-6 group-data-[highlighted]:text-white">
-                            Shared by: {ownerNames[company.ownerId] ? `${ownerNames[company.ownerId]} (${company.ownerEmail || ""})` : (company.ownerEmail || "")}
-                          </div>
+                        {company.id === companyId && (
+                          <Check className="ml-2 h-4 w-4 shrink-0 text-green-600" />
                         )}
                       </DropdownMenuItem>
                     ))}
                   </div>
-                )}
-                {cloudOwnedCompanies.length > 0 && (
-                  <div className="mb-2 rounded-md border bg-muted/20 p-1">
-                    <DropdownMenuLabel className="pl-8 text-[11px] text-muted-foreground">My Online Companies</DropdownMenuLabel>
-                    {cloudOwnedCompanies.map((company) => (
-                      <DropdownMenuItem key={company.id} onSelect={() => handleSelectCompany(company)}>
-                        <Building2 className="mr-2 h-4 w-4 shrink-0" />
-                        <span className="flex-1 truncate">{company.name}</span>
-                        {company.id === companyId && <Check className="ml-2 h-4 w-4 shrink-0 text-green-600" />}
-                      </DropdownMenuItem>
-                    ))}
-                  </div>
-                )}
-                {sharedCloudCompanies.length > 0 && (
-                  <div className="rounded-md border bg-muted/20 p-1">
-                    <DropdownMenuLabel className="pl-8 text-[11px] text-muted-foreground">Shared Online Companies</DropdownMenuLabel>
-                    {sharedCloudCompanies.map((company) => (
-                      <DropdownMenuItem key={company.id} onSelect={() => handleSelectCompany(company)} className="flex flex-col items-stretch py-2 group">
-                        <div className="flex items-center gap-2 w-full">
-                          <Building2 className="h-4 w-4 shrink-0" />
-                          <span className="flex-1 truncate font-medium">{company.name}</span>
-                          {company.id === companyId && <Check className="h-4 w-4 shrink-0 text-green-600" />}
-                        </div>
-                        {(company.ownerEmail || ownerNames[company.ownerId]) && (
-                          <div className="text-xs text-muted-foreground truncate mt-0.5 pl-6 group-data-[highlighted]:text-white">
-                            Shared by: {ownerNames[company.ownerId] ? `${ownerNames[company.ownerId]} (${company.ownerEmail || ""})` : (company.ownerEmail || "")}
+                )
+              ) : onlineList.length === 0 ? (
+                <p className="px-2 py-3 text-xs text-muted-foreground">No online companies.</p>
+              ) : (
+                <div className="mt-2 max-h-64 overflow-y-auto rounded-md border bg-muted/20 p-1">
+                  {myOnlineDisplay.length > 0 ? (
+                    <div className="mb-2">
+                      <DropdownMenuLabel className="pl-2 text-[11px] text-muted-foreground">
+                        My online companies
+                      </DropdownMenuLabel>
+                      {myOnlineDisplay.map((company) => (
+                        <DropdownMenuItem key={company.id} onSelect={() => handleSelectCompany(company)}>
+                          <Building2 className="mr-2 h-4 w-4 shrink-0" />
+                          <span className="flex-1 truncate">{company.name}</span>
+                          {company.id === companyId && (
+                            <Check className="ml-2 h-4 w-4 shrink-0 text-green-600" />
+                          )}
+                        </DropdownMenuItem>
+                      ))}
+                    </div>
+                  ) : null}
+                  {sharedOnlineDisplay.length > 0 ? (
+                    <div>
+                      <DropdownMenuLabel className="pl-2 text-[11px] text-muted-foreground">
+                        Shared online companies
+                      </DropdownMenuLabel>
+                      {sharedOnlineDisplay.map((company) => (
+                        <DropdownMenuItem
+                          key={company.id}
+                          onSelect={() => handleSelectCompany(company)}
+                          className="flex flex-col items-stretch py-2 group"
+                        >
+                          <div className="flex w-full items-center gap-2">
+                            <Building2 className="h-4 w-4 shrink-0" />
+                            <span className="flex-1 truncate font-medium">{company.name}</span>
+                            {company.id === companyId && (
+                              <Check className="h-4 w-4 shrink-0 text-green-600" />
+                            )}
                           </div>
-                        )}
-                      </DropdownMenuItem>
-                    ))}
-                  </div>
-                )}
-              </DropdownMenuGroup>
+                          {(company.ownerEmail || ownerNames[company.ownerId]) ? (
+                            <div className="mt-0.5 truncate pl-6 text-xs text-muted-foreground group-data-[highlighted]:text-white">
+                              Shared by:{" "}
+                              {ownerNames[company.ownerId]
+                                ? `${ownerNames[company.ownerId]} (${company.ownerEmail || ""})`
+                                : company.ownerEmail || ""}
+                            </div>
+                          ) : null}
+                        </DropdownMenuItem>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </DropdownMenuGroup>
           )}
-          {(localOwnedCompanies.length > 0 ||
-            sharedLocalCompanies.length > 0 ||
-            cloudOwnedCompanies.length > 0 ||
-            sharedCloudCompanies.length > 0) && <DropdownMenuSeparator />}
+          {(localList.length > 0 || onlineList.length > 0) && <DropdownMenuSeparator />}
           <DropdownMenuGroup>
              <DropdownMenuItem onSelect={() => router.push("/company/create")}>
                 <PlusCircle className="mr-2 h-4 w-4" />

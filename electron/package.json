@@ -26,6 +26,8 @@
     "files": [
       "main.js",
       "googleAuthExternal.js",
+      "localAppServer.js",
+      "localAppServerAccessTokens.js",
       "staticAppServer.js",
       "tab-strip.html",
       "tab-strip.js",

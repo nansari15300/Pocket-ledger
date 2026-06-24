@@ -47,3 +47,43 @@ export function allocatePaymentInAmounts(
   }
   return result;
 }
+
+function trimName(names: Record<string, string>, id?: string | null): string {
+  if (!id) return "";
+  const n = names[id];
+  return typeof n === "string" && n.trim() ? n.trim() : "";
+}
+
+/** Spend-wise inflow row: party/payee; fallback bank/cash account name. */
+export function getSpendWiseInflowPartyLabel(v: any, names: Record<string, string>): string {
+  if (!v) return "—";
+  if (v.type === "contra") {
+    return trimName(names, v.fromAccountId) || trimName(names, v.toAccountId) || "—";
+  }
+  const label =
+    trimName(names, v.partyId) ||
+    trimName(names, v.staffId) ||
+    trimName(names, v.taxAccountId) ||
+    trimName(names, v.incomeAccountId) ||
+    (typeof v.payeeName === "string" ? v.payeeName.trim() : "");
+  if (label) return label;
+  const acctId = v.accountId ?? v.toAccountId ?? v.bankAccountId;
+  return trimName(names, acctId) || "—";
+}
+
+/** Spend-wise outflow row: payee/expense; fallback bank/cash account name. */
+export function getSpendWiseOutflowPartyLabel(v: any, names: Record<string, string>): string {
+  if (!v) return "—";
+  if (v.type === "contra") {
+    return trimName(names, v.toAccountId) || trimName(names, v.fromAccountId) || "—";
+  }
+  const label =
+    trimName(names, v.partyId) ||
+    trimName(names, v.staffId) ||
+    trimName(names, v.expenseAccountId) ||
+    trimName(names, v.toAccountId) ||
+    (typeof v.payeeName === "string" ? v.payeeName.trim() : "");
+  if (label) return label;
+  const acctId = v.accountId ?? v.fromAccountId;
+  return trimName(names, acctId) || "—";
+}

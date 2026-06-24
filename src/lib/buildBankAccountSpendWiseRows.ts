@@ -1,19 +1,34 @@
+import { stripSpendWiseSyntheticOpeningMaster } from "@/lib/ledgerPagePrint";
+import { applySpendWiseStatementRunningBalances } from "@/lib/spendWiseStatementRunningBalance";
 import { getOpeningBalanceBaseAmount, getOpeningBalanceVoucherLabel, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
+import {
+  buildSpendWiseAddedInflowVoucherIds,
+  filterSpendWiseRowsByDateRange,
+} from "@/lib/spendWiseDateRangeGroups";
+import { reorderSpendWiseRowsByDate } from "@/lib/spendWisePagination";
 
 /**
  * Bank/Cash AccountDetails jaisa spend-wise row order — report page reuse ke liye (single account only).
+ * `baseTransactions` = poori ledger; optional `dateRange` sirf rows hide karta hai.
  */
 export function buildBankAccountSpendWiseRows(options: {
   accountId: string;
   openingBalanceForPeriod: number;
+  booksOpeningBalance?: number;
   baseTransactions: any[];
   vouchers: any[];
+  dateRange?: { from?: Date | null; to?: Date | null };
 }): any[] {
-  const { accountId, openingBalanceForPeriod, baseTransactions, vouchers } = options;
+  const { accountId, openingBalanceForPeriod, booksOpeningBalance, baseTransactions, vouchers, dateRange } = options;
   if (!vouchers?.length) return baseTransactions;
 
-  const byId = new Map(baseTransactions.map((t: any) => [t.id, t]));
-  const inRangeIds = new Set(baseTransactions.map((t: any) => t.id));
+  const buildBase = baseTransactions;
+  const byId = new Map(buildBase.map((t: any) => [t.id, t]));
+
+  const getDateMs = (v: any) => {
+    const d = v.date?.toDate ? v.date.toDate() : new Date(v.date);
+    return d.getTime();
+  };
 
   const isInVoucher = (v: any) =>
     (v.type === "payment_in" && v.accountId === accountId) ||
@@ -28,36 +43,23 @@ export function buildBankAccountSpendWiseRows(options: {
     return hasAccount && Array.isArray(v.linkedPaymentInIds) && v.linkedPaymentInIds.includes(inId);
   };
 
+  const isOpeningLinkedIn = (v: any) =>
+    (v.linkedOpeningBalanceAccountId ?? "") === accountId &&
+    (Number(v.linkedOpeningBalanceAmount) || 0) > 0;
   const openingLinkedInIds = new Set(
     vouchers
-      .filter(
-        (v: any) =>
-          !v.isDeleted &&
-          isInVoucher(v) &&
-          (v.linkedOpeningBalanceAccountId ?? "") === accountId &&
-          (Number(v.linkedOpeningBalanceAmount) || 0) > 0 &&
-          inRangeIds.has(v.id)
-      )
+      .filter((v: any) => !v.isDeleted && isInVoucher(v) && isOpeningLinkedIn(v))
       .map((v: any) => v.id)
   );
   const openingLinkedOutIds = new Set(
     vouchers
-      .filter((v: any) => !v.isDeleted && linkedOutFilter(v, SPEND_WISE_OPENING_BALANCE_ID) && inRangeIds.has(v.id))
+      .filter((v: any) => !v.isDeleted && linkedOutFilter(v, SPEND_WISE_OPENING_BALANCE_ID))
       .map((v: any) => v.id)
   );
 
   const inVouchers = vouchers
-    .filter((v: any) => {
-      if (!isInVoucher(v) || v.isDeleted) return false;
-      if (openingLinkedInIds.has(v.id)) return false;
-      if (inRangeIds.has(v.id)) return true;
-      return vouchers.some((o: any) => linkedOutFilter(o, v.id) && inRangeIds.has(o.id));
-    })
-    .sort((a: any, b: any) => {
-      const da = a.date?.toDate ? a.date.toDate() : new Date(a.date);
-      const db = b.date?.toDate ? b.date.toDate() : new Date(b.date);
-      return da.getTime() - db.getTime();
-    });
+    .filter((v: any) => !v.isDeleted && isInVoucher(v))
+    .sort((a: any, b: any) => getDateMs(a) - getDateMs(b));
 
   const voucherToInRow = (v: any) => {
     const existing = byId.get(v.id);
@@ -96,7 +98,10 @@ export function buildBankAccountSpendWiseRows(options: {
 
   inVouchers.forEach((pi: any) => {
     const t = voucherToInRow(pi);
-    const linkedOuts = vouchers.filter((v: any) => linkedOutFilter(v, pi.id));
+    const spendWiseGroupId = `sw-group-in-${pi.id}`;
+    const linkedOuts = vouchers
+      .filter((v: any) => !v.isDeleted && linkedOutFilter(v, pi.id))
+      .sort((a: any, b: any) => getDateMs(a) - getDateMs(b));
     const hasLinkedGroup = linkedOuts.length > 0;
     const colorIdx = nextColor();
     const groupRunning = (t.debit || 0) - (t.credit || 0);
@@ -104,6 +109,7 @@ export function buildBankAccountSpendWiseRows(options: {
       rows.push({
         ...t,
         _rowKey: nextRowKey(),
+        _spendWiseGroupId: spendWiseGroupId,
         _spendWiseGroupFirst: true,
         _spendWiseGroupLast: false,
         _spendWiseRunningBalance: groupRunning,
@@ -113,6 +119,7 @@ export function buildBankAccountSpendWiseRows(options: {
       rows.push({
         ...t,
         _rowKey: nextRowKey(),
+        _spendWiseGroupId: spendWiseGroupId,
         _spendWiseGroupFirst: true,
         _spendWiseGroupLast: true,
         _spendWiseRunningBalance: groupRunning,
@@ -132,7 +139,9 @@ export function buildBankAccountSpendWiseRows(options: {
       rows.push({
         ...outRow,
         id: `${po.id}-in-${pi.id}`,
+        _baseVoucherId: po.id,
         _rowKey: nextRowKey(),
+        _spendWiseGroupId: spendWiseGroupId,
         _spendWiseChild: true,
         _spendWiseGroupFirst: false,
         _spendWiseGroupLast: idx === linkedOuts.length - 1,
@@ -144,15 +153,18 @@ export function buildBankAccountSpendWiseRows(options: {
     if (hasLinkedGroup) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-in-${pi.id}`, _rowKey: nextRowKey() });
   });
 
-  const openingSide = openingBalanceForPeriod >= 0 ? "dr" : "cr";
-  const openingBase = getOpeningBalanceBaseAmount(openingBalanceForPeriod, openingSide);
+  const masterBooksOb = Number(booksOpeningBalance ?? 0) || openingBalanceForPeriod;
+  const openingSide = masterBooksOb >= 0 ? "dr" : "cr";
+  const openingBase = getOpeningBalanceBaseAmount(masterBooksOb, openingSide);
   if (openingBase > 0 && ((openingSide === "cr" && openingLinkedInIds.size > 0) || (openingSide === "dr" && openingLinkedOutIds.size > 0))) {
     const colorIdx = nextColor();
+    const spendWiseGroupId = "sw-group-opening-balance";
     const openingIsCr = openingSide === "cr";
     let openingRunning = openingIsCr ? -openingBase : openingBase;
     rows.push({
       id: "__opening_balance_group__",
       _rowKey: nextRowKey(),
+      _spendWiseGroupId: spendWiseGroupId,
       type: "opening_balance",
       voucherNumber: getOpeningBalanceVoucherLabel(openingSide),
       date: undefined,
@@ -196,6 +208,7 @@ export function buildBankAccountSpendWiseRows(options: {
         debit: openingIsCr ? linkedAmount : 0,
         credit: openingIsCr ? 0 : linkedAmount,
         _rowKey: nextRowKey(),
+        _spendWiseGroupId: spendWiseGroupId,
         _spendWiseChild: true,
         _spendWiseGroupFirst: false,
         _spendWiseGroupLast: idx === openingLinkedRows.length - 1,
@@ -223,8 +236,8 @@ export function buildBankAccountSpendWiseRows(options: {
     rows.unshift(...openingChunk);
   }
 
-  const addedIds = new Set(rows.filter((r: any) => r.id && !(r as any)._spendWiseSpacer).map((r: any) => r.id));
-  const unlinked = baseTransactions.filter((t: any) => !addedIds.has(t.id));
+  const addedInflowIds = buildSpendWiseAddedInflowVoucherIds(rows);
+  const unlinked = buildBase.filter((t: any) => !addedInflowIds.has(t.id));
   unlinked.forEach((t: any, idx: number) => {
     const fullAmount = Math.abs((t.debit || 0) - (t.credit || 0));
     const alreadyShown = (linkedAmountByOutId.get(t.id) ?? 0) + (linkedAmountByInId.get(t.id) ?? 0);
@@ -236,6 +249,7 @@ export function buildBankAccountSpendWiseRows(options: {
       ...voucherToOutRow(t),
       id: t.id,
       _rowKey: nextRowKey(),
+      _spendWiseGroupId: `sw-group-unlinked-${t.id}`,
       debit: isOutflow ? 0 : remainder,
       credit: isOutflow ? remainder : 0,
       _spendWiseGroupFirst: true,
@@ -247,5 +261,10 @@ export function buildBankAccountSpendWiseRows(options: {
     if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}`, _rowKey: nextRowKey() });
   });
 
-  return rows.length ? rows : baseTransactions;
+  const ordered = rows.length ? reorderSpendWiseRowsByDate(rows) : buildBase;
+  const filtered = filterSpendWiseRowsByDateRange(ordered, dateRange);
+  const stripped = rows.length ? stripSpendWiseSyntheticOpeningMaster(filtered) : buildBase;
+  return rows.length
+    ? applySpendWiseStatementRunningBalances(stripped, openingBalanceForPeriod)
+    : buildBase;
 }

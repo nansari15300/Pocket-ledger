@@ -4,7 +4,12 @@ import { useEffect, useRef } from "react";
 import { auth } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import {
+  ELECTRON_FOREGROUND_RESUME_EVENT,
+  ELECTRON_FOREGROUND_RESUME_MIN_HIDDEN_MS,
+} from "@/lib/electronForegroundResume";
 import { shouldSkipEmbeddedStartupAuthChurn, embeddedClientPrefersQuietBackgroundSync } from "@/lib/embeddedWarmBootstrapFlags";
 import { flushVoucherOutbox } from "@/lib/localVoucherOutbox";
 import { useCompany } from "@/hooks/useCompany";
@@ -13,6 +18,7 @@ import { useCompany } from "@/hooks/useCompany";
 export function StaticFastResumeSyncManager() {
   const { triggerSync, reloadLocalCompanyRegistry } = useCompany();
   const lastRunRef = useRef(0);
+  const hiddenAtRef = useRef<number | null>(null);
   /** Online/offline flap: defer timer cleanup; airplane par pehle `triggerSync()` turant listeners chhedta tha ("refresh" feel). */
   // Deferred reload timer id — browser number; TS `@types/node` conflicts Timeout vs number; `number` keeps next build happy with window.setTimeout.
   const deferredRegistryTimerRef = useRef<number | null>(null);
@@ -28,6 +34,12 @@ export function StaticFastResumeSyncManager() {
         console.log("[ONLINE_EVENT]", "StaticFastResumeSyncManager:runBackgroundRefresh", { reason });
       }
       const now = Date.now();
+      const hiddenMs = hiddenAtRef.current != null ? now - hiddenAtRef.current : 0;
+      const electronForegroundResume =
+        isElectronDesktopApp() &&
+        (reason === "electron-resume" ||
+          reason === "focus" ||
+          (reason === "visible" && hiddenMs >= ELECTRON_FOREGROUND_RESUME_MIN_HIDDEN_MS));
       // Standby se rapid duplicate events (visibility + Capacitor + online) aate hain; one small burst enough.
       if (now - lastRunRef.current < 2500) return;
       lastRunRef.current = now;
@@ -65,10 +77,10 @@ export function StaticFastResumeSyncManager() {
         const embeddedQuietBackgroundOnly = embeddedClientPrefersQuietBackgroundSync();
 
         const skipRegistryAndToken =
-          quietResumeNoRegistryTick ||
+          (quietResumeNoRegistryTick && !electronForegroundResume) ||
           skipEmbeddedWarmMount ||
           skipHeavyMountWhileOnlineSession ||
-          embeddedQuietBackgroundOnly;
+          (embeddedQuietBackgroundOnly && !electronForegroundResume);
 
         if (process.env.NODE_ENV !== "production") {
           // `flushVoucherOutbox` andar `enableNetwork` chala sakta — yehi Firestore listener churn se "refresh" correlate hota hai.
@@ -118,11 +130,27 @@ export function StaticFastResumeSyncManager() {
 
     const onOnline = () => runBackgroundRefresh("online");
     const onVisibility = () => {
-      if (document.visibilityState === "visible") runBackgroundRefresh("visible");
+      if (document.visibilityState === "hidden") {
+        hiddenAtRef.current = Date.now();
+        return;
+      }
+      if (document.visibilityState === "visible") {
+        runBackgroundRefresh("visible");
+        hiddenAtRef.current = null;
+      }
     };
+    const onFocus = () => {
+      if (!isElectronDesktopApp()) return;
+      const hiddenMs = hiddenAtRef.current != null ? Date.now() - hiddenAtRef.current : 0;
+      if (hiddenMs < ELECTRON_FOREGROUND_RESUME_MIN_HIDDEN_MS) return;
+      runBackgroundRefresh("focus");
+    };
+    const onElectronResume = () => runBackgroundRefresh("electron-resume");
 
     window.addEventListener("online", onOnline);
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener(ELECTRON_FOREGROUND_RESUME_EVENT, onElectronResume);
     if (typeof navigator !== "undefined" && navigator.onLine) runBackgroundRefresh("mount");
 
     void import("@capacitor/app")
@@ -148,6 +176,8 @@ export function StaticFastResumeSyncManager() {
       }
       window.removeEventListener("online", onOnline);
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener(ELECTRON_FOREGROUND_RESUME_EVENT, onElectronResume);
       removeAppStateListener?.();
     };
   }, [reloadLocalCompanyRegistry, triggerSync]);

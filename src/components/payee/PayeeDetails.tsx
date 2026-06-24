@@ -4,6 +4,7 @@
 import * as React from "react";
 import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
+import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import type { Party } from "@/components/party/types";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
@@ -89,6 +90,12 @@ import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColum
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
+import { useLedgerDetailSessionMemory } from "@/hooks/useLedgerDetailSessionMemory";
+import {
+  ledgerDetailSessionStorageKey,
+  writeLedgerDetailSessionSnapshot,
+  type LedgerDetailViewMode,
+} from "@/lib/ledgerDetailSessionMemory";
 import { LedgerUnapprovedFilterButton } from "@/components/vouchers/LedgerUnapprovedFilterButton";
 import { useRowsPerPageSelectControl } from "@/hooks/useRowsPerPageSelect";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
@@ -180,11 +187,25 @@ export function PayeeDetails({
       return 'party'; 
   }, [party]);
 
+  const { balanceMode } = useBalanceMode();
+
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
+  const ledgerViewMode: LedgerDetailViewMode =
+    balanceMode === "bill_wise" ? "bill_wise" : "statement";
+  const ledgerSessionKey = useMemo(
+    () =>
+      companyId && party?.id
+        ? ledgerDetailSessionStorageKey(companyId, "payee", party.id, ledgerViewMode)
+        : null,
+    [companyId, party?.id, ledgerViewMode]
+  );
   useEffect(() => {
     setCurrentPage(1);
-  }, [party?.id, isAllVouchersView]);
+  }, [ledgerViewMode]);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [isAllVouchersView]);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -245,6 +266,12 @@ export function PayeeDetails({
 
   const handleEditVoucher = (voucher: any) => {
     setSelectedVoucher(voucher);
+    if (ledgerSessionKey && voucher?.id) {
+      writeLedgerDetailSessionSnapshot(ledgerSessionKey, {
+        page: currentPage,
+        openVoucherId: String(voucher.id),
+      });
+    }
     setIsVoucherDialogOpen(true);
   };
 
@@ -268,9 +295,6 @@ export function PayeeDetails({
     setActiveFilter,
   });
 
-  const { balanceMode } = useBalanceMode();
-
-  // PC: preference; mobile: hamesha notes (includeNotesInTable)
   const displayTransactions = useMemo(
     () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
     [processedTransactions, includeNotesInTable]
@@ -306,6 +330,22 @@ export function PayeeDetails({
     pageSortBy: sortBy,
     pageSortOrder: sortOrder,
   });
+
+  useLedgerDetailSessionMemory({
+    companyId: companyId ?? undefined,
+    context: "payee",
+    contextId: party?.id,
+    viewMode: ledgerViewMode,
+    totalPages,
+    currentPage,
+    setCurrentPage,
+    vouchers,
+    selectedVoucherId: selectedVoucher?.id ?? null,
+    isVoucherDialogOpen,
+    setSelectedVoucher,
+    setIsVoucherDialogOpen,
+  });
+
   const { selectValue: rowsPerPageSelectValue, onSelectValueChange: handleRowsPerPageChange } =
     useRowsPerPageSelectControl(rowsPerPage, setRowsPerPage, setCurrentPage, ROWS_PER_PAGE_OPTIONS_DEFAULT, "20");
   const buildDateRangeText = () => {
@@ -323,29 +363,45 @@ export function PayeeDetails({
 
   const handlePrintStatement = (billWise: boolean = false) => {
     if (!company) return Promise.resolve();
-    return openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: `${party.type || 'Party'} Statement: ${party.name}`,
-      context: entityType,
-      contextId: party.id,
-      dateSystem: dateSystem,
-      dateRangeText: buildDateRangeText(),
-      vouchersCount: processedTransactions.length,
-      openingBalance: openingBalanceForPeriod,
-      transactions: processedTransactions,
-      showNarration: showNarration,
-      journalAccountNames: journalAccountNames,
-      billWise: billWise,
-    }, true);
+    return openPrintDirect(
+      applyLedgerPageToPrintPayload(
+        {
+          company: {
+            name: company.name,
+            pan: company.pan,
+            phone: company.phone,
+            address: company.address,
+            decimalPlaces: company.decimalPlaces,
+            showDrCr: company.showDrCr,
+            showCurrencySymbol: company.showCurrencySymbol,
+            logoUrl: company.logoUrl,
+          },
+          title: `${party.type || "Party"} Statement: ${party.name}`,
+          context: entityType,
+          contextId: party.id,
+          dateSystem: dateSystem,
+          dateRangeText: buildDateRangeText(),
+          vouchersCount: paginatedTransactions.length,
+          openingBalance: desktopPaginationMeta.openingForPage,
+          transactions: paginatedTransactions,
+          showNarration: showNarration,
+          journalAccountNames: journalAccountNames,
+          billWise: billWise,
+        },
+        {
+          paginatedTransactions,
+          openingForPage: desktopPaginationMeta.openingForPage,
+          periodDrForPage: desktopPaginationMeta.periodDrForPage,
+          periodCrForPage: desktopPaginationMeta.periodCrForPage,
+          closingForPage: desktopPaginationMeta.closingForPage,
+          ledgerShowBookOpeningRow: currentPage === 1,
+          ledgerDateFilterActive: Boolean(dateRange?.from != null || dateRange?.to != null),
+          openingBalancePeriodStartDate: dateRange?.from,
+          dateRange,
+        }
+      ),
+      true
+    );
   };
 
   const handlePrint = () => {

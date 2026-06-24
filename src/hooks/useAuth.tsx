@@ -217,7 +217,8 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
     const bootstrapUserSession = (firebaseUser: User) => {
       fastLocalAuthRef.current = false;
       if (isLocalOnlyMode()) {
-        // Local-first mode: full `users` profile listener skip (permission noise) — slug `userDocId` ek baar resolve.
+        // Local-only static/APK: Firebase session turant paint — mirror ke liye user + email zaroori.
+        setUser(firebaseUser);
         const displayName = firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "User";
         setCustomUser({
           id: firebaseUser.uid,

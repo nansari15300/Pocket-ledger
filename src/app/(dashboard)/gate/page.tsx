@@ -1,6 +1,21 @@
-import { redirect } from "next/navigation";
+"use client";
 
-/** Gate screen decommissioned: company source is fixed to online in UI. */
+import { Suspense } from "react";
+import { GatePageContent } from "@/components/gates/GatePageContent";
+import { Loader2 } from "lucide-react";
+
+function GatePageFallback() {
+  return (
+    <div className="flex min-h-[40vh] items-center justify-center">
+      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
+
 export default function GatePage() {
-  redirect("/company");
+  return (
+    <Suspense fallback={<GatePageFallback />}>
+      <GatePageContent />
+    </Suspense>
+  );
 }

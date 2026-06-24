@@ -4,7 +4,7 @@ import * as React from "react";
 import { TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { MoreVertical, Pencil, History, CheckCircle } from "lucide-react";
+import { MoreVertical, Pencil, History, CheckCircle, Printer, MousePointerClick } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,6 +35,7 @@ import { motion } from "framer-motion";
 import { FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
 import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
+import { getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize";
 import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
 import {
@@ -87,9 +88,8 @@ export type Transaction = Record<string, any>;
 /**
  * Ledger row par attachment — File column filter (with / without / all).
  */
-export function transactionRowHasFileAttachment(t: { fileUrls?: unknown } | null | undefined): boolean {
-  if (!t || !Array.isArray(t.fileUrls)) return false;
-  return t.fileUrls.some((u) => String(u ?? "").trim().length > 0);
+export function transactionRowHasFileAttachment(t: { fileUrls?: unknown; unassignedFile?: unknown } | null | undefined): boolean {
+  return getVoucherAttachmentUrlsForUi(t).length > 0;
 }
 
 /**
@@ -886,8 +886,10 @@ export const TransactionRow = React.memo(
     isCheckModeFocused = false,
     /** Check mode: Space mark — halka green bg (border nahi) */
     isCheckModeMarked = false,
-    /** Spend-wise group shell ke andar: sirf outer card border — row par alag pill mat banao */
+    /** Spend-wise group card: 3-dot me Select + Print */
     spendWiseInGroupCard = false,
+    showSpendWiseGroupMenuActions = false,
+    onPrintRow,
   }: any) => {
     /* Main + narration hover ek block — narration par mouse par bhi dono rows highlight (globals.css [data-pl-txn-hovered]) */
     const [pairHovered, setPairHovered] = React.useState(false);
@@ -974,7 +976,14 @@ export const TransactionRow = React.memo(
     let debit = toLedgerAmount(transaction.debit);
     let credit = toLedgerAmount(transaction.credit);
     let balance = toLedgerAmount(transaction.balance);
-    if (typeof spendWiseRunningBalance === "number") balance = spendWiseRunningBalance;
+    const spendWiseGroupBalance =
+      typeof spendWiseRunningBalance === "number" ? spendWiseRunningBalance : null;
+    if (typeof (transaction as any)._spendWiseLedgerRunningBalance === "number") {
+      balance = Number((transaction as any)._spendWiseLedgerRunningBalance);
+    } else if (typeof spendWiseRunningBalance === "number") {
+      balance = spendWiseRunningBalance;
+    }
+    const spendWiseBlinkBalance = spendWiseGroupBalance ?? balance;
     const spendWiseLinkedAmount = (transaction as any)._spendWiseLinkedAmount;
     if (isSpendWiseChild && typeof spendWiseLinkedAmount === "number" && spendWiseLinkedAmount > 0) {
       const isOutflow = (transaction.type === "payment_out" || transaction.type === "direct_expense") || (Number(transaction.credit) > 0);
@@ -999,24 +1008,30 @@ export const TransactionRow = React.memo(
       activeBlinkModes.includes("all") &&
       isSpendWiseGroupLast &&
       hasSpendWiseColor &&
-      balance !== 0 &&
+      spendWiseBlinkBalance !== 0 &&
       !isBalanceMasked;
     const shouldBlinkByGroup =
       activeBlinkModes.includes("group") &&
       isSpendWiseGroupLast &&
       hasSpendWiseColor &&
-      balance !== 0 &&
+      spendWiseBlinkBalance !== 0 &&
       !isBalanceMasked &&
       (spendWiseGroupSize ?? 0) > 1;
     const shouldBlinkByRowMode =
       activeBlinkModes.includes("row") &&
       isSelectedRowBlink &&
       hasSpendWiseColor &&
-      balance !== 0 &&
       !isBalanceMasked;
+    const shouldRowModeSameVoucherBlink =
+      activeBlinkModes.includes("row") &&
+      hasSpendWiseColor &&
+      !isBalanceMasked &&
+      (isRelatedBlink || isSelectedRowBlink);
     const isGroupBalanceNonZero = shouldBlinkByAll || shouldBlinkByGroup || shouldBlinkByRowMode;
     const shouldAnimateSpendWiseAmountText =
-      isGroupBalanceNonZero || ((isRelatedBlink || isSelectedRowBlink) && !isSelected);
+      isGroupBalanceNonZero ||
+      shouldRowModeSameVoucherBlink ||
+      ((isRelatedBlink || isSelectedRowBlink) && !isSelected);
 
     const formatBalanceCell = (value: number) => {
       const isItemQty = context === "item" && stockView === "qty";
@@ -1137,44 +1152,39 @@ export const TransactionRow = React.memo(
         )}
         {showFileColumn && (
           <TableCell className={cn("text-center", ensureMinGaps && "min-w-[44px] px-[5px]")} onClick={(e) => e.stopPropagation()}>
-            {Array.isArray(transaction.fileUrls) && transaction.fileUrls.length > 0 ? (
-              (() => {
-                const rowUrls = (transaction.fileUrls as string[])
-                  .map((x) => String(x).trim())
-                  .filter((s) => s.length > 0);
-                // Shared table rows: click preview + double-click open for single PDF.
-                const singlePdfOpen =
-                  rowUrls.length === 1 && getAttachmentFormatLabel(rowUrls[0]!) === "PDF"
-                    ? (e: React.MouseEvent<HTMLDivElement>) => {
-                        e.stopPropagation();
-                        void openAttachmentInApp(rowUrls[0]!, { kind: "pdf" });
-                      }
-                    : undefined;
-                return (
-                  <AttachmentHoverPortal
-                    triggerClassName="inline-flex cursor-pointer"
-                    onPreviewDoubleClick={singlePdfOpen}
-                    preview={
-                      <div className="flex w-max max-w-none flex-col gap-3">
-                        {rowUrls.map((u, idx) => (
-                          <SingleAttachmentHoverPreviewBody
-                            key={`${u}-${idx}`}
-                            url={u}
-                            gallery={rowUrls.length > 1 ? { urls: rowUrls, startIndex: idx } : undefined}
-                          />
-                        ))}
-                      </div>
+            {(() => {
+              const rowUrls = getVoucherAttachmentUrlsForUi(transaction);
+              if (rowUrls.length === 0) return "-";
+              // Shared table rows: click preview + double-click open for single PDF.
+              const singlePdfOpen =
+                rowUrls.length === 1 && getAttachmentFormatLabel(rowUrls[0]!) === "PDF"
+                  ? (e: React.MouseEvent<HTMLDivElement>) => {
+                      e.stopPropagation();
+                      void openAttachmentInApp(rowUrls[0]!, { kind: "pdf" });
                     }
-                  >
-                    <span className="inline-flex cursor-pointer" aria-label="Has attachment">
-                      <CheckCircle className="h-4 w-4 text-green-600" />
-                    </span>
-                  </AttachmentHoverPortal>
-                );
-              })()
-            ) : (
-              "-"
-            )}
+                  : undefined;
+              return (
+                <AttachmentHoverPortal
+                  triggerClassName="inline-flex cursor-pointer"
+                  onPreviewDoubleClick={singlePdfOpen}
+                  preview={
+                    <div className="flex w-max max-w-none flex-col gap-3">
+                      {rowUrls.map((u, idx) => (
+                        <SingleAttachmentHoverPreviewBody
+                          key={`${u}-${idx}`}
+                          url={u}
+                          gallery={rowUrls.length > 1 ? { urls: rowUrls, startIndex: idx } : undefined}
+                        />
+                      ))}
+                    </div>
+                  }
+                >
+                  <span className="inline-flex cursor-pointer" aria-label="Has attachment">
+                    <CheckCircle className="h-4 w-4 text-green-600" />
+                  </span>
+                </AttachmentHoverPortal>
+              );
+            })()}
           </TableCell>
         )}
         {showCol("dr") && (
@@ -1276,7 +1286,14 @@ export const TransactionRow = React.memo(
                 {isBalanceMasked ? (
                   "*****"
                 ) : isZeroBalance ? (
-                  "Settled"
+                  <span
+                    className={cn(
+                      "font-bold text-green-700",
+                      shouldAnimateSpendWiseAmountText && "animate-spend-wise-balance-blink"
+                    )}
+                  >
+                    Settled
+                  </span>
                 ) : (
                   <span
                     className={cn(
@@ -1301,6 +1318,21 @@ export const TransactionRow = React.memo(
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
+              {showSpendWiseGroupMenuActions ? (
+                <>
+                  <DropdownMenuItem
+                    onClick={() => onRowSelect?.(transaction)}
+                    className="flex items-center gap-2"
+                  >
+                    <MousePointerClick className="h-3.5 w-3.5" />
+                    Select
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => onPrintRow?.()} className="flex items-center gap-2">
+                    <Printer className="h-3.5 w-3.5" />
+                    Print
+                  </DropdownMenuItem>
+                </>
+              ) : null}
               {/* Add Link action intentionally removed from 3-dot menu as per latest UX requirement. */}
               {can("approve_transactions") &&
                 effectiveNotificationSettings?.approve?.on !== false &&

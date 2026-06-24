@@ -33,9 +33,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
-import { sharedCompanyQueryKey, sharedCompanyQuerySpecs } from "@/lib/sharedWithEmailsQuery";
-import { collection, query, where, onSnapshot } from "firebase/firestore";
-import { firestore, auth, signOutWithFirestoreTeardown } from "@/lib/firebase";
+import { auth, signOutWithFirestoreTeardown } from "@/lib/firebase";
 import { useEmbeddedLogout } from "@/contexts/EmbeddedLogoutContext";
 import { format } from "date-fns";
 import { CompanyActions } from "@/components/company/CompanySelector";
@@ -84,6 +82,7 @@ import { useMasterDetailHeaderIdSnapshot } from "@/hooks/useMasterDetailHeaderId
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 import { listLocalCompanies } from "@/lib/localCompanyStore";
 import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
 import { highestPlanIdAmongOwnedCompanies, resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
@@ -1355,6 +1354,7 @@ function HeaderViewModeToggle() {
  */
 function HeaderCompanyPickerIsland({
   unfilteredHeaderCompanies,
+  contextCompanies,
   loading,
   user,
   isSuperAdminUser,
@@ -1362,6 +1362,7 @@ function HeaderCompanyPickerIsland({
   mobileStrip,
 }: {
   unfilteredHeaderCompanies: Company[];
+  contextCompanies: Company[];
   loading: boolean;
   user: { uid: string; email: string | null } | null | undefined;
   isSuperAdminUser: boolean;
@@ -1370,18 +1371,31 @@ function HeaderCompanyPickerIsland({
   mobileStrip?: boolean;
 }) {
   const pathname = usePathname();
-  const companies = useMemo(
-    () =>
-      filterSharedOnlyCompaniesForSuperAdminInMainApp(
-        unfilteredHeaderCompanies,
-        user,
-        isSuperAdminUser,
-        pathname
-      ),
-    [unfilteredHeaderCompanies, user, isSuperAdminUser, pathname]
-  );
+  const companies = useMemo(() => {
+    const shareUser = { uid: user?.uid || "", email: user?.email ?? null };
+    const byId = new Map<string, Company>();
+    const addRows = (rows: Company[]) => {
+      for (const c of rows) {
+        if (!c?.id) continue;
+        byId.set(c.id, {
+          ...c,
+          isOwned: user?.uid ? resolveCompanyIsOwnedForUser(c, shareUser) : Boolean(c.isOwned),
+        });
+      }
+    };
+    addRows(unfilteredHeaderCompanies);
+    addRows(contextCompanies || []);
+    return filterSharedOnlyCompaniesForSuperAdminInMainApp(
+      Array.from(byId.values()),
+      user,
+      isSuperAdminUser,
+      pathname
+    );
+  }, [unfilteredHeaderCompanies, contextCompanies, user, isSuperAdminUser, pathname]);
+  const showLoadingSkeleton =
+    loading && unfilteredHeaderCompanies.length === 0 && (contextCompanies?.length ?? 0) === 0;
   // Pehli load: skeleton; data aane ke baad loading dubara true ho to bhi purana box dikhate raho (sidebar navigate flash band).
-  if (loading && unfilteredHeaderCompanies.length === 0) {
+  if (showLoadingSkeleton) {
     return (
       <div
         className={cn(
@@ -1403,7 +1417,7 @@ function HeaderCompanyPickerIsland({
 
 export function DesktopAppHeader() {
   const { user, customUser } = useAuth();
-  const { allCompanies: contextCompanies, loading: companyContextLoading } = useCompany();
+  const { allCompanies: contextCompanies, loading: companyContextLoading, localCompanyRegistryEpoch } = useCompany();
   // Firestore merge alag; pathname sirf HeaderCompanyPickerIsland — sidebar navigate par parent header strip unnecessary re-render na ho.
   const [unfilteredHeaderCompanies, setUnfilteredHeaderCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1415,200 +1429,59 @@ export function DesktopAppHeader() {
   }, [user?.email]);
   const isSuperAdminUser = isSuperAdmin || isSuperAdminByEmail;
 
-  // Local / static: CompanyProvider context yahi deps; navigate par Firestore effect na chale (company box flicker band).
+  // Header company list: context + SQLite local rows (naya offline create Firestore snapshot ke bina bhi dikhe).
   useEffect(() => {
-    if (!isLocalOnlyMode()) return;
-    // Local-first: header list = owned + local + mirrored online/shared (CompanySelector ke saath align)
+    let cancelled = false;
     setLoading(Boolean(companyContextLoading));
-    const isOwnedByUser = (c: Company) =>
-      (!!user?.uid && c.ownerId === user?.uid) ||
-      (!!user?.email &&
-        !!c.ownerEmail &&
-        c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
-    const mappedBase = (contextCompanies || [])
-      .filter((c) => isCompanyVisibleInHeader(c as Company & { movedToAdminRecycleAt?: unknown }))
-      .map((c) => ({ ...c, isOwned: c.isOwned ?? isOwnedByUser(c) })) as Company[];
-    setUnfilteredHeaderCompanies(mappedBase);
-    if (!companyContextLoading && (!contextCompanies || contextCompanies.length === 0)) {
-      listLocalCompanies()
-        .then((rows) => {
-          const mappedRows = rows
-            // Local fallback me bhi hidden tab companies suppress rakho.
-            .filter((r: { isDeleted?: boolean; movedToAdminRecycleAt?: unknown }) => !r?.isDeleted && r?.movedToAdminRecycleAt == null)
-            .map((r) => {
-              const c = { ...(r as unknown as Company) };
-              return { ...c, isOwned: c.isOwned ?? isOwnedByUser(c) } as Company;
-            });
-          setUnfilteredHeaderCompanies(mappedRows);
-        })
-        .finally(() => setLoading(false));
-    }
-  }, [user, contextCompanies, companyContextLoading]);
-
-  // Firebase web: Firestore listeners — sirf user / SuperAdmin; sidebar navigate par dubara setLoading(true) / skeleton na ho.
-  useEffect(() => {
-    if (isLocalOnlyMode()) return;
-    if (!user || !user.email) {
-      setLoading(false);
+    if (!user?.uid) {
       setUnfilteredHeaderCompanies([]);
+      if (!companyContextLoading) setLoading(false);
       return;
     }
-    setLoading(true);
-
-    const ownedQuery = query(
-      collection(firestore, "companies"),
-      where("ownerId", "==", user.uid)
-    );
-    const sharedQuerySpecs = isSuperAdminUser ? [] : sharedCompanyQuerySpecs(user.email);
-    // SuperAdmin: also show companies where ownerEmail matches, so they can use app like a normal user
-    const ownedByEmailQuery = isSuperAdminUser
-      ? query(
-          collection(firestore, "companies"),
-          where("ownerEmail", "==", user.email)
-        )
-      : null;
-
-    let ownedCompaniesCache: Company[] = [];
-    let sharedCompaniesCache: Company[] = [];
-    let ownedByEmailCache: Company[] = [];
-    let localCompaniesCache: Company[] = [];
-    const isOwnedByCurrentUser = (c: Company) =>
-      c.ownerId === user?.uid ||
-      (!!c.ownerEmail && !!user?.email && c.ownerEmail.toLowerCase().trim() === user.email.toLowerCase().trim());
-    // Keep first paint stable: wait for all initial listeners before publishing header data.
-    let ownedReady = false;
-    let sharedReady = sharedQuerySpecs.length === 0;
-    const sharedSnapsByVariant = new Map<string, { docs: readonly { id: string; data: () => Record<string, unknown> }[] }>();
-    const sharedVariantsReady = new Set<string>();
-    let ownedByEmailReady = !ownedByEmailQuery;
-
-    const combineAndSet = () => {
-      if (!ownedReady || !sharedReady || !ownedByEmailReady) return;
-      const companyMap = new Map<string, Company>();
-
-      // Server-owned companies are authoritative for online ownership categorization.
-      ownedCompaniesCache.forEach((c) =>
-        companyMap.set(c.id, { ...c, isOwned: true })
-      );
-      // SuperAdmin: add companies owned by email (in case ownerId differs)
-      ownedByEmailCache.forEach((c) => {
-        if (!companyMap.has(c.id))
-          companyMap.set(c.id, { ...c, isOwned: true });
-      });
-      // Add shared companies if not already in map
-      sharedCompaniesCache.forEach((c) => {
-        if (!companyMap.has(c.id))
-          companyMap.set(c.id, { ...c, isOwned: false });
-      });
-      // Add local-only leftovers after server merge; this prevents shared online companies from being misclassified.
-      localCompaniesCache.forEach((c) => {
-        if (!companyMap.has(c.id)) {
-          companyMap.set(c.id, { ...c, isOwned: isOwnedByCurrentUser(c) });
-        }
-      });
-
-      const merged = Array.from(companyMap.values());
-      // Avoid no-op state writes — lekin sirf id/isOwned mat compare karo; rename (name) change par bhi next apply ho (selector live rahe)
-      setUnfilteredHeaderCompanies((prev) => {
-        const sameLength = prev.length === merged.length;
-        if (!sameLength) return merged;
-        const rowSig = (c: Company) =>
-          `${c.id}\0${Boolean(c.isOwned)}\0${c.name ?? ""}\0${String((c as Company & { storageOption?: string }).storageOption ?? "")}`;
-        const same =
-          prev.length === merged.length &&
-          prev.every((p, i) => rowSig(p) === rowSig(merged[i] as Company));
-        return same ? prev : merged;
-      });
-      setLoading(false);
-    };
-
-    // Load local companies in parallel with Firestore so dropdown can show local + cloud together.
-    listLocalCompanies()
-      .then((rows) => {
-        localCompaniesCache = rows
-          .filter((c: any) => isCompanyVisibleInHeader(c as Company & { movedToAdminRecycleAt?: unknown }))
-          .map((c) => ({ ...(c as unknown as Company), isOwned: isOwnedByCurrentUser(c as unknown as Company) }));
-        combineAndSet();
-      })
-      .catch(() => {
-        // Local list optional; ignore errors and continue with cloud/shared data.
-      });
-
-    const unsubOwned = onSnapshot(
-      ownedQuery,
-      (snap) => {
-        ownedCompaniesCache = snap.docs
-          .map((doc) => ({ id: doc.id, ...doc.data() } as Company))
-          .filter((c) => isCompanyVisibleInHeader(c as Company & { movedToAdminRecycleAt?: unknown }));
-        ownedReady = true;
-        combineAndSet();
-      },
-      (error) => {
-        console.error("Error fetching owned companies:", error);
-        setLoading(false);
+    const shareUser = { uid: user.uid, email: user.email ?? null };
+    void (async () => {
+      const mappedBase = (contextCompanies || [])
+        .filter((c) => isCompanyVisibleInHeader(c as Company & { movedToAdminRecycleAt?: unknown }))
+        .map((c) => ({
+          ...c,
+          isOwned: resolveCompanyIsOwnedForUser(c, shareUser),
+        })) as Company[];
+      let localRows: Company[] = [];
+      try {
+        localRows = (await listLocalCompanies())
+          .filter(
+            (r: { isDeleted?: boolean; movedToAdminRecycleAt?: unknown }) =>
+              !r?.isDeleted && r?.movedToAdminRecycleAt == null
+          )
+          .map((r) => {
+            const c = { ...(r as unknown as Company) };
+            return {
+              ...c,
+              isOwned: resolveCompanyIsOwnedForUser(c, shareUser),
+            } as Company;
+          });
+      } catch {
+        /* SQLite unavailable */
       }
-    );
-
-    const mergeSharedHeaderCache = () => {
-      if (sharedVariantsReady.size < sharedQuerySpecs.length) return;
+      if (cancelled) return;
       const byId = new Map<string, Company>();
-      for (const snap of sharedSnapsByVariant.values()) {
-        for (const doc of snap.docs) {
-          const company = { id: doc.id, ...doc.data() } as Company;
-          if (isCompanyVisibleInHeader(company as Company & { movedToAdminRecycleAt?: unknown })) {
-            byId.set(company.id, company);
-          }
-        }
+      for (const c of mappedBase) {
+        if (c?.id) byId.set(c.id, c);
       }
-      sharedCompaniesCache = Array.from(byId.values());
-      sharedReady = true;
-      combineAndSet();
-    };
-    const unsubSharedList = sharedQuerySpecs.map((spec) =>
-      onSnapshot(
-        query(
-          collection(firestore, "companies"),
-          where(spec.field, "array-contains", spec.value)
-        ),
-        (snap) => {
-          const key = sharedCompanyQueryKey(spec);
-          sharedSnapsByVariant.set(key, snap);
-          sharedVariantsReady.add(key);
-          mergeSharedHeaderCache();
-        },
-        (error) => {
-          console.error("Error fetching shared companies:", error);
-          setLoading(false);
-        }
-      )
-    );
-
-    const unsubOwnedByEmail = ownedByEmailQuery
-      ? onSnapshot(
-          ownedByEmailQuery,
-          (snap) => {
-            ownedByEmailCache = snap.docs
-              .map((doc) => ({ id: doc.id, ...doc.data() } as Company))
-              .filter((c) => isCompanyVisibleInHeader(c as Company & { movedToAdminRecycleAt?: unknown }));
-            ownedByEmailReady = true;
-            combineAndSet();
-          },
-          (error) => {
-            console.error("Error fetching companies by owner email:", error);
-            setLoading(false);
-          }
-        )
-      : () => {};
-
+      for (const c of localRows) {
+        if (!c?.id || byId.has(c.id)) continue;
+        byId.set(c.id, c);
+      }
+      setUnfilteredHeaderCompanies(Array.from(byId.values()));
+      setLoading(false);
+    })();
     return () => {
-      unsubOwned();
-      unsubSharedList.forEach((unsub) => unsub());
-      unsubOwnedByEmail();
+      cancelled = true;
     };
-  }, [user, isSuperAdminUser]);
+  }, [user, contextCompanies, companyContextLoading, localCompanyRegistryEpoch]);
 
   const onCompanyCreated = () => {
-    // This is now handled automatically by the onSnapshot listeners.
+    // useCompany context listeners / registry mirror se list auto-update hoti hai.
     // The prop is still required by CompanyActions but can be a no-op.
   };
 
@@ -1675,6 +1548,7 @@ export function DesktopAppHeader() {
               <div className="min-w-0 flex-1">
                 <HeaderCompanyPickerIsland
                   unfilteredHeaderCompanies={unfilteredHeaderCompanies}
+                  contextCompanies={contextCompanies}
                   loading={loading}
                   user={user}
                   isSuperAdminUser={isSuperAdminUser}
@@ -1723,6 +1597,7 @@ export function DesktopAppHeader() {
               ) : null}
               <HeaderCompanyPickerIsland
                 unfilteredHeaderCompanies={unfilteredHeaderCompanies}
+                contextCompanies={contextCompanies}
                 loading={loading}
                 user={user}
                 isSuperAdminUser={isSuperAdminUser}

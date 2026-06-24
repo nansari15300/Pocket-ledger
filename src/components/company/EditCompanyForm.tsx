@@ -134,7 +134,7 @@ const formSchema = z.object({
 });
 
 
-export function EditCompanyForm() {
+export function EditCompanyForm({ readOnly = false }: { readOnly?: boolean }) {
   const [isLoading, setIsLoading] = useState(false);
   const {
     company,
@@ -718,6 +718,7 @@ export function EditCompanyForm() {
 
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
+    if (readOnly) return;
     if (!companyId || !company) {
       toast({ variant: "destructive", title: "Error", description: "No company is selected." });
       return;
@@ -891,6 +892,7 @@ export function EditCompanyForm() {
   return (
     <div className="min-w-0">
         <Form {...form}>
+        <fieldset disabled={readOnly} className="min-w-0 border-0 p-0 m-0 space-y-6 disabled:opacity-100">
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <FormField
@@ -1591,13 +1593,16 @@ export function EditCompanyForm() {
             )}
 
 
+            {!readOnly && (
             <div className="flex justify-end items-center">
                 <Button type="submit" disabled={isLoading} variant="default">
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save Changes
                 </Button>
             </div>
+            )}
         </form>
+        </fieldset>
         </Form>
 
         {/* Existing local user row edit — naam / role / password (optional). */}
