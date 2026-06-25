@@ -1355,6 +1355,7 @@ function HeaderViewModeToggle() {
 function HeaderCompanyPickerIsland({
   unfilteredHeaderCompanies,
   contextCompanies,
+  allCompaniesRegistry,
   loading,
   user,
   isSuperAdminUser,
@@ -1363,6 +1364,7 @@ function HeaderCompanyPickerIsland({
 }: {
   unfilteredHeaderCompanies: Company[];
   contextCompanies: Company[];
+  allCompaniesRegistry: Company[];
   loading: boolean;
   user: { uid: string; email: string | null } | null | undefined;
   isSuperAdminUser: boolean;
@@ -1373,6 +1375,7 @@ function HeaderCompanyPickerIsland({
   const pathname = usePathname();
   const companies = useMemo(() => {
     const shareUser = { uid: user?.uid || "", email: user?.email ?? null };
+    const registryRows = allCompaniesRegistry?.length ? allCompaniesRegistry : contextCompanies || [];
     const byId = new Map<string, Company>();
     const addRows = (rows: Company[]) => {
       for (const c of rows) {
@@ -1384,16 +1387,19 @@ function HeaderCompanyPickerIsland({
       }
     };
     addRows(unfilteredHeaderCompanies);
-    addRows(contextCompanies || []);
+    addRows(registryRows);
     return filterSharedOnlyCompaniesForSuperAdminInMainApp(
       Array.from(byId.values()),
       user,
       isSuperAdminUser,
       pathname
     );
-  }, [unfilteredHeaderCompanies, contextCompanies, user, isSuperAdminUser, pathname]);
+  }, [unfilteredHeaderCompanies, allCompaniesRegistry, contextCompanies, user, isSuperAdminUser, pathname]);
   const showLoadingSkeleton =
-    loading && unfilteredHeaderCompanies.length === 0 && (contextCompanies?.length ?? 0) === 0;
+    loading &&
+    unfilteredHeaderCompanies.length === 0 &&
+    (allCompaniesRegistry?.length ?? 0) === 0 &&
+    (contextCompanies?.length ?? 0) === 0;
   // Pehli load: skeleton; data aane ke baad loading dubara true ho to bhi purana box dikhate raho (sidebar navigate flash band).
   if (showLoadingSkeleton) {
     return (
@@ -1417,7 +1423,7 @@ function HeaderCompanyPickerIsland({
 
 export function DesktopAppHeader() {
   const { user, customUser } = useAuth();
-  const { allCompanies: contextCompanies, loading: companyContextLoading, localCompanyRegistryEpoch } = useCompany();
+  const { allCompanies: contextCompanies, allCompaniesRegistry, loading: companyContextLoading, localCompanyRegistryEpoch } = useCompany();
   // Firestore merge alag; pathname sirf HeaderCompanyPickerIsland — sidebar navigate par parent header strip unnecessary re-render na ho.
   const [unfilteredHeaderCompanies, setUnfilteredHeaderCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1549,6 +1555,7 @@ export function DesktopAppHeader() {
                 <HeaderCompanyPickerIsland
                   unfilteredHeaderCompanies={unfilteredHeaderCompanies}
                   contextCompanies={contextCompanies}
+                  allCompaniesRegistry={allCompaniesRegistry}
                   loading={loading}
                   user={user}
                   isSuperAdminUser={isSuperAdminUser}
@@ -1598,6 +1605,7 @@ export function DesktopAppHeader() {
               <HeaderCompanyPickerIsland
                 unfilteredHeaderCompanies={unfilteredHeaderCompanies}
                 contextCompanies={contextCompanies}
+                allCompaniesRegistry={allCompaniesRegistry}
                 loading={loading}
                 user={user}
                 isSuperAdminUser={isSuperAdminUser}

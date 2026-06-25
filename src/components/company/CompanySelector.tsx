@@ -217,7 +217,15 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   }, [user?.email]);
   const isSuperAdminUser = customUser?.role === "SuperAdmin" || isSuperAdminByEmail;
   // Local mode: list useCompany context se (local DB + mirror) — alag listLocalCompanies se sab ko isOwned true galat tha.
-  const { setCompanyId, companyId, allCompanies: contextCompanies, loading: contextCompanyLoading, triggerSync, reloadLocalCompanyRegistry } = useCompany();
+  const {
+    setCompanyId,
+    companyId,
+    allCompanies: contextCompanies,
+    allCompaniesRegistry,
+    loading: contextCompanyLoading,
+    triggerSync,
+    reloadLocalCompanyRegistry,
+  } = useCompany();
   const [dialogState, setDialogState] = useState<{
     type: "share" | "addLocalUser" | "delete" | null;
     company: CompanyData | null;
@@ -281,20 +289,18 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
       });
     };
 
-    if (isLocalOnlyMode()) {
-      const raw = contextCompanies || [];
-      setCompanies(raw.filter(isCompanyVisibleInSelector));
-      return;
-    }
-    if (!user) {
+    const registryRows =
+      (allCompaniesRegistry?.length ? allCompaniesRegistry : null) ??
+      (contextCompanies?.length ? contextCompanies : null) ??
+      [];
+    if (!user && registryRows.length === 0 && !(initialCompanies?.length ?? 0)) {
       setCompanies([]);
       return;
     }
     const map = new Map<string, CompanyData>();
     mergeIntoMap(map, (initialCompanies ?? []).filter(isCompanyVisibleInSelector));
-    // Drive restore/join: device-local rows SQLite se — parent Firestore list me nahi hote.
-    // Online owned + shared dono context se — EXE new tab par header jaisa poora list.
-    (contextCompanies || []).forEach((c) => {
+    // Picker: gate-filtered `allCompanies` nahi — registry (local + online) taaki APK/tablet PC = EXE.
+    registryRows.forEach((c) => {
       if (!isCompanyVisibleInSelector(c)) return;
       if (isOfflineCompanyStorage(c)) {
         const driveSharedJoin =
@@ -312,7 +318,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
       });
     });
     setCompanies(Array.from(map.values()));
-  }, [user, contextCompanies, contextCompanyLoading, parentCompaniesListSig, initialCompanies]);
+  }, [user, allCompaniesRegistry, contextCompanies, contextCompanyLoading, parentCompaniesListSig, initialCompanies]);
 
 
   const handleSelectCompany = async (company: CompanyData) => {

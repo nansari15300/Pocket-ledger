@@ -88,6 +88,7 @@ import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isAdminPanelNavVisible } from "@/lib/adminDevPreview";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { AppSidebarZoomControls } from "@/components/layout/AppSidebarZoomControls";
 
 
 type MenuItem = {
@@ -182,6 +183,7 @@ export function AppSidebar() {
   const { isOpen, isMobile, setIsOpen } = useSidebar();
   /** Static/Capacitor: sirf <Link> se route kabhi load nahi hota — router.push se SPA navigation pakka */
   const isStaticApp = isStaticAppBuild();
+  const showNativeZoomControls = isCapacitorNativeApp();
   const onNavLinkClick = useCallback(
     (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
       if (isStaticApp) {
@@ -530,6 +532,12 @@ export function AppSidebar() {
     return [...core, ...catalog];
   }, [visibleMenuItems]);
 
+  const zoomControlsAfterNavId = React.useMemo(() => {
+    if (combinedDashboardNavItems.some((i) => i.id === "gallery")) return "gallery";
+    if (combinedDashboardNavItems.some((i) => i.id === "items")) return "items";
+    return combinedDashboardNavItems[combinedDashboardNavItems.length - 1]?.id ?? null;
+  }, [combinedDashboardNavItems]);
+
   // Hide Billing & Plans for shared company access — only owner buys / upgrades subscription.
   const visibleBottomMenuItems = React.useMemo(() => {
     const hideBilling = company != null && company.isOwned === false;
@@ -685,7 +693,16 @@ export function AppSidebar() {
               {(combinedDashboardNavItems.length > 0 || showAdminNavLink) && (
                 <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald w-full shrink-0 p-2">
                   <SidebarMenu className="gap-0.5 py-1">
-                    {combinedDashboardNavItems.map(renderMainNavRow)}
+                    {combinedDashboardNavItems.map((item) => (
+                      <React.Fragment key={item.href}>
+                        {renderMainNavRow(item)}
+                        {showNativeZoomControls && zoomControlsAfterNavId === item.id ? (
+                          <SidebarMenuItem className="list-none">
+                            <AppSidebarZoomControls sidebarOpen={isOpen} />
+                          </SidebarMenuItem>
+                        ) : null}
+                      </React.Fragment>
+                    ))}
                     {showAdminNavLink && (
                       <SidebarMenuItem>
                         <Link prefetch={false} href={appNavHref("/admin")} onClick={(e) => onNavLinkClick(e, "/admin")}>

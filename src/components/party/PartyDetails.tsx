@@ -46,6 +46,7 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { addDays, format, startOfDay, endOfDay, isSameDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { mdc, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
 import * as XLSX from "xlsx";
 import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
 import { RunningBalanceFullChart } from "@/components/reports/RunningBalanceFullChart";
@@ -1036,9 +1037,9 @@ export function PartyDetails({
             </div>
           </div>
           </MobileDetailSummaryCollapsible>
-          {/* Transaction list - extends to footer line; scroll-touch + inline style for APK/WebView touch scroll */}
+          {/* Transaction list — report: table + pager ek scroll (100/All par gap fix); ledger: pager bahar */}
           <div
-            className="flex-1 min-h-0 overflow-auto scroll-touch"
+            className={mobileTxnScrollBodyClass(isReportMobileChrome)}
             style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
           >
             <div className="pb-2">
@@ -1096,19 +1097,33 @@ export function PartyDetails({
             )}
             </div>
           </div>
-          {mobileReportView === "list" ? (
-          <MobileTransactionsPager
-            className="flex-shrink-0 mb-12"
-            currentPage={currentPage}
-            totalItems={searchFilteredTransactions.length}
-            rowsPerPage={rowsPerPage}
-            onRowsPerPageChange={(nextRows) => {
-              setRowsPerPage(nextRows);
-              setCurrentPage(1);
-            }}
-            onPageChange={setCurrentPage}
-            edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
-          />
+          {mobileReportView === "list" && isReportMobileChrome ? (
+            <MobileTransactionsPager
+              className={mdc.reportTxnPagerOutside}
+              currentPage={currentPage}
+              totalItems={searchFilteredTransactions.length}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(nextRows) => {
+                setRowsPerPage(nextRows);
+                setCurrentPage(1);
+              }}
+              onPageChange={setCurrentPage}
+              edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+            />
+          ) : null}
+          {mobileReportView === "list" && !isReportMobileChrome ? (
+            <MobileTransactionsPager
+              className={mdc.ledgerTxnPagerOutside}
+              currentPage={currentPage}
+              totalItems={searchFilteredTransactions.length}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(nextRows) => {
+                setRowsPerPage(nextRows);
+                setCurrentPage(1);
+              }}
+              onPageChange={setCurrentPage}
+              edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+            />
           ) : null}
         </div>
         {isReportMobileChrome ? (

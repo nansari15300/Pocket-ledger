@@ -36,6 +36,7 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { format, startOfDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { mdc, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
 import * as XLSX from "xlsx";
 import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
 import {
@@ -756,7 +757,7 @@ export function TaxDetails({
           </MobileDetailSummaryCollapsible>
           {/* scroll-touch + inline style for APK/WebView touch scroll */}
           <div
-            className="flex-1 min-h-0 overflow-auto scroll-touch"
+            className={mobileTxnScrollBodyClass(isReportMobileChrome)}
             style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
           >
             <div className={isReportMobileChrome ? "pb-2" : "pb-24"}>
@@ -799,18 +800,34 @@ export function TaxDetails({
               {...statementCheck.tableProps}/>
             </div>
           </div>
-          <MobileTransactionsPager
-            className="flex-shrink-0 mb-12"
-            currentPage={currentPage}
-            totalItems={searchFilteredTransactions.length}
-            rowsPerPage={rowsPerPage}
-            onRowsPerPageChange={(nextRows) => {
-              setRowsPerPage(nextRows);
-              setCurrentPage(1);
-            }}
-            onPageChange={setCurrentPage}
-            edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
-          />
+          {isReportMobileChrome ? (
+            <MobileTransactionsPager
+              className={mdc.reportTxnPagerOutside}
+              currentPage={currentPage}
+              totalItems={searchFilteredTransactions.length}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(nextRows) => {
+                setRowsPerPage(nextRows);
+                setCurrentPage(1);
+              }}
+              onPageChange={setCurrentPage}
+              edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+            />
+          ) : null}
+          {!isReportMobileChrome ? (
+            <MobileTransactionsPager
+              className={mdc.ledgerTxnPagerOutside}
+              currentPage={currentPage}
+              totalItems={searchFilteredTransactions.length}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(nextRows) => {
+                setRowsPerPage(nextRows);
+                setCurrentPage(1);
+              }}
+              onPageChange={setCurrentPage}
+              edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+            />
+          ) : null}
         </div>
         {isReportMobileChrome ? (
           <ReportMobileLedgerFooter

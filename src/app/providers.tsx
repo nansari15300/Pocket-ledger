@@ -15,6 +15,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { usePresence } from "@/hooks/usePresence";
 import { ThemeProvider } from "@/hooks/useTheme";
 import { CapacitorAndroidBackButton } from "@/components/CapacitorAndroidBackButton";
+import { AppUiZoomBootstrap } from "@/components/layout/AppUiZoomBootstrap";
 import { VoucherOutboxFlushManager } from "@/components/VoucherOutboxFlushManager";
 import { LocalCompanyCloudSyncManager } from "@/components/LocalCompanyCloudSyncManager";
 import { CapacitorDriveOAuthReturnHandler } from "@/components/CapacitorDriveOAuthReturnHandler";
@@ -87,6 +88,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 {/* APK/static pehli login: full warm chalte waqt background warm band — gate overlay set karti hai */}
                 <FirstLoginWarmGateProvider>
                 <CapacitorAndroidBackButton />
+                <AppUiZoomBootstrap />
                 <StaticFastResumeSyncManager />
                 {/* Offline→online: dashboard/company silent jump block; sync background me chale */}
                 <OnlineResumeRouteShield />

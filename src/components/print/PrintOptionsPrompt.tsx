@@ -117,7 +117,7 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
           }}
         >
           <DialogContent
-            className="!flex w-[98vw] max-w-[98vw] flex-col gap-0 overflow-hidden p-4 pb-3 h-[min(92dvh,calc(100vh-1.5rem))] max-h-[min(92dvh,calc(100vh-1.5rem))] sm:h-auto sm:max-h-none sm:w-full sm:max-w-md max-sm:top-[max(0.75rem,env(safe-area-inset-top,0px))] max-sm:translate-y-0"
+            className="!flex flex-col gap-0 overflow-hidden p-4 pb-3 max-sm:!w-[98%] max-sm:!max-w-[98%] max-sm:rounded-xl max-sm:left-[50%] max-sm:-translate-x-1/2 h-[min(92dvh,calc(100vh-1.5rem))] max-h-[min(92dvh,calc(100vh-1.5rem))] sm:h-auto sm:max-h-none sm:w-full sm:max-w-md max-sm:top-[max(0.75rem,env(safe-area-inset-top,0px))] max-sm:translate-y-0"
             aria-describedby={view === "report" ? "print-options-desc" : undefined}
           >
             {view === "masters" ? (

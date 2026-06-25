@@ -15,6 +15,22 @@
   }
 }
 
+/* Capacitor Android UI zoom: `html { zoom }` layout chhota karta hai — shell height badha kar screen bhari rakho */
+html[data-pl-app-ui-zoom-shell="android-zoom"] #app-container {
+  height: var(--pl-screen-h, 100dvh) !important;
+  max-height: var(--pl-screen-h, 100dvh) !important;
+  min-height: var(--pl-screen-h, 100dvh) !important;
+}
+html[data-pl-app-ui-zoom-shell="android-zoom"] .h-dvh {
+  height: var(--pl-screen-h, 100dvh) !important;
+}
+html[data-pl-app-ui-zoom-shell="android-zoom"] .max-h-dvh {
+  max-height: var(--pl-screen-h, 100dvh) !important;
+}
+html[data-pl-app-ui-zoom-shell="android-zoom"] .min-h-dvh {
+  min-height: var(--pl-screen-h, 100dvh) !important;
+}
+
 /* Master–detail lists: grid → dayaan amount (auto width) poora, baayaan naam minmax(0,1fr) + truncate */
 @layer components {
   .pl-master-list-row {

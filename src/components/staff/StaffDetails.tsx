@@ -60,7 +60,7 @@ import {
   searchParamsStringForModalClose,
 } from "@/lib/modalUrlSync";
 import { useMobileLedgerModalUrlGuard } from "@/hooks/useMobileLedgerModalUrlGuard";
-import { mdc, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
+import { mdc, mdcNoEdgeSwipeCapture, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import AdCalendar from "@/components/ui/ad-calendar";
 import {
@@ -1038,7 +1038,7 @@ export function StaffDetails({
       {/* Transactions list - extends to footer line */}
       {/* scroll-touch + inline style for APK/WebView touch scroll */}
       <div
-        className="flex-1 min-h-0 overflow-auto scroll-touch"
+        className={mobileTxnScrollBodyClass(isReportMobileChrome)}
         style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
       >
         <div className={isReportMobileChrome ? "pb-2" : "pb-36"}>
@@ -1092,21 +1092,21 @@ export function StaffDetails({
         )}
         </div>
       </div>
-      {(!isReportMobileChrome || mobileReportView === "list") &&
-        (isReportMobileChrome ? (
-          <MobileTransactionsPager
-            className="flex-shrink-0 mb-12"
-            currentPage={currentPage}
-            totalItems={filteredMobileTransactions.length}
-            rowsPerPage={rowsPerPage}
-            onRowsPerPageChange={(nextRows) => {
-              setRowsPerPage(nextRows);
-              setCurrentPage(1);
-            }}
-            onPageChange={setCurrentPage}
-            edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
-          />
-        ) : (
+      {isReportMobileChrome && mobileReportView === "list" ? (
+        <MobileTransactionsPager
+          className={mdc.reportTxnPagerOutside}
+          currentPage={currentPage}
+          totalItems={filteredMobileTransactions.length}
+          rowsPerPage={rowsPerPage}
+          onRowsPerPageChange={(nextRows) => {
+            setRowsPerPage(nextRows);
+            setCurrentPage(1);
+          }}
+          onPageChange={setCurrentPage}
+          edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+        />
+      ) : null}
+      {!isReportMobileChrome ? (
       <div className="fixed bottom-9 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur px-2 py-1">
         {/* Staff-page style: keep pager fixed just above bottom action buttons. */}
         <MobileTransactionsPager
@@ -1122,7 +1122,7 @@ export function StaffDetails({
           edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
         />
           </div>
-        ))}
+        ) : null}
     </div>
     {isReportMobileChrome ? (
       <>

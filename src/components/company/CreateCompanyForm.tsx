@@ -120,11 +120,16 @@ export function CreateCompanyForm({
   const { user, customUser } = useAuth();
   // `company` = abhi selected company (plan hint); owned list se highest tier — pehle hamesha "basic" plan check tha
   const { setCompanyId, allCompanies, allCompaniesRegistry, company, reloadLocalCompanyRegistry } = useCompany();
+  /** Gate-filtered `allCompanies` se alag — create form me local + online dono count/plan ke liye. */
+  const companyRowsForCreate = useMemo(
+    () => (allCompaniesRegistry?.length ? allCompaniesRegistry : allCompanies),
+    [allCompaniesRegistry, allCompanies]
+  );
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const livePlans = useLivePlans();
   const accountPlanId = useMemo(
-    () => resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId),
-    [allCompanies, user?.uid, company?.planId]
+    () => resolveEffectiveAccountPlanId(companyRowsForCreate, user?.uid, company?.planId),
+    [companyRowsForCreate, user?.uid, company?.planId]
   );
   const canAddAvatar = useMemo(() => {
     return getPlanFromPlans(livePlans, accountPlanId).entitlements.canAddAvatar === true;
@@ -140,8 +145,8 @@ export function CreateCompanyForm({
     [accountPlanId, accountPlan]
   );
   const usedOnlineSlots = useMemo(
-    () => (user?.uid ? countOnlineCompanySlotsForOwner(allCompanies, user.uid) : 0),
-    [allCompanies, user?.uid]
+    () => (user?.uid ? countOnlineCompanySlotsForOwner(companyRowsForCreate, user.uid) : 0),
+    [companyRowsForCreate, user?.uid]
   );
   /** Online company creation only; slot guard still applies. */
   const hasFreeOnlineSlot = allowFirebaseOnline && maxOnlineSlots > 0 && usedOnlineSlots < maxOnlineSlots;
@@ -237,9 +242,9 @@ export function CreateCompanyForm({
 
   async function onSubmit(values: FormValues) {
     // Submit waqt latest slot count — doosre tab me company banne par bhi sahi branch
-    const planIdForSlots = resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId);
+    const planIdForSlots = resolveEffectiveAccountPlanId(companyRowsForCreate, user?.uid, company?.planId);
     const maxO = maxOnlineCompaniesForPlan(planIdForSlots, getPlanFromPlans(livePlans, planIdForSlots));
-    const usedO = user?.uid ? countOnlineCompanySlotsForOwner(allCompanies, user.uid) : 0;
+    const usedO = user?.uid ? countOnlineCompanySlotsForOwner(companyRowsForCreate, user.uid) : 0;
     const freeOnlineSlotNow = maxO > 0 && usedO < maxO;
     const createAsLocalOnly = willCreateAsLocal;
 
@@ -332,7 +337,7 @@ export function CreateCompanyForm({
     }
 
     const nameNorm = values.companyName.trim().toLowerCase();
-    const registryRows = [...allCompanies, ...(allCompaniesRegistry || [])];
+    const registryRows = companyRowsForCreate;
     const ownedByName = registryRows.filter(
       (c, i, arr) =>
         arr.findIndex((x) => x.id === c.id) === i &&

@@ -1964,7 +1964,8 @@ export function TransactionsTable({
         )}
         {(() => {
           // Large mobile ledgers: blocks ko virtualize karo; poori list map karne se WebView freeze spikes aate hain.
-          const mobileVirtualizationEnabled = mobileBlocks.length > 80;
+          const mobileVirtualizationEnabled =
+            !scrollOnlyTransactions && mobileBlocks.length > 80;
           if (!mobileVirtualizationEnabled) {
             return mobileBlocks.map((block, blockIdx) => {
               if (block.type === "spacer") {

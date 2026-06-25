@@ -72,7 +72,13 @@ function SelectCompanyPageContent() {
   const isSuperAdminUser = customUser?.role === "SuperAdmin" || isSuperAdminByEmail;
   const { isOnline } = useOnlineStatus();
   // Local mode: list Firestore snapshots se nahi, useCompany() ke local DB hydrate se aati hai (owned/shared wahi logic jo CompanySelector me).
-  const { allCompanies: contextCompanies, loading: companyContextLoading, reloadLocalCompanyRegistry, triggerSync } = useCompany();
+  const {
+    allCompanies: contextCompanies,
+    allCompaniesRegistry,
+    loading: companyContextLoading,
+    reloadLocalCompanyRegistry,
+    triggerSync,
+  } = useCompany();
   const [newlyCreatedCompany, setNewlyCreatedCompany] = useState<Company | null>(null);
 
   useEffect(() => {
@@ -89,7 +95,8 @@ function SelectCompanyPageContent() {
   const newCompanyId = searchParams.get("new");
   useEffect(() => {
     if (!newCompanyId || !user?.uid) return;
-    const alreadyInList = (contextCompanies || []).some((c) => c.id === newCompanyId);
+    const registryRows = allCompaniesRegistry?.length ? allCompaniesRegistry : contextCompanies || [];
+    const alreadyInList = registryRows.some((c) => c.id === newCompanyId);
     if (alreadyInList) {
       setNewlyCreatedCompany(null);
       return;
@@ -119,7 +126,7 @@ function SelectCompanyPageContent() {
     return () => {
       cancelled = true;
     };
-  }, [newCompanyId, user?.uid, contextCompanies]);
+  }, [newCompanyId, user?.uid, allCompaniesRegistry, contextCompanies]);
 
   const allCompanies = useMemo(() => {
     const shareUser = { uid: user?.uid || "", email: user?.email ?? null };
@@ -127,25 +134,22 @@ function SelectCompanyPageContent() {
       user?.uid ? resolveCompanyIsOwnedForUser(c, shareUser) : Boolean(c.isOwned);
 
     const companyMap = new Map<string, Company>();
-    (contextCompanies || []).forEach((c) => {
+    const registryRows = allCompaniesRegistry?.length ? allCompaniesRegistry : contextCompanies || [];
+    registryRows.forEach((c) => {
       if (!isCompanyVisibleInCompanyPage(c as Company)) return;
       companyMap.set(c.id, { ...(c as Company), isOwned: resolveOwned(c as Company) });
     });
     if (newlyCreatedCompany && !companyMap.has(newlyCreatedCompany.id)) {
       companyMap.set(newlyCreatedCompany.id, newlyCreatedCompany);
     }
-    mergeDeviceLocalCompaniesIntoMap(
-      companyMap,
-      (contextCompanies || []) as Company[],
-      user
-    );
+    mergeDeviceLocalCompaniesIntoMap(companyMap, registryRows as Company[], user);
     return filterSharedOnlyCompaniesForSuperAdminInMainApp(
       Array.from(companyMap.values()),
       user ? { uid: user.uid, email: user.email } : null,
       isSuperAdminUser,
       "/company"
     );
-}, [user, newlyCreatedCompany, contextCompanies, isSuperAdminUser]);
+}, [user, newlyCreatedCompany, allCompaniesRegistry, contextCompanies, isSuperAdminUser]);
 
   if (authLoading || companyContextLoading) {
     return (

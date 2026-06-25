@@ -84,4 +84,20 @@ export const mdc = {
   reportChromeTitle: "shrink-0 text-sm font-bold text-muted-foreground",
   reportChromeEntity: "min-w-0 truncate text-xs font-medium",
   reportChromeBalance: "shrink-0 whitespace-nowrap text-xs font-bold",
+
+  /** Report mobile: sirf txn table scroll — pager alag row (footer ke upar, hamesha dikhe). */
+  reportTxnScrollBody: "flex-1 min-h-0 overflow-y-auto scroll-touch",
+  ledgerTxnScrollBody: "flex-1 min-h-0 overflow-auto scroll-touch",
+  /** Report register: pager scroll ke bahar — `ReportMobileLedgerFooter` fixed niche rehta hai */
+  reportTxnPagerOutside:
+    "flex-shrink-0 border-t bg-background/95 z-40 mb-[calc(env(safe-area-inset-bottom,0px)+3.25rem)]",
+  /** @deprecated use reportTxnPagerOutside — pager ab scroll ke andar nahi */
+  reportTxnPagerInScroll:
+    "flex-shrink-0 border-t bg-background/95 z-40 mb-[calc(env(safe-area-inset-bottom,0px)+3.25rem)]",
+  ledgerTxnPagerOutside: "flex-shrink-0 mb-12",
 } as const;
+
+/** Mobile txn list scroll wrapper — report vs ledger detail */
+export function mobileTxnScrollBodyClass(isReportMobileChrome: boolean): string {
+  return isReportMobileChrome ? mdc.reportTxnScrollBody : mdc.ledgerTxnScrollBody;
+}

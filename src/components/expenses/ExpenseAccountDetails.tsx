@@ -49,6 +49,7 @@ import {
   DrawerFooter,
 } from "@/components/ui/drawer";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { mdc } from "@/lib/mobileDetailChrome";
 import * as XLSX from "xlsx";
 import { ReportMobileLedgerFooter } from "@/components/reports/ReportMobileLedgerFooter";
 import {
@@ -983,8 +984,7 @@ export function ExpenseAccountDetails({
 
     return (
       <>
-      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden w-full">
+      <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
           {isReportMobileChrome && onBack ? (
             <header className="sticky top-0 z-10 flex-shrink-0 border-b bg-white p-3 dark:bg-card">
               <div className="flex min-w-0 items-center gap-2">
@@ -1083,7 +1083,57 @@ export function ExpenseAccountDetails({
             </div>
           </div>
           </MobileDetailSummaryCollapsible>
-          {/* List + pager: grow to fill viewport; pager stays above fixed action bar */}
+          {isReportMobileChrome ? (
+            <>
+            <div
+              className={mdc.reportTxnScrollBody}
+              style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+            >
+              <div className="pb-2">
+                <TransactionsTable
+                  transactions={mobileTransactions}
+                  context="expense"
+                  contextId={account.id}
+                  openingBalance={mobilePageLedgerStats.openingForPage}
+                  booksOpeningBalance={masterExpenseOpening}
+                  ledgerDateFilterActive={hasLedgerDateFilter}
+                  ledgerShowBookOpeningRow={rowsPerPage <= 0 || currentPage === 1}
+                  openingBalancePeriodStartDate={dateRange?.from}
+              dateRange={dateRange}
+                  openingBalanceNarration={account.openingBalanceNarration}
+                  openingBalanceAttachmentUrls={account.documentFileUrls}
+                  openingBalanceDate={(account as any).openingBalanceDate}
+                  showNarration={showNarration}
+                  visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
+                  userNames={userNames}
+                  journalAccountNames={journalAccountNames}
+                  onRowClick={handleEditVoucher}
+                  filters={filters}
+                  setFilters={setFilters}
+                  activeFilter={activeFilter}
+                  setActiveFilter={setActiveFilter}
+                  periodDr={mobilePageLedgerStats.periodDrForPage}
+                  periodCr={mobilePageLedgerStats.periodCrForPage}
+                  closingBalance={mobilePageLedgerStats.closingForPage}
+                  scrollOnlyTransactions
+                  {...statementCheck.tableProps}
+                />
+              </div>
+            </div>
+            <MobileTransactionsPager
+              className={mdc.reportTxnPagerOutside}
+              currentPage={currentPage}
+              totalItems={searchFilteredTransactions.length}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(nextRows) => {
+                setRowsPerPage(nextRows);
+                setCurrentPage(1);
+              }}
+              onPageChange={setCurrentPage}
+              edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+            />
+            </>
+          ) : (
           <div className="flex min-h-0 flex-1 flex-col">
             <div
               className="min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-touch touch-pan-y"
@@ -1097,7 +1147,7 @@ export function ExpenseAccountDetails({
                   openingBalance={mobilePageLedgerStats.openingForPage}
                   booksOpeningBalance={masterExpenseOpening}
                   ledgerDateFilterActive={hasLedgerDateFilter}
-                  ledgerShowBookOpeningRow={currentPage === 1}
+                  ledgerShowBookOpeningRow={rowsPerPage <= 0 || currentPage === 1}
                   openingBalancePeriodStartDate={dateRange?.from}
               dateRange={dateRange}
                   openingBalanceNarration={account.openingBalanceNarration}
@@ -1133,21 +1183,97 @@ export function ExpenseAccountDetails({
               edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
             />
           </div>
-        </div>
-        {isReportMobileChrome ? (
-          <ReportMobileLedgerFooter
-            onPrint={handlePrint}
-            onExcel={handleExcelLedger}
-            onDateOpen={() => {
+          )}
+      </div>
+      {isReportMobileChrome ? (
+        <>
+        <ReportMobileLedgerFooter
+          onPrint={handlePrint}
+          onExcel={handleExcelLedger}
+          onDateOpen={() => {
+            openingModalRef.current = true;
+            setIsCalendarOpen(true);
+            openModalInUrl();
+          }}
+          balanceMode={balanceMode}
+          onBalanceModeToggle={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
+          showChart={false}
+        />
+        <Drawer
+          open={isCalendarOpen}
+          onOpenChange={(open: boolean) => {
+            if (open) {
               openingModalRef.current = true;
-              setIsCalendarOpen(true);
               openModalInUrl();
-            }}
-            balanceMode={balanceMode}
-            onBalanceModeToggle={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
-            showChart={false}
-          />
-        ) : (
+            }
+            setIsCalendarOpen(open);
+            if (!open) closeModalInUrl();
+          }}
+        >
+          <DrawerContent>
+            <DrawerHeader className="p-4 text-left">
+              <DrawerTitle>Select Date Range</DrawerTitle>
+              <MobileDialogDescription>Select a date range for the transaction list.</MobileDialogDescription>
+            </DrawerHeader>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
+              {(dateSystem === "BS" || dateSystem === "Both") && (
+                <NepaliCalendar
+                  rangePresetSlot={
+                    <DateRangePresetRow
+                      country={company?.country}
+                      onApply={(r) => {
+                        onDateRangeChange?.(r);
+                        setIsCalendarOpen(false);
+                      }}
+                    />
+                  }
+                  onSelect={handleNepaliSelect}
+                  valueAD={dateRange}
+                  isRange={true}
+                  numberOfMonths={calendarMonths}
+                />
+              )}
+              {(dateSystem === "AD" || dateSystem === "Both") && (
+                <div className="flex-1 w-full min-w-0">
+                  <AdCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          onDateRangeChange?.(r);
+                          setIsCalendarOpen(false);
+                        }}
+                      />
+                    }
+                    valueAD={dateRange}
+                    isRange
+                    numberOfMonths={calendarMonths}
+                    transactionDates={transactionDates}
+                    onSelect={(adDate) => {
+                      const range = dateRange;
+                      if (!range?.from || (range.from && range.to)) {
+                        onDateRangeChange?.({ from: adDate, to: undefined });
+                      } else if (adDate < range.from) {
+                        onDateRangeChange?.({ from: adDate, to: range.from });
+                        setIsCalendarOpen(false);
+                      } else {
+                        onDateRangeChange?.({ from: range.from, to: adDate });
+                        setIsCalendarOpen(false);
+                      }
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+            <DrawerFooter className="p-4 pt-2">
+              <DrawerClose asChild>
+                <Button variant="outline">Close</Button>
+              </DrawerClose>
+            </DrawerFooter>
+          </DrawerContent>
+        </Drawer>
+        </>
+      ) : (
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
           <Button
             className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium"
@@ -1248,81 +1374,7 @@ export function ExpenseAccountDetails({
             </DrawerContent>
           </Drawer>
         </div>
-        )}
-        {isReportMobileChrome ? (
-          <Drawer
-            open={isCalendarOpen}
-            onOpenChange={(open: boolean) => {
-              if (open) {
-                openingModalRef.current = true;
-                openModalInUrl();
-              }
-              setIsCalendarOpen(open);
-              if (!open) closeModalInUrl();
-            }}
-          >
-            <DrawerContent>
-              <DrawerHeader className="p-4 text-left">
-                <DrawerTitle>Select Date Range</DrawerTitle>
-                <MobileDialogDescription>Select a date range for the transaction list.</MobileDialogDescription>
-              </DrawerHeader>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
-                {(dateSystem === "BS" || dateSystem === "Both") && (
-                  <NepaliCalendar
-                    rangePresetSlot={
-                      <DateRangePresetRow
-                        country={company?.country}
-                        onApply={(r) => {
-                          onDateRangeChange?.(r);
-                          setIsCalendarOpen(false);
-                        }}
-                      />
-                    }
-                    onSelect={handleNepaliSelect}
-                    valueAD={dateRange}
-                    isRange={true}
-                    numberOfMonths={calendarMonths}
-                  />
-                )}
-                {(dateSystem === "AD" || dateSystem === "Both") && (
-                  <div className="flex-1 w-full min-w-0">
-                    <AdCalendar
-                      rangePresetSlot={
-                        <DateRangePresetRow
-                          country={company?.country}
-                          onApply={(r) => {
-                            onDateRangeChange?.(r);
-                            setIsCalendarOpen(false);
-                          }}
-                        />
-                      }
-                      valueAD={dateRange}
-                      isRange
-                      numberOfMonths={calendarMonths}
-                      onSelect={(adDate) => {
-                        const range = dateRange;
-                        if (!range?.from || (range.from && range.to)) {
-                          onDateRangeChange?.({ from: adDate, to: undefined });
-                        } else if (adDate < range.from) {
-                          onDateRangeChange?.({ from: adDate, to: range.from });
-                          setIsCalendarOpen(false);
-                        } else {
-                          onDateRangeChange?.({ from: range.from, to: adDate });
-                          setIsCalendarOpen(false);
-                        }
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
-              <DrawerFooter className="p-4 pt-2">
-                <DrawerClose asChild>
-                  <Button variant="outline">Close</Button>
-                </DrawerClose>
-              </DrawerFooter>
-            </DrawerContent>
-          </Drawer>
-        ) : null}
+      )}
         <AddVoucherDialog
           isOpen={!!mobileFooterDialogOpen && mobileFooterDialogOpen === "add_expense"}
           onOpenChange={(open: boolean) => {
@@ -1356,7 +1408,6 @@ export function ExpenseAccountDetails({
           voucher={selectedVoucher}
           onVoucherAction={() => setSelectedVoucher(null)}
         />
-      </div>
       </>
     );
   }

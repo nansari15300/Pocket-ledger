@@ -58,6 +58,7 @@ import {
   DrawerFooter,
 } from "@/components/ui/drawer";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { mdc } from "@/lib/mobileDetailChrome";
 import { Calendar } from "@/components/ui/calendar";
 import {
   Select,
@@ -797,7 +798,8 @@ export function AccountDetails({
     // Reports drill-down (dashboard txn count → Journal/Contra): Party ledger mobile — collapsible summary + scroll + pager
     if (isReportChrome) {
       return (
-        <div className="relative flex w-full min-h-0 flex-1 flex-col overflow-hidden">
+        <>
+        <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
           <header className="sticky top-0 z-10 flex-shrink-0 border-b bg-white p-3 dark:bg-card">
             <div className="flex min-w-0 items-center gap-2">
               {onBack ? (
@@ -864,7 +866,7 @@ export function AccountDetails({
           </MobileDetailSummaryCollapsible>
 
           <div
-            className="min-h-0 flex-1 overflow-auto scroll-touch"
+            className={mdc.reportTxnScrollBody}
             style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
           >
             <div className="pb-2">
@@ -898,40 +900,40 @@ export function AccountDetails({
                 periodCr={ledgerPageStats.periodCrForPage}
                 closingBalance={ledgerPageStats.closingForPage}
                 hideFooter
+                scrollOnlyTransactions
                 transactionCardSearchHighlight={mobileSearchTerm}
                 {...statementCheck.tableProps}
               />
               )}
             </div>
           </div>
-
           {mobileReportView === "list" ? (
-          <MobileTransactionsPager
-            className="mb-12 flex-shrink-0"
-            currentPage={currentPage}
-            totalItems={filteredMobileTransactions.length}
-            rowsPerPage={rowsPerPage}
-            onRowsPerPageChange={(nextRows) => {
-              setRowsPerPage(nextRows);
-              setCurrentPage(1);
-            }}
-            onPageChange={setCurrentPage}
-            edgeCounts={rowsPerPage > 0 && useTailPaging ? mobileReportPagerEdgeCounts : undefined}
-            pagingMode={useTailPaging ? "newest-first" : "oldest-first"}
-          />
+            <MobileTransactionsPager
+              className={mdc.reportTxnPagerOutside}
+              currentPage={currentPage}
+              totalItems={filteredMobileTransactions.length}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(nextRows) => {
+                setRowsPerPage(nextRows);
+                setCurrentPage(1);
+              }}
+              onPageChange={setCurrentPage}
+              edgeCounts={rowsPerPage > 0 && useTailPaging ? mobileReportPagerEdgeCounts : undefined}
+              pagingMode={useTailPaging ? "newest-first" : "oldest-first"}
+            />
           ) : null}
 
           {mobileCalendarDrawer}
-
-          <ReportMobileLedgerFooter
-            onPrint={handlePrintStatement}
-            onExcel={handleExcelLedger}
-            onDateOpen={() => setIsCalendarOpen(true)}
-            showBillWise={false}
-            mobileView={mobileReportView}
-            onViewToggle={() => setMobileReportView((v) => (v === "list" ? "chart" : "list"))}
-          />
         </div>
+        <ReportMobileLedgerFooter
+          onPrint={handlePrintStatement}
+          onExcel={handleExcelLedger}
+          onDateOpen={() => setIsCalendarOpen(true)}
+          showBillWise={false}
+          mobileView={mobileReportView}
+          onViewToggle={() => setMobileReportView((v) => (v === "list" ? "chart" : "list"))}
+        />
+        </>
       );
     }
 

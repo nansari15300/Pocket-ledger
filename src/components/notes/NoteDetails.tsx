@@ -37,6 +37,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { cn } from "@/lib/utils";
+import { mdc, mobileTxnScrollBodyClass } from "@/lib/mobileDetailChrome";
 import * as XLSX from "xlsx";
 
 export function NoteDetails({
@@ -329,7 +330,7 @@ export function NoteDetails({
             </div>
           </MobileDetailSummaryCollapsible>
           <div
-            className="flex-1 min-h-0 overflow-auto scroll-touch"
+            className={mobileTxnScrollBodyClass(isReportMobileChrome)}
             style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
           >
             <div className="pb-2 px-0.5">
@@ -352,19 +353,36 @@ export function NoteDetails({
               )}
             </div>
           </div>
-          <MobileTransactionsPager
-            className="flex-shrink-0 mb-12"
-            currentPage={currentPage}
-            totalItems={searchFilteredTransactions.length}
-            rowsPerPage={rowsPerPage}
-            onRowsPerPageChange={(nextRows) => {
-              setRowsPerPage(nextRows);
-              setCurrentPage(1);
-            }}
-            onPageChange={setCurrentPage}
-            edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
-            pagingMode={useTailPaging ? "newest-first" : "oldest-first"}
-          />
+          {isReportMobileChrome ? (
+            <MobileTransactionsPager
+              className={mdc.reportTxnPagerOutside}
+              currentPage={currentPage}
+              totalItems={searchFilteredTransactions.length}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(nextRows) => {
+                setRowsPerPage(nextRows);
+                setCurrentPage(1);
+              }}
+              onPageChange={setCurrentPage}
+              edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+              pagingMode={useTailPaging ? "newest-first" : "oldest-first"}
+            />
+          ) : null}
+          {!isReportMobileChrome ? (
+            <MobileTransactionsPager
+              className={mdc.ledgerTxnPagerOutside}
+              currentPage={currentPage}
+              totalItems={searchFilteredTransactions.length}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(nextRows) => {
+                setRowsPerPage(nextRows);
+                setCurrentPage(1);
+              }}
+              onPageChange={setCurrentPage}
+              edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+              pagingMode={useTailPaging ? "newest-first" : "oldest-first"}
+            />
+          ) : null}
         </div>
         {isReportMobileChrome ? (
           <ReportMobileLedgerFooter
