@@ -1,10 +1,16 @@
 import type { Company } from "@/hooks/useCompany";
 import { isCloudLinkedCompanyStorage, isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 
-type CompanyStorageRow = Company & {
+type CompanyStorageRow = {
+  id?: string;
+  name?: string;
+  ownerId?: string;
+  storageOption?: string | null;
   syncPolicy?: string | null;
   syncedFromCloud?: boolean;
   isOwned?: boolean;
+  plServerShared?: boolean;
+  authoritativeCompanyId?: string;
 };
 
 /**

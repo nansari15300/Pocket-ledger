@@ -521,6 +521,8 @@ export async function upsertCompanyDocInBrowserDb(
   if (!(await shouldPersistCompanyDocToBrowserDb(companyId, options))) return;
   if (shouldSkipMirrorWritesNow()) return;
   const shouldNotify = options?.notify !== false;
+  let hasExistingRow = false;
+  let stampedData: Record<string, unknown> = data;
   try {
     // User-origin voucher SQLite writes: expired paid / strict JWT gate — mirror/restore paths `skipPlanMutationGate`.
     if (collectionName === "vouchers" && options?.skipPlanMutationGate !== true) {
@@ -528,16 +530,17 @@ export async function upsertCompanyDocInBrowserDb(
     }
     const db = await getBrowserDb();
     if (!db) return;
-    let hasExistingRow = false;
+    let hasExistingRowInner = false;
     try {
       const existingRow = db
         .prepare("SELECT 1 AS ok FROM company_docs WHERE company_id = ? AND collection = ? AND id = ?")
         .get(companyId, collectionName, docId) as { ok?: number } | undefined;
-      hasExistingRow = existingRow?.ok === 1;
+      hasExistingRowInner = existingRow?.ok === 1;
     } catch {
       /* optional */
     }
-    const stampedData = stampUserOriginCompanyDocData(data, { shouldNotify, hasExistingRow });
+    hasExistingRow = hasExistingRowInner;
+    stampedData = stampUserOriginCompanyDocData(data, { shouldNotify, hasExistingRow });
     traceServerDocTimestampLifecycle("before_upsert", companyId, collectionName, docId, stampedData);
     const json = JSON.stringify(serializeForLocalDb(stampedData));
     try {

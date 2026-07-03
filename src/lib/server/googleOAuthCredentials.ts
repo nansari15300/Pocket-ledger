@@ -37,10 +37,14 @@ export function resolveGoogleOAuthRedirectUri(): string {
 }
 
 /** googleapis OAuth2 client — Drive connect + token refresh dono ke liye. */
-export function createGoogleOAuth2Client(google: typeof import("googleapis").google) {
+export function createGoogleOAuth2Client(
+  google: typeof import("googleapis").google,
+  redirectUriOverride?: string
+) {
+  const redirectUri = String(redirectUriOverride ?? "").trim() || resolveGoogleOAuthRedirectUri();
   return new google.auth.OAuth2(
     resolveGoogleOAuthClientId(),
     resolveGoogleOAuthClientSecret(),
-    resolveGoogleOAuthRedirectUri()
+    redirectUri
   );
 }

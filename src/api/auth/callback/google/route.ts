@@ -64,9 +64,11 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const oauth2Client = createGoogleOAuth2Client(google);
     // Callback host production/staging ho sakta hai — request origin se redirect URI match karo.
-    oauth2Client.redirectUri = `${baseUrl}/api/auth/callback/google`;
+    const oauth2Client = createGoogleOAuth2Client(
+      google,
+      `${baseUrl}/api/auth/callback/google`
+    );
 
     // Exchange code -> tokens
     const { tokens } = await oauth2Client.getToken(code);
