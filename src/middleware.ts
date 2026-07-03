@@ -5,8 +5,8 @@ import {
 } from "@/lib/server/billingApiCors";
 
 /**
- * Static APK/EXE: `https://localhost` → `https://pocket-ledger.com/api/payments/*` cross-origin.
- * Pehle sirf sync-plan par CORS tha — checkout "Failed to fetch" isi wajah se aata tha.
+ * Static APK/EXE + web dev: `http://localhost:3000` → `https://pocket-ledger.com/api/...` cross-origin.
+ * Billing, Drive OAuth, aur local-cloud-sync sab ke liye CORS preflight.
  */
 export function middleware(req: NextRequest) {
   const pathname = req.nextUrl.pathname;
@@ -30,6 +30,8 @@ export const config = {
   matcher: [
     "/api/payments/:path*",
     "/api/billing/:path*",
+    "/api/local-cloud-sync/:path*",
+    "/api/auth/google/:path*",
     "/api/company/sync-plan",
     "/api/company/downgrade-plan",
     "/api/company/repair-stripe-plan-expiry",

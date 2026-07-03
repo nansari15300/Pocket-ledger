@@ -36,6 +36,8 @@ function getAllowedBillingCorsOrigin(req: NextRequest): string | null {
 /** Middleware matcher — static client cross-origin billing + local Drive sync APIs. */
 export function isPocketLedgerBillingApiCorsPath(pathname: string): boolean {
   if (pathname.startsWith("/api/billing/")) return true;
+  if (pathname.startsWith("/api/local-cloud-sync/")) return true;
+  if (pathname.startsWith("/api/auth/google/")) return true;
   if (pathname.startsWith("/api/payments/webhook/")) return false;
   if (pathname.startsWith("/api/payments/")) return true;
   return (
