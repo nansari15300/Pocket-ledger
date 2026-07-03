@@ -19,6 +19,7 @@ import {
   openGoogleDriveOAuthUrl,
   resolveDriveOAuthReturnPath,
 } from "@/lib/driveAuthClient";
+import { markDriveOAuthReturnGrace } from "@/lib/driveOAuthReturnGrace";
 import { getLocalCloudSyncStatus, runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
 import { backfillLocalDocsToCloudSyncOutbox } from "@/lib/localCloudSync/backfillOutbox";
 import { setCloudSyncCursor } from "@/lib/localCloudSync/queue";
@@ -455,6 +456,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
     setBusy(true);
     try {
       const firebaseUser = await getFirebaseAuthUserForApi();
+      markDriveOAuthReturnGrace(companyId);
       const { url } = await getGoogleDriveAuthUrl({
         returnPath: resolveDriveOAuthReturnPath(settingsViewHref("local_cloud_sync")),
         uid: firebaseUser.uid,

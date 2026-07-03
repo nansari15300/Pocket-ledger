@@ -12,6 +12,7 @@ import {
   openGoogleDriveOAuthUrl,
   resolveDriveOAuthReturnPath,
 } from "@/lib/driveAuthClient";
+import { markDriveOAuthReturnGrace } from "@/lib/driveOAuthReturnGrace";
 import {
   getFirebaseAuthUserForApi,
   isLocalSyntheticAuthUid,
@@ -52,7 +53,7 @@ export function JoinSharedLocalCompanyPanel({
   embedded = false,
 }: Props) {
   const { user } = useAuth();
-  const { reloadLocalCompanyRegistry, localCompanyRegistryEpoch } = useCompany();
+  const { reloadLocalCompanyRegistry, localCompanyRegistryEpoch, companyId } = useCompany();
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
   const [joiningId, setJoiningId] = useState<string | null>(null);
@@ -111,10 +112,12 @@ export function JoinSharedLocalCompanyPanel({
   const connectDrive = async () => {
     try {
       const firebaseUser = await getFirebaseAuthUserForApi();
+      if (companyId) markDriveOAuthReturnGrace(companyId);
       const { url } = await getGoogleDriveAuthUrl({
         returnPath: resolveDriveOAuthReturnPath(returnPath),
         uid: firebaseUser.uid,
         email: firebaseUser.email ?? undefined,
+        formData: companyId ? { companyId } : undefined,
       });
       await openGoogleDriveOAuthUrl(url);
     } catch (e) {

@@ -19,6 +19,7 @@ import { AppUiZoomBootstrap } from "@/components/layout/AppUiZoomBootstrap";
 import { VoucherOutboxFlushManager } from "@/components/VoucherOutboxFlushManager";
 import { LocalCompanyCloudSyncManager } from "@/components/LocalCompanyCloudSyncManager";
 import { CapacitorDriveOAuthReturnHandler } from "@/components/CapacitorDriveOAuthReturnHandler";
+import { DriveOAuthReturnBootstrap } from "@/components/DriveOAuthReturnBootstrap";
 import { PendingRestoreCloudPushManager } from "@/components/PendingRestoreCloudPushManager";
 import { StaticFastResumeSyncManager } from "@/components/StaticFastResumeSyncManager";
 import { OnlineResumeRouteShield } from "@/components/OnlineResumeRouteShield";
@@ -127,6 +128,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                                 <VoucherOutboxFlushManager />
                                 <LocalCompanyCloudSyncManager />
                                 <CapacitorDriveOAuthReturnHandler />
+                                <DriveOAuthReturnBootstrap />
                                 <PendingRestoreCloudPushManager />
                                 <TooltipProvider>
                                     <MobileDetailSummaryCollapseProvider>

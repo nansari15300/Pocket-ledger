@@ -37,6 +37,7 @@ import {
 } from "@/lib/companyOnlineIntegrity";
 import { isPureLocalLedgerCompany, shouldReadLedgerFromSqliteOnly, isDeviceLocalCompany } from "@/lib/companyStorageKind";
 import { isLocalBackupRestoredCompanyRow, readLocalBackupRestoreSelectionGrace } from "@/lib/localBackupRestoreCompany";
+import { readDriveOAuthReturnGrace } from "@/lib/driveOAuthReturnGrace";
 import { BUMP_LOCAL_COMPANY_REGISTRY_EVENT } from "@/lib/applyStripePlanToLocalCompany";
 import { isRestoreCloudUploadLocked, readPendingRestoreCloudPush } from "@/lib/restoreCloudBackgroundSync";
 import { clearCompanyPlanLocalCache, readCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
@@ -1248,6 +1249,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             });
             return;
           }
+          if (readDriveOAuthReturnGrace(liveId)) {
+            plDbgCompanyRecovery("performLocalRegistryFirestoreMirror:selectedInvisible:oauthGraceHold", {
+              liveId,
+            });
+            return;
+          }
           const gate = getActiveGate();
           if (
             gate.type === "local_server" &&
@@ -2389,6 +2396,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         setTimeout(() => setLoadingPulse((p) => p + 1), 600);
         return;
       }
+      if (readDriveOAuthReturnGrace(companyId)) {
+        plDbgCompanyRecovery("listRecovery:notInSqlite:oauthGraceDefer", { companyId });
+        setTimeout(() => setLoadingPulse((p) => p + 1), 600);
+        return;
+      }
       plDbgCompanyRecovery("listRecovery:notInSqlite:clear", { companyId });
       clearCompanyId();
     })();
@@ -2405,6 +2417,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     try {
       const persisted = readSelectedCompanyId()?.trim();
       if (persisted) {
+        if (readDriveOAuthReturnGrace(persisted)) {
+          setCompanyId(persisted);
+          plNavDbg("useCompany.autoSelect:oauthGraceHydrate", { hint: plNavDbgIdHint(persisted) });
+          return;
+        }
         setCompanyId(persisted);
         plNavDbg("useCompany.autoSelect:hydratePersisted", { hint: plNavDbgIdHint(persisted) });
         return;

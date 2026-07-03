@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
-import { createGoogleOAuth2Client } from "@/lib/server/googleOAuthCredentials";
+import { createGoogleOAuth2Client, resolveGoogleOAuthRedirectUri } from "@/lib/server/googleOAuthCredentials";
 import { saveGoogleDriveTokensForUser } from "@/lib/localCloudSync/server/driveOAuthServer";
 
 type DecodedState = {
@@ -60,10 +60,8 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const oauth2Client = createGoogleOAuth2Client(
-      google,
-      `${baseUrl}/api/auth/callback/google`
-    );
+    const redirectUri = resolveGoogleOAuthRedirectUri();
+    const oauth2Client = createGoogleOAuth2Client(google, redirectUri);
 
     const { tokens } = await oauth2Client.getToken(code);
 
@@ -83,9 +81,10 @@ export async function GET(req: NextRequest) {
     return redirectToReturnPath(returnPath, baseUrl, { success: "drive_connected" }, encodedState);
   } catch (error: unknown) {
     console.error("OAuth exchange failed FULL:", error);
-    const err = error as { response?: { data?: unknown } };
+    const err = error as { response?: { data?: { error?: string; error_description?: string } } };
     console.error("OAuth exchange failed RESPONSE:", err?.response?.data || "no response data");
 
-    return redirectToReturnPath(returnPath, baseUrl, { error: "oauth_exchange_failed" }, encodedState);
+    const googleError = String(err?.response?.data?.error || "").trim() || "oauth_exchange_failed";
+    return redirectToReturnPath(returnPath, baseUrl, { error: googleError }, encodedState);
   }
 }

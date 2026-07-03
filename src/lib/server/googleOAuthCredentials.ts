@@ -12,7 +12,11 @@ const POCKET_LEDGER_PRODUCTION_APP_URL = "https://pocket-ledger.com";
  */
 export function resolveGoogleOAuthClientId(): string {
   const web = String(process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? "").trim();
-  const legacy = String(process.env.GOOGLE_CLIENT_ID ?? "").trim();
+  const legacy = String(
+    process.env.GOOGLE_CLIENT_ID ??
+      (process.env as Record<string, string | undefined>)["GOOGLE_CLIENT_ID  "] ??
+      ""
+  ).trim();
   const clientId = web || FIREBASE_WEB_OAUTH_CLIENT_ID || legacy;
   if (!clientId) throw new Error("Missing Google OAuth client ID");
   return clientId;
