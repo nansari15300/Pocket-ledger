@@ -92,8 +92,7 @@ import {
   maxOnlineCompaniesForPlan,
 } from "@/lib/companyOnlineSlots";
 import { GlobalFileHoverPreviewSwitch } from "@/components/layout/GlobalFileHoverPreviewSwitch";
-import { GlobalProfileMenuOpenSwitch } from "@/components/layout/GlobalProfileMenuOpenSwitch";
-import { useProfileMenuOpen } from "@/contexts/ProfileMenuOpenContext";
+import { useFileHoverPreview } from "@/contexts/FileHoverPreviewContext";
 import { CopyLedgerHeaderButton } from "@/components/ledger/CopyLedgerHeaderButton";
 import { ShareForReconciliationHeaderButton } from "@/components/reconciliation/ShareForReconciliationHeaderButton";
 import { RenewProrationPills } from "@/components/billing/RenewProrationPills";
@@ -629,8 +628,8 @@ function UserProfileButton() {
   const { toast } = useToast();
   const { isOnline } = useOnlineStatus();
   const livePlans = useLivePlans();
-  const { mode: profileMenuOpenMode } = useProfileMenuOpen();
-  const profileHoverOpenEnabled = profileMenuOpenMode === "hover";
+  const { mode: filePreviewMode } = useFileHoverPreview();
+  const profileHoverOpenEnabled = filePreviewMode === "hover";
   const [profileOpen, setProfileOpen] = useState(false);
   const [userStorageUsedBytes, setUserStorageUsedBytes] = useState<number | null>(null);
   /** Avatar menu: manual Firestore → local plan sync (SQLite/cache align). */
@@ -1609,7 +1608,6 @@ export function DesktopAppHeader() {
               <CopyLedgerHeaderButton />
               <ShareForReconciliationHeaderButton />
               <GlobalFileHoverPreviewSwitch />
-              <GlobalProfileMenuOpenSwitch />
               <ScreenControls />
             </div>
           </div>

@@ -5,7 +5,7 @@ import * as React from "react";
 /** localStorage key — purana rakha; values: `off` | `hover` | `click` (legacy `0`/`1` migrate) */
 const STORAGE_KEY = "pocket-ledger-file-hover-preview-v1";
 
-/** Global file/avatar preview: band / hover / click */
+/** Global file/avatar preview + profile plan menu: band / hover / click */
 export type FilePreviewMode = "off" | "hover" | "click";
 
 type FileHoverPreviewContextValue = {

@@ -19,7 +19,6 @@ import { MobileFloatingButton, ReportsMobileReportListFab } from "@/components/l
 import { CompanyDemotedBanner } from "@/components/company/CompanyDemotedBanner";
 import { PlanAuthoritativeSyncBanner } from "@/components/company/PlanAuthoritativeSyncBanner";
 import { FileHoverPreviewProvider } from "@/contexts/FileHoverPreviewContext";
-import { ProfileMenuOpenProvider } from "@/contexts/ProfileMenuOpenContext";
 import { ReportPartyViewProvider } from "@/contexts/ReportPartyViewContext";
 import { ReportListProvider } from "@/contexts/ReportListContext";
 import { SettingsListProvider } from "@/contexts/SettingsListContext";
@@ -942,15 +941,13 @@ export default function DashboardLayout({
     <MobileViewProvider>
       <SidebarProvider>
         <DashboardProvider>
-          {/* Global file preview — header 3-step: Off / Hover / Click (AttachmentHoverPortal). */}
+          {/* Global preview switch: Off / Hover / Click — attachments + profile plan menu */}
           <FileHoverPreviewProvider>
-            <ProfileMenuOpenProvider>
             {/* Overlay LayoutContent ke bahar: `/company` jaisi bare routes par bhi trace dikhai de */}
             <DashboardDocumentTitleSync />
             <ElectronTabStripSyncBridge />
             <PlNavDebugOnDeviceOverlay />
             <LayoutContent>{children}</LayoutContent>
-            </ProfileMenuOpenProvider>
           </FileHoverPreviewProvider>
         </DashboardProvider>
       </SidebarProvider>

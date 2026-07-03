@@ -37,15 +37,15 @@ const MODE_DETAIL: Record<
 > = {
   off: {
     title: "Off",
-    body: "Hovering or clicking voucher, party, or item attachments will not open the preview panel. Use the Preview button where it is shown.",
+    body: "Attachment preview band. Profile plan menu sirf avatar click se khulega — hover par auto open nahi.",
   },
   hover: {
     title: "Hover preview",
-    body: "Rest the pointer on a thumbnail or attachment icon to open the preview panel. Moving the pointer away (for example while scrolling a table) closes the panel.",
+    body: "Attachment thumbnail par hover se preview khulega. Profile avatar par hover se plan menu bhi khulega.",
   },
   click: {
     title: "Click preview",
-    body: "Click or tap an attachment to open the preview panel. After you click inside, it stays open until you click outside. This is also the default on mobile.",
+    body: "Attachment click/tap se preview. Profile plan menu sirf avatar click se — hover par nahi.",
   },
 };
 
@@ -123,7 +123,7 @@ export function GlobalFileHoverPreviewSwitch({ className }: { className?: string
         <button
           type="button"
           role="radiogroup"
-          aria-label="File preview mode"
+          aria-label="Preview & profile menu mode"
           title={`${MODE_LABEL[mode]} — tap a zone to change`}
           onClick={handleTrackClick}
           data-pl-header-preview-switch
@@ -200,7 +200,7 @@ export function GlobalFileHoverPreviewSwitch({ className }: { className?: string
             onOpenAutoFocus={(e) => e.preventDefault()}
           >
             <div className="border-b px-3 py-2">
-              <p className="text-sm font-semibold leading-tight">File preview</p>
+              <p className="text-sm font-semibold leading-tight">Preview & profile menu</p>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 Current: <span className="font-medium text-foreground">{MODE_LABEL[mode]}</span>
               </p>
