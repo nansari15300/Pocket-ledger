@@ -37,6 +37,7 @@ import {
 } from "@/lib/companyOnlineIntegrity";
 import { isPureLocalLedgerCompany, shouldReadLedgerFromSqliteOnly, isDeviceLocalCompany } from "@/lib/companyStorageKind";
 import { isLocalBackupRestoredCompanyRow, readLocalBackupRestoreSelectionGrace } from "@/lib/localBackupRestoreCompany";
+import { overlayOwnerAccountPlanOnLocalCompany } from "@/lib/accountPlanForOwner";
 import { readDriveOAuthReturnGrace } from "@/lib/driveOAuthReturnGrace";
 import { BUMP_LOCAL_COMPANY_REGISTRY_EVENT } from "@/lib/applyStripePlanToLocalCompany";
 import { isRestoreCloudUploadLocked, readPendingRestoreCloudPush } from "@/lib/restoreCloudBackgroundSync";
@@ -1029,37 +1030,42 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     const shareUser = { uid: currentUid, email: user?.email ?? null };
     const isOwnedByCurrentUser = isCurrentUserOwnerOfCompanyRow(raw, shareUser);
     const isSharedWithCurrentUser = isCurrentUserSharedOnCompanyRow(raw, shareUser);
-    return {
-      ...raw,
-      planId,
-      ...(typeof rawMs === "number" && Number.isFinite(rawMs) ? { planExpiryMs: rawMs } : {}),
-      ...(planExpiryFromMs ? { planExpiry: planExpiryFromMs } : {}),
-      ...(stripeSessionFromPlanCache ? { lastStripeCheckoutSessionId: stripeSessionFromPlanCache } : {}),
-      // Drive-shared local join → "Shared Companies Local" (online shared jaisa owner email).
-      isOwned: isDriveSharedJoin
-        ? false
-        : isOwnedByCurrentUser
-          ? true
-          : isSharedWithCurrentUser
-            ? false
-            : resolveCompanyIsOwnedForUser(raw, shareUser),
-      allowAttachments:
-        typeof raw.allowAttachments === "boolean"
-          ? raw.allowAttachments
-          : plan.entitlements.canAddFileImagePdf === true,
-      voucherHistoryEnabled:
-        typeof raw.voucherHistoryEnabled === "boolean"
-          ? raw.voucherHistoryEnabled
-          : plan.entitlements.voucherHistoryEnabled === true,
-      voucherHistoryLimit:
-        typeof raw.voucherHistoryLimit === "number"
-          ? raw.voucherHistoryLimit
-          : Number(plan.entitlements.voucherHistoryLimit) || 0,
-      userCanUseMultiDevice:
-        typeof raw.userCanUseMultiDevice === "boolean"
-          ? raw.userCanUseMultiDevice
-          : plan.entitlements.hasMultiDeviceSync === true,
-    } as Company;
+    return overlayOwnerAccountPlanOnLocalCompany(
+      {
+        ...raw,
+        planId,
+        ...(typeof rawMs === "number" && Number.isFinite(rawMs) ? { planExpiryMs: rawMs } : {}),
+        ...(planExpiryFromMs ? { planExpiry: planExpiryFromMs } : {}),
+        ...(stripeSessionFromPlanCache ? { lastStripeCheckoutSessionId: stripeSessionFromPlanCache } : {}),
+        // Drive-shared local join → "Shared Companies Local" (online shared jaisa owner email).
+        isOwned: isDriveSharedJoin
+          ? false
+          : isOwnedByCurrentUser
+            ? true
+            : isSharedWithCurrentUser
+              ? false
+              : resolveCompanyIsOwnedForUser(raw, shareUser),
+        allowAttachments:
+          typeof raw.allowAttachments === "boolean"
+            ? raw.allowAttachments
+            : plan.entitlements.canAddFileImagePdf === true,
+        voucherHistoryEnabled:
+          typeof raw.voucherHistoryEnabled === "boolean"
+            ? raw.voucherHistoryEnabled
+            : plan.entitlements.voucherHistoryEnabled === true,
+        voucherHistoryLimit:
+          typeof raw.voucherHistoryLimit === "number"
+            ? raw.voucherHistoryLimit
+            : Number(plan.entitlements.voucherHistoryLimit) || 0,
+        userCanUseMultiDevice:
+          typeof raw.userCanUseMultiDevice === "boolean"
+            ? raw.userCanUseMultiDevice
+            : plan.entitlements.hasMultiDeviceSync === true,
+      } as Company,
+      allCompaniesLiveRef.current,
+      user?.uid,
+      user?.email
+    );
   }, [user?.email, user?.uid]);
 
   useEffect(() => {
@@ -1340,16 +1346,14 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       setPlanSyncInFlight(true);
       try {
         const row = await getLocalCompanyById(companyId);
-        // Local-only company ko cloud plan route hit karane ki zarurat nahi (404 noise reduce).
-        if (!canRunServerPlanSyncForCompanyRow(row as Company | null | undefined)) {
-          return { ok: true, applied: false, reason: "local_only_company" };
-        }
         const firebaseCompanyId =
           String(row?.authoritativeCompanyId || companyId).trim() || companyId;
         const r = await syncCompanyPlanFromServer({
           firebaseCompanyId,
           localCompanyId: companyId,
           getIdToken: () => user.getIdToken(),
+          firebaseUid: user.uid,
+          ownedCompaniesHint: allCompaniesLiveRef.current,
         });
         const rowAfter = await getLocalCompanyById(companyId);
         if (rowAfter && r.ok && r.applied) {
@@ -1873,7 +1877,15 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           !user?.uid ||
           isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user?.email ?? null });
         if ((isPureLocalRow || isLocalBackupRestoredCompanyRow(row as Record<string, unknown>)) && isOwnerRow) {
-          companyMap.set(c.id, normalized);
+          companyMap.set(
+            c.id,
+            overlayOwnerAccountPlanOnLocalCompany(
+              normalized,
+              Array.from(companyMap.values()),
+              user?.uid,
+              user?.email ?? null
+            )
+          );
           continue;
         }
         if (

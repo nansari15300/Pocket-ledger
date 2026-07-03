@@ -1,5 +1,6 @@
 "use client";
 
+import { isDeviceLocalCompany } from "@/lib/companyStorageKind";
 import { normalizePlanIdForClient, type PlanId, planTierIndex } from "@/config/plans";
 
 /**
@@ -85,4 +86,23 @@ export function resolvePlanIdForActiveCompany(
     return resolveEffectiveAccountPlanId(allCompanies, firebaseUid, company.planId);
   }
   return normalizePlanIdForClient(company.planId);
+}
+
+/** Device-local owned row: Firebase account plan overlay (SQLite basic + online Pro). */
+export function overlayOwnerAccountPlanOnLocalCompany<
+  T extends CompanyPlanRow & { id?: string; storageOption?: string | null }
+>(
+  company: T,
+  allCompanies: ReadonlyArray<CompanyPlanRow>,
+  firebaseUid: string | null | undefined,
+  firebaseEmail?: string | null
+): T {
+  if (!company?.id || !firebaseUid?.trim()) return company;
+  if (!isDeviceLocalCompany(company)) return company;
+  if (!isCompanyOwnedByFirebaseUser(company, firebaseUid, firebaseEmail)) return company;
+  const effective = resolvePlanIdForActiveCompany(company, allCompanies, firebaseUid, firebaseEmail);
+  const current = normalizePlanIdForClient(company.planId);
+  if (effective === current) return company;
+  if (planTierIndex(effective) <= planTierIndex(current)) return company;
+  return { ...company, planId: effective };
 }

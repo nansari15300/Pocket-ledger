@@ -85,13 +85,15 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 import { listLocalCompanies } from "@/lib/localCompanyStore";
 import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
-import { highestPlanIdAmongOwnedCompanies, resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
+import { highestPlanIdAmongOwnedCompanies, resolveEffectiveAccountPlanId, resolvePlanIdForActiveCompany } from "@/lib/accountPlanForOwner";
 import {
   countLocalCompanySlotsForOwner,
   countOnlineCompanySlotsForOwner,
   maxOnlineCompaniesForPlan,
 } from "@/lib/companyOnlineSlots";
 import { GlobalFileHoverPreviewSwitch } from "@/components/layout/GlobalFileHoverPreviewSwitch";
+import { GlobalProfileMenuOpenSwitch } from "@/components/layout/GlobalProfileMenuOpenSwitch";
+import { useProfileMenuOpen } from "@/contexts/ProfileMenuOpenContext";
 import { CopyLedgerHeaderButton } from "@/components/ledger/CopyLedgerHeaderButton";
 import { ShareForReconciliationHeaderButton } from "@/components/reconciliation/ShareForReconciliationHeaderButton";
 import { RenewProrationPills } from "@/components/billing/RenewProrationPills";
@@ -627,6 +629,8 @@ function UserProfileButton() {
   const { toast } = useToast();
   const { isOnline } = useOnlineStatus();
   const livePlans = useLivePlans();
+  const { mode: profileMenuOpenMode } = useProfileMenuOpen();
+  const profileHoverOpenEnabled = profileMenuOpenMode === "hover";
   const [profileOpen, setProfileOpen] = useState(false);
   const [userStorageUsedBytes, setUserStorageUsedBytes] = useState<number | null>(null);
   /** Avatar menu: manual Firestore → local plan sync (SQLite/cache align). */
@@ -728,7 +732,9 @@ function UserProfileButton() {
   const accountPlanId = user?.uid
     ? resolveEffectiveAccountPlanId(allCompanies, user.uid, company?.planId)
     : ((company?.planId as PlanId) || "basic");
-  const selectedCompanyPlanId: PlanId = normalizePlanIdForClient(company?.planId);
+  const selectedCompanyPlanId: PlanId = company && user?.uid
+    ? resolvePlanIdForActiveCompany(company, allCompanies, user.uid, user.email)
+    : normalizePlanIdForClient(company?.planId);
   const selectedCompanyPlanName = DEFAULT_PLANS[selectedCompanyPlanId]?.name ?? String(selectedCompanyPlanId);
   // Profile dropdown: selected company local ho to uske liye *Local caps dikhao (admin Plans).
   const storageIsLocal = companyStorageIsLocal(company?.storageOption);
@@ -860,8 +866,8 @@ function UserProfileButton() {
           <Button
             variant="ghost"
             className="relative h-9 w-9 rounded-full p-0 touch-manipulation"
-            onMouseEnter={openProfileFromHover}
-            onMouseLeave={scheduleProfileHoverClose}
+            onMouseEnter={profileHoverOpenEnabled ? openProfileFromHover : undefined}
+            onMouseLeave={profileHoverOpenEnabled ? scheduleProfileHoverClose : undefined}
           >
             {/* Sirf plan dropdown — avatar par `EntityFileAttachmentHover` mat lagao warna hover pe Preview modal + dropdown dono fight karte hain. */}
             <div
@@ -887,8 +893,8 @@ function UserProfileButton() {
           align="end"
           sideOffset={8}
           forceMount
-          onMouseEnter={openProfileFromHover}
-          onMouseLeave={scheduleProfileHoverClose}
+          onMouseEnter={profileHoverOpenEnabled ? openProfileFromHover : undefined}
+          onMouseLeave={profileHoverOpenEnabled ? scheduleProfileHoverClose : undefined}
         >
           {!company ? (
             <DropdownMenuLabel className="font-normal px-3 pt-3 pb-2">
@@ -1603,6 +1609,7 @@ export function DesktopAppHeader() {
               <CopyLedgerHeaderButton />
               <ShareForReconciliationHeaderButton />
               <GlobalFileHoverPreviewSwitch />
+              <GlobalProfileMenuOpenSwitch />
               <ScreenControls />
             </div>
           </div>

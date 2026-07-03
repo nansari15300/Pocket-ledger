@@ -13,7 +13,8 @@ import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { bumpLocalCompanyRegistry } from "@/lib/applyStripePlanToLocalCompany";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { clearCompanyPlanLocalCache, readCompanyPlanLocalCache, writeCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
-import { normalizePlanIdForClient } from "@/config/plans";
+import { normalizePlanIdForClient, planTierIndex } from "@/config/plans";
+import { highestPlanIdAmongOwnedCompanies } from "@/lib/accountPlanForOwner";
 import { verifyPlanEntitlementJws } from "@/lib/security/planEntitlementJwtVerify";
 import { getOrCreateClientDeviceId } from "@/lib/security/deviceIdentity";
 import { doc, getDoc } from "firebase/firestore";
@@ -157,6 +158,86 @@ async function applyAuthoritativePlanPayloadToLocal(opts: {
   writePlanAuthoritativeSyncTimestamp(localCompanyId);
   bumpLocalCompanyRegistry();
   return { ok: true, applied: true };
+}
+
+/** Pure device-local company: Firestore `users/{uid}` account plan + owned online rows se SQLite plan patch. */
+export async function syncLocalOnlyCompanyPlanFromOwnerAccount(opts: {
+  localCompanyId: string;
+  firebaseUid: string;
+  ownedCompaniesHint?: ReadonlyArray<{
+    id?: string;
+    planId?: string | null;
+    planExpiryMs?: number;
+    isOwned?: boolean;
+    ownerId?: string;
+  }>;
+}): Promise<SyncCompanyPlanResult> {
+  const localCompanyId = String(opts.localCompanyId || "").trim();
+  const uid = String(opts.firebaseUid || "").trim();
+  if (!localCompanyId || !uid) return { ok: false, applied: false, reason: "missing_ids" };
+
+  let planId = normalizePlanIdForClient("basic");
+  let planExpiryMs: number | null = null;
+  let stripeCustomerId: string | null = null;
+  let stripeSubscriptionId: string | null = null;
+  let lastStripeCheckoutSessionId: string | null = null;
+  let firebaseCompanyId = localCompanyId;
+
+  try {
+    const userSnap = await getDoc(doc(firestore, "users", uid));
+    if (userSnap.exists()) {
+      const u = userSnap.data() as Record<string, unknown>;
+      const canon = u.accountCanonicalPlanId;
+      if (typeof canon === "string" && canon.trim()) {
+        planId = normalizePlanIdForClient(canon);
+        const exp = u.accountCanonicalPlanExpiryMs;
+        if (typeof exp === "number" && Number.isFinite(exp)) planExpiryMs = exp;
+        stripeCustomerId =
+          typeof u.accountCanonicalStripeCustomerId === "string" && u.accountCanonicalStripeCustomerId.trim()
+            ? u.accountCanonicalStripeCustomerId.trim()
+            : null;
+        stripeSubscriptionId =
+          typeof u.accountCanonicalStripeSubscriptionId === "string" &&
+          u.accountCanonicalStripeSubscriptionId.trim()
+            ? u.accountCanonicalStripeSubscriptionId.trim()
+            : null;
+      }
+    }
+  } catch {
+    /* user doc optional */
+  }
+
+  const hintBest = highestPlanIdAmongOwnedCompanies(opts.ownedCompaniesHint ?? [], uid);
+  if (hintBest && planTierIndex(hintBest) > planTierIndex(planId)) {
+    planId = hintBest;
+    const bestRow = (opts.ownedCompaniesHint ?? []).find(
+      (c) =>
+        c.isOwned === true &&
+        String(c.ownerId || "").trim() === uid &&
+        normalizePlanIdForClient(c.planId) === hintBest
+    );
+    if (bestRow?.id) firebaseCompanyId = String(bestRow.id).trim();
+    if (typeof bestRow?.planExpiryMs === "number" && Number.isFinite(bestRow.planExpiryMs)) {
+      planExpiryMs = bestRow.planExpiryMs;
+    }
+  }
+
+  if (planId === "basic" && !hintBest) {
+    return { ok: true, applied: false, reason: "no_account_plan" };
+  }
+
+  return applyAuthoritativePlanPayloadToLocal({
+    firebaseCompanyId,
+    localCompanyId,
+    data: {
+      companyId: firebaseCompanyId,
+      planId,
+      planExpiryMs,
+      stripeCustomerId,
+      stripeSubscriptionId,
+      lastStripeCheckoutSessionId,
+    },
+  });
 }
 
 async function syncCompanyPlanFromFirestoreClientFallback(opts: {
@@ -399,6 +480,14 @@ export async function syncCompanyPlanFromServer(opts: {
   /** SQLite row id (selected company) — missing par firebase id */
   localCompanyId: string;
   getIdToken: () => Promise<string>;
+  firebaseUid?: string;
+  ownedCompaniesHint?: ReadonlyArray<{
+    id?: string;
+    planId?: string | null;
+    planExpiryMs?: number;
+    isOwned?: boolean;
+    ownerId?: string;
+  }>;
 }): Promise<SyncCompanyPlanResult> {
   // Pehle network: token / POST se pehle clear "offline" message (static build bhi).
   if (typeof navigator !== "undefined" && !navigator.onLine) {
@@ -420,6 +509,14 @@ export async function syncCompanyPlanFromServer(opts: {
       const authoritative = String((localRow as { authoritativeCompanyId?: string }).authoritativeCompanyId || "")
         .trim();
       if (storage === "local" && !authoritative) {
+        const uid = String(opts.firebaseUid || "").trim();
+        if (uid) {
+          return syncLocalOnlyCompanyPlanFromOwnerAccount({
+            localCompanyId,
+            firebaseUid: uid,
+            ownedCompaniesHint: opts.ownedCompaniesHint,
+          });
+        }
         return { ok: true, applied: false, reason: "local_only_company" };
       }
     }
