@@ -363,6 +363,14 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
 
         if (localSqlMirror) {
           const fromDb = await getCompanyDocFromBrowserDb(companyId, "parties", partyRefSnap.id);
+          const { serverTimestampTraceLog } = await import("@/lib/plServerLivePullDevLog");
+          const { mirrorDocTimestampFields } = await import("@/lib/localCompanyDocMirror");
+          serverTimestampTraceLog("before_save_dialog", {
+            companyId,
+            collection: "parties",
+            id: partyRefSnap.id,
+            ...(fromDb ? mirrorDocTimestampFields(fromDb) : { editTimeMs: 0 }),
+          });
           const base: Record<string, unknown> = fromDb ?? {
             id: partyRefSnap.id,
             companyId,
@@ -775,7 +783,13 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                     </p>
                   ) : (
                     <div className="flex items-center gap-4 flex-wrap">
-                      {file ? <FilePreview file={file} onRemove={removeAvatar} /> : null}
+                      {file ? (
+                        <FilePreview
+                          file={file}
+                          onRemove={removeAvatar}
+                          attachmentCompanyId={companyId ?? undefined}
+                        />
+                      ) : null}
                       {!file ? (
                         <FormControl>
                           <AttachmentHoldPasteSurface
@@ -829,6 +843,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                           file={slot}
                           onRemove={() => removeDocAt(idx)}
                           size={96}
+                          attachmentCompanyId={companyId ?? undefined}
                         />
                       ))}
                       {docSlots.length < 5 ? (

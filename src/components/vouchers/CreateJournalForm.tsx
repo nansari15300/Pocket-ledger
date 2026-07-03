@@ -53,6 +53,8 @@ import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { findVoucherInLocalMirrorByNumberAndType } from "@/lib/localCompanyDocMirror";
 import {
   appendLocalOnlyVoucherFilesToUrls,
   shouldDeferStorageIncrementUntilPendingUpload,
@@ -1545,13 +1547,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       });
 
       if (!idArgForFirestore || data.voucherNumber !== voucher?.voucherNumber) {
-        const q = query(
-          collection(firestore, `companies/${companyId}/vouchers`),
-          where("voucherNumber", "==", data.voucherNumber),
-          where("type", "==", "journal")
-        );
-        const existingVoucherSnap = await getDocs(q);
-        if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== idArgForFirestore) {
+        const preferLocalReads = preferLocalLedgerReads(company);
+        let duplicateOtherId: string | null = null;
+        if (preferLocalReads) {
+          const hit = await findVoucherInLocalMirrorByNumberAndType(companyId, data.voucherNumber, "journal");
+          if (hit && hit.id !== idArgForFirestore) duplicateOtherId = hit.id;
+        } else {
+          const q = query(
+            collection(firestore, `companies/${companyId}/vouchers`),
+            where("voucherNumber", "==", data.voucherNumber),
+            where("type", "==", "journal")
+          );
+          const existingVoucherSnap = await getDocs(q);
+          if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== idArgForFirestore) {
+            duplicateOtherId = existingVoucherSnap.docs[0].id;
+          }
+        }
+        if (duplicateOtherId) {
           sonnerToast.error("Duplicate Voucher Number", { id: toastId, description: "This voucher number is already in use." });
           setIsLoading(false);
           return;

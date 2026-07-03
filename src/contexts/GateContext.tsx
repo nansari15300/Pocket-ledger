@@ -39,7 +39,7 @@ import {
   refreshActiveLocalServerGateContext,
 } from "@/lib/gates/gateRuntime";
 import { fetchGateServerAccessContext } from "@/lib/gates/gateServerFetch";
-import { applyPlServerAccessContextPayload } from "@/lib/plServerAccessContext";
+import { applyPlServerAccessContextPayload, clearPlServerGatePreview } from "@/lib/plServerAccessContext";
 import { ensureWebDefaultOnlineGate } from "@/lib/gates/gateClientDefaults";
 
 type GateContextValue = {
@@ -140,6 +140,7 @@ export function GateProvider({ children }: { children: ReactNode }) {
 
   const removeGate = useCallback(
     (id: string) => {
+      clearPlServerGatePreview(id);
       const ok = deleteGate(id);
       if (ok) refreshGates();
       return ok;
@@ -173,18 +174,15 @@ export function GateProvider({ children }: { children: ReactNode }) {
       const { persistDevClientAccessToken } = await import("@/lib/plServerAccessContext");
       persistDevClientAccessToken(gate.accessToken.trim());
     }
-    applyPlServerAccessContextPayload(
-      {
-        unrestricted: ctx.unrestricted,
-        allowedCompanyIds: ctx.allowedCompanyIds,
-        label: ctx.label ?? undefined,
-        companies: ctx.companies ?? undefined,
-      },
-      id
-    );
-    const count = ctx.unrestricted
-      ? "all"
-      : String(ctx.companies?.length ?? ctx.allowedCompanyIds?.length ?? 0);
+    const payload = {
+      unrestricted: ctx.unrestricted,
+      allowedCompanyIds: ctx.allowedCompanyIds,
+      label: ctx.label ?? undefined,
+      companies: ctx.companies ?? undefined,
+    };
+    applyPlServerAccessContextPayload(payload, id);
+    const { countPlServerAccessContextCompanies } = await import("@/lib/plServerAccessContext");
+    const count = countPlServerAccessContextCompanies(payload);
     const label = ctx.label ? ` (${ctx.label})` : "";
     return { ok: true, message: `Connected${label} — ${count} companies allowed` };
   }, [refreshGates]);

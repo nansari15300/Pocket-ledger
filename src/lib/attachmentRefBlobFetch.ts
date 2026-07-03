@@ -34,6 +34,7 @@ export type FetchAttachmentRefBlobOptions = {
 /** Preview/hover callers — gallery me parallel `local:` match ke liye. */
 export type AttachmentPreviewBlobLoadOptions = {
   galleryUrls?: readonly string[];
+  companyId?: string;
 };
 
 /**
@@ -57,6 +58,11 @@ export async function fetchAttachmentRefBlob(
       companyId: options?.companyId,
     });
     if (blob && blob.size > 0) return blob;
+    if (options?.companyId) {
+      const { fetchPlServerAttachmentBlob } = await import("@/lib/plServerAttachmentFetch");
+      const remote = await fetchPlServerAttachmentBlob(options.companyId, u, options?.signal);
+      if (remote && remote.size > 0) return remote;
+    }
   }
 
   if (isDriveFileRef(u)) {

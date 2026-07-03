@@ -35,6 +35,7 @@ export function EntityProfilePhotoBlock({
   onRemoveAvatar,
   canAddAvatar,
   inputId = "entity-avatar-input",
+  attachmentCompanyId,
 }: {
   file: File | string | null;
   onPickClick: () => void;
@@ -43,6 +44,7 @@ export function EntityProfilePhotoBlock({
   onRemoveAvatar: () => void;
   canAddAvatar: boolean;
   inputId?: string;
+  attachmentCompanyId?: string;
 }) {
   return (
     <FormItem>
@@ -56,7 +58,14 @@ export function EntityProfilePhotoBlock({
         </p>
       ) : (
         <div className="flex flex-wrap items-center gap-4">
-          {file ? <FilePreview file={file} onRemove={onRemoveAvatar} size={DOC_SIZE} /> : null}
+          {file ? (
+            <FilePreview
+              file={file}
+              onRemove={onRemoveAvatar}
+              size={DOC_SIZE}
+              attachmentCompanyId={attachmentCompanyId}
+            />
+          ) : null}
           {!file ? (
             <FormControl>
               {/* 2s hold = clipboard attachment paste (sirf image); tap = picker */}
@@ -102,6 +111,7 @@ export function EntityDocumentsBlock({
   canAttachDocuments,
   entityStatementLabel,
   inputId = "entity-docs-input",
+  attachmentCompanyId,
 }: {
   docSlots: Array<File | string>;
   onRemoveDoc: (idx: number) => void;
@@ -112,6 +122,7 @@ export function EntityDocumentsBlock({
   /** e.g. "party", "bank account", "staff", "tax", "income/expense account", "item" */
   entityStatementLabel: string;
   inputId?: string;
+  attachmentCompanyId?: string;
 }) {
   // Edit mode: saare slots string URL hon to full-screen viewer me ← → / swipe same set
   const galleryUrls =
@@ -140,6 +151,7 @@ export function EntityDocumentsBlock({
               file={slot}
               onRemove={() => onRemoveDoc(idx)}
               size={DOC_SIZE}
+              attachmentCompanyId={attachmentCompanyId}
               attachmentGallery={galleryUrls ? { urls: galleryUrls, startIndex: idx } : undefined}
             />
           ))}

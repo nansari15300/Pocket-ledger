@@ -21,6 +21,8 @@ import type { AttachmentKindHint } from "@/lib/openAttachmentInApp";
 import { mountGalleryImageZoom, type GalleryImageZoomApi } from "@/lib/inAppGalleryImageZoom";
 import { dismissOpenInAppPdfPreviewIfPresent, showInAppPdfPreview } from "@/lib/inAppPdfPreview";
 import { shareAttachmentFromPreviewSrc } from "@/lib/shareAttachmentBlob";
+import { resolveStaticAttachmentDisplay } from "@/lib/staticAttachmentDisplayUrl";
+import { usesEmbeddedNativeAttachmentStorage } from "@/lib/usesEmbeddedNativeAttachmentStorage";
 
 function pathLooksImage(pathLower: string): boolean {
   return /\.(jpe?g|png|gif|webp|bmp|svg)$/.test(pathLower);
@@ -45,6 +47,38 @@ type ResolvedSlide =
 async function resolveSlide(url: string, kindHint?: AttachmentKindHint): Promise<ResolvedSlide> {
   const u = String(url || "").trim();
   const noop = () => {};
+
+  // EXE/APK: display sirf pl-attachments / blob — HTTPS transport download ke liye preload me.
+  if (usesEmbeddedNativeAttachmentStorage()) {
+    const resolved = await resolveStaticAttachmentDisplay(u, { localLedgerOnly: true });
+    if (resolved.displayUrl) {
+      const pathOnly = u.split("?")[0].split("#")[0].toLowerCase();
+      const slideKind: "image" | "pdf" =
+        kindHint === "pdf" || pathLooksPdf(pathOnly)
+          ? "pdf"
+          : kindHint === "image" || pathLooksImage(pathOnly)
+            ? "image"
+            : String(resolved.contentType || "").toLowerCase().includes("pdf")
+              ? "pdf"
+              : "image";
+      return { kind: slideKind, src: resolved.displayUrl, revoke: noop };
+    }
+    if (resolved.blob && resolved.blob.size > 0) {
+      const objectUrl = URL.createObjectURL(resolved.blob);
+      const revoke = () => {
+        try {
+          URL.revokeObjectURL(objectUrl);
+        } catch {
+          /* ignore */
+        }
+      };
+      const kind = await sniffBlobKindForPreview(resolved.blob);
+      if (kind === "image") return { kind: "image", src: objectUrl, revoke };
+      if (kind === "pdf") return { kind: "pdf", src: objectUrl, revoke };
+      revoke();
+    }
+    return { kind: "other", href: u, revoke: noop };
+  }
 
   if (isLocalFileRef(u)) {
     const blob = await getBlobFromLocalFileRef(u);
@@ -100,6 +134,22 @@ async function resolveSlide(url: string, kindHint?: AttachmentKindHint): Promise
   }
 
   if (kindHint === "image" || isDataImage || pathLooksImage(pathOnly)) {
+    if (!/^https?:\/\//i.test(u)) {
+      return { kind: "image", src: u, revoke: noop };
+    }
+    const resolved = await resolveStaticAttachmentDisplay(u, { localLedgerOnly: false });
+    if (resolved.displayUrl) return { kind: "image", src: resolved.displayUrl, revoke: noop };
+    if (resolved.blob && resolved.blob.size > 0) {
+      const objectUrl = URL.createObjectURL(resolved.blob);
+      const revoke = () => {
+        try {
+          URL.revokeObjectURL(objectUrl);
+        } catch {
+          /* ignore */
+        }
+      };
+      return { kind: "image", src: objectUrl, revoke };
+    }
     return { kind: "image", src: u, revoke: noop };
   }
 

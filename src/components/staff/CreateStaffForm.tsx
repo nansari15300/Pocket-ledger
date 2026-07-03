@@ -933,6 +933,7 @@ export function CreateStaffForm({
               docsInputRef={docsInputRef}
               onDocsChange={handleDocumentsChange}
               canAttachDocuments={canAttachDocuments}
+              attachmentCompanyId={companyId ?? undefined}
               entityStatementLabel="staff"
               inputId="create-staff-docs"
             />

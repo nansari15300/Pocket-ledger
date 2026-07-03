@@ -11,6 +11,9 @@ import { readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConf
 import { postDriveJsonViaClient } from "@/lib/localCloudSync/driveApiClient";
 import { logLocalCloudSync, warnLocalCloudSync } from "@/lib/localCloudSync/logger";
 import { hasRealFirebaseAuthSession } from "@/lib/firebaseAuthForApi";
+import { isDeviceLocalCompany } from "@/lib/companyStorageKind";
+import { isLocalBackupRestoredCompanyRow } from "@/lib/localBackupRestoreCompany";
+
 export function isLocalCompanyDriveFolderOwner(
   reg: LocalCompanyDoc | Record<string, unknown>,
   firebaseUid: string | null | undefined
@@ -100,6 +103,8 @@ export async function purgeLocalCompanyIfDriveFolderMissing(
 
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
   if (!reg) return null;
+  if (isDeviceLocalCompany(reg as Parameters<typeof isDeviceLocalCompany>[0])) return null;
+  if (isLocalBackupRestoredCompanyRow(reg as Record<string, unknown>)) return null;
   if (!shouldPurgeLocalCompanyWhenDriveFolderMissing(reg, firebaseUid)) return null;
 
   const folderId = String(reg.cloudSyncDriveFolderId ?? "").trim();

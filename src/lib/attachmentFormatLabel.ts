@@ -7,6 +7,8 @@ const MIME_TO_LABEL: Record<string, string> = {
   "application/pdf": "PDF",
   "image/jpeg": "JPEG",
   "image/jpg": "JPG",
+  "image/jfif": "JPEG",
+  "image/pjpeg": "JPEG",
   "image/png": "PNG",
   "image/webp": "WEBP",
   "image/gif": "GIF",
@@ -27,6 +29,8 @@ function normalizeExt(ext: string): string {
     jpeg: "JPEG",
     jpe: "JPEG",
     jpg: "JPG",
+    jfif: "JPEG",
+    pjpeg: "JPEG",
     pdf: "PDF",
     png: "PNG",
     gif: "GIF",
@@ -98,7 +102,7 @@ export function getAttachmentFormatLabelFromHints(
     if (MIME_TO_LABEL[ct]) return MIME_TO_LABEL[ct];
     if (ct.startsWith("image/")) {
       const sub = (ct.split("/")[1] || "").toLowerCase();
-      if (sub === "jpeg" || sub === "jpg") return sub === "jpeg" ? "JPEG" : "JPG";
+      if (sub === "jpeg" || sub === "jpg" || sub === "jfif" || sub === "pjpeg") return "JPEG";
       return sub.length > 0 && sub.length <= 8 ? sub.toUpperCase() : "IMAGE";
     }
     if (ct === "application/pdf" || ct.includes("pdf")) return "PDF";

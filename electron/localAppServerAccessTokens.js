@@ -22,6 +22,20 @@ function normalizeCompanyIds(raw) {
   return out;
 }
 
+function normalizeInvitedEmails(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const email of raw) {
+    const s = String(email || "").trim().toLowerCase();
+    if (!s || !s.includes("@") || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
 function loadAccessTokenStore(userDataPath) {
   try {
     const raw = JSON.parse(fs.readFileSync(tokensPath(userDataPath), "utf8"));
@@ -52,6 +66,7 @@ function listAccessTokens(userDataPath) {
       lastUsedAt: t.lastUsedAt || null,
       tokenPreview: t.token ? `${t.token.slice(0, 6)}…${t.token.slice(-4)}` : "",
       allowedCompanyIds: normalizeCompanyIds(t.allowedCompanyIds),
+      invitedEmails: normalizeInvitedEmails(t.invitedEmails),
     }));
 }
 
@@ -161,6 +176,9 @@ function updateAccessToken(userDataPath, id, input = {}) {
   if (input.allowedCompanyIds != null) {
     rec.allowedCompanyIds = normalizeCompanyIds(input.allowedCompanyIds);
   }
+  if (input.invitedEmails != null) {
+    rec.invitedEmails = normalizeInvitedEmails(input.invitedEmails);
+  }
   saveAccessTokenStore(userDataPath, store);
   const ids = normalizeCompanyIds(rec.allowedCompanyIds);
   return {
@@ -172,6 +190,7 @@ function updateAccessToken(userDataPath, id, input = {}) {
     lastUsedAt: rec.lastUsedAt || null,
     tokenPreview: rec.token ? `${rec.token.slice(0, 6)}…${rec.token.slice(-4)}` : "",
     allowedCompanyIds: ids,
+    invitedEmails: normalizeInvitedEmails(rec.invitedEmails),
   };
 }
 
@@ -185,4 +204,5 @@ module.exports = {
   updateAccessToken,
   revokeAccessToken,
   normalizeCompanyIds,
+  normalizeInvitedEmails,
 };

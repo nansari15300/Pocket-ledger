@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
+import { createGoogleOAuth2Client } from "@/lib/server/googleOAuthCredentials";
 import { doc, getDoc, serverTimestamp } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { setGoogleDriveUserTokenMerge } from "@/lib/writeGateway/oauthNestedWrites";
@@ -63,13 +64,9 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const redirectUri = `${baseUrl}/api/auth/callback/google`;
-
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID!,
-      process.env.GOOGLE_CLIENT_SECRET!,
-      redirectUri
-    );
+    const oauth2Client = createGoogleOAuth2Client(google);
+    // Callback host production/staging ho sakta hai — request origin se redirect URI match karo.
+    oauth2Client.redirectUri = `${baseUrl}/api/auth/callback/google`;
 
     // Exchange code -> tokens
     const { tokens } = await oauth2Client.getToken(code);

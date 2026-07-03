@@ -345,18 +345,26 @@ function StaffPageContent() {
     }).length;
   }, [processedStaffGroupsForList, searchTerm]);
 
-  const handleSelect = (item: Staff | StaffGroup) => {
-    if (useQueryNav) {
-        // Static export ke liye query params use karte hain – /staff/[id] path 404 de sakta hai
-        if ('salary' in item) {
-            router.push(`/staff?selected=${item.id}`);
-        } else {
-            router.push(`/staff?view=groups&selected=${item.id}`);
-        }
-    } else {
-        setSelected(item);
+  const handleSelect = useCallback((item: Staff | StaffGroup) => {
+    const isStaffMember = "ownerId" in item;
+    if (!isStaffMember) {
+      setActiveView("groups");
     }
-  };
+    setSelected(item);
+    const path = isStaffMember
+      ? `/staff?selected=${encodeURIComponent(item.id)}`
+      : `/staff?view=groups&selected=${encodeURIComponent(item.id)}`;
+    if (typeof window !== "undefined") {
+      try {
+        window.history.replaceState(window.history.state, "", path);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (useQueryNav) {
+      router.replace(path, { scroll: false });
+    }
+  }, [router, setSelected, useQueryNav]);
   
   const staffForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];

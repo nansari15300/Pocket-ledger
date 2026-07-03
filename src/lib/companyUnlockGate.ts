@@ -1,6 +1,13 @@
 import type { Company } from "@/hooks/useCompany";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
+import { isServerGateCompany } from "@/lib/companyStorageKind";
+import {
+  hasValidStoredOfflineUnlockSession,
+  readStoredOfflineUnlockSession,
+} from "@/lib/offlineCompanyUnlockRemember";
+import { readCloudCompanyPasswordUnlockSession } from "@/lib/cloudCompanyPasswordUnlockRemember";
+import { getLocalAuthToken, setLocalAuthToken } from "@/lib/localApiClient";
 
 /** Company row jisme selector `isOwned` set karta hai */
 export type CompanyUnlockRow = Company & { isOwned?: boolean };
@@ -59,9 +66,24 @@ export function offlineCompanyHasLocalLoginUsers(company: unknown): boolean {
   return parseLocalCompanyUserRows((company as { localCompanyUsers?: unknown }).localCompanyUsers).length > 0;
 }
 
-/** Select se pehle dialog dikhana hai ya nahi */
+/** SQLite / list row: koi bhi unlock (password, local users, shared user password) zaroori hai? */
+export function companyDocRequiresUnlock(
+  doc: unknown,
+  userEmail?: string | null
+): boolean {
+  if (!doc || typeof doc !== "object") return false;
+  const row = doc as CompanyUnlockRow & { localCompanyUsers?: unknown };
+  if (String(row.password ?? "").trim()) return true;
+  if (offlineCompanyHasLocalLoginUsers(row)) return true;
+  const se = getShareEntryForEmail(row, userEmail);
+  return !!(se?.password && String(se.password).trim());
+}
+
+/** Select se pehle dialog dikhana hai ya nahi (remembered session check async path me). */
 export function shouldPromptCompanyUnlock(company: CompanyUnlockRow, userEmail?: string | null): boolean {
-  // Shared + cloud: Protect company password ya shared row par user-specific password.
+  if (isServerGateCompany(company)) {
+    return companyDocRequiresUnlock(company, userEmail);
+  }
   if (isOnlineSharedCompany(company)) {
     return !!company.password || onlineSharedHasPerUserPassword(company, userEmail);
   }
@@ -78,13 +100,26 @@ export function shouldPromptCompanyUnlock(company: CompanyUnlockRow, userEmail?:
 /** List row slim ho to SQLite se local users check — unlock dialog ke liye. */
 export async function shouldPromptCompanyUnlockAsync(
   company: CompanyUnlockRow,
-  userEmail?: string | null
+  userEmail?: string | null,
+  firebaseUid?: string
 ): Promise<boolean> {
+  const id = String(company.id || "").trim();
+  if (id) {
+    if (hasValidStoredOfflineUnlockSession(firebaseUid, id, userEmail)) return false;
+    if (!isOfflineCompanyStorage(company) && readCloudCompanyPasswordUnlockSession(firebaseUid, id, userEmail)) {
+      return false;
+    }
+  }
   if (shouldPromptCompanyUnlock(company, userEmail)) return true;
-  if (!isOfflineCompanyStorage(company) || !company.id) return false;
+  if (!company.id) return false;
   try {
     const doc = await getLocalCompanyById(company.id, { includeDeleted: true });
-    return offlineCompanyHasLocalLoginUsers(doc);
+    if (!doc) return false;
+    if (isServerGateCompany(company) || isServerGateCompany(doc)) {
+      return companyDocRequiresUnlock(doc, userEmail);
+    }
+    if (!isOfflineCompanyStorage(company)) return false;
+    return companyDocRequiresUnlock(doc, userEmail);
   } catch {
     return false;
   }
@@ -92,6 +127,9 @@ export async function shouldPromptCompanyUnlockAsync(
 
 /** Username field: online shared jab Protect on ho ya shared user ka apna password ho; offline shared jab share row me name+password ho */
 export function showCompanyUserNameField(company: CompanyUnlockRow, userEmail?: string | null): boolean {
+  if (isServerGateCompany(company)) {
+    return companyDocRequiresUnlock(company, userEmail);
+  }
   if (isOnlineSharedCompany(company)) {
     return !!company.password || onlineSharedHasPerUserPassword(company, userEmail);
   }
@@ -193,4 +231,20 @@ export function verifyCompanyUnlock(
   }
 
   return { ok: true };
+}
+
+/** Bina password/local users — SQLite se seedha open; vouchers ke liye lightweight session. */
+export function grantOpenLocalCompanySession(
+  companyId: string,
+  options?: { role?: "owner" | "viewer" }
+): void {
+  const id = String(companyId || "").trim();
+  if (!id || getLocalAuthToken(id)) return;
+  const role = options?.role === "owner" ? "owner" : "viewer";
+  setLocalAuthToken(id, `local_open_${id}_${Date.now()}`, {
+    id: role === "owner" ? "local_open_owner" : "local_open",
+    username: role === "owner" ? "owner" : "viewer",
+    displayName: role === "owner" ? "Owner" : "Viewer",
+    role,
+  });
 }

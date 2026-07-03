@@ -10,3 +10,8 @@ import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 export function usesEmbeddedNativeAttachmentStorage(): boolean {
   return isCapacitorNativeApp() || isElectronDesktopApp();
 }
+
+/** EXE/APK display policy: offline par local bytes; online par cache miss pe HTTPS turant (background disk save). */
+export function embeddedAttachmentDisplayUsesLocalBytesOnly(): boolean {
+  return false;
+}

@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 /** `settings/page.tsx` nav `id` — path `/settings/voucher` → `?view=voucher` taaki URL share + deep link sahi tab khule */
 const SETTINGS_SECTION_IDS = new Set([
   "company",
-  "local_app_server",
   "sharing",
   "devices",
   "app_lock",
@@ -19,7 +18,6 @@ const SETTINGS_SECTION_IDS = new Set([
 // Static export (`output: export`) ke liye dynamic segment ke sab valid params build-time par dene zaroori hote hain.
 const SETTINGS_SECTION_LIST = [
   "company",
-  "local_app_server",
   "sharing",
   "devices",
   "app_lock",

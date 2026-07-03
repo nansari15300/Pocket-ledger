@@ -18,8 +18,8 @@ export function looksLikeFirebaseStorageDownloadUrl(url: string): boolean {
   );
 }
 
-// Keep a bounded wait; mobile/desktop network can be slower than browser web.
-const GET_BLOB_RACE_MS = 10_000;
+// Backup / large PDF: SDK getBlob ko zyada time — 10s par jaldi proxy/CORS fallback = error storm.
+const GET_BLOB_RACE_MS = 45_000;
 
 function shouldUseElectronFirebaseProxy(): boolean {
   if (typeof window === "undefined") return false;
@@ -41,11 +41,20 @@ async function tryFetchViaElectronProxy(url: string, signal?: AbortSignal): Prom
   }
 }
 
+/** Signed download URL — SDK fail/timeout par CORS fetch (web dev localhost + token URLs). */
+export async function tryFetchFirebaseStorageDownloadUrlBlob(
+  url: string,
+  signal?: AbortSignal
+): Promise<Blob | null> {
+  return fetchFirebaseBlobFallback(url, signal);
+}
+
 async function fetchFirebaseBlobFallback(url: string, signal?: AbortSignal): Promise<Blob | null> {
-  // Electron packaged localhost: use same-origin proxy first to avoid renderer CORS limits.
+  // Electron packaged localhost: same-origin proxy — renderer par direct Firebase URL CORS fail hota hai.
   const viaProxy = await tryFetchViaElectronProxy(url, signal);
-  if (viaProxy) return viaProxy;
-  // Last fallback: direct token URL fetch for cases where SDK path fails.
+  if (viaProxy && viaProxy.size > 0) return viaProxy;
+  if (shouldUseElectronFirebaseProxy()) return null;
+  // Web (non-localhost Electron): bucket CORS configured ho to direct fetch.
   try {
     const res = await fetch(url, { mode: "cors", credentials: "omit", signal });
     if (res.ok) return await res.blob();
@@ -86,7 +95,9 @@ export async function tryGetBlobFromFirebaseStorageDownloadUrl(
     });
     const blob = await Promise.race([getBlob(reference), timedOut]);
     if (timeoutId) clearTimeout(timeoutId);
-    if (blob === null) return null;
+    if (blob === null) {
+      return await fetchFirebaseBlobFallback(url, signal);
+    }
     return blob;
   } catch {
     return await fetchFirebaseBlobFallback(url, signal);

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useGate } from "@/contexts/GateContext";
 import { useCompany } from "@/hooks/useCompany";
+import type { Company as CompanyData } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
 import {
@@ -18,8 +19,13 @@ import {
   filterCompaniesForActiveGate,
   isLocalServerGate,
   refreshActiveLocalServerGateContext,
+  resolveLocalServerGateAccessToken,
+  activateLocalServerGateOnBundledClient,
 } from "@/lib/gates/gateRuntime";
+import { normalizeServerUrl } from "@/lib/gates/gateStore";
+import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,6 +45,8 @@ import { toast } from "sonner";
 import {
   Check,
   DoorOpen,
+  Eye,
+  EyeOff,
   Loader2,
   Pencil,
   Plus,
@@ -51,6 +59,24 @@ import {
 import { cn } from "@/lib/utils";
 import { appNavHref } from "@/lib/appNavHref";
 import type { GateRecord } from "@/lib/gates/gateTypes";
+import { localAuthLoginForCompanyContext } from "@/lib/localCompanyUsers";
+import { setLocalAuthToken } from "@/lib/localApiClient";
+import {
+  readAnyStoredOfflineUnlockSessionForCompany,
+  readOfflineUnlockPreferenceDays,
+  readStoredOfflineUnlockSession,
+  saveOfflineUnlockSession,
+} from "@/lib/offlineCompanyUnlockRemember";
+import { RememberCompanyPasswordDurationSelect } from "@/components/company/RememberCompanyPasswordDurationSelect";
+import { mirrorPlServerGateToLocalSqlite, mirrorPlServerSharedCompanyById } from "@/lib/plServerClientCompanyMirror";
+import { plServerCompanyLedgerNeedsFullPull } from "@/lib/plServerLedgerMirrorGate";
+import { readAndStripPlGatePrefillFromLocation } from "@/lib/plServerGateInviteLink";
+import { persistDevClientAccessToken } from "@/lib/plServerAccessContext";
+import {
+  grantOpenLocalCompanySession,
+  shouldPromptCompanyUnlockAsync,
+} from "@/lib/companyUnlockGate";
+import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 
 function gateIcon(type: GateRecord["type"]) {
   switch (type) {
@@ -91,7 +117,7 @@ export function GatePageContent() {
   const router = useRouter();
   const pathname = usePathname();
   const { user, customUser } = useAuth();
-  const { allCompaniesRegistry, setCompanyId, companyId } = useCompany();
+  const { allCompaniesRegistry, setCompanyId, companyId, reloadLocalCompanyRegistry } = useCompany();
   const isSuperAdminByEmail = useMemo(() => {
     const e = (user?.email || "").toLowerCase().trim();
     if (!e) return false;
@@ -128,6 +154,16 @@ export function GatePageContent() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [serverAccessEpoch, setServerAccessEpoch] = useState(0);
   const [refreshingServerCompanies, setRefreshingServerCompanies] = useState(false);
+  const [companyToUnlock, setCompanyToUnlock] = useState<CompanyData | null>(null);
+  const [unlockServerGate, setUnlockServerGate] = useState<GateRecord | null>(null);
+  const [usernameInput, setUsernameInput] = useState("");
+  const [passwordInput, setPasswordInput] = useState("");
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [rememberUnlockDays, setRememberUnlockDays] = useState(0);
+
+  const useBundledLocalServerGate =
+    isElectronDesktopApp() || isCapacitorNativeApp();
 
   const detailGate = useMemo(
     () => gates.find((g) => g.id === selectedGateIdForDetail) ?? null,
@@ -138,6 +174,19 @@ export function GatePageContent() {
     const onCtx = () => setServerAccessEpoch((n) => n + 1);
     window.addEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, onCtx);
     return () => window.removeEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, onCtx);
+  }, []);
+
+  useEffect(() => {
+    const prefill = readAndStripPlGatePrefillFromLocation();
+    if (!prefill) return;
+    setShowAdd(true);
+    setLabel(prefill.gateLabel || "Shared server");
+    setServerUrl(prefill.serverUrl);
+    setAccessToken(prefill.accessToken);
+    persistDevClientAccessToken(prefill.accessToken);
+    toast.message("Server invite loaded", {
+      description: "Review the prefilled gate and tap Add to connect.",
+    });
   }, []);
 
   useEffect(() => {
@@ -213,8 +262,23 @@ export function GatePageContent() {
         accessToken,
       });
       const test = await testLocalServerGate(gate.id);
-      if (test.ok) toast.success("Gate added", { description: test.message });
-      else toast.warning("Gate saved", { description: test.message });
+      if (test.ok && useBundledLocalServerGate && !isPlRemoteServerClientMode()) {
+        const mirror = await mirrorPlServerGateToLocalSqlite(gate, { pullFullLedger: false });
+        await reloadLocalCompanyRegistry();
+        if (mirror.mirrored > 0) {
+          toast.success("Gate added", {
+            description: `${mirror.mirrored} companies mirrored to this device.`,
+          });
+        } else if (mirror.error) {
+          toast.warning("Gate saved", { description: mirror.error });
+        } else {
+          toast.success("Gate added", { description: test.message });
+        }
+      } else if (test.ok) {
+        toast.success("Gate added", { description: test.message });
+      } else {
+        toast.warning("Gate saved", { description: test.message });
+      }
       setLabel("");
       setServerUrl("");
       setAccessToken("");
@@ -231,14 +295,29 @@ export function GatePageContent() {
     if (!editingGateId) return;
     setSavingEdit(true);
     try {
-      updateLocalServerGate(editingGateId, {
+      const gate = updateLocalServerGate(editingGateId, {
         label: editLabel,
         serverUrl: editServerUrl,
         accessToken: editAccessToken.trim() || undefined,
       });
       const test = await testLocalServerGate(editingGateId);
-      if (test.ok) toast.success("Gate updated", { description: test.message });
-      else toast.warning("Gate saved", { description: test.message });
+      if (test.ok && useBundledLocalServerGate && !isPlRemoteServerClientMode()) {
+        const mirror = await mirrorPlServerGateToLocalSqlite(gate, { pullFullLedger: false });
+        await reloadLocalCompanyRegistry();
+        if (mirror.mirrored > 0) {
+          toast.success("Gate updated", {
+            description: `${mirror.mirrored} companies mirrored to this device.`,
+          });
+        } else if (mirror.error) {
+          toast.warning("Gate saved", { description: mirror.error });
+        } else {
+          toast.success("Gate updated", { description: test.message });
+        }
+      } else if (test.ok) {
+        toast.success("Gate updated", { description: test.message });
+      } else {
+        toast.warning("Gate saved", { description: test.message });
+      }
       cancelEdit();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not update gate");
@@ -263,6 +342,18 @@ export function GatePageContent() {
           toast.error("Cannot connect", { description: test.message });
           return;
         }
+        if (useBundledLocalServerGate && !isPlRemoteServerClientMode()) {
+          setActiveGateId(gate.id);
+          const activated = await activateLocalServerGateOnBundledClient(gate);
+          if (!activated.ok) {
+            toast.error("Could not use gate on this device", { description: activated.message });
+            return;
+          }
+          toast.success(`Using gate: ${gate.label}`, {
+            description: "Server companies are available on this device (SQLite).",
+          });
+          return;
+        }
         setActiveGateId(gate.id);
         connectLocalServerGate(gate.id);
       })();
@@ -274,12 +365,160 @@ export function GatePageContent() {
 
   const handlePickCompany = (id: string, gate: GateRecord) => {
     if (isLocalServerGate(gate)) {
-      connectLocalServerGate(gate.id, id);
+      void (async () => {
+        const token = resolveLocalServerGateAccessToken(gate);
+        if (!token) {
+          toast.error("Missing access token", {
+            description: "Edit this gate and paste the token from the server owner (Settings → Server).",
+          });
+          return;
+        }
+        if (gate.serverUrl) {
+          try {
+            const gateOrigin = new URL(normalizeServerUrl(gate.serverUrl)).origin;
+            if (isPlRemoteServerClientMode() && window.location.origin === gateOrigin) {
+              setActiveGateId(gate.id);
+              setCompanyId(id);
+              router.push(appNavHref("/dashboard"));
+              toast.success("Opened company on server");
+              return;
+            }
+          } catch {
+            /* fall through */
+          }
+        }
+        if (useBundledLocalServerGate && !isPlRemoteServerClientMode()) {
+          setTestingId(gate.id);
+          const test = await testLocalServerGate(gate.id);
+          if (!test.ok) {
+            setTestingId(null);
+            toast.error("Cannot open company", { description: test.message });
+            return;
+          }
+          setActiveGateId(gate.id);
+          const activated = await activateLocalServerGateOnBundledClient(gate);
+          setTestingId(null);
+          if (!activated.ok) {
+            toast.error("Could not open company", { description: activated.message });
+            return;
+          }
+          const picked = localServerGateCompanies.find((c) => c.id === id);
+          const companyRow: CompanyData =
+            picked ??
+            ({
+              id,
+              name: id,
+              ownerId: "",
+              storageOption: "local",
+              plServerShared: true,
+              isOwned: false,
+            } as CompanyData);
+          const remembered =
+            readStoredOfflineUnlockSession(user?.uid, id, user?.email) ||
+            readAnyStoredOfflineUnlockSessionForCompany(id);
+          if (remembered) {
+            try {
+              if (await plServerCompanyLedgerNeedsFullPull(id)) {
+                await mirrorPlServerSharedCompanyById(id, { pullFullLedger: true });
+              }
+              setLocalAuthToken(id, remembered.token, remembered.user);
+              setCompanyId(id);
+              router.push(appNavHref("/dashboard"));
+              toast.success("Opened company on this device");
+            } catch (e) {
+              toast.error("Could not sync company", {
+                description: e instanceof Error ? e.message : "Mirror failed.",
+              });
+            }
+            return;
+          }
+          const needsUnlock = await shouldPromptCompanyUnlockAsync(
+            companyRow,
+            user?.email,
+            user?.uid
+          );
+          if (!needsUnlock) {
+            try {
+              if (await plServerCompanyLedgerNeedsFullPull(id)) {
+                await mirrorPlServerSharedCompanyById(id, { pullFullLedger: true });
+              }
+              grantOpenLocalCompanySession(id, {
+                role: resolveCompanyIsOwnedForUser(companyRow, {
+                  uid: user?.uid || "",
+                  email: user?.email ?? null,
+                })
+                  ? "owner"
+                  : "viewer",
+              });
+              setCompanyId(id);
+              router.push(appNavHref("/dashboard"));
+              toast.success("Opened company on this device");
+            } catch (e) {
+              toast.error("Could not sync company", {
+                description: e instanceof Error ? e.message : "Mirror failed.",
+              });
+            }
+            return;
+          }
+          setCompanyToUnlock(companyRow);
+          setUnlockServerGate(gate);
+          setUsernameInput("");
+          setPasswordInput("");
+          setRememberUnlockDays(readOfflineUnlockPreferenceDays(user?.uid, id, user?.email));
+          return;
+        }
+        connectLocalServerGate(gate.id, id);
+      })();
       return;
     }
     setActiveGateId(gate.id);
     setCompanyId(id);
     router.push("/dashboard");
+  };
+
+  const handleServerCompanyUnlock = async () => {
+    if (!companyToUnlock) return;
+    const u = usernameInput.trim();
+    const p = passwordInput.trim();
+    if (!u || !p) {
+      toast.error("Company access", { description: "Enter both login username and password." });
+      return;
+    }
+    setIsVerifying(true);
+    try {
+      toast.message("Syncing company data…", {
+        description: "Verifying login and downloading ledger from server.",
+      });
+      const unlockGate =
+        unlockServerGate ?? (detailGate && isLocalServerGate(detailGate) ? detailGate : null);
+      const { token, user: localUser } = await localAuthLoginForCompanyContext(companyToUnlock.id, u, p, {
+        plServerGate: unlockGate,
+        forcePlServerRemote: Boolean(unlockGate),
+      });
+      setLocalAuthToken(companyToUnlock.id, token, localUser);
+      saveOfflineUnlockSession(
+        user?.uid,
+        companyToUnlock.id,
+        rememberUnlockDays,
+        token,
+        localUser,
+        user?.email
+      );
+      setCompanyId(companyToUnlock.id);
+      setCompanyToUnlock(null);
+      setUnlockServerGate(null);
+      setUsernameInput("");
+      setPasswordInput("");
+      router.push(appNavHref("/dashboard"));
+      toast.success(`Welcome to ${companyToUnlock.name}`);
+    } catch (e) {
+      toast.error("Company access", {
+        description: e instanceof Error ? e.message : "Login failed.",
+      });
+      setPasswordInput("");
+    } finally {
+      setIsVerifying(false);
+    }
   };
 
   const [onRemoteOrigin, setOnRemoteOrigin] = useState(false);
@@ -524,8 +763,21 @@ export function GatePageContent() {
                     disabled={testingId === detailGate.id}
                     onClick={() => handleUseGate(detailGate)}
                   >
-                    Connect &amp; open
+                    {useBundledLocalServerGate && !isPlRemoteServerClientMode()
+                      ? "Use on this device"
+                      : "Connect & open"}
                   </Button>
+                  {useBundledLocalServerGate && !isPlRemoteServerClientMode() ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={testingId === detailGate.id}
+                      onClick={() => connectLocalServerGate(detailGate.id)}
+                    >
+                      Connect &amp; open in browser
+                    </Button>
+                  ) : null}
                 </>
               ) : (
                 <Button type="button" size="sm" onClick={() => handleUseGate(detailGate)}>
@@ -590,7 +842,9 @@ export function GatePageContent() {
                   onPick={(id) => handlePickCompany(id, detailGate)}
                 />
                 <p className="text-sm text-muted-foreground">
-                  Tap a company to open it on the server, or use <strong>Connect &amp; open</strong> above.
+                  {useBundledLocalServerGate && !isPlRemoteServerClientMode()
+                    ? "Tap a company to sign in and sync it on this device, or use Use on this device above."
+                    : "Tap a company to open it on the server, or use Connect & open above."}
                 </p>
               </>
             )}
@@ -599,6 +853,96 @@ export function GatePageContent() {
           </CardContent>
         </Card>
       ) : null}
+
+      <AlertDialog
+        open={!!companyToUnlock}
+        onOpenChange={(open) => {
+          if (!open) {
+            const closing = companyToUnlock;
+            setCompanyToUnlock(null);
+            setUnlockServerGate(null);
+            setUsernameInput("");
+            setPasswordInput("");
+            if (closing) {
+              setRememberUnlockDays(
+                readOfflineUnlockPreferenceDays(user?.uid, closing.id, user?.email)
+              );
+            }
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Enter your credentials</AlertDialogTitle>
+            <AlertDialogDescription>
+              {companyToUnlock ? (
+                <>
+                  Open{" "}
+                  <span className="font-medium text-foreground">&quot;{companyToUnlock.name}&quot;</span>{" "}
+                  using this company&apos;s local username and password on the server. After login, full
+                  company data will sync to this device.
+                </>
+              ) : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="gate-unlock-login-user">Login username</Label>
+              <Input
+                id="gate-unlock-login-user"
+                value={usernameInput}
+                onChange={(e) => setUsernameInput(e.target.value)}
+                autoComplete="username"
+                disabled={isVerifying}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="gate-unlock-password">Password</Label>
+              <div className="relative">
+                <Input
+                  id="gate-unlock-password"
+                  type={showPassword ? "text" : "password"}
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  autoComplete="current-password"
+                  disabled={isVerifying}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleServerCompanyUnlock();
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-0 top-0 h-full px-3"
+                  onClick={() => setShowPassword((v) => !v)}
+                  disabled={isVerifying}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
+            <RememberCompanyPasswordDurationSelect
+              id="gate-remember-days"
+              value={rememberUnlockDays}
+              onChange={setRememberUnlockDays}
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isVerifying}>Cancel</AlertDialogCancel>
+            <Button type="button" disabled={isVerifying} onClick={() => void handleServerCompanyUnlock()}>
+              {isVerifying ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Syncing…
+                </>
+              ) : (
+                "Sign in & sync"
+              )}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={!!deleteId} onOpenChange={(o) => !o && setDeleteId(null)}>
         <AlertDialogContent>

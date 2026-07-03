@@ -14,6 +14,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useCompany } from "@/hooks/useCompany";
+import { filterCompaniesForActiveGate } from "@/lib/gates/gateRuntime";
+import { getActiveGate } from "@/lib/gates/gateStore";
+import { PL_GATE_CHANGED_EVENT } from "@/lib/gates/gateTypes";
+import {
+  filterCompaniesForPlServerAccess,
+  PL_SERVER_ACCESS_CONTEXT_EVENT,
+} from "@/lib/plServerAccessContext";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useToast } from "@/hooks/use-toast";
 import { voucherTouchesPartyLedger } from "@/lib/voucherTouchesPartyLedger";
@@ -169,7 +176,29 @@ function getCompareHalfFromCell(tr: HTMLTableRowElement, cellIndex: number): "le
  * Target: alag company + wahan ka party (entity) map; optional account note.
  */
 export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) {
-  const { company, companyId, allCompanies } = useCompany();
+  const { company, companyId, allCompanies, allCompaniesRegistry } = useCompany();
+  /** Gate / server token change par company dropdown dubara filter — `useCompany` fallback list mat use karo. */
+  const [syncLedgerGateEpoch, setSyncLedgerGateEpoch] = React.useState(0);
+  React.useEffect(() => {
+    const bump = () => setSyncLedgerGateEpoch((n) => n + 1);
+    window.addEventListener(PL_GATE_CHANGED_EVENT, bump);
+    window.addEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, bump);
+    return () => {
+      window.removeEventListener(PL_GATE_CHANGED_EVENT, bump);
+      window.removeEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, bump);
+    };
+  }, []);
+
+  const syncLedgerCompanies = React.useMemo(() => {
+    void syncLedgerGateEpoch;
+    const source =
+      (allCompaniesRegistry?.length ? allCompaniesRegistry : allCompanies)?.filter(
+        (c) => c.isDeleted !== true && c.movedToAdminRecycleAt == null
+      ) ?? [];
+    const gate = getActiveGate();
+    const byGate = filterCompaniesForActiveGate(source, gate);
+    return filterCompaniesForPlServerAccess(byGate);
+  }, [allCompaniesRegistry, allCompanies, syncLedgerGateEpoch]);
   const { processedParties, vouchers: vouchersForDisplay } = useVouchers();
   const { user, customUser } = useAuth();
   const { dateSystem, formatDate, formatDateBS } = useDate();
@@ -253,20 +282,20 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
   );
 
   const otherCompanies = React.useMemo(
-    () => (allCompanies || []).filter((c) => c.id && c.id !== effectiveSourceCompanyId),
-    [allCompanies, effectiveSourceCompanyId]
+    () => syncLedgerCompanies.filter((c) => c.id && c.id !== effectiveSourceCompanyId),
+    [syncLedgerCompanies, effectiveSourceCompanyId]
   );
 
-  /** Compare dropdowns: saari companies (id) alphabetical — current company bhi list me. */
+  /** Compare dropdowns: active gate + server token ke allowed companies; alphabetical. */
   const allCompaniesSorted = React.useMemo(
     () =>
-      (allCompanies || [])
+      syncLedgerCompanies
         .filter((c): c is typeof c & { id: string } => Boolean(String(c.id || "").trim()))
         .map((c) => ({ ...c, id: String(c.id) }))
         .sort((a, b) =>
           String(a.name || a.id).localeCompare(String(b.name || b.id), undefined, { sensitivity: "base" })
         ),
-    [allCompanies]
+    [syncLedgerCompanies]
   );
   const companyDisplayNameById = React.useMemo(() => {
     const m = new Map<string, string>();
@@ -1545,6 +1574,13 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
 
   return (
     <>
+      {/* modal={false} par Radix overlay kam blur deta hai — alag fixed backdrop. */}
+      {open ? (
+        <div
+          className="fixed inset-0 z-[48] bg-black/50 backdrop-blur-lg dark:bg-black/60 pointer-events-auto"
+          aria-hidden="true"
+        />
+      ) : null}
       {/* Sirf Compare before Sync — pehla setup dialog hata diya gaya. */}
       <Dialog
         open={open}
@@ -1555,8 +1591,7 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
         modal={false}
       >
         <DialogContent
-          /* Peeche page blur + dim — compare ke peeche dashboard clearly alag dikhe */
-          overlayClassName="bg-black/50 backdrop-blur-md dark:bg-black/55 dark:backdrop-blur-md"
+          overlayClassName="bg-transparent pointer-events-none backdrop-blur-none"
           className={
             /* Neela border + white ki jagah halka slate — plain white canvas kam harsh */
             "w-[95vw] max-w-[95vw] h-[92vh] !flex !flex-col overflow-hidden !p-0 gap-0 !rounded-xl " +

@@ -604,6 +604,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                 docsInputRef={docsInputRef}
                 onDocsChange={handleDocsChange}
                 canAttachDocuments={canAttachDocuments}
+                attachmentCompanyId={companyId ?? undefined}
                 entityStatementLabel="income/expense account"
                 inputId="edit-expense-docs"
               />

@@ -4,6 +4,13 @@ const http = require("http");
 const os = require("os");
 const handler = require("serve-handler");
 const accessTokens = require("./localAppServerAccessTokens");
+const { PL_MIRROR_PROTOCOL_VERSION, evaluateMirrorProtocol } = require("./plMirrorProtocol.cjs");
+const {
+  EXE_APP_UI_PORT_START,
+  EXE_APP_UI_PORT_COUNT,
+  consecutivePortCandidates,
+} = require("./plWebPorts.cjs");
+const { packagedStaticServeHeaders } = require("./packagedStaticHeaders.cjs");
 
 const CONFIG_FILE = "pl-local-server-config.json";
 const TOKEN_FILE = "pl-local-app-client-token.json";
@@ -15,6 +22,8 @@ const PL_ELECTRON_MARKER_VALUE = "pocket-ledger-electron";
 
 const DEFAULT_CONFIG = {
   port: 3000,
+  /** EXE BrowserView origin — set once on first bind; sharing port change iske saath login break nahi karta. */
+  appUiPort: null,
   bindMode: "localhost",
   appOnlyAccess: true,
   autoStartOnBoot: false,
@@ -26,8 +35,12 @@ const DEFAULT_CONFIG = {
   requireRemoteAccessToken: true,
 };
 
-let staticServer = null;
-let staticServerPort = null;
+let appUiServer = null;
+let appUiServerPort = null;
+let sharingServer = null;
+let sharingServerPort = null;
+let companyMirrorExportProvider = null;
+let companyMirrorCollectionExportProvider = null;
 let clientToken = null;
 let staticPublicDir = "";
 let isPackaged = false;
@@ -35,6 +48,14 @@ let rewriteReconciliationDocumentUrl = null;
 let isAllowedFirebaseProxyTarget = null;
 let listShareableCompaniesProvider = null;
 let localCompanyAuthProvider = null;
+let attachmentBlobProvider = null;
+let attachmentBlobWriteProvider = null;
+let companyMirrorPushProvider = null;
+let mirrorHealthProvider = null;
+
+function setMirrorHealthProvider(fn) {
+  mirrorHealthProvider = typeof fn === "function" ? fn : null;
+}
 
 function setShareableCompaniesProvider(fn) {
   listShareableCompaniesProvider = typeof fn === "function" ? fn : null;
@@ -42,6 +63,26 @@ function setShareableCompaniesProvider(fn) {
 
 function setLocalCompanyAuthProvider(fn) {
   localCompanyAuthProvider = typeof fn === "function" ? fn : null;
+}
+
+function setAttachmentBlobProvider(fn) {
+  attachmentBlobProvider = typeof fn === "function" ? fn : null;
+}
+
+function setAttachmentBlobWriteProvider(fn) {
+  attachmentBlobWriteProvider = typeof fn === "function" ? fn : null;
+}
+
+function setCompanyMirrorPushProvider(fn) {
+  companyMirrorPushProvider = typeof fn === "function" ? fn : null;
+}
+
+function setCompanyMirrorExportProvider(fn) {
+  companyMirrorExportProvider = typeof fn === "function" ? fn : null;
+}
+
+function setCompanyMirrorCollectionExportProvider(fn) {
+  companyMirrorCollectionExportProvider = typeof fn === "function" ? fn : null;
 }
 
 function readJsonBody(req) {
@@ -84,15 +125,15 @@ async function shareableCompaniesForToken(allowedIds) {
       /* fallback below */
     }
   }
-  if (!all.length && idSet?.size) {
-    return stubShareableCompaniesFromIds([...idSet]);
-  }
-  return all.filter((c) => {
+  const filtered = all.filter((c) => {
     if (!c || !c.id) return false;
     const id = String(c.id).trim();
     if (!idSet) return true;
     return idSet.has(id);
   });
+  if (filtered.length > 0) return filtered;
+  if (idSet?.size) return stubShareableCompaniesFromIds([...idSet]);
+  return filtered;
 }
 
 function setServerDeps(deps) {
@@ -143,10 +184,13 @@ function loadConfig(userDataPath) {
   try {
     const raw = JSON.parse(fs.readFileSync(configPath(userDataPath), "utf8"));
     const port = Number(raw.port);
+    const appUiPortRaw = Number(raw.appUiPort);
     return {
       ...DEFAULT_CONFIG,
       ...raw,
       port: Number.isFinite(port) && port > 0 && port < 65536 ? port : DEFAULT_CONFIG.port,
+      appUiPort:
+        Number.isFinite(appUiPortRaw) && appUiPortRaw > 0 && appUiPortRaw < 65536 ? appUiPortRaw : null,
       bindMode: normalizeBindMode(raw.bindMode),
       appOnlyAccess: raw.appOnlyAccess !== false,
       autoStartOnBoot: raw.autoStartOnBoot === true,
@@ -167,15 +211,6 @@ function saveConfig(userDataPath, partial) {
   const next = { ...prev, ...partial };
   if (partial && partial.appRole != null) next.appRole = normalizeAppRole(partial.appRole);
   if (partial && partial.bindMode != null) next.bindMode = normalizeBindMode(partial.bindMode);
-  if (partial && partial.port != null) {
-    const newPort = Number(partial.port);
-    const oldPort = Number(prev.port);
-    if (Number.isFinite(newPort) && newPort > 0 && newPort < 65536 && newPort !== oldPort) {
-      try {
-        fs.unlinkSync(path.join(userDataPath, PERSISTED_PORT_FILE));
-      } catch (_) {}
-    }
-  }
   try {
     fs.mkdirSync(path.dirname(configPath(userDataPath)), { recursive: true });
     fs.writeFileSync(configPath(userDataPath), JSON.stringify(next, null, 2), "utf8");
@@ -210,24 +245,32 @@ function shouldUseRemoteEntry(cfg) {
   return false;
 }
 
-function packagedStaticPortCandidates(userDataPath, preferred) {
+function resolveAppUiPort(userDataPath, cfg) {
+  const fromCfg = Number(cfg?.appUiPort);
+  if (Number.isFinite(fromCfg) && fromCfg > 0 && fromCfg < 65536) return fromCfg;
   const persisted = readPersistedPackagedPort(userDataPath);
-  const fallbacks = [37123, 38123, 39123, 40123, 41123];
-  // Settings → Port (preferred) pehle — warna purana persisted (e.g. 37123) user ke 30000 ko ignore karta tha.
-  const ordered = [
-    preferred,
-    ...(persisted != null && persisted !== preferred ? [persisted] : []),
-    ...fallbacks,
-  ];
-  const seen = new Set();
-  const out = [];
-  for (const n of ordered) {
-    if (typeof n === "number" && n > 0 && n < 65536 && !seen.has(n)) {
-      seen.add(n);
-      out.push(n);
-    }
-  }
-  return out;
+  if (persisted != null) return persisted;
+  return null;
+}
+
+function packagedAppUiPortCandidates(userDataPath, cfg) {
+  const persisted = readPersistedPackagedPort(userDataPath);
+  const resolved = resolveAppUiPort(userDataPath, cfg);
+  return consecutivePortCandidates(
+    EXE_APP_UI_PORT_START,
+    EXE_APP_UI_PORT_COUNT,
+    resolved,
+    persisted
+  );
+}
+
+function sharingPortCandidates(cfg) {
+  const preferred = Number(cfg.port);
+  return consecutivePortCandidates(
+    EXE_APP_UI_PORT_START,
+    EXE_APP_UI_PORT_COUNT,
+    Number.isFinite(preferred) && preferred > 0 ? preferred : null
+  );
 }
 
 function headerValue(req, name) {
@@ -479,6 +522,414 @@ function createRequestHandler(userDataPath) {
         );
         return;
       }
+      const mirrorCollectionMatch = requestUrl.pathname.match(
+        /^\/__pl_company_mirror\/([^/]+)\/([^/]+)\/?$/
+      );
+      if (requestUrl.pathname === "/__pl_mirror_health") {
+        applyPlAccessContextCors(request, response);
+        if (request.method === "OPTIONS") {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          response.statusCode = 405;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "method_not_allowed" }));
+          return;
+        }
+        const companyId = String(requestUrl.searchParams.get("companyId") || "").trim();
+        if (!companyId) {
+          response.statusCode = 400;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "missing_company_id" }));
+          return;
+        }
+        const fromLocalhost = isRequestFromLocalhost(request);
+        if (!fromLocalhost) {
+          const tok = tokenFromRequest(request);
+          const rec = accessTokens.getAccessTokenRecord(userDataPath, tok);
+          if (!rec) {
+            response.statusCode = 403;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "invalid_or_missing_token" }));
+            return;
+          }
+          accessTokens.validateAccessToken(userDataPath, tok);
+          const ids = accessTokens.normalizeCompanyIds(rec.allowedCompanyIds);
+          if (ids.length > 0 && !ids.includes(companyId)) {
+            response.statusCode = 403;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "company_not_allowed_for_token" }));
+            return;
+          }
+        }
+        if (!mirrorHealthProvider) {
+          response.statusCode = 503;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "mirror_health_unavailable" }));
+          return;
+        }
+        try {
+          const payload = await mirrorHealthProvider(companyId);
+          response.statusCode = 200;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.setHeader("cache-control", "no-store");
+          response.end(JSON.stringify(payload && typeof payload === "object" ? payload : { ok: false }));
+        } catch (_) {
+          response.statusCode = 500;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "mirror_health_failed" }));
+        }
+        return;
+      }
+      if (mirrorCollectionMatch) {
+        applyPlAccessContextCors(request, response);
+        if (request.method === "OPTIONS") {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          response.statusCode = 405;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "method_not_allowed" }));
+          return;
+        }
+        const companyId = decodeURIComponent(String(mirrorCollectionMatch[1] || "")).trim();
+        const collection = decodeURIComponent(String(mirrorCollectionMatch[2] || "")).trim();
+        if (!companyId || !collection) {
+          response.statusCode = 400;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "missing_company_or_collection" }));
+          return;
+        }
+        const fromLocalhost = isRequestFromLocalhost(request);
+        if (!fromLocalhost) {
+          const tok = tokenFromRequest(request);
+          const rec = accessTokens.getAccessTokenRecord(userDataPath, tok);
+          if (!rec) {
+            response.statusCode = 403;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ error: "invalid_or_missing_token" }));
+            return;
+          }
+          accessTokens.validateAccessToken(userDataPath, tok);
+          const ids = accessTokens.normalizeCompanyIds(rec.allowedCompanyIds);
+          if (ids.length > 0 && !ids.includes(companyId)) {
+            response.statusCode = 403;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ error: "company_not_allowed_for_token" }));
+            return;
+          }
+        }
+        if (!companyMirrorCollectionExportProvider) {
+          response.statusCode = 503;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "mirror_collection_export_unavailable" }));
+          return;
+        }
+        try {
+          const docs = await companyMirrorCollectionExportProvider(companyId, collection);
+          if (docs == null) {
+            response.statusCode = 404;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ error: "company_or_collection_not_found" }));
+            return;
+          }
+          response.statusCode = 200;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.setHeader("cache-control", "no-store");
+          response.end(JSON.stringify({ collection, docs }));
+        } catch (_) {
+          response.statusCode = 500;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "mirror_collection_export_failed" }));
+        }
+        return;
+      }
+      const mirrorMatch = requestUrl.pathname.match(/^\/__pl_company_mirror\/([^/]+)\/?$/);
+      if (mirrorMatch) {
+        applyPlAccessContextCors(request, response);
+        if (request.method === "OPTIONS") {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          response.statusCode = 405;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "method_not_allowed" }));
+          return;
+        }
+        const companyId = decodeURIComponent(String(mirrorMatch[1] || "")).trim();
+        if (!companyId) {
+          response.statusCode = 400;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "missing_company_id" }));
+          return;
+        }
+        const fromLocalhost = isRequestFromLocalhost(request);
+        if (!fromLocalhost) {
+          const tok = tokenFromRequest(request);
+          const rec = accessTokens.getAccessTokenRecord(userDataPath, tok);
+          if (!rec) {
+            response.statusCode = 403;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ error: "invalid_or_missing_token" }));
+            return;
+          }
+          accessTokens.validateAccessToken(userDataPath, tok);
+          const ids = accessTokens.normalizeCompanyIds(rec.allowedCompanyIds);
+          if (ids.length > 0 && !ids.includes(companyId)) {
+            response.statusCode = 403;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ error: "company_not_allowed_for_token" }));
+            return;
+          }
+        }
+        if (!companyMirrorExportProvider) {
+          response.statusCode = 503;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "mirror_export_unavailable" }));
+          return;
+        }
+        try {
+          const bundle = await companyMirrorExportProvider(companyId);
+          if (!bundle) {
+            response.statusCode = 404;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ error: "company_not_found" }));
+            return;
+          }
+          response.statusCode = 200;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.setHeader("cache-control", "no-store");
+          response.end(JSON.stringify(bundle));
+        } catch (_) {
+          response.statusCode = 500;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "mirror_export_failed" }));
+        }
+        return;
+      }
+      if (requestUrl.pathname === "/__pl_attachment") {
+        applyPlAccessContextCors(request, response);
+        if (request.method === "OPTIONS") {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+        const companyIdParam = String(requestUrl.searchParams.get("companyId") || "").trim();
+        const refParam = String(requestUrl.searchParams.get("ref") || "").trim();
+
+        async function validatePlAttachmentAccess(companyId) {
+          const fromLocalhost = isRequestFromLocalhost(request);
+          if (!fromLocalhost) {
+            const tok = tokenFromRequest(request);
+            const rec = accessTokens.getAccessTokenRecord(userDataPath, tok);
+            if (!rec) {
+              response.statusCode = 403;
+              response.setHeader("content-type", "application/json; charset=utf-8");
+              response.end(JSON.stringify({ error: "invalid_or_missing_token" }));
+              return false;
+            }
+            accessTokens.validateAccessToken(userDataPath, tok);
+            const ids = accessTokens.normalizeCompanyIds(rec.allowedCompanyIds);
+            if (ids.length > 0 && !ids.includes(companyId)) {
+              response.statusCode = 403;
+              response.setHeader("content-type", "application/json; charset=utf-8");
+              response.end(JSON.stringify({ error: "company_not_allowed_for_token" }));
+              return false;
+            }
+          }
+          return true;
+        }
+
+        if (request.method === "POST") {
+          let body = {};
+          try {
+            body = await readJsonBody(request);
+          } catch (_) {
+            response.statusCode = 400;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "invalid_json" }));
+            return;
+          }
+          const companyId = String(body.companyId || companyIdParam || "").trim();
+          const id = String(body.id || refParam || "").trim();
+          const base64 = String(body.base64 || body.blob || "").trim();
+          if (!companyId || !id || !base64) {
+            response.statusCode = 400;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "missing_fields" }));
+            return;
+          }
+          if (!(await validatePlAttachmentAccess(companyId))) return;
+          if (!attachmentBlobWriteProvider) {
+            response.statusCode = 503;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "attachment_write_unavailable" }));
+            return;
+          }
+          try {
+            const result = await attachmentBlobWriteProvider(companyId, {
+              id,
+              base64,
+              sha256Hex: body.sha256Hex || body.sha256,
+              contentType: body.contentType,
+              fileName: body.fileName,
+              storagePathPrefix: body.storagePathPrefix,
+              docPath: body.docPath,
+              field: body.field,
+            });
+            const out = result && typeof result === "object" ? result : { ok: false, error: "write_failed" };
+            if (!out.ok) {
+              response.statusCode = 500;
+              response.setHeader("content-type", "application/json; charset=utf-8");
+              response.end(JSON.stringify({ ok: false, error: String(out.error || "attachment_write_failed") }));
+              return;
+            }
+            response.statusCode = 200;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: true, deduped: out.deduped === true }));
+          } catch (_) {
+            response.statusCode = 500;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "attachment_write_failed" }));
+          }
+          return;
+        }
+
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          response.statusCode = 405;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "method_not_allowed" }));
+          return;
+        }
+        const companyId = companyIdParam;
+        const ref = refParam;
+        if (!companyId || !ref) {
+          response.statusCode = 400;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "missing_fields" }));
+          return;
+        }
+        if (!(await validatePlAttachmentAccess(companyId))) return;
+        if (!attachmentBlobProvider) {
+          response.statusCode = 503;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "attachment_read_unavailable" }));
+          return;
+        }
+        try {
+          const payload = await attachmentBlobProvider(companyId, ref);
+          if (!payload || !payload.buffer || !Buffer.isBuffer(payload.buffer) || payload.buffer.length <= 0) {
+            response.statusCode = 404;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ error: "attachment_not_found" }));
+            return;
+          }
+          if (request.method === "HEAD") {
+            response.statusCode = 200;
+            response.setHeader(
+              "content-type",
+              String(payload.contentType || "application/octet-stream")
+            );
+            response.setHeader("content-length", String(payload.buffer.length));
+            response.setHeader("cache-control", "private, max-age=120");
+            response.end();
+            return;
+          }
+          response.statusCode = 200;
+          response.setHeader(
+            "content-type",
+            String(payload.contentType || "application/octet-stream")
+          );
+          response.setHeader("content-length", String(payload.buffer.length));
+          response.setHeader("cache-control", "private, max-age=120");
+          response.end(payload.buffer);
+        } catch (_) {
+          response.statusCode = 500;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "attachment_read_failed" }));
+        }
+        return;
+      }
+      if (requestUrl.pathname === "/__pl_company_mirror_push") {
+        applyPlAccessContextCors(request, response);
+        if (request.method === "OPTIONS") {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+        if (request.method !== "POST") {
+          response.statusCode = 405;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "method_not_allowed" }));
+          return;
+        }
+        const accessTok = tokenFromRequest(request);
+        if (!accessTok || !accessTokens.validateAccessToken(userDataPath, accessTok)) {
+          response.statusCode = 403;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "invalid_or_missing_token" }));
+          return;
+        }
+        try {
+          const body = await readJsonBody(request);
+          const companyId = String(body.companyId || "").trim();
+          const collection = String(body.collection || "").trim();
+          const docs = Array.isArray(body.docs) ? body.docs : [];
+          if (!companyId || !collection || !docs.length) {
+            response.statusCode = 400;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "missing_fields" }));
+            return;
+          }
+          const protoEval = evaluateMirrorProtocol(body.mirrorProtocol, PL_MIRROR_PROTOCOL_VERSION);
+          if (protoEval.action === "reject") {
+            response.statusCode = 409;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(
+              JSON.stringify({
+                ok: false,
+                error: protoEval.code,
+                message: protoEval.message,
+                mirrorProtocol: PL_MIRROR_PROTOCOL_VERSION,
+              })
+            );
+            return;
+          }
+          if (protoEval.action === "warn") {
+            console.warn("[MirrorProtocol]", protoEval.code, protoEval.message || "");
+          }
+          const rec = accessTokens.getAccessTokenRecord(userDataPath, accessTok);
+          const allowedIds = accessTokens.normalizeCompanyIds(rec?.allowedCompanyIds);
+          if (allowedIds.length > 0 && !allowedIds.includes(companyId)) {
+            response.statusCode = 403;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "company_not_allowed_for_token" }));
+            return;
+          }
+          if (!companyMirrorPushProvider) {
+            response.statusCode = 503;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "mirror_push_unavailable" }));
+            return;
+          }
+          const result = await companyMirrorPushProvider(companyId, collection, docs);
+          response.statusCode = 200;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.setHeader("cache-control", "no-store");
+          response.end(JSON.stringify(result && typeof result === "object" ? result : { ok: true }));
+        } catch (_) {
+          response.statusCode = 500;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "mirror_push_failed" }));
+        }
+        return;
+      }
       if (requestUrl.pathname === "/__pl_company_login") {
         applyPlAccessContextCors(request, response);
         if (request.method === "OPTIONS") {
@@ -611,12 +1062,7 @@ function createRequestHandler(userDataPath) {
     return handler(request, response, {
       public: staticPublicDir,
       cleanUrls: true,
-      headers: [
-        {
-          source: "**/*.mjs",
-          headers: [{ key: "Content-Type", value: "text/javascript; charset=utf-8" }],
-        },
-      ],
+      headers: packagedStaticServeHeaders(isPackaged),
     });
   };
 }
@@ -632,11 +1078,8 @@ function forceCloseHttpServer(server) {
   } catch (_) {}
 }
 
-function stopStaticServer() {
-  if (!staticServer) return Promise.resolve();
-  const server = staticServer;
-  staticServer = null;
-  staticServerPort = null;
+function closeHttpServerInstance(server) {
+  if (!server) return Promise.resolve();
   return new Promise((resolve) => {
     let settled = false;
     const finish = () => {
@@ -658,77 +1101,175 @@ function stopStaticServer() {
   });
 }
 
+function stopSharingServer() {
+  if (!sharingServer) return Promise.resolve();
+  const server = sharingServer;
+  sharingServer = null;
+  sharingServerPort = null;
+  return closeHttpServerInstance(server);
+}
+
+function stopAppUiServer() {
+  if (!appUiServer) return Promise.resolve();
+  const server = appUiServer;
+  appUiServer = null;
+  appUiServerPort = null;
+  return closeHttpServerInstance(server);
+}
+
+function stopStaticServer() {
+  return Promise.all([stopSharingServer(), stopAppUiServer()]).then(() => undefined);
+}
+
 function listenHostForConfig(cfg) {
   if (!cfg.userWantsRunning) return "127.0.0.1";
   return cfg.bindMode === "localhost" ? "127.0.0.1" : "0.0.0.0";
 }
 
-function startStaticServer(userDataPath, options = {}) {
-  if (staticServer && staticServerPort) {
-    return Promise.resolve(staticServerPort);
-  }
-
-  const cfg = { ...loadConfig(userDataPath), ...options };
-  if (!shouldHostLocalServer(cfg)) {
-    return Promise.reject(new Error("PL_LOCAL_SERVER_ROLE_CLIENT_ONLY"));
-  }
-  if (!options.forAppUi && !cfg.userWantsRunning) {
-    return Promise.reject(new Error("PL_LOCAL_SERVER_STOPPED"));
-  }
-
-  const preferred = cfg.port;
-  const host = listenHostForConfig(cfg);
-
-  staticServer = http.createServer(createRequestHandler(userDataPath));
-
+function listenOnPort(server, port, host) {
   return new Promise((resolve, reject) => {
     const finish = () => {
-      staticServer.removeAllListeners("error");
-      const addressInfo = staticServer.address();
+      server.removeAllListeners("error");
+      const addressInfo = server.address();
       if (!addressInfo || typeof addressInfo === "string") {
         reject(new Error("Unable to resolve static server port."));
         return;
       }
-      staticServerPort = addressInfo.port;
-      writePersistedPackagedPort(userDataPath, staticServerPort);
-      resolve(staticServerPort);
+      resolve(addressInfo.port);
     };
+    server.removeAllListeners("error");
+    server.once("error", (err) => reject(err));
+    server.listen(port, host, finish);
+  });
+}
 
-    const candidates = isPackaged
-      ? packagedStaticPortCandidates(userDataPath, preferred)
-      : [preferred];
-
+function tryListenWithCandidates(server, candidates, host) {
+  return new Promise((resolve, reject) => {
     let candidateIndex = 0;
-    const tryNextCandidate = () => {
+    const tryNext = () => {
       if (candidateIndex >= candidates.length) {
         reject(new Error("PL_PACKAGED_STATIC_PORT_EXHAUSTED"));
         return;
       }
       const port = candidates[candidateIndex++];
-      staticServer.removeAllListeners("error");
-      staticServer.once("error", (err) => {
+      server.removeAllListeners("error");
+      server.once("error", (err) => {
         if (err && err.code === "EADDRINUSE") {
-          tryNextCandidate();
+          tryNext();
           return;
         }
         reject(err);
       });
-      staticServer.listen(port, host, finish);
+      server.listen(port, host, () => {
+        server.removeAllListeners("error");
+        const addressInfo = server.address();
+        if (!addressInfo || typeof addressInfo === "string") {
+          reject(new Error("Unable to resolve static server port."));
+          return;
+        }
+        resolve(addressInfo.port);
+      });
     };
-
-    tryNextCandidate();
+    tryNext();
   });
 }
 
+function startAppUiServer(userDataPath) {
+  if (appUiServer && appUiServerPort) {
+    return Promise.resolve(appUiServerPort);
+  }
+  const cfg = loadConfig(userDataPath);
+  if (!shouldHostLocalServer(cfg)) {
+    return Promise.reject(new Error("PL_LOCAL_SERVER_ROLE_CLIENT_ONLY"));
+  }
+  appUiServer = http.createServer(createRequestHandler(userDataPath));
+  const candidates = isPackaged
+    ? packagedAppUiPortCandidates(userDataPath, cfg)
+    : [resolveAppUiPort(userDataPath, cfg) || cfg.port || 3000];
+  return tryListenWithCandidates(appUiServer, candidates, "127.0.0.1").then((port) => {
+    appUiServerPort = port;
+    writePersistedPackagedPort(userDataPath, port);
+    if (Number(cfg.appUiPort) !== port) {
+      saveConfig(userDataPath, { appUiPort: port });
+    }
+    return port;
+  });
+}
+
+function sharingServerMatchesConfig(cfg) {
+  if (!sharingServer || !sharingServerPort) return false;
+  const expectedHost = listenHostForConfig(cfg);
+  const addr = sharingServer.address();
+  if (!addr || typeof addr === "string") return false;
+  const hostOk =
+    addr.address === expectedHost ||
+    (expectedHost === "0.0.0.0" && (addr.address === "::" || addr.address === "0.0.0.0"));
+  return hostOk && Number(addr.port) === Number(cfg.port);
+}
+
+function startSharingServer(userDataPath) {
+  const cfg = loadConfig(userDataPath);
+  if (!shouldHostLocalServer(cfg)) {
+    return Promise.reject(new Error("PL_LOCAL_SERVER_ROLE_CLIENT_ONLY"));
+  }
+  if (!cfg.userWantsRunning) {
+    return Promise.reject(new Error("PL_LOCAL_SERVER_STOPPED"));
+  }
+  if (sharingServerMatchesConfig(cfg)) {
+    return Promise.resolve(sharingServerPort);
+  }
+  return stopSharingServer().then(() => {
+    sharingServer = http.createServer(createRequestHandler(userDataPath));
+    const host = listenHostForConfig(cfg);
+    const candidates = sharingPortCandidates(cfg);
+    return tryListenWithCandidates(sharingServer, candidates, host).then((port) => {
+      sharingServerPort = port;
+      if (Number(cfg.port) !== port) {
+        saveConfig(userDataPath, { port });
+      }
+      return port;
+    });
+  });
+}
+
+function startStaticServer(userDataPath, options = {}) {
+  if (options.forAppUi) {
+    return startAppUiServer(userDataPath);
+  }
+  return startSharingServer(userDataPath);
+}
+
+async function restartSharingServer(userDataPath) {
+  await stopSharingServer();
+  const cfg = loadConfig(userDataPath);
+  if (!shouldHostLocalServer(cfg) || !cfg.userWantsRunning) {
+    return null;
+  }
+  return startSharingServer(userDataPath);
+}
+
+function getAppUiServerPort() {
+  return appUiServerPort;
+}
+
+function getSharingServerPort() {
+  return sharingServerPort;
+}
+
 function getStaticServerPort() {
-  return staticServerPort;
+  return appUiServerPort;
 }
 
 function getServerListenAddress() {
-  if (!staticServer || !staticServerPort) return null;
-  const addr = staticServer.address();
-  if (!addr || typeof addr === "string") return null;
-  return { host: addr.address, port: addr.port };
+  if (sharingServer && sharingServerPort) {
+    const addr = sharingServer.address();
+    if (addr && typeof addr !== "string") return { host: addr.address, port: addr.port };
+  }
+  if (appUiServer && appUiServerPort) {
+    const addr = appUiServer.address();
+    if (addr && typeof addr !== "string") return { host: addr.address, port: addr.port };
+  }
+  return null;
 }
 
 function normalizeRemoteServerUrl(url) {
@@ -745,21 +1286,27 @@ function normalizeRemoteServerUrl(url) {
 }
 
 async function restartStaticServer(userDataPath, options = {}) {
-  await stopStaticServer();
-  return startStaticServer(userDataPath, options);
+  if (options.forAppUi) {
+    await stopAppUiServer();
+    return startAppUiServer(userDataPath);
+  }
+  return restartSharingServer(userDataPath);
 }
 
 function getStatus(userDataPath) {
   const cfg = loadConfig(userDataPath);
-  const port = staticServerPort || cfg.port;
   const hosting = shouldHostLocalServer(cfg);
-  const processUp = Boolean(staticServer && staticServerPort);
-  const sharingActive = processUp && cfg.userWantsRunning;
+  const appUiUp = Boolean(appUiServer && appUiServerPort);
+  const sharingUp = Boolean(sharingServer && sharingServerPort && cfg.userWantsRunning);
+  const resolvedAppUiPort = appUiServerPort || resolveAppUiPort(userDataPath, cfg);
+  const sharingPort = sharingUp ? sharingServerPort : null;
   return {
-    running: sharingActive,
-    appUiServing: processUp,
-    sharingActive,
-    port: staticServerPort || null,
+    running: sharingUp,
+    appUiServing: appUiUp,
+    sharingActive: sharingUp,
+    port: sharingPort || resolvedAppUiPort || null,
+    appUiPort: resolvedAppUiPort || null,
+    sharingPort,
     configuredPort: cfg.port,
     bindMode: cfg.bindMode,
     appOnlyAccess: cfg.appOnlyAccess,
@@ -770,10 +1317,10 @@ function getStatus(userDataPath) {
     publicHost: cfg.publicHost,
     requireRemoteAccessToken: cfg.requireRemoteAccessToken,
     urls:
-      staticServerPort && hosting && cfg.userWantsRunning
-        ? listLanUrls(staticServerPort, cfg.publicHost)
-        : processUp && hosting
-          ? [`http://127.0.0.1:${staticServerPort}/`, `http://localhost:${staticServerPort}/`]
+      sharingPort && hosting && cfg.userWantsRunning
+        ? listLanUrls(sharingPort, cfg.publicHost)
+        : appUiUp && hosting
+          ? [`http://127.0.0.1:${resolvedAppUiPort}/`, `http://localhost:${resolvedAppUiPort}/`]
           : [],
     clientHeader: PL_CLIENT_HEADER,
     accessHeader: PL_ACCESS_HEADER,
@@ -802,15 +1349,28 @@ module.exports = {
   setServerDeps,
   setShareableCompaniesProvider,
   setLocalCompanyAuthProvider,
+  setAttachmentBlobProvider,
+  setAttachmentBlobWriteProvider,
+  setCompanyMirrorPushProvider,
+  setCompanyMirrorExportProvider,
+  setCompanyMirrorCollectionExportProvider,
+  setMirrorHealthProvider,
   loadConfig,
   saveConfig,
   getOrCreateClientToken,
   startStaticServer,
+  startAppUiServer,
+  startSharingServer,
   restartStaticServer,
+  restartSharingServer,
   stopStaticServer,
+  stopSharingServer,
   listenHostForConfig,
   getStaticServerPort,
+  getAppUiServerPort,
+  getSharingServerPort,
   getServerListenAddress,
+  resolveAppUiPort,
   getStatus,
   applyLoginItemSettings,
   listLanUrls,

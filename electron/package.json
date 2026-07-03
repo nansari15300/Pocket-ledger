@@ -13,6 +13,7 @@
     "force-clean": "powershell -ExecutionPolicy Bypass -File scripts/force-clean-dist.ps1",
     "build": "npm run clean-dist && npm run gen-icon && electron-builder --win --projectDir .",
     "build:win": "npm run clean-dist && npm run gen-icon && electron-builder --win --projectDir .",
+    "build:win:fast": "npm run gen-icon && electron-builder --win --projectDir .",
     "build:win:alt": "npm run gen-icon && electron-builder --win --projectDir . --config.directories.output=dist-build",
     "build:linux": "electron-builder --linux --projectDir ."
   },
@@ -28,6 +29,10 @@
       "googleAuthExternal.js",
       "localAppServer.js",
       "localAppServerAccessTokens.js",
+      "plMirrorProtocol.cjs",
+      "plWebPorts.cjs",
+      "packagedStaticHeaders.cjs",
+      "appUpgradeCache.js",
       "staticAppServer.js",
       "tab-strip.html",
       "tab-strip.js",

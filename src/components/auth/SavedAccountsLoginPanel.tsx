@@ -2,9 +2,10 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { signInWithEmailAndPassword, type User } from "firebase/auth";
-import { Loader2, Trash2, UserRound } from "lucide-react";
+import { Loader2, Mail, Trash2, UserPlus, UserRound } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { auth } from "@/lib/firebase";
 import { signInWithGoogleForApp } from "@/lib/googleFirebaseSignIn";
@@ -28,6 +29,7 @@ export function SavedAccountsLoginPanel({ onBack }: Props) {
   const { toast } = useToast();
   const livePlans = useLivePlans();
   const [busyUid, setBusyUid] = useState<string | null>(null);
+  const [busyOther, setBusyOther] = useState(false);
   const [rows, setRows] = useState(() => listSavedLoginAccounts());
 
   const entitledRows = useMemo(
@@ -63,7 +65,7 @@ export function SavedAccountsLoginPanel({ onBack }: Props) {
         navigateAfterAuth(auth.currentUser?.uid, auth.currentUser?.email);
         return;
       }
-      const result = await signInWithGoogleForApp();
+      const result = await signInWithGoogleForApp({ loginHint: record.email });
       if (result?.user) {
         navigateAfterAuth(result.user.uid, result.user.email);
       }
@@ -75,35 +77,53 @@ export function SavedAccountsLoginPanel({ onBack }: Props) {
     }
   };
 
+  const signInWithAnotherGoogleAccount = async () => {
+    setBusyOther(true);
+    try {
+      const result = await signInWithGoogleForApp();
+      if (result?.user) {
+        navigateAfterAuth(result.user.uid, result.user.email);
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Sign-in failed.";
+      toast({ variant: "destructive", title: "Google sign-in failed", description: msg });
+    } finally {
+      setBusyOther(false);
+    }
+  };
+
   const removeRow = (uid: string) => {
     removeSavedLoginAccount(uid);
     setRows(listSavedLoginAccounts());
   };
 
+  const busy = busyUid != null || busyOther;
+
   return (
     <div className="rounded-lg border bg-card p-6 shadow-sm space-y-4">
       <div className="space-y-1">
         <h2 className="text-lg font-semibold">Change account</h2>
-        <p className="text-sm text-muted-foreground">Choose a saved account on this device.</p>
+        <p className="text-sm text-muted-foreground">
+          Pick a saved account on this device, or sign in with a different one.
+        </p>
       </div>
-      {entitledRows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No saved accounts. Sign in and save one on logout.</p>
-      ) : (
+
+      {entitledRows.length > 0 ? (
         <ul className="space-y-2">
           {entitledRows.map((row) => {
             const label = row.displayName?.trim() || row.email;
-            const busy = busyUid === row.uid;
+            const rowBusy = busyUid === row.uid;
             return (
               <li key={row.uid} className="flex items-center gap-2">
                 <Button
                   type="button"
                   variant="outline"
                   className="flex-1 justify-start h-auto py-3"
-                  disabled={busyUid != null}
+                  disabled={busy}
                   onClick={() => void switchTo(row)}
                 >
                   <span className="mr-2 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
-                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserRound className="h-4 w-4" />}
+                    {rowBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserRound className="h-4 w-4" />}
                   </span>
                   <span className="min-w-0 text-left">
                     <span className="block truncate font-medium">{label}</span>
@@ -115,7 +135,7 @@ export function SavedAccountsLoginPanel({ onBack }: Props) {
                   variant="ghost"
                   size="icon"
                   className="shrink-0 text-muted-foreground hover:text-destructive"
-                  disabled={busyUid != null}
+                  disabled={busy}
                   aria-label={`Remove ${row.email}`}
                   onClick={() => removeRow(row.uid)}
                 >
@@ -125,8 +145,38 @@ export function SavedAccountsLoginPanel({ onBack }: Props) {
             );
           })}
         </ul>
+      ) : (
+        <p className="text-sm text-muted-foreground">No saved accounts yet.</p>
       )}
-      <Button type="button" variant="link" className="w-full" onClick={onBack}>
+
+      <div className="space-y-3">
+        <div className="relative">
+          <Separator />
+          <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-card px-2 text-xs text-muted-foreground">
+            or use another account
+          </span>
+        </div>
+        <Button
+          type="button"
+          variant="default"
+          className="w-full"
+          disabled={busy}
+          onClick={() => void signInWithAnotherGoogleAccount()}
+        >
+          {busyOther ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <UserPlus className="mr-2 h-4 w-4" />
+          )}
+          Choose another Google account
+        </Button>
+        <Button type="button" variant="outline" className="w-full" disabled={busy} onClick={onBack}>
+          <Mail className="mr-2 h-4 w-4" />
+          Sign in with email &amp; password
+        </Button>
+      </div>
+
+      <Button type="button" variant="link" className="w-full" disabled={busy} onClick={onBack}>
         Back to sign in
       </Button>
     </div>

@@ -678,6 +678,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                   docsInputRef={docsInputRef}
                   onDocsChange={handleDocsChange}
                   canAttachDocuments={canAttachDocuments}
+                  attachmentCompanyId={companyId ?? undefined}
                   entityStatementLabel="tax"
                   inputId="edit-tax-docs"
                 />

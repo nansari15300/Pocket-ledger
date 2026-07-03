@@ -98,28 +98,6 @@ import { RenewProrationPills } from "@/components/billing/RenewProrationPills";
 import { useDisplayCurrency } from "@/hooks/useDisplayCurrency";
 import { getCompanyPlanExpiryMsFromDoc } from "@/lib/companyPlanExpiryMs";
 
-import { useHeaderAttachmentPrefetchPercent } from "@/contexts/EmbeddedAttachmentPrefetchContext";
-
-/** APK/static: background attachment cache — header ke niche patli strip (kam visible). */
-function EmbeddedAttachmentHeaderProgress() {
-  const headerAttachmentPercent = useHeaderAttachmentPrefetchPercent();
-  // EXE: background warm chal raha ho to header layout shift / ledger scroll jump avoid.
-  if (isElectronDesktopApp()) return null;
-  if (headerAttachmentPercent == null) return null;
-  const w = Math.min(100, Math.max(0, Math.round(headerAttachmentPercent)));
-  return (
-    <div
-      className="pointer-events-none absolute bottom-0 left-0 right-0 z-40 h-[2px] overflow-hidden bg-muted/25 opacity-70"
-      aria-hidden
-    >
-      <div
-        className="h-full bg-primary/30 transition-[width] duration-500 ease-out"
-        style={{ width: `${w}%` }}
-      />
-    </div>
-  );
-}
-
 /** Electron desktop: header quick-action buttons strip collapsed — `main.js` View menu se bhi toggle */
 const PL_DESKTOP_QUICK_ACTIONS_KEY = "pl-desktop-header-quick-actions-collapsed";
 
@@ -1531,7 +1509,6 @@ export function DesktopAppHeader() {
 
   return (
     <header className="relative sticky top-0 z-30 border-b border-sidebar-border bg-background px-[2px] py-0.5">
-      <EmbeddedAttachmentHeaderProgress />
       {/* Static/Electron: icon sirf sidebar green brand card me — yahan extra black strip nahi (tab strip + duplicate lagta tha). */}
       {/* User request: single header card, but control alignment purane header flow jaisa rakho */}
       {/* User request: header container ko pink tone me dikhana */}

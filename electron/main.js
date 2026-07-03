@@ -8,12 +8,15 @@ const {
   dialog,
   nativeImage,
   shell,
+  session,
 } = require("electron");
 const googleAuthExternal = require("./googleAuthExternal");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const localAppServer = require("./localAppServer");
+const appUpgradeCache = require("./appUpgradeCache");
+const { PL_MIRROR_PROTOCOL_VERSION, evaluateMirrorProtocol } = require("./plMirrorProtocol.cjs");
 
 /** Har app launch par naya id — EXE multi-tab PIN unlock isi session me share (cold start par dubara PIN). */
 let appBootSessionId = "";
@@ -122,6 +125,123 @@ localAppServer.setServerDeps({
 /** Packaged app: UI BrowserView tabs (main window webContents khali rehta hai). */
 let serverDataBridgeWindow = null;
 
+/** Keep in sync with src/lib/plMirrorProtocol.ts — import from plMirrorProtocol.cjs */
+
+const mirrorExportMetrics = {
+  bundleFallbackCount: 0,
+};
+
+/** Per-company last successful push (client→server) / export (server→client pull). */
+const mirrorSyncAtByCompany = new Map();
+
+function getServerBuildLabel() {
+  try {
+    const v = app.getVersion();
+    if (v) return String(v);
+  } catch (_) {}
+  try {
+    return String(require("./package.json").version || "unknown");
+  } catch (_) {
+    return "unknown";
+  }
+}
+
+function noteMirrorPushSuccess(companyId) {
+  const cid = String(companyId || "").trim();
+  if (!cid) return;
+  const row = mirrorSyncAtByCompany.get(cid) || { lastPushAt: 0, lastExportAt: 0 };
+  row.lastPushAt = Date.now();
+  mirrorSyncAtByCompany.set(cid, row);
+}
+
+function noteMirrorExportSuccess(companyId) {
+  const cid = String(companyId || "").trim();
+  if (!cid) return;
+  const row = mirrorSyncAtByCompany.get(cid) || { lastPushAt: 0, lastExportAt: 0 };
+  row.lastExportAt = Date.now();
+  mirrorSyncAtByCompany.set(cid, row);
+}
+
+function mirrorSyncMsAgo(companyId, key) {
+  const row = mirrorSyncAtByCompany.get(String(companyId || "").trim());
+  const ts = row?.[key];
+  if (!ts || !Number.isFinite(ts)) return null;
+  return Math.max(0, Date.now() - ts);
+}
+
+function mirrorHealthEnvelope(companyId, extra) {
+  return {
+    mirrorProtocol: PL_MIRROR_PROTOCOL_VERSION,
+    serverBuild: getServerBuildLabel(),
+    lastSuccessfulMirrorPushMsAgo: mirrorSyncMsAgo(companyId, "lastPushAt"),
+    lastSuccessfulMirrorPullMsAgo: mirrorSyncMsAgo(companyId, "lastExportAt"),
+    ...extra,
+  };
+}
+
+function logMirrorExportDev(event, detail) {
+  if (app.isPackaged) return;
+  console.log("[MirrorExport]", event, detail || "");
+}
+
+function mirrorRendererLabel(wc) {
+  if (!wc || wc.isDestroyed()) return "unknown";
+  if (
+    serverDataBridgeWindow &&
+    !serverDataBridgeWindow.isDestroyed() &&
+    wc.id === serverDataBridgeWindow.webContents.id
+  ) {
+    return "bridge";
+  }
+  try {
+    const url = String(wc.getURL() || "");
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(url)) return "main-window";
+    if (url) return `wc-${wc.id}`;
+  } catch (_) {}
+  return `wc-${wc.id}`;
+}
+
+function mirrorRendererPriority(label) {
+  return label === "bridge" ? 1 : 2;
+}
+
+function mirrorDocsMaxUpdatedAtMs(docs) {
+  let max = 0;
+  for (const d of docs) {
+    const raw = d.updatedAt ?? d.lastEditedAt ?? d.createdAt;
+    let ms = 0;
+    if (typeof raw === "number" && Number.isFinite(raw)) ms = raw;
+    else if (typeof raw === "string") {
+      const p = Date.parse(raw);
+      if (Number.isFinite(p)) ms = p;
+    } else if (raw && typeof raw === "object" && typeof raw.seconds === "number") {
+      ms = raw.seconds * 1000 + Math.floor((raw.nanoseconds || 0) / 1e6);
+    }
+    if (ms > max) max = ms;
+  }
+  return max;
+}
+
+function mirrorDatasetFingerprintHex(docs) {
+  const payload = [...docs]
+    .sort((a, b) => String(a.id || "").localeCompare(String(b.id || "")))
+    .map((d) => {
+      const id = String(d.id || "");
+      const upd = String(d.updatedAt ?? d.lastEditedAt ?? "");
+      const deleted = d.isDeleted === true || d.deleted === true ? 1 : 0;
+      return `${id}|${upd}|${deleted}`;
+    })
+    .join("\n");
+  return require("crypto").createHash("sha1").update(payload).digest("hex").slice(0, 8);
+}
+
+function mirrorExportRendererScore(docs, label) {
+  const count = docs.length;
+  const maxUpdatedAt = mirrorDocsMaxUpdatedAtMs(docs);
+  const rendererPriority = mirrorRendererPriority(label);
+  return 100000 * count + 1000 * maxUpdatedAt + rendererPriority;
+}
+
 function scoreLocalhostAppUrl(url) {
   const u = String(url || "");
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(u)) return 0;
@@ -151,7 +271,20 @@ function getAppTabWebContentsList() {
   if (serverDataBridgeWindow && !serverDataBridgeWindow.isDestroyed()) {
     push(serverDataBridgeWindow.webContents);
   }
-  return out.sort((a, b) => scoreLocalhostAppUrl(a.getURL()) - scoreLocalhostAppUrl(b.getURL()));
+  return out.sort((a, b) => {
+    const sa = scoreLocalhostAppUrl(a.getURL());
+    const sb = scoreLocalhostAppUrl(b.getURL());
+    if (sa !== sb) return sa - sb;
+    const aBridge =
+      serverDataBridgeWindow && !serverDataBridgeWindow.isDestroyed() && a.id === serverDataBridgeWindow.webContents.id
+        ? 1
+        : 0;
+    const bBridge =
+      serverDataBridgeWindow && !serverDataBridgeWindow.isDestroyed() && b.id === serverDataBridgeWindow.webContents.id
+        ? 1
+        : 0;
+    return aBridge - bBridge;
+  });
 }
 
 async function waitForWindowBridgeFn(wc, fnName, timeoutMs = 25000) {
@@ -172,8 +305,7 @@ async function ensureServerDataBridgeWindow() {
   if (!app.isPackaged) return null;
   const cfg = localAppServer.loadConfig(userDataPath());
   if (!localAppServer.shouldHostLocalServer(cfg) || !cfg.userWantsRunning) return null;
-  const bound = localAppServer.getServerListenAddress();
-  const port = bound?.port || localAppServer.getStaticServerPort();
+  const port = localAppServer.getAppUiServerPort();
   if (!port) return null;
   const bridgeUrl = `http://127.0.0.1:${port}/`;
   if (!serverDataBridgeWindow || serverDataBridgeWindow.isDestroyed()) {
@@ -200,6 +332,31 @@ async function ensureServerDataBridgeWindow() {
   }
   await waitForWindowBridgeFn(wc, "__plListShareableLocalCompanies");
   return wc;
+}
+
+/** P2P client push ke baad saari app tabs ko SQLite bump — hidden bridge window alag process me likhta hai. */
+async function broadcastBrowserDbCollectionBump(companyId, collection) {
+  const script = `(function(){
+    try {
+      if (typeof window.__plInvalidateBrowserDbCache === "function") window.__plInvalidateBrowserDbCache();
+    } catch (e) {}
+    try {
+      window.dispatchEvent(new CustomEvent("pocket-ledger-browser-db-bump", {
+        detail: { companyId: ${JSON.stringify(String(companyId || ""))}, collection: ${JSON.stringify(String(collection || ""))} }
+      }));
+    } catch (e) {}
+  })()`;
+  const contentsList = getAppTabWebContentsList();
+  await Promise.all(
+    contentsList.map(async (wc) => {
+      if (!wc || wc.isDestroyed()) return;
+      try {
+        const url = wc.getURL();
+        if (!url || url.startsWith("devtools://")) return;
+        await wc.executeJavaScript(script, true);
+      } catch (_) {}
+    })
+  );
 }
 
 async function runInServerAppRenderer(script, opts = {}) {
@@ -234,6 +391,187 @@ async function runInServerAppRenderer(script, opts = {}) {
   return null;
 }
 
+/** Collection mirror export — saare renderers try karo; stale empty vouchers skip karke best score lo. */
+async function runMirrorCollectionExportWithMeta(companyId, collection) {
+  const exportStartedMs = Date.now();
+  const cid = String(companyId || "").trim();
+  const col = String(collection || "").trim();
+  if (!cid || !col) return { docs: null, meta: null };
+
+  const exportScript = `(async () => {
+    try {
+      if (typeof window.__plExportCompanyMirrorCollection !== "function") return null;
+      return await window.__plExportCompanyMirrorCollection(${JSON.stringify(cid)}, ${JSON.stringify(col)});
+    } catch (_) {
+      return null;
+    }
+  })()`;
+
+  const partiesScript =
+    col === "vouchers"
+      ? `(async () => {
+    try {
+      if (typeof window.__plExportCompanyMirrorCollection !== "function") return null;
+      return await window.__plExportCompanyMirrorCollection(${JSON.stringify(cid)}, "parties");
+    } catch (_) {
+      return null;
+    }
+  })()`
+      : null;
+
+  let bestRows = null;
+  let bestScore = -1;
+  let bestRenderer = null;
+  let bestWc = null;
+  let sawSuspiciousEmptyVouchers = false;
+  const seenWc = new Set();
+
+  async function tryRenderer(wc) {
+    const rendererStartedMs = Date.now();
+    if (!wc || wc.isDestroyed()) return;
+    if (seenWc.has(wc.id)) return;
+    seenWc.add(wc.id);
+    const label = mirrorRendererLabel(wc);
+    const url = wc.getURL();
+    if (!url || url.startsWith("devtools://")) return;
+    const ready = await wc.executeJavaScript(
+      `typeof window.__plExportCompanyMirrorCollection === "function"`,
+      true
+    );
+    if (!ready) return;
+    const result = await wc.executeJavaScript(exportScript, true);
+    const rendererDurationMs = Date.now() - rendererStartedMs;
+    if (!Array.isArray(result)) return;
+
+    if (col === "vouchers" && result.length === 0 && partiesScript) {
+      try {
+        const parties = await wc.executeJavaScript(partiesScript, true);
+        if (Array.isArray(parties) && parties.length > 0) {
+          sawSuspiciousEmptyVouchers = true;
+          logMirrorExportDev("renderer_skipped", {
+            renderer: label,
+            collection: col,
+            reason: "suspicious_empty_vouchers",
+            partiesCount: parties.length,
+            mirror_export_duration_ms: rendererDurationMs,
+          });
+          return;
+        }
+      } catch (_) {
+        /* fall through — treat as authoritative empty */
+      }
+    }
+
+    const score = mirrorExportRendererScore(result, label);
+    const fingerprint = mirrorDatasetFingerprintHex(result);
+    logMirrorExportDev("renderer_result", {
+      renderer: label,
+      collection: col,
+      count: result.length,
+      cacheReload: true,
+      score,
+      fingerprint,
+      mirror_export_duration_ms: rendererDurationMs,
+    });
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestRows = result;
+      bestRenderer = label;
+      bestWc = wc;
+    }
+  }
+
+  for (const wc of getAppTabWebContentsList()) {
+    try {
+      await tryRenderer(wc);
+    } catch (_) {
+      /* next tab */
+    }
+  }
+
+  const bridge = await ensureServerDataBridgeWindow();
+  if (bridge && !bridge.isDestroyed()) {
+    await waitForWindowBridgeFn(bridge, "__plExportCompanyMirrorCollection");
+    try {
+      await tryRenderer(bridge);
+    } catch (_) {}
+  }
+
+  if (Array.isArray(bestRows)) {
+    const mirrorExportDurationMs = Date.now() - exportStartedMs;
+    logMirrorExportDev("export_selected", {
+      renderer: bestRenderer,
+      collection: col,
+      count: bestRows.length,
+      score: bestScore,
+      fingerprint: mirrorDatasetFingerprintHex(bestRows),
+      mirror_export_duration_ms: mirrorExportDurationMs,
+    });
+    return {
+      docs: bestRows,
+      meta: {
+        renderer: bestRenderer,
+        fingerprint: mirrorDatasetFingerprintHex(bestRows),
+        score: bestScore,
+        exportMs: mirrorExportDurationMs,
+        voucherCount: bestRows.length,
+        bestWc,
+      },
+    };
+  }
+  if (sawSuspiciousEmptyVouchers) {
+    return { docs: null, meta: { sawSuspiciousEmptyVouchers: true } };
+  }
+  return { docs: null, meta: null };
+}
+
+async function runMirrorCollectionExportBestEffort(companyId, collection) {
+  const { docs } = await runMirrorCollectionExportWithMeta(companyId, collection);
+  return docs;
+}
+
+async function probeMirrorDbOpenMs(wc) {
+  if (!wc || wc.isDestroyed()) return null;
+  try {
+    const ready = await wc.executeJavaScript(`typeof window.__plMirrorHealthDbOpenMs === "function"`, true);
+    if (!ready) return null;
+    const ms = await wc.executeJavaScript(`window.__plMirrorHealthDbOpenMs()`, true);
+    return typeof ms === "number" && Number.isFinite(ms) ? ms : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+localAppServer.setMirrorHealthProvider(async (companyId) => {
+  const cid = String(companyId || "").trim();
+  if (!cid) {
+    return mirrorHealthEnvelope(cid, { ok: false, error: "missing_company_id" });
+  }
+  const { docs, meta } = await runMirrorCollectionExportWithMeta(cid, "vouchers");
+  if (!meta || !Array.isArray(docs)) {
+    return mirrorHealthEnvelope(cid, {
+      ok: false,
+      error: meta?.sawSuspiciousEmptyVouchers ? "suspicious_empty_vouchers" : "export_unavailable",
+      mirror_bundle_fallback_count: mirrorExportMetrics.bundleFallbackCount,
+    });
+  }
+  noteMirrorExportSuccess(cid);
+  const dbOpenMs = meta.bestWc ? await probeMirrorDbOpenMs(meta.bestWc) : null;
+  return mirrorHealthEnvelope(cid, {
+    ok: true,
+    companyId: cid,
+    renderer: meta.renderer,
+    fingerprint: meta.fingerprint,
+    voucherCount: meta.voucherCount,
+    cacheReload: true,
+    dbOpenMs,
+    exportMs: meta.exportMs,
+    score: meta.score,
+    mirror_bundle_fallback_count: mirrorExportMetrics.bundleFallbackCount,
+  });
+});
+
 localAppServer.setShareableCompaniesProvider(async () => {
   const rows = await runInServerAppRenderer(
     `(async () => {
@@ -253,8 +591,7 @@ localAppServer.setShareableCompaniesProvider(async () => {
 });
 
 localAppServer.setLocalCompanyAuthProvider(async (companyId, username, password) => {
-  const result = await runInServerAppRenderer(
-    `(async () => {
+  const script = `(async () => {
       try {
         if (typeof window.__plValidateLocalCompanyLogin !== "function") {
           return { ok: false, error: "bridge_missing" };
@@ -263,17 +600,164 @@ localAppServer.setLocalCompanyAuthProvider(async (companyId, username, password)
       } catch (e) {
         return { ok: false, error: e && e.message ? e.message : "Login failed" };
       }
+    })()`;
+  let lastError = "Invalid username or password";
+  const contentsList = getAppTabWebContentsList();
+  for (const wc of contentsList) {
+    try {
+      const url = wc.getURL();
+      if (!url || url.startsWith("devtools://")) continue;
+      const ready = await wc.executeJavaScript(
+        `typeof window.__plValidateLocalCompanyLogin === "function"`,
+        true
+      );
+      if (!ready) continue;
+      const result = await wc.executeJavaScript(script, true);
+      if (result && typeof result === "object" && result.ok === true) return result;
+      if (result && typeof result === "object" && result.error) {
+        lastError = String(result.error);
+      }
+    } catch (_) {
+      /* next tab */
+    }
+  }
+  const bridge = await ensureServerDataBridgeWindow();
+  if (bridge && !bridge.isDestroyed()) {
+    await waitForWindowBridgeFn(bridge, "__plValidateLocalCompanyLogin");
+    try {
+      const result = await bridge.executeJavaScript(script, true);
+      if (result && typeof result === "object" && result.ok === true) return result;
+      if (result && typeof result === "object" && result.error) {
+        lastError = String(result.error);
+      }
+    } catch (_) {}
+  }
+  if (lastError === "bridge_missing") {
+    return {
+      ok: false,
+      error:
+        "Server data bridge is not ready. On the server PC keep Pocket Ledger open (or wait ~10s after starting sharing), then try again.",
+    };
+  }
+  return { ok: false, error: lastError };
+});
+
+localAppServer.setCompanyMirrorExportProvider(async (companyId) => {
+  const bundle = await runInServerAppRenderer(
+    `(async () => {
+      try {
+        if (typeof window.__plExportCompanyMirrorBundle !== "function") return null;
+        return await window.__plExportCompanyMirrorBundle(${JSON.stringify(companyId)});
+      } catch (_) {
+        return null;
+      }
     })()`,
-    { requireFn: "__plValidateLocalCompanyLogin" }
+    { requireFn: "__plExportCompanyMirrorBundle" }
   );
-  if (result && typeof result === "object" && result.ok === true) return result;
-  if (result && typeof result === "object" && result.error && result.error !== "bridge_missing") {
-    return result;
+  return bundle && typeof bundle === "object" ? bundle : null;
+});
+
+localAppServer.setCompanyMirrorCollectionExportProvider(async (companyId, collection) => {
+  const rows = await runMirrorCollectionExportBestEffort(companyId, collection);
+  if (Array.isArray(rows)) {
+    noteMirrorExportSuccess(companyId);
+    return rows;
+  }
+  const bundle = await runInServerAppRenderer(
+    `(async () => {
+      try {
+        if (typeof window.__plExportCompanyMirrorBundle !== "function") return null;
+        return await window.__plExportCompanyMirrorBundle(${JSON.stringify(companyId)});
+      } catch (_) {
+        return null;
+      }
+    })()`,
+    { requireFn: "__plExportCompanyMirrorBundle" }
+  );
+  const col = String(collection || "").trim();
+  const fromBundle = bundle?.collections?.[col];
+  if (Array.isArray(fromBundle)) {
+    mirrorExportMetrics.bundleFallbackCount += 1;
+    console.warn(
+      "[MirrorExport] mirror_bundle_fallback_count",
+      mirrorExportMetrics.bundleFallbackCount,
+      { companyId, collection: col, count: fromBundle.length }
+    );
+    logMirrorExportDev("bundle_fallback", {
+      companyId,
+      collection: col,
+      count: fromBundle.length,
+      mirror_bundle_fallback_count: mirrorExportMetrics.bundleFallbackCount,
+    });
+    noteMirrorExportSuccess(companyId);
+    return fromBundle;
+  }
+  return null;
+});
+
+localAppServer.setAttachmentBlobProvider(async (companyId, ref) => {
+  const payload = await runInServerAppRenderer(
+    `(async () => {
+      try {
+        if (typeof window.__plReadAttachmentBlob !== "function") return null;
+        return await window.__plReadAttachmentBlob(${JSON.stringify(companyId)}, ${JSON.stringify(ref)});
+      } catch (_) {
+        return null;
+      }
+    })()`,
+    { requireFn: "__plReadAttachmentBlob" }
+  );
+  if (!payload || typeof payload !== "object" || !payload.base64) return null;
+  try {
+    const buffer = Buffer.from(String(payload.base64), "base64");
+    if (!buffer.length) return null;
+    return {
+      buffer,
+      contentType: String(payload.contentType || "application/octet-stream"),
+    };
+  } catch (_) {
+    return null;
+  }
+});
+
+localAppServer.setAttachmentBlobWriteProvider(async (companyId, body) => {
+  const result = await runInServerAppRenderer(
+    `(async () => {
+      try {
+        if (typeof window.__plPutPendingAttachmentFromRemote !== "function") {
+          return { ok: false, error: "bridge_missing" };
+        }
+        return await window.__plPutPendingAttachmentFromRemote(${JSON.stringify(companyId)}, ${JSON.stringify(body)});
+      } catch (e) {
+        return { ok: false, error: e && e.message ? e.message : "write_failed" };
+      }
+    })()`,
+    { requireFn: "__plPutPendingAttachmentFromRemote" }
+  );
+  return result && typeof result === "object" ? result : { ok: false, error: "write_failed" };
+});
+
+localAppServer.setCompanyMirrorPushProvider(async (companyId, collection, docs) => {
+  const result = await runInServerAppRenderer(
+    `(async () => {
+      try {
+        if (typeof window.__plUpsertCompanyMirrorDocs !== "function") return { ok: false, error: "bridge_missing" };
+        return await window.__plUpsertCompanyMirrorDocs(${JSON.stringify(companyId)}, ${JSON.stringify(collection)}, ${JSON.stringify(docs)});
+      } catch (e) {
+        return { ok: false, error: e && e.message ? e.message : "push_failed" };
+      }
+    })()`,
+    { requireFn: "__plUpsertCompanyMirrorDocs" }
+  );
+  const out = result && typeof result === "object" ? result : { ok: false, error: "push_failed" };
+  if (out.ok) {
+    noteMirrorPushSuccess(companyId);
+    await broadcastBrowserDbCollectionBump(companyId, collection);
   }
   return {
-    ok: false,
-    error:
-      "Server data bridge is not ready. On the server PC keep Pocket Ledger open (or wait ~10s after starting sharing), then try again.",
+    ...out,
+    mirrorProtocol: PL_MIRROR_PROTOCOL_VERSION,
+    serverBuild: getServerBuildLabel(),
   };
 });
 
@@ -314,7 +798,8 @@ async function startStaticServer() {
     throw new Error("PL_LOCAL_SERVER_STOPPED");
   }
   try {
-    const port = await localAppServer.startStaticServer(userDataPath());
+    await localAppServer.startStaticServer(userDataPath(), { forAppUi: true });
+    const port = await localAppServer.startSharingServer(userDataPath());
     const cfgAfter = localAppServer.loadConfig(userDataPath());
     if (cfgAfter.userWantsRunning) {
       void ensureServerDataBridgeWindow().catch(() => {});
@@ -379,37 +864,19 @@ async function focusOrOpenMainWindow() {
 
 async function stopLocalServerAndPersist() {
   localAppServer.saveConfig(userDataPath(), { userWantsRunning: false });
+  await localAppServer.stopSharingServer();
   const cfg = localAppServer.loadConfig(userDataPath());
   if (app.isPackaged && localAppServer.shouldHostLocalServer(cfg)) {
-    const expectedHost = localAppServer.listenHostForConfig(cfg);
-    const bound = localAppServer.getServerListenAddress();
-    if (!bound) {
-      await localAppServer.startStaticServer(userDataPath(), { forAppUi: true });
-    } else if (bound.host !== expectedHost) {
-      await localAppServer.restartStaticServer(userDataPath(), { forAppUi: true });
-    }
-    syncLocalServerTray();
-    return;
+    await localAppServer.startStaticServer(userDataPath(), { forAppUi: true });
   }
-  await stopStaticServer();
   syncLocalServerTray();
 }
 
 async function startSharedLocalServer() {
   localAppServer.saveConfig(userDataPath(), { userWantsRunning: true });
-  const cfg = localAppServer.loadConfig(userDataPath());
-  const expectedHost = localAppServer.listenHostForConfig(cfg);
-  const bound = localAppServer.getServerListenAddress();
-  let port;
-  if (!bound) {
-    port = await startStaticServer();
-  } else if (bound.host !== expectedHost) {
-    port = await localAppServer.restartStaticServer(userDataPath());
-    void ensureServerDataBridgeWindow().catch(() => {});
-  } else {
-    port = bound.port;
-    void ensureServerDataBridgeWindow().catch(() => {});
-  }
+  await localAppServer.startStaticServer(userDataPath(), { forAppUi: true });
+  const port = await localAppServer.startSharingServer(userDataPath());
+  void ensureServerDataBridgeWindow().catch(() => {});
   return port;
 }
 
@@ -587,14 +1054,84 @@ function getFocusedTabContents(win) {
   return state.tabs[state.activeIndex]?.webContents ?? null;
 }
 
-/** View → DevTools: native `toggleDevTools` role **BrowserWindow** ke khali host par lagta tha — active **BrowserView** tab par kholna zaroori. */
+/** View → DevTools: BrowserView tab — `detach` alag window me blank page preview chhodta hai; `right` = app + console ek hi window. */
 function toggleDevToolsForActiveTab(win) {
   const wc = getFocusedTabContents(win);
   if (!wc || wc.isDestroyed()) return;
   try {
     if (wc.isDevToolsOpened()) wc.closeDevTools();
-    else wc.openDevTools({ mode: "detach" });
+    else wc.openDevTools({ mode: "right", activate: true });
   } catch (_) {}
+}
+
+/** Chrome-style right-click on app tabs — navigation, edit, Inspect Element + DevTools. */
+function attachAppContentContextMenu(webContents) {
+  if (!webContents || webContents.isDestroyed()) return;
+  webContents.on("context-menu", (_event, params) => {
+    const canNavBack = webContents.canGoBack();
+    const canNavForward = webContents.canGoForward();
+    const canCut = params.isEditable && params.editFlags?.canCut;
+    const canCopy =
+      Boolean(params.editFlags?.canCopy) ||
+      Boolean(params.selectionText && params.selectionText.length > 0) ||
+      Boolean(params.linkURL);
+    const canPaste = params.isEditable && params.editFlags?.canPaste;
+    const canSelectAll = params.isEditable;
+
+    const template = [
+      {
+        label: "Back",
+        enabled: canNavBack,
+        click: () => {
+          if (canNavBack) webContents.goBack();
+        },
+      },
+      {
+        label: "Forward",
+        enabled: canNavForward,
+        click: () => {
+          if (canNavForward) webContents.goForward();
+        },
+      },
+      {
+        label: "Reload",
+        click: () => webContents.reload(),
+      },
+      { type: "separator" },
+    ];
+
+    if (params.linkURL) {
+      template.push(
+        {
+          label: "Open Link in Browser",
+          click: () => {
+            shell.openExternal(params.linkURL).catch(() => {});
+          },
+        },
+        { type: "separator" }
+      );
+    }
+
+    template.push(
+      { label: "Cut", enabled: canCut, role: "cut" },
+      { label: "Copy", enabled: canCopy, role: "copy" },
+      { label: "Paste", enabled: canPaste, role: "paste" },
+      { type: "separator" },
+      { label: "Select All", enabled: canSelectAll, role: "selectAll" },
+      { type: "separator" },
+      {
+        label: "Inspect",
+        click: () => {
+          webContents.inspectElement(params.x, params.y);
+          if (!webContents.isDevToolsOpened()) {
+            webContents.openDevTools({ mode: "right", activate: true });
+          }
+        },
+      }
+    );
+
+    Menu.buildFromTemplate(template).popup();
+  });
 }
 
 /** BrowserView tab reload — native `{ role: "reload" }` galat webContents (khali window) par lagta tha */
@@ -836,9 +1373,22 @@ function previousTab(win) {
   switchToTab(win, prevIndex);
 }
 
+const { DEV_WEB_PORT_START } = require("./plWebPorts.cjs");
+
+function readDevWebPort() {
+  const fromEnv = Number(process.env.PL_DEV_WEB_PORT);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  try {
+    const f = path.join(__dirname, "..", ".pl-dev-web-port.json");
+    const n = Number(JSON.parse(fs.readFileSync(f, "utf8")).port);
+    if (Number.isFinite(n) && n > 0) return n;
+  } catch (_) {}
+  return DEV_WEB_PORT_START;
+}
+
 async function getAppEntryUrl() {
-  // Dev Next (`npm run dev`) port 3000 — packaged EXE static server alag fallback ports par.
-  if (isDevMode()) return "http://localhost:3000";
+  // Dev Next (`npm run dev`) — 4500–4599; packaged EXE static server — 3000–3099.
+  if (isDevMode()) return `http://localhost:${readDevWebPort()}`;
   const cfg = localAppServer.loadConfig(userDataPath());
   if (localAppServer.shouldUseRemoteEntry(cfg)) {
     const remote = localAppServer.normalizeRemoteServerUrl(cfg.remoteServerUrl);
@@ -912,6 +1462,7 @@ async function openNewTab(win) {
     },
   });
   installPlServerRequestHeaders(view.webContents.session);
+  attachAppContentContextMenu(view.webContents);
 
   // Normalize zoom shortcuts for different keyboard layouts in each tab webContents.
   view.webContents.on("before-input-event", (event, input) => {
@@ -942,6 +1493,8 @@ async function openNewTab(win) {
 
   view.webContents.on("page-title-updated", () => pushTabStripState(win));
   view.webContents.on("did-finish-load", () => pushTabStripState(win));
+  view.webContents.on("devtools-opened", () => updateBrowserViewBounds(win));
+  view.webContents.on("devtools-closed", () => updateBrowserViewBounds(win));
 
   const state = windowTabs.get(win.id);
   if (!state) return;
@@ -1214,6 +1767,20 @@ async function createWindow() {
 if (gotSingleInstanceLock) {
   app.whenReady().then(async () => {
   getAppBootSessionId();
+
+  if (app.isPackaged) {
+    try {
+      await appUpgradeCache.runPackagedUpgradeCacheRefresh({
+        app,
+        session: session.defaultSession,
+        asarOutDir: path.join(__dirname, "out"),
+        userDataPath: userDataPath(),
+      });
+    } catch (e) {
+      console.warn("[main] packaged upgrade cache refresh failed", e?.message || e);
+    }
+  }
+
   ipcMain.on("pl-get-app-boot-session-id", (event) => {
     event.returnValue = getAppBootSessionId();
   });
@@ -1239,8 +1806,8 @@ if (gotSingleInstanceLock) {
   const bootCfg = localAppServer.loadConfig(userDataPath());
   localAppServer.applyLoginItemSettings(app, bootCfg.autoStartOnBoot);
 
-  ipcMain.handle("pl-google-auth-external", async () => {
-    return googleAuthExternal.signInWithGoogleExternal(shell);
+  ipcMain.handle("pl-google-auth-external", async (_event, options) => {
+    return googleAuthExternal.signInWithGoogleExternal(shell, options || {});
   });
 
   ipcMain.handle("pl-local-server-get-status", async () => {
@@ -1275,7 +1842,7 @@ if (gotSingleInstanceLock) {
   });
 
   ipcMain.handle("pl-local-server-restart", async (_event, partial) => {
-    const portBeforeRestart = localAppServer.getStaticServerPort();
+    const appUiPortBefore = localAppServer.getAppUiServerPort();
     if (partial && typeof partial === "object") {
       localAppServer.saveConfig(userDataPath(), partial);
       if (typeof partial.autoStartOnBoot === "boolean") {
@@ -1283,48 +1850,41 @@ if (gotSingleInstanceLock) {
       }
     }
     const cfg = localAppServer.loadConfig(userDataPath());
-    const bound = localAppServer.getServerListenAddress();
-    const nextHost = localAppServer.listenHostForConfig(cfg);
-    const hostMatches =
-      bound &&
-      (bound.host === nextHost ||
-        (nextHost === "0.0.0.0" && (bound.host === "::" || bound.host === "0.0.0.0")));
-    const portMatches = bound && (!cfg.userWantsRunning || bound.port === Number(cfg.port));
-    const canKeepSocket =
-      bound && hostMatches && portMatches && localAppServer.shouldHostLocalServer(cfg);
-
-    if (canKeepSocket) {
-      syncLocalServerTray();
-      return { ok: true, port: bound.port, status: localAppServer.getStatus(userDataPath()) };
-    }
-
-    await stopStaticServer();
     if (!localAppServer.shouldHostLocalServer(cfg)) {
+      await localAppServer.stopSharingServer();
       syncLocalServerTray();
       return { ok: true, port: null, status: localAppServer.getStatus(userDataPath()) };
     }
-    let port;
-    if (app.isPackaged) {
-      if (cfg.userWantsRunning) {
-        port = await localAppServer.startStaticServer(userDataPath());
-      } else {
-        port = await localAppServer.startStaticServer(userDataPath(), { forAppUi: true });
+
+    let appUiPort = appUiPortBefore;
+    try {
+      appUiPort = await localAppServer.startStaticServer(userDataPath(), { forAppUi: true });
+    } catch (_) {
+      /* client-only role */
+    }
+
+    let sharingPort = null;
+    if (cfg.userWantsRunning) {
+      try {
+        sharingPort = await localAppServer.restartSharingServer(userDataPath());
+        void ensureServerDataBridgeWindow().catch(() => {});
+      } catch (_) {
+        /* sharing bind failed */
       }
-    } else if (cfg.userWantsRunning) {
-      port = await localAppServer.startStaticServer(userDataPath());
     } else {
-      syncLocalServerTray();
-      return { ok: true, port: null, status: localAppServer.getStatus(userDataPath()) };
+      await localAppServer.stopSharingServer();
     }
+
     syncLocalServerTray();
-    if (app.isPackaged && port) {
-      if (portBeforeRestart && portBeforeRestart !== port) {
-        void reloadAllAppBrowserViewsPreservePath(port);
-      } else if (!portBeforeRestart) {
-        void reloadAllAppBrowserViewsPreservePath(port);
-      }
+    if (app.isPackaged && appUiPortBefore && appUiPort && appUiPortBefore !== appUiPort) {
+      void reloadAllAppBrowserViewsPreservePath(appUiPort);
     }
-    return { ok: true, port, status: localAppServer.getStatus(userDataPath()) };
+    return {
+      ok: true,
+      port: sharingPort || appUiPort,
+      appUiPort,
+      status: localAppServer.getStatus(userDataPath()),
+    };
   });
 
   ipcMain.handle("pl-local-server-list-access-tokens", async () => {
@@ -1490,6 +2050,31 @@ if (gotSingleInstanceLock) {
     }
   });
 
+  /** Large JPG/PDF — base64 IPC overhead avoid; `pl-attachments` folder yahi se banta hai. */
+  ipcMain.handle("pl-attachment-write-binary", async (_event, payload) => {
+    try {
+      const rel = safeAttachmentRelativePath(payload?.relativePath);
+      const raw = payload?.buffer;
+      if (!rel || raw == null) return { ok: false, error: "missing-args" };
+      let buf;
+      if (Buffer.isBuffer(raw)) buf = raw;
+      else if (raw instanceof ArrayBuffer) buf = Buffer.from(new Uint8Array(raw));
+      else if (ArrayBuffer.isView(raw)) buf = Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength);
+      else if (raw && typeof raw === "object" && raw.type === "Buffer" && Array.isArray(raw.data)) {
+        buf = Buffer.from(raw.data);
+      } else {
+        buf = Buffer.from(raw);
+      }
+      if (!buf.length) return { ok: false, error: "empty-buffer" };
+      const full = path.join(attachmentsRootDir(), rel);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, buf);
+      return { ok: true, bytes: buf.length };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  });
+
   ipcMain.handle("pl-attachment-read", async (_event, payload) => {
     try {
       const rel = safeAttachmentRelativePath(payload?.relativePath);
@@ -1498,6 +2083,21 @@ if (gotSingleInstanceLock) {
       if (!fs.existsSync(full)) return { ok: false, error: "not-found" };
       const buf = fs.readFileSync(full);
       return { ok: true, base64: buf.toString("base64") };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  });
+
+  /** Large restored JPG/PDF — base64 IPC overhead avoid on read (write-binary jaisa). */
+  ipcMain.handle("pl-attachment-read-binary", async (_event, payload) => {
+    try {
+      const rel = safeAttachmentRelativePath(payload?.relativePath);
+      if (!rel) return { ok: false, error: "missing-path" };
+      const full = path.join(attachmentsRootDir(), rel);
+      if (!fs.existsSync(full)) return { ok: false, error: "not-found" };
+      const buf = fs.readFileSync(full);
+      if (!buf.length) return { ok: false, error: "empty-file" };
+      return { ok: true, buffer: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) };
     } catch (e) {
       return { ok: false, error: String(e?.message || e) };
     }

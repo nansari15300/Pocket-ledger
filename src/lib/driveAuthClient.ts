@@ -1,6 +1,6 @@
 "use client";
 
-import { getBillingApiUrl } from "@/lib/billingApiOrigin";
+import { resolveDriveHostedApiUrl } from "@/lib/driveHostedApiOrigin";
 import { getFirebaseIdTokenForApi } from "@/lib/firebaseAuthForApi";
 import { hostedApiFetch } from "@/lib/hostedApiFetch";
 export { openGoogleDriveOAuthUrl, resolveDriveOAuthReturnPath } from "@/lib/driveOAuthNavigation";
@@ -12,10 +12,11 @@ export type DriveAuthClientState = {
   formData?: unknown;
 };
 
-/** Browser — hosted API se OAuth URL (static/APK: pocket-ledger.com; dev: same-origin). */
+/** Browser — hosted API se OAuth URL (static/APK: pocket-ledger.com; dev localhost UI: pocket-ledger.com). */
 export async function getGoogleDriveAuthUrl(state: DriveAuthClientState): Promise<{ url: string }> {
   const { token } = await getFirebaseIdTokenForApi();
-  const res = await hostedApiFetch(getBillingApiUrl("/api/auth/google/drive-auth-url"), {
+  const apiUrl = resolveDriveHostedApiUrl("/api/auth/google/drive-auth-url");
+  const res = await hostedApiFetch(apiUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -25,7 +26,11 @@ export async function getGoogleDriveAuthUrl(state: DriveAuthClientState): Promis
   });
   const json = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
   if (!res.ok || !json.url) {
-    throw new Error(json.error || res.statusText || "Failed to get Drive auth URL");
+    throw new Error(
+      json.error ||
+        res.statusText ||
+        `Failed to get Drive auth URL (${apiUrl})`
+    );
   }
   return { url: json.url };
 }
@@ -33,7 +38,7 @@ export async function getGoogleDriveAuthUrl(state: DriveAuthClientState): Promis
 /** Drive unlink — hosted API (static/APK) ya same-origin dev; client Firestore delete mat karo. */
 export async function disconnectGoogleDrive(): Promise<void> {
   const { token } = await getFirebaseIdTokenForApi();
-  const res = await hostedApiFetch(getBillingApiUrl("/api/auth/google/drive-disconnect"), {
+  const res = await hostedApiFetch(resolveDriveHostedApiUrl("/api/auth/google/drive-disconnect"), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,

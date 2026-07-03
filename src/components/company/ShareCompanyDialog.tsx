@@ -37,6 +37,7 @@ import {
   mergeSharedWithIntoLocalCompanyUsers,
   parseLocalCompanyUserRows,
 } from "@/lib/localCompanyUsers";
+import { COMPANY_SHARE_ROLE_OPTIONS } from "@/lib/localCompanyAppRoles";
 import { pushAllLocalCompanyDocsToFirestore } from "@/lib/migrateLocalCompanySubcollectionsToFirestore";
 
 
@@ -381,11 +382,11 @@ export function ShareCompanyDialog({
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="viewer">Viewer</SelectItem>
-                        <SelectItem value="data-entry">Data Entry</SelectItem>
-                        <SelectItem value="accountant">Accountant</SelectItem>
-                        <SelectItem value="editor">Editor</SelectItem>
-                        <SelectItem value="manager">Admin</SelectItem>
+                        {COMPANY_SHARE_ROLE_OPTIONS.map((r) => (
+                          <SelectItem key={r.value} value={r.value}>
+                            {r.label}
+                          </SelectItem>
+                        ))}
                         {isEditing && userToEdit?.role === "owner" ? (
                           <SelectItem value="owner">Owner</SelectItem>
                         ) : null}

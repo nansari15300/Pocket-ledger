@@ -170,6 +170,9 @@ interface TransactionsTableProps {
   isAllVouchersView?: boolean;
   hideDebitColumn?: boolean;
   hideCreditColumn?: boolean;
+  /** Optional header labels (e.g. staff tax-details: Tax / Salary). */
+  debitColumnHeaderLabel?: string;
+  creditColumnHeaderLabel?: string;
   hideBalanceColumn?: boolean;
   hideFooter?: boolean;
   /** Ledger date filter range — Books opening sirf tab jab `openingBalanceDate` is inclusive range me ho. */
@@ -217,6 +220,8 @@ interface TransactionsTableProps {
   transactionCardSearchHighlight?: string;
   /** Page-1: upar stacked Book row (jab master OB nonzero + OB date range me); page>1 sirf dated carry. */
   ledgerShowBookOpeningRow?: boolean;
+  /** Staff tax-details view: hide Book/Dated opening rows entirely. */
+  hideLedgerOpeningRows?: boolean;
   /** Range `from` — period-carry opening row ki Date column (BS/AD). */
   openingBalancePeriodStartDate?: unknown;
   /** Statement check mode (PC): focus / mark rows — Tally-style reconciliation */
@@ -260,6 +265,8 @@ export function TransactionsTable({
   isAllVouchersView,
   hideDebitColumn,
   hideCreditColumn,
+  debitColumnHeaderLabel,
+  creditColumnHeaderLabel,
   hideBalanceColumn,
   hideFooter,
   dateRange,
@@ -292,6 +299,7 @@ export function TransactionsTable({
   highlightPendingApproval = true,
   ledgerDateFilterActive,
   ledgerShowBookOpeningRow = true,
+  hideLedgerOpeningRows = false,
   openingBalancePeriodStartDate,
   transactionCardSearchHighlight,
   statementCheckModeActive = false,
@@ -672,6 +680,8 @@ export function TransactionsTable({
   // Get animation settings - check enabled flag explicitly (match PartyList / list motion). Disable when parent asks (e.g. view toggle).
   const isRowAnimationEnabled = !disableLayoutAnimation && animationSettings?.rows?.enabled === true;
   const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 0.4) : 0;
+  /** Framer `layout` on `<tr>` mis-projects the row menu between Accounts/User; spend-wise groups only. */
+  const useTxnRowLayoutAnimation = hasSpendWiseGroups && isRowAnimationEnabled;
   /** Date filter par popLayout purani row positions preserve karta hai — spend-wise list neeche chipak jati hai. */
   const spendWiseListAnimateKey = useMemo(() => {
     if (!ledgerDateFilterActive) return "spend-wise-all";
@@ -1095,6 +1105,12 @@ export function TransactionsTable({
         visibleCreditCol;
 
   const showOpeningBalance = ["party", "account", "staff", "tax", "item", "expense", "group"].includes(context);
+  const showLedgerOpeningRows = showOpeningBalance && !hideLedgerOpeningRows;
+
+  const debitHeaderLabel =
+    debitColumnHeaderLabel ?? (stockView === "amount" ? "Debit" : "In");
+  const creditHeaderLabel =
+    creditColumnHeaderLabel ?? (stockView === "amount" ? "Credit" : "Out");
 
   // Prevent header/amount overlap — opening row cells helpers
   const ensureMinGaps = true;
@@ -1118,7 +1134,7 @@ export function TransactionsTable({
 
   /** Opening row dates — normal transaction row jaisa */
   const renderOpeningBalanceDateCells = (rowDate: Date | null) =>
-    showOpeningBalance && showCol("date") ? (
+    showOpeningBalance && showLedgerOpeningRows && showCol("date") ? (
       dateSystem === "Both" ? (
         <>
           <TableCell className={cn("align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
@@ -1798,7 +1814,7 @@ export function TransactionsTable({
     // Mobile transaction list: 4px vertical gap between cards for cleaner scanability.
     return (
       <div className={cn("w-full min-w-0 space-y-1 pb-4 overflow-hidden", context === "daybook" ? "" : "px-0.5")}>
-        {showOpeningBalance && (
+        {showLedgerOpeningRows && (
           <>
             {/* Date filter + master OB: pehla card (stacked); search slot sirf neeche wale card par */}
             {showBookOpeningAboveDatedRow ? (
@@ -2080,8 +2096,8 @@ export function TransactionsTable({
           {isItemPartyContext && showItemPartyColumn && <TableHead className="font-semibold p-0" style={ensureMinGaps ? { minWidth: "90px" } : undefined}>Party</TableHead>}
           {showCol("user") && context !== 'note' && renderHeaderWithFilter("user", "User", false, ensureMinGaps ? 85 : undefined)}
           {showFileBySelection && renderFileHeaderWithFilter()}
-          {showCol("dr") && !hideDebitColumn && renderHeaderWithFilter("debit", stockView === 'amount' ? "Debit" : "In", true, ensureMinGaps ? 100 : undefined)}
-          {showCol("cr") && !hideCreditColumn && renderHeaderWithFilter("credit", stockView === 'amount' ? "Credit" : "Out", true, ensureMinGaps ? 100 : undefined)}
+          {showCol("dr") && !hideDebitColumn && renderHeaderWithFilter("debit", debitHeaderLabel, true, ensureMinGaps ? 100 : undefined)}
+          {showCol("cr") && !hideCreditColumn && renderHeaderWithFilter("credit", creditHeaderLabel, true, ensureMinGaps ? 100 : undefined)}
           {showCol("status") && !hideStatusColumn && renderHeaderWithFilter("status", "Status", false, ensureMinGaps ? 95 : undefined)}
           {showCol("runningBalance") && !hideBalanceColumn && renderHeaderWithFilter("balance", stockView === 'amount' ? "Balance" : "Stock", true, ensureMinGaps ? 115 : undefined)}
           <TableHead className="w-10 p-0" />
@@ -2090,7 +2106,7 @@ export function TransactionsTable({
       
       <TableBody>
         <>
-            {showOpeningBalance && (
+            {showLedgerOpeningRows && (
               useSpendWiseOpeningBalanceCard ? (
                 !embedSpendWiseOpeningInGroup ? (
                   <>
@@ -2314,7 +2330,7 @@ export function TransactionsTable({
                                           txnStripeIndex={txnStripeIndex}
                                           transaction={t}
                                           fullRowColSpan={fullRowColSpan}
-                                          animateLayout={true}
+                                          animateLayout={useTxnRowLayoutAnimation}
                                           layoutTransition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
                                           isSpendWiseChild={!!(t as any)._spendWiseChild}
                                           isSpendWiseGroupFirst={!!(t as any)._spendWiseGroupFirst}
@@ -2383,7 +2399,7 @@ export function TransactionsTable({
                           txnStripeIndex={txnStripeIndex}
                           transaction={t}
                           fullRowColSpan={fullRowColSpan}
-                          animateLayout={true}
+                          animateLayout={useTxnRowLayoutAnimation}
                           layoutTransition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
                           isSpendWiseChild={!!(t as any)._spendWiseChild}
                           isSpendWiseGroupFirst={!!(t as any)._spendWiseGroupFirst}
@@ -2456,7 +2472,7 @@ export function TransactionsTable({
                         txnStripeIndex={txnStripeSeq++}
                         transaction={t}
                         fullRowColSpan={fullRowColSpan}
-                        animateLayout={true}
+                        animateLayout={useTxnRowLayoutAnimation}
                         layoutTransition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
                         isSpendWiseChild={!!(t as any)._spendWiseChild}
                         isSpendWiseGroupFirst={!!(t as any)._spendWiseGroupFirst}

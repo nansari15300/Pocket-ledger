@@ -99,7 +99,8 @@ import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColum
 
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
-import { LedgerFooterCheckboxPill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterCheckboxPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { mapTransactionsForStaffTaxDetailsView } from "@/lib/staffTaxDetailsLedger";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
 import { useLedgerUnapprovedOnlyFilter } from "@/hooks/useLedgerUnapprovedOnlyFilter";
 import { useLedgerDetailSessionMemory } from "@/hooks/useLedgerDetailSessionMemory";
@@ -141,6 +142,7 @@ import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { toast } from "sonner";
+import { chromePillActive } from "@/lib/chromePillButton";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -277,6 +279,7 @@ export function StaffDetails({
 
   // Desktop Calendar State
   const [isDesktopCalendarOpen, setIsDesktopCalendarOpen] = useState(false);
+  const [taxDetailsMode, setTaxDetailsMode] = useState(false);
   
   // Local State for Calendar Buffer
   const [tempDateRange, setTempDateRange] = useState<DateRange | undefined>(dateRange);
@@ -500,16 +503,40 @@ export function StaffDetails({
     [processedTransactions, includeNotesInTable]
   );
 
+  const ledgerSourceTransactions = useMemo(() => {
+    if (!taxDetailsMode) return displayTransactions;
+    return mapTransactionsForStaffTaxDetailsView(
+      displayTransactions,
+      staff.id,
+      processedTaxes || []
+    );
+  }, [displayTransactions, taxDetailsMode, staff.id, processedTaxes]);
+
+  const taxDetailsOpeningForRunning = taxDetailsMode ? 0 : ledgerOpeningForRunning;
+  const effectiveBalanceMode = taxDetailsMode ? "statement" : balanceMode;
+  const canUseStaffTaxDetails = !isAllVouchersView && staff.id !== "all";
+
+  useEffect(() => {
+    if (!canUseStaffTaxDetails && taxDetailsMode) {
+      setTaxDetailsMode(false);
+    }
+  }, [canUseStaffTaxDetails, taxDetailsMode, staff.id]);
+
+  const toggleTaxDetailsMode = useCallback(() => {
+    setTaxDetailsMode((prev) => !prev);
+    setCurrentPage(1);
+  }, []);
+
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
         sortTransactionsWithFiscalMergeForCompany(
-          filterByUnapprovedOnly(displayTransactions), "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
-        ledgerOpeningForRunning
+          filterByUnapprovedOnly(ledgerSourceTransactions), "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
+        taxDetailsOpeningForRunning
       ),
-    [displayTransactions, filterByUnapprovedOnly, ledgerOpeningForRunning, company]
+    [ledgerSourceTransactions, filterByUnapprovedOnly, taxDetailsOpeningForRunning, company]
   );
   
   // Statement check mode + desktop tail paging (PartyDetails jaisa)
@@ -522,7 +549,7 @@ export function StaffDetails({
     companyId,
     context: "staff",
     contextId: staff?.id,
-    viewMode: balanceMode === "bill_wise" ? "bill_wise" : "statement",
+    viewMode: effectiveBalanceMode === "bill_wise" ? "bill_wise" : "statement",
     searchFilteredTransactions: sortedTransactions,
     rowsPerPage,
     currentPage,
@@ -603,7 +630,7 @@ export function StaffDetails({
           periodCrForPage: desktopPaginationMeta.periodCrForPage,
           closingForPage: desktopPaginationMeta.closingForPage,
           booksOpeningBalance: masterStaffOpening,
-          ledgerShowBookOpeningRow: currentPage === 1,
+          ledgerShowBookOpeningRow: !taxDetailsMode && currentPage === 1,
           ledgerDateFilterActive: hasLedgerDateFilter,
           openingBalancePeriodStartDate: dateRange?.from,
           masterOpeningBalanceDate: (staff as any).openingBalanceDate,
@@ -656,7 +683,7 @@ export function StaffDetails({
           periodCrForPage: desktopPaginationMeta.periodCrForPage,
           closingForPage: desktopPaginationMeta.closingForPage,
           booksOpeningBalance: masterStaffOpening,
-          ledgerShowBookOpeningRow: currentPage === 1,
+          ledgerShowBookOpeningRow: !taxDetailsMode && currentPage === 1,
           ledgerDateFilterActive: hasLedgerDateFilter,
           openingBalancePeriodStartDate: dateRange?.from,
           masterOpeningBalanceDate: (staff as any).openingBalanceDate,
@@ -940,6 +967,19 @@ export function StaffDetails({
             : formatCurrency(closingBalance, { showDrCr: true })}
         </p>
       </div>
+      {canUseStaffTaxDetails && !isReportMobileChrome && (
+        <div className="flex flex-shrink-0 border-b px-2 py-1">
+          <Button
+            type="button"
+            variant={taxDetailsMode ? "default" : "outline"}
+            size="sm"
+            className="h-7 shrink-0 px-2 text-xs"
+            onClick={toggleTaxDetailsMode}
+          >
+            Tax Details
+          </Button>
+        </div>
+      )}
       {/* Staff dropdown + Edit + Search */}
       <div className="flex-shrink-0 border-b px-2 py-1">
         <div className="flex items-stretch gap-1.5">
@@ -1049,13 +1089,15 @@ export function StaffDetails({
           />
         ) : (
         <TransactionsTable
+          key={`staff-mobile-${staff.id}-${taxDetailsMode ? "tax" : "stmt"}-${currentPage}-${rowsPerPage}`}
           transactions={mobileTransactionsToShow}
           context="staff"
           contextId={staff.id}
-          openingBalance={mobilePaginationMeta.openingForPage}
-          booksOpeningBalance={masterStaffOpening}
+          openingBalance={taxDetailsMode ? 0 : mobilePaginationMeta.openingForPage}
+          booksOpeningBalance={taxDetailsMode ? 0 : masterStaffOpening}
           ledgerDateFilterActive={hasLedgerDateFilter}
-          ledgerShowBookOpeningRow={currentPage === 1}
+          ledgerShowBookOpeningRow={!taxDetailsMode && currentPage === 1}
+          hideLedgerOpeningRows={taxDetailsMode}
           openingBalancePeriodStartDate={dateRange?.from}
           dateRange={dateRange}
           openingBalanceOutstanding={openingBalanceOutstanding}
@@ -1066,7 +1108,7 @@ export function StaffDetails({
           openingBalanceActions={undefined}
           showNarration={showNarration}
           visibleColumns={
-            balanceMode === "bill_wise"
+            effectiveBalanceMode === "bill_wise"
               ? { ...visibleColumns, status: true }
               : visibleColumns
           }
@@ -1086,6 +1128,8 @@ export function StaffDetails({
           isAllVouchersView={isAllVouchersView}
           hideDebitColumn={false}
           hideCreditColumn={false}
+          debitColumnHeaderLabel={taxDetailsMode ? "Tax" : undefined}
+          creditColumnHeaderLabel={taxDetailsMode ? "Salary" : undefined}
           scrollOnlyTransactions
           {...statementCheck.tableProps}
         />
@@ -1479,14 +1523,16 @@ export function StaffDetails({
                 <XCircle className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
               </Button>
             )}
-            <LedgerViewModePills
-              value={balanceMode}
-              onChange={setBalanceMode}
-              options={[
-                { value: "statement", label: "Statement" },
-                { value: "bill_wise", label: "Bill wise" },
-              ]}
-            />
+            {!taxDetailsMode && (
+              <LedgerViewModePills
+                value={balanceMode}
+                onChange={setBalanceMode}
+                options={[
+                  { value: "statement", label: "Statement" },
+                  { value: "bill_wise", label: "Bill wise" },
+                ]}
+              />
+            )}
             <Button
               variant="chromePill"
               size="sm"
@@ -1497,6 +1543,19 @@ export function StaffDetails({
               <FilePlus className={cn("mr-2", LEDGER_HEADER_PILL_ICON_SIZE_CN)} />
               Add Note
             </Button>
+            {canUseStaffTaxDetails && (
+              <Button
+                variant="chromePill"
+                size="sm"
+                type="button"
+                aria-pressed={taxDetailsMode}
+                onClick={toggleTaxDetailsMode}
+                className={cn(LEDGER_HEADER_PILL_CN, taxDetailsMode && chromePillActive)}
+                data-theme-detail="tax-details"
+              >
+                Tax Details
+              </Button>
+            )}
             {onShowAll && (
               <Button variant="chromePill" size="sm" onClick={onShowAll} className={LEDGER_HEADER_PILL_CN}>
                 All Vouchers
@@ -1518,14 +1577,15 @@ export function StaffDetails({
       <div className="flex-1 flex flex-col min-h-0 overflow-x-auto">
         <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
                 <TransactionsTable
-                  key={`staff-${staff.id}-${currentPage}-${rowsPerPage}`}
+                  key={`staff-${staff.id}-${taxDetailsMode ? "tax" : "stmt"}-${currentPage}-${rowsPerPage}`}
                   transactions={paginatedTransactions}
                   context="staff"
                   contextId={staff.id}
-                  openingBalance={desktopPaginationMeta.openingForPage}
-                  booksOpeningBalance={masterStaffOpening}
+                  openingBalance={taxDetailsMode ? 0 : desktopPaginationMeta.openingForPage}
+                  booksOpeningBalance={taxDetailsMode ? 0 : masterStaffOpening}
                   ledgerDateFilterActive={hasLedgerDateFilter}
-                  ledgerShowBookOpeningRow={currentPage === 1}
+                  ledgerShowBookOpeningRow={!taxDetailsMode && currentPage === 1}
+                  hideLedgerOpeningRows={taxDetailsMode}
                   openingBalancePeriodStartDate={dateRange?.from}
                   dateRange={dateRange}
                   openingBalanceOutstanding={openingBalanceOutstanding}
@@ -1548,7 +1608,7 @@ export function StaffDetails({
                     </EditStaffDialog>
                   }
                   showNarration={showNarration}
-                  visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
+                  visibleColumns={effectiveBalanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
                   journalAccountNames={{}}
                   accountNames={accountNamesMap}
                   periodDr={desktopPaginationMeta.periodDrForPage}
@@ -1565,11 +1625,17 @@ export function StaffDetails({
                   isAllVouchersView={isAllVouchersView}
                   hideDebitColumn={false}
                   hideCreditColumn={false}
+                  debitColumnHeaderLabel={taxDetailsMode ? "Tax" : undefined}
+                  creditColumnHeaderLabel={taxDetailsMode ? "Salary" : undefined}
                   scrollOnlyTransactions
                   {...statementCheck.tableProps}
                 />
           {paginatedTransactions.length === 0 && (
-            <div className="text-center py-8 text-muted-foreground">No transactions found for this staff member in the selected period.</div>
+            <div className="text-center py-8 text-muted-foreground">
+              {taxDetailsMode
+                ? "No Add Salary vouchers found for this staff member in the selected period."
+                : "No transactions found for this staff member in the selected period."}
+            </div>
           )}
         </div>
       </div>
@@ -1586,10 +1652,10 @@ export function StaffDetails({
             <LedgerFooterColumnsMenu>
                 <DropdownMenuContent align="start" className="w-52 p-2">
                 {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
-                  .filter((key) => key !== "status" || balanceMode === "bill_wise")
+                  .filter((key) => key !== "status" || effectiveBalanceMode === "bill_wise")
                   .map((key) => {
-                  const isStatusInStatement = key === "status" && balanceMode === "statement";
-                  const isStatusInBillWise = key === "status" && balanceMode === "bill_wise";
+                  const isStatusInStatement = key === "status" && effectiveBalanceMode === "statement";
+                  const isStatusInBillWise = key === "status" && effectiveBalanceMode === "bill_wise";
                   const isStatusLocked = isStatusInStatement || isStatusInBillWise;
                   return (
                     <DropdownMenuItem
@@ -1618,11 +1684,23 @@ export function StaffDetails({
                 onCheckedChange={(c) => setShowNotes(Boolean(c))}
                 label="Note"
               />
+              {canUseStaffTaxDetails && (
+                <button
+                  type="button"
+                  className="inline-flex shrink-0 cursor-pointer border-0 bg-transparent p-0"
+                  onClick={toggleTaxDetailsMode}
+                  aria-pressed={taxDetailsMode}
+                >
+                  <LedgerFooterChromePill active={taxDetailsMode}>
+                    <span className="whitespace-nowrap text-sm font-medium leading-none">Tax Details</span>
+                  </LedgerFooterChromePill>
+                </button>
+              )}
             <StatementCheckModeFooterControls
               idPrefix="staff"
               enabled={statementCheck.checkModeEnabled}
               onEnabledChange={statementCheck.setCheckModeEnabled}
-              viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+              viewMode={effectiveBalanceMode === "bill_wise" ? "bill_wise" : "statement"}
               hiddenCount={statementCheck.hiddenCount}
             />
           </>
@@ -1633,7 +1711,7 @@ export function StaffDetails({
           setSortBy(by);
           setSortOrder(order);
         }}
-        viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+        viewMode={effectiveBalanceMode === "bill_wise" ? "bill_wise" : "statement"}
         currentPage={currentPage}
         totalPages={totalPages}
         setCurrentPage={setCurrentPage}
@@ -1642,7 +1720,7 @@ export function StaffDetails({
         rowsPerPageOptions={ROWS_PER_PAGE_OPTIONS_STAFF}
         beforeCount={desktopPaginationMeta.beforeCount}
         afterCount={desktopPaginationMeta.afterCount}
-        totalCount={displayTransactions.length}
+        totalCount={sortedTransactions.length}
       />
     </div>
   );

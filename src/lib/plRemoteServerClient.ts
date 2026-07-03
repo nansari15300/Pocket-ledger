@@ -49,3 +49,31 @@ export function appendPlRemoteClientQuery(url: string): string {
     return `${url}${sep}${QUERY_FLAG}=1`;
   }
 }
+
+/** Gate → Connect: `/company?pl_remote_client=1&pl_access=…&pl_company=…` — read once, strip from address bar. */
+export function readAndStripPlRemoteClientLandingQuery(): {
+  hadRemoteClientFlag: boolean;
+  accessToken: string | null;
+  companyId: string | null;
+} {
+  if (typeof window === "undefined") {
+    return { hadRemoteClientFlag: false, accessToken: null, companyId: null };
+  }
+  try {
+    const u = new URL(window.location.href);
+    if (u.searchParams.get(QUERY_FLAG) !== "1") {
+      return { hadRemoteClientFlag: false, accessToken: null, companyId: null };
+    }
+    markPlRemoteServerClientMode();
+    const accessToken = (u.searchParams.get("pl_access") || "").trim() || null;
+    const companyId = (u.searchParams.get("pl_company") || "").trim() || null;
+    u.searchParams.delete(QUERY_FLAG);
+    u.searchParams.delete("pl_access");
+    u.searchParams.delete("pl_company");
+    const clean = `${u.pathname}${u.search}${u.hash}`;
+    window.history.replaceState(window.history.state, "", clean);
+    return { hadRemoteClientFlag: true, accessToken, companyId };
+  } catch {
+    return { hadRemoteClientFlag: false, accessToken: null, companyId: null };
+  }
+}

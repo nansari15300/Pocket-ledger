@@ -770,6 +770,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
                   docsInputRef={docsInputRef}
                   onDocsChange={handleDocsChange}
                   canAttachDocuments={canAttachDocuments}
+                  attachmentCompanyId={companyId ?? undefined}
                   entityStatementLabel="staff"
                 />
                 <EntityOpeningBalanceNarrationField

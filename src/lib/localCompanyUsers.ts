@@ -6,6 +6,7 @@
  */
 
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
+import type { GateRecord } from "@/lib/gates/gateTypes";
 import { setBackupEncryptionSessionFromLogin } from "@/lib/serverBackupEncryption";
 import { normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
 
@@ -292,6 +293,11 @@ export async function localAuthLoginClientOnly(
 
   const users = await getLocalCompanyUsersRecords(companyId);
   let match = users.find((x) => x.username.toLowerCase() === u && x.password === p);
+  if (!match) {
+    match = users.find(
+      (x) => String(x.displayName || "").trim().toLowerCase() === u && x.password === p
+    );
+  }
   // Gmail login + alag login username row — ek hi password row ho to email se bhi chale.
   if (!match && u.includes("@")) {
     const withPw = users.filter((x) => x.password === p && x.password.length > 0);
@@ -350,7 +356,26 @@ export async function localAuthLoginClientOnly(
 export async function localAuthLoginForCompanyContext(
   companyId: string,
   username: string,
-  password: string
+  password: string,
+  options?: { plServerGate?: GateRecord | null; forcePlServerRemote?: boolean }
 ): Promise<{ token: string; user: { id: string; username: string; displayName?: string; role?: string } }> {
+  const {
+    plServerRemoteCompanyLogin,
+    shouldUsePlServerRemoteCompanyLogin,
+  } = await import("@/lib/plServerRemoteCompanyLogin");
+  const remoteOpts = options?.plServerGate ? { gate: options.plServerGate } : undefined;
+  const useRemote =
+    options?.forcePlServerRemote === true ||
+    (await shouldUsePlServerRemoteCompanyLogin(companyId, remoteOpts));
+  if (useRemote) {
+    const result = await plServerRemoteCompanyLogin(companyId, username, password, remoteOpts);
+    const { mirrorPlServerSharedCompanyById } = await import("@/lib/plServerClientCompanyMirror");
+    await mirrorPlServerSharedCompanyById(companyId, { pullFullLedger: true });
+    if (typeof window !== "undefined") {
+      const { setBackupEncryptionSessionFromLogin } = await import("@/lib/serverBackupEncryption");
+      void setBackupEncryptionSessionFromLogin(companyId, username, password);
+    }
+    return result;
+  }
   return localAuthLoginClientOnly(companyId, username, password);
 }

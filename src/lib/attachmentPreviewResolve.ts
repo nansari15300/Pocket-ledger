@@ -1,7 +1,9 @@
 "use client";
 
 import type { AttachmentPreviewBlobLoadOptions } from "@/lib/attachmentRefBlobFetch";
-import { getBlobFromLocalFileRef, isLocalFileRef } from "@/lib/localPendingFiles";
+import { fetchAttachmentRefBlob } from "@/lib/attachmentRefBlobFetch";
+import { normalizeAttachmentUrlForDevicePreview } from "@/lib/attachmentHoldClipboard";
+import { isLocalFileRef } from "@/lib/localPendingFiles";
 import {
   getRemoteAttachmentBlobPreferOfflineCache,
   tryOfflineCachedAttachmentBlobMultiKey,
@@ -19,16 +21,25 @@ export async function getBlobFromAttachmentRefPreferLocalFirst(
 ): Promise<Blob | null> {
   const trimmed = String(rawUrl || "").trim();
   if (!trimmed) return null;
+  const normalized = normalizeAttachmentUrlForDevicePreview(trimmed) || trimmed;
 
-  const cached = await tryOfflineCachedAttachmentBlobMultiKey(trimmed);
+  const cached = await tryOfflineCachedAttachmentBlobMultiKey(normalized);
   if (cached && cached.size > 0) return cached;
-
-  if (isLocalFileRef(trimmed)) {
-    const pending = await getBlobFromLocalFileRef(trimmed);
-    if (pending && pending.size > 0) return pending;
+  if (normalized !== trimmed) {
+    const altCached = await tryOfflineCachedAttachmentBlobMultiKey(trimmed);
+    if (altCached && altCached.size > 0) return altCached;
   }
 
-  return getRemoteAttachmentBlobPreferOfflineCache(trimmed, undefined, {
+  if (isLocalFileRef(normalized) || options?.companyId) {
+    const localOrRemote = await fetchAttachmentRefBlob(normalized, {
+      galleryUrls: options?.galleryUrls,
+      companyId: options?.companyId,
+    });
+    if (localOrRemote && localOrRemote.size > 0) return localOrRemote;
+  }
+
+  return getRemoteAttachmentBlobPreferOfflineCache(normalized, undefined, {
     galleryUrls: options?.galleryUrls,
+    companyId: options?.companyId,
   });
 }

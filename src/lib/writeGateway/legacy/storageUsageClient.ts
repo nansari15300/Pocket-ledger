@@ -9,6 +9,9 @@ import { readCachedPlansRecord, defaultPlansRecordFallback } from "@/lib/plansCa
 import { isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import { companyRowUsesSqliteLedgerWrites } from "@/lib/companyStorageKind";
+import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
 
 const BYTES_PER_GB = 1e9;
 
@@ -20,8 +23,26 @@ export type UsageDelta = {
 /** `getDoc` Android WebView / flaky WAN par kai minute pend ho sakta; limit check fast fail (0 usage) rakho */
 const COMPANY_USAGE_FIRESTORE_MS = 4500;
 
+/** Local SQLite ledger company — Firestore `companies/{id}` root doc nahi hota; usage counter skip. */
+async function shouldSkipFirestoreStorageUsage(
+  companyId: string,
+  storageOption?: string | null
+): Promise<boolean> {
+  if (companyStorageIsLocal(storageOption)) return true;
+  const cid = String(companyId || "").trim();
+  if (!cid) return false;
+  try {
+    const row = await getLocalCompanyById(cid, { includeDeleted: true });
+    if (row && companyRowUsesSqliteLedgerWrites(row)) return true;
+  } catch {
+    /* registry miss — niche Firestore try */
+  }
+  return false;
+}
+
 export async function getCompanyUsage(
-  companyId: string
+  companyId: string,
+  storageOption?: string | null
 ): Promise<{ attachmentsUsedBytes: number; storageUsedBytes: number }> {
   // JS `online` kabhi misleading — phir bhi seedha stall avoid.
   if (typeof navigator !== "undefined" && !navigator.onLine) {
@@ -33,6 +54,9 @@ export async function getCompanyUsage(
   }
   // Static export / Capacitor: voucher+attachment save pe `checkStorageLimit` — party jaisa turant; `getDoc` 4.5s wait na ho.
   if (apkEmbeddedSqliteFirstWritesPreferred()) {
+    return { attachmentsUsedBytes: 0, storageUsedBytes: 0 };
+  }
+  if (await shouldSkipFirestoreStorageUsage(companyId, storageOption)) {
     return { attachmentsUsedBytes: 0, storageUsedBytes: 0 };
   }
   // Offline / local-only company: Firestore read throw kare to voucher+file save poora fail ho jata tha — limit check ke liye 0 maan lo.
@@ -68,27 +92,33 @@ export async function checkStorageLimit(
   /** Local company → `*Local` GB caps (admin Plans); missing `storageOption` treated as local app-wide. */
   storageOption?: string | null
 ): Promise<{ allowed: boolean; message?: string }> {
-  const merged = getPlanFromPlans(readCachedPlansRecord() ?? defaultPlansRecordFallback(), (planId as PlanId) || undefined);
   const useLocal = companyStorageIsLocal(storageOption);
+
+  // Local SQLite ledger (web dev + Firebase data source): device par save — Firestore GB quota mat lagao.
+  if (useLocal || (await shouldSkipFirestoreStorageUsage(companyId, storageOption))) {
+    return { allowed: true };
+  }
+
+  const merged = getPlanFromPlans(readCachedPlansRecord() ?? defaultPlansRecordFallback(), (planId as PlanId) || undefined);
   const maxAttachmentsGB = numericEntitlement(merged.entitlements, "maxAttachmentsGB", useLocal);
   const maxStorageGB = numericEntitlement(merged.entitlements, "maxStorageGB", useLocal);
 
-  const usage = await getCompanyUsage(companyId);
+  const usage = await getCompanyUsage(companyId, storageOption);
   const addAtt = Math.max(0, delta.attachmentsBytes ?? 0);
   const addStor = Math.max(0, delta.storageBytes ?? 0);
 
   const newAttachmentsBytes = usage.attachmentsUsedBytes + addAtt;
   const newStorageBytes = usage.storageUsedBytes + addStor;
-  const limitAttachmentsBytes = maxAttachmentsGB * BYTES_PER_GB;
-  const limitStorageBytes = maxStorageGB * BYTES_PER_GB;
+  const limitAttachmentsBytes = maxAttachmentsGB > 0 ? maxAttachmentsGB * BYTES_PER_GB : Number.POSITIVE_INFINITY;
+  const limitStorageBytes = maxStorageGB > 0 ? maxStorageGB * BYTES_PER_GB : Number.POSITIVE_INFINITY;
 
-  if (newAttachmentsBytes > limitAttachmentsBytes) {
+  if (Number.isFinite(limitAttachmentsBytes) && newAttachmentsBytes > limitAttachmentsBytes) {
     return {
       allowed: false,
       message: `Attachments limit reached (${(limitAttachmentsBytes / BYTES_PER_GB).toFixed(1)} GB). Upgrade to add more.`,
     };
   }
-  if (newStorageBytes > limitStorageBytes) {
+  if (Number.isFinite(limitStorageBytes) && newStorageBytes > limitStorageBytes) {
     return {
       allowed: false,
       message: `Storage limit reached (${(limitStorageBytes / BYTES_PER_GB).toFixed(1)} GB). Upgrade to add more.`,
@@ -102,13 +132,17 @@ export async function checkStorageLimit(
  */
 export async function incrementCompanyStorage(
   companyId: string,
-  delta: UsageDelta
+  delta: UsageDelta,
+  storageOption?: string | null
 ): Promise<void> {
   const att = Math.max(0, Math.round(delta.attachmentsBytes ?? 0));
   const stor = Math.max(0, Math.round(delta.storageBytes ?? 0));
   if (att === 0 && stor === 0) return;
   // Embedded/offline: counter baad me outbox flush — voucher+attachment SQLite save block mat karo.
   if (apkEmbeddedSqliteFirstWritesPreferred() || (typeof navigator !== "undefined" && !navigator.onLine)) {
+    return;
+  }
+  if (await shouldSkipFirestoreStorageUsage(companyId, storageOption)) {
     return;
   }
 
@@ -140,6 +174,10 @@ export async function incrementCompanyStorage(
       console.warn("[storageUsage] Skipped increment (offline/unavailable/timeout).");
       return;
     }
+    if (isCompanyNotFoundError(error)) {
+      console.warn("[storageUsage] Skipped increment — company doc not on Firestore (local-only).");
+      return;
+    }
     throw error;
   }
 }
@@ -149,11 +187,15 @@ export async function incrementCompanyStorage(
  */
 export async function decrementCompanyStorage(
   companyId: string,
-  delta: UsageDelta
+  delta: UsageDelta,
+  storageOption?: string | null
 ): Promise<void> {
   const att = Math.max(0, Math.round(delta.attachmentsBytes ?? 0));
   const stor = Math.max(0, Math.round(delta.storageBytes ?? 0));
   if (att === 0 && stor === 0) return;
+  if (await shouldSkipFirestoreStorageUsage(companyId, storageOption)) {
+    return;
+  }
 
   const ref = doc(firestore, "companies", companyId);
   const updates: Record<string, unknown> = {};
@@ -171,6 +213,10 @@ export async function decrementCompanyStorage(
     }
     if (isLikelyOfflineFirestoreError(error)) {
       console.warn("[storageUsage] Skipped decrement (offline/unavailable).");
+      return;
+    }
+    if (isCompanyNotFoundError(error)) {
+      console.warn("[storageUsage] Skipped decrement — company doc not on Firestore (local-only).");
       return;
     }
     throw error;

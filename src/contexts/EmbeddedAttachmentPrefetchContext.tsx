@@ -6,30 +6,42 @@
  */
 import React, { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from "react";
 
-type PercentSnapshot = number | null;
+export type HeaderAttachmentPrefetchSnapshot = {
+  companyId: string;
+  percent: number;
+} | null;
 
-let headerAttachmentPercent: PercentSnapshot = null;
+let headerAttachmentPrefetch: HeaderAttachmentPrefetchSnapshot = null;
 const listeners = new Set<() => void>();
 
-function subscribeHeaderAttachmentPercent(onStoreChange: () => void): () => void {
+function subscribeHeaderAttachmentPrefetch(onStoreChange: () => void): () => void {
   listeners.add(onStoreChange);
   return () => {
     listeners.delete(onStoreChange);
   };
 }
 
-function getHeaderAttachmentPercentSnapshot(): PercentSnapshot {
-  return headerAttachmentPercent;
+function getHeaderAttachmentPrefetchSnapshot(): HeaderAttachmentPrefetchSnapshot {
+  return headerAttachmentPrefetch;
 }
 
-function publishHeaderAttachmentPercent(next: PercentSnapshot): void {
-  if (headerAttachmentPercent === next) return;
-  headerAttachmentPercent = next;
+function publishHeaderAttachmentPrefetch(next: HeaderAttachmentPrefetchSnapshot): void {
+  const prev = headerAttachmentPrefetch;
+  if (prev === null && next === null) return;
+  if (
+    prev !== null &&
+    next !== null &&
+    prev.companyId === next.companyId &&
+    prev.percent === next.percent
+  ) {
+    return;
+  }
+  headerAttachmentPrefetch = next;
   for (const l of listeners) l();
 }
 
 type SetterCtx = {
-  setHeaderAttachmentPercent: (v: number | null) => void;
+  setHeaderAttachmentPrefetch: (v: HeaderAttachmentPrefetchSnapshot) => void;
 };
 
 const EmbeddedAttachmentPrefetchContext = createContext<SetterCtx | null>(null);
@@ -37,36 +49,73 @@ const EmbeddedAttachmentPrefetchContext = createContext<SetterCtx | null>(null);
 const noopSetter = () => {};
 
 export function EmbeddedAttachmentPrefetchProvider({ children }: { children: React.ReactNode }) {
-  const setHeaderAttachmentPercent = useCallback((v: number | null) => {
-    publishHeaderAttachmentPercent(v);
+  const setHeaderAttachmentPrefetch = useCallback((v: HeaderAttachmentPrefetchSnapshot) => {
+    publishHeaderAttachmentPrefetch(v);
   }, []);
-  const value = useMemo(() => ({ setHeaderAttachmentPercent }), [setHeaderAttachmentPercent]);
+  const value = useMemo(() => ({ setHeaderAttachmentPrefetch }), [setHeaderAttachmentPrefetch]);
   return (
     <EmbeddedAttachmentPrefetchContext.Provider value={value}>{children}</EmbeddedAttachmentPrefetchContext.Provider>
   );
 }
 
 /** Background warm / backfill — setter only; percent change par re-render nahi. */
-export function useSetHeaderAttachmentPrefetchPercent(): (v: number | null) => void {
+export function useSetHeaderAttachmentPrefetch(): (v: HeaderAttachmentPrefetchSnapshot) => void {
   const c = useContext(EmbeddedAttachmentPrefetchContext);
-  return c?.setHeaderAttachmentPercent ?? noopSetter;
+  return c?.setHeaderAttachmentPrefetch ?? noopSetter;
 }
 
-/** Header progress strip — is hook par hi % subscribe karo. */
-export function useHeaderAttachmentPrefetchPercent(): PercentSnapshot {
-  return useSyncExternalStore(
-    subscribeHeaderAttachmentPercent,
-    getHeaderAttachmentPercentSnapshot,
-    getHeaderAttachmentPercentSnapshot
+/** @deprecated Prefer `useSetHeaderAttachmentPrefetch` with `{ companyId, percent }`. */
+export function useSetHeaderAttachmentPrefetchPercent(): (
+  v: number | null,
+  companyId?: string | null
+) => void {
+  const setHeaderAttachmentPrefetch = useSetHeaderAttachmentPrefetch();
+  return useCallback(
+    (v, companyId) => {
+      if (v == null) {
+        setHeaderAttachmentPrefetch(null);
+        return;
+      }
+      const cid = companyId?.trim();
+      if (!cid) return;
+      setHeaderAttachmentPrefetch({ companyId: cid, percent: v });
+    },
+    [setHeaderAttachmentPrefetch]
   );
 }
 
-/** @deprecated Prefer `useSetHeaderAttachmentPrefetchPercent` (managers) ya `useHeaderAttachmentPrefetchPercent` (header). */
-export function useEmbeddedAttachmentPrefetch(): SetterCtx & { headerAttachmentPercent: PercentSnapshot } {
+/** Header progress strip — sirf jab `viewingCompanyId` active prefetch company se match ho. */
+export function useHeaderAttachmentPrefetchPercentForCompany(
+  viewingCompanyId: string | null | undefined
+): number | null {
+  const snapshot = useSyncExternalStore(
+    subscribeHeaderAttachmentPrefetch,
+    getHeaderAttachmentPrefetchSnapshot,
+    getHeaderAttachmentPrefetchSnapshot
+  );
+  const cid = viewingCompanyId?.trim();
+  if (!snapshot || !cid || snapshot.companyId !== cid) return null;
+  return snapshot.percent;
+}
+
+/** @deprecated Prefer `useHeaderAttachmentPrefetchPercentForCompany`. */
+export function useHeaderAttachmentPrefetchPercent(): number | null {
+  return useSyncExternalStore(
+    subscribeHeaderAttachmentPrefetch,
+    () => headerAttachmentPrefetch?.percent ?? null,
+    () => headerAttachmentPrefetch?.percent ?? null
+  );
+}
+
+/** @deprecated Prefer `useSetHeaderAttachmentPrefetch` ya `useHeaderAttachmentPrefetchPercentForCompany`. */
+export function useEmbeddedAttachmentPrefetch(): SetterCtx & { headerAttachmentPercent: number | null } {
   const c = useContext(EmbeddedAttachmentPrefetchContext);
   const percent = useHeaderAttachmentPrefetchPercent();
   if (!c) {
-    return { headerAttachmentPercent: null, setHeaderAttachmentPercent: noopSetter };
+    return { headerAttachmentPercent: null, setHeaderAttachmentPrefetch: noopSetter };
   }
-  return { headerAttachmentPercent: percent, setHeaderAttachmentPercent: c.setHeaderAttachmentPercent };
+  return {
+    headerAttachmentPercent: percent,
+    setHeaderAttachmentPrefetch: c.setHeaderAttachmentPrefetch,
+  };
 }

@@ -11,7 +11,6 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import type { Company } from "@/hooks/useCompany";
 import { useFirstLoginWarmGate } from "@/contexts/FirstLoginWarmGateContext";
-import { useSetHeaderAttachmentPrefetchPercent } from "@/contexts/EmbeddedAttachmentPrefetchContext";
 import { shouldPrefetchAttachmentsForCompany } from "@/lib/offlineFullWarmSync";
 import {
   EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
@@ -24,7 +23,6 @@ export function CompanyAttachmentOfflineBackfillManager() {
   const { user } = useAuth();
   const { companyId, company, loading } = useCompany();
   const { gateActive } = useFirstLoginWarmGate();
-  const setHeaderAttachmentPercent = useSetHeaderAttachmentPrefetchPercent();
   const runAbortRef = useRef<AbortController | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const companyRef = useRef(company);
@@ -62,15 +60,12 @@ export function CompanyAttachmentOfflineBackfillManager() {
       void (async () => {
         try {
           if (process.env.NODE_ENV !== "production") {
-            // Ye phase poora page reload nahi karti — sirf cache + header %; phir bhi correlate karne ke liye tag.
             console.log("[ATTACHMENT_SYNC]", "CompanyAttachmentOfflineBackfillManager:start", { companyId: cid });
           }
-          setHeaderAttachmentPercent(1);
           await runEmbeddedCompanyFullPreload({
             company: c,
             localCompanyId: cid,
             signal: ac.signal,
-            onAttachmentProgressPercent: (p) => setHeaderAttachmentPercent(p),
             prefetchOverrides: EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
           });
         } catch {
@@ -79,7 +74,6 @@ export function CompanyAttachmentOfflineBackfillManager() {
           if (process.env.NODE_ENV !== "production" && !ac.signal.aborted) {
             console.log("[ATTACHMENT_SYNC]", "CompanyAttachmentOfflineBackfillManager:done", { companyId: cid });
           }
-          if (!ac.signal.aborted) setHeaderAttachmentPercent(null);
         }
       })();
     }, DEBOUNCE_AFTER_COMPANY_MS);

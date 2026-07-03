@@ -124,6 +124,34 @@ export async function refreshActiveLocalServerGateContext(
   return ctx;
 }
 
+/** EXE/APK bundled shell: server gate activate + SQLite mirror — remote URL par navigate mat. */
+export async function activateLocalServerGateOnBundledClient(
+  gate: GateRecord
+): Promise<{ ok: boolean; message?: string }> {
+  if (gate.type !== "local_server" || !gate.serverUrl) {
+    return { ok: false, message: "Invalid server gate" };
+  }
+  const token = resolveLocalServerGateAccessToken(gate);
+  if (!token) {
+    return {
+      ok: false,
+      message: "Missing access token — edit this gate and paste the token from the server PC.",
+    };
+  }
+  persistDevClientAccessToken(token);
+  writeActiveGateId(gate.id);
+  applyActiveGateRuntime({ ...gate, accessToken: token || gate.accessToken });
+  const ctx = await refreshActiveLocalServerGateContext({ ...gate, accessToken: token || gate.accessToken });
+  if (ctx?.error) return { ok: false, message: ctx.error };
+  const { mirrorPlServerGateToLocalSqlite } = await import("@/lib/plServerClientCompanyMirror");
+  await mirrorPlServerGateToLocalSqlite(
+    { ...gate, accessToken: token || gate.accessToken },
+    { pullFullLedger: false }
+  ).catch(() => undefined);
+  dispatchGateChanged();
+  return { ok: true };
+}
+
 type PlElectronGateBridge = {
   setRemoteAuth?: (serverUrl: string, accessToken: string) => { ok?: boolean };
 };
@@ -173,7 +201,9 @@ export function isLocalServerGate(gate: GateRecord): boolean {
 
 /** Filter company list for active gate. */
 export function filterCompaniesForActiveGate(companies: Company[], gate: GateRecord): Company[] {
-  const visible = companies.filter((c) => c.isDeleted !== true && c.movedToAdminRecycleAt == null);
+  const visible = companies.filter(
+    (c) => c && c.isDeleted !== true && c.movedToAdminRecycleAt == null
+  );
 
   if (isDeviceGate(gate)) {
     return visible.filter((c) => isOfflineCompanyStorage(c) && !isCloudBackedCompanyShape(c));

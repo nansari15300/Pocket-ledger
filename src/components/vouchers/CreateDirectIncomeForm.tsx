@@ -54,6 +54,8 @@ import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { findVoucherInLocalMirrorByNumberAndType } from "@/lib/localCompanyDocMirror";
 import {
   appendLocalOnlyVoucherFilesToUrls,
   shouldDeferStorageIncrementUntilPendingUpload,
@@ -343,13 +345,23 @@ export function CreatePaymentInForm({
 
     try {
       if (!savedVoucherId || data.voucherNumber !== voucher?.voucherNumber) {
-        const q = query(
-          collection(firestore, `companies/${companyId}/vouchers`),
-          where("voucherNumber", "==", data.voucherNumber),
-          where("type", "==", voucherType)
-        );
-        const existingVoucherSnap = await getDocs(q);
-        if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== savedVoucherId) {
+        const preferLocalReads = preferLocalLedgerReads(company);
+        let duplicateOtherId: string | null = null;
+        if (preferLocalReads) {
+          const hit = await findVoucherInLocalMirrorByNumberAndType(companyId, data.voucherNumber, voucherType);
+          if (hit && hit.id !== savedVoucherId) duplicateOtherId = hit.id;
+        } else {
+          const q = query(
+            collection(firestore, `companies/${companyId}/vouchers`),
+            where("voucherNumber", "==", data.voucherNumber),
+            where("type", "==", voucherType)
+          );
+          const existingVoucherSnap = await getDocs(q);
+          if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== savedVoucherId) {
+            duplicateOtherId = existingVoucherSnap.docs[0].id;
+          }
+        }
+        if (duplicateOtherId) {
           sonnerToast.error("Duplicate Voucher Number", { id: toastId, description: "This voucher number is already in use." });
           setIsLoading(false);
           return;

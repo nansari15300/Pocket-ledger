@@ -68,3 +68,14 @@ export function comboboxValueFromLineItemId(itemId: string | undefined | null): 
 export function lineItemIdFromComboboxValue(val: string): string {
   return val === VOUCHER_LINE_ITEM_NONE_VALUE ? "" : val;
 }
+
+/** Firestore/SQLite rows may store null; RHF + zod optional strings expect "" not null. */
+export function normalizeVoucherLineItemForForm<T extends Record<string, unknown>>(li: T): T {
+  return {
+    ...li,
+    itemId: String(li.itemId ?? "").trim(),
+    taxAccountId: String(li.taxAccountId ?? "").trim(),
+    unit: li.unit != null ? String(li.unit) : "",
+    allowManualRate: li.allowManualRate !== false,
+  };
+}

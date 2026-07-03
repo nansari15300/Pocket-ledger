@@ -10,6 +10,7 @@ import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { getLocalAuthToken, getLocalAuthUser, LOCAL_AUTH_CHANGED_EVENT } from "@/lib/localApiClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { resolvePlanIdForActiveCompany } from "@/lib/accountPlanForOwner";
+import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 
 
 export type UserRole = "viewer" | "data-entry" | "accountant" | "editor" | "manager" | "owner";
@@ -103,15 +104,8 @@ const usePermissions = () => {
             if (customUser.role === 'SuperAdmin') {
                 role = 'owner';
             } else {
-            // Check if user is owner by email (case-insensitive) or by ownerId
-            const isOwnerByEmail = company.ownerEmail && 
-                customUser.email && 
-                customUser.email.toLowerCase().trim() === company.ownerEmail.toLowerCase().trim();
-            const isOwnerById = company.ownerId && 
-                customUser.uid && 
-                company.ownerId === customUser.uid;
-            
-            if (isOwnerByEmail || isOwnerById) {
+            const shareUser = { uid: customUser.uid || "", email: customUser.email ?? null };
+            if (resolveCompanyIsOwnedForUser(company, shareUser)) {
                 role = 'owner';
             } else {
                 const normalizedEmail = (customUser.email || "").toLowerCase().trim();
@@ -163,9 +157,16 @@ const usePermissions = () => {
         // `local_admin_fallback` = Admin username + company password → owner-level settings.
         if (customUser && company && isLocalStorageCompany(company) && company.id && getLocalAuthToken(company.id)) {
           const localUser = getLocalAuthUser(company.id);
+          const roleBeforeLocalSession = role;
           if (localUser?.id) {
             if (localUser.id === "local_admin_fallback") {
               role = "owner";
+            } else if (localUser.id === "local_open" || localUser.id === "local_open_owner") {
+              // Password-free open: Firebase owner ko viewer mat banao (header buttons / create_records).
+              role =
+                roleBeforeLocalSession === "owner"
+                  ? "owner"
+                  : normalizeStaffRoleString(localUser.role);
             } else if (localUser.role) {
               const normalizedRole = String(localUser.role)
                 .toLowerCase()

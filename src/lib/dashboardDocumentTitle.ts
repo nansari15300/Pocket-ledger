@@ -33,6 +33,7 @@ const ROUTE_PREFIX_LABELS: { prefix: string; label: string }[] = [
   { prefix: "/add-salary", label: "Add Salary" },
   { prefix: "/purchase", label: "Purchase" },
   { prefix: "/messages", label: "Messages" },
+  { prefix: "/gate", label: "Gate" },
   { prefix: "/billing", label: "Billing & Plans" },
   { prefix: "/backup", label: "Backup & Restore" },
   { prefix: "/company", label: "Company" },

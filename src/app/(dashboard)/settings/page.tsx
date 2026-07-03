@@ -6,7 +6,7 @@ import { isEmbeddedDeviceLockShell } from "@/lib/embeddedDeviceLock";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Share2, Loader2, Hash, Palette, FileDigit, Zap, Building, ShieldAlert, Bell, Smartphone, ChevronLeft, PanelRight, CalendarRange, LockKeyhole, Server, Cloud } from "lucide-react";
+import { Share2, Loader2, Hash, Palette, FileDigit, Zap, Building, ShieldAlert, Bell, Smartphone, ChevronLeft, PanelRight, CalendarRange, LockKeyhole, Cloud } from "lucide-react";
 import { ManageShare } from "@/components/company/ManageShare";
 import usePermissions from "@/hooks/usePermissions";
 import { useCompany } from "@/hooks/useCompany";
@@ -32,11 +32,6 @@ import {
     type EdgeSwipeDocumentOptions,
 } from "@/hooks/useMobileEdgeSwipe";
 import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
-import {
-    isLocalAppServerSettingsNavVisible,
-    isLocalhostDevPreview,
-} from "@/lib/localAppServerDevPreview";
-import { LocalAppServerSettings } from "@/components/settings/LocalAppServerSettings";
 import { LocalCloudSyncSettingsPage } from "@/components/settings/LocalCloudSyncSettingsPage";
 import { settingsViewHref } from "@/lib/appNavHref";
 
@@ -75,7 +70,6 @@ function settingsNavRowClass(isActive: boolean, isDanger?: boolean) {
 
 const settingsNavItems = [
     { id: "local_cloud_sync", title: "Google Drive sync", icon: Cloud, permission: "configure_company_settings" as const, href: null },
-    { id: "local_app_server", title: "Server", icon: Server, permission: "configure_company_settings" as const, href: null },
     { id: "company", title: "Company Profile", icon: Building, permission: "configure_company_settings" as const, href: null },
     { id: "sharing", title: "Manage Sharing", icon: Share2, permission: "manage_users_roles" as const, href: null },
     // Device sync settings (synced devices management).
@@ -162,15 +156,8 @@ function SettingsPageContent() {
     const canConfigureCompany = can("configure_company_settings");
     /** EXE/APK par App Lock nav dikhao — `window` SSR par missing ho sakta hai; layout effect se client par sync. */
     const [shellLockEligible, setShellLockEligible] = useState(false);
-    const devServerNav = process.env.NODE_ENV === "development";
-    const [shellServerNavEligible, setShellServerNavEligible] = useState(
-        () => devServerNav || (typeof window !== "undefined" ? isLocalAppServerSettingsNavVisible() : false)
-    );
     useLayoutEffect(() => {
         setShellLockEligible(isEmbeddedDeviceLockShell());
-    }, []);
-    useLayoutEffect(() => {
-        setShellServerNavEligible(isLocalAppServerSettingsNavVisible());
     }, []);
     /** Owner ne company settings band kiya ho — shared user ko theme/animation phir bhi (local-only). */
     const sharedLocalAppearanceOnly = Boolean(
@@ -180,7 +167,6 @@ function SettingsPageContent() {
         const allowed = settingsNavItems.filter((item) => {
             if (item.id === "local_cloud_sync") return true;
             if (item.id === "app_lock") return shellLockEligible;
-            if (item.id === "local_app_server") return devServerNav || shellServerNavEligible;
             if (item.id === "company") return Boolean(companyId && company);
             return can(item.permission);
         });
@@ -188,20 +174,13 @@ function SettingsPageContent() {
             const driveItem = settingsNavItems.find((i) => i.id === "local_cloud_sync");
             if (driveItem) allowed.unshift(driveItem);
         }
-        if (
-            (devServerNav || shellServerNavEligible) &&
-            !allowed.some((i) => i.id === "local_app_server")
-        ) {
-            const serverItem = settingsNavItems.find((i) => i.id === "local_app_server");
-            if (serverItem) allowed.splice(1, 0, serverItem);
-        }
         if (!sharedLocalAppearanceOnly) return allowed;
         const extra = settingsNavItems.filter(
             (item) =>
                 (item.id === "theme" || item.id === "animation") && !allowed.some((a) => a.id === item.id)
         );
         return [...allowed, ...extra];
-    }, [can, sharedLocalAppearanceOnly, shellLockEligible, shellServerNavEligible, devServerNav, companyId, company]);
+    }, [can, sharedLocalAppearanceOnly, shellLockEligible, companyId, company]);
     const navItemsForUi = useMemo(() => {
         if (availableNavItems.length > 0) return availableNavItems;
         const driveOnly = settingsNavItems.filter((i) => i.id === "local_cloud_sync");
@@ -502,8 +481,6 @@ function SettingsPageContent() {
 
     const renderActiveView = () => {
         switch (activeView) {
-            case "local_app_server":
-                return <LocalAppServerSettings />;
             case "company":
                 return <CompanySettings readOnly={!canConfigureCompany} />;
             case "sharing":

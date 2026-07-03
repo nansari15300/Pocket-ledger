@@ -19,15 +19,16 @@ import {
   EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
   runEmbeddedCompanyFullPreload,
 } from "@/lib/embeddedAccountOfflineWarm";
-import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
-import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 import { useFirstLoginWarmGate } from "@/contexts/FirstLoginWarmGateContext";
 import { isLocalOnlyMode } from "@/lib/localMode";
 
 const WARM_DEBOUNCE_MS = 2_200;
+/** EXE: startup par turant file open (HTTPS) — attachment bytes background me baad me (bandwidth clash avoid). */
+const EMBEDDED_MULTI_WALK_START_MS_ELECTRON = 45_000;
 /** Doosri company ka warm overlap na ho selected company ke debounced run se (`WARM_DEBOUNCE_MS` ke baad shuru). */
-const EMBEDDED_MULTI_WALK_START_MS = 3_500;
+const EMBEDDED_MULTI_WALK_START_MS = 200;
 /** Har company warm ke beech thoda gap — APK memory / bandwidth. */
 const EMBEDDED_MULTI_GAP_MS = 750;
 /** User se bina click: online rehne par periodic resweep se missed/failing attachments bhi dheere-dheere cache ho jayein. */
@@ -44,9 +45,8 @@ export function OfflineWarmSyncManager() {
   /** Pehli-login full-screen warm chal raha ho to yahan duplicate pull mat chalao */
   const { gateActive } = useFirstLoginWarmGate();
 
-  /** `build:static` / Capacitor: multi-company attachment + mirror queue */
-  const embeddedMultiClient =
-    isStaticAppBuild() || (typeof window !== "undefined" && isCapacitorNativeApp());
+  /** Static APK / EXE / file: protocol — multi-company attachment + mirror queue */
+  const embeddedMultiClient = isEmbeddedOfflinePreloadClient();
   // Embedded local-first: online event handlers se UI jump avoid; polling loop background me kaam kare.
   const suppressOnlineEventWarm = embeddedMultiClient && isLocalOnlyMode();
 
@@ -71,6 +71,7 @@ export function OfflineWarmSyncManager() {
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const runAbortRef = useRef<AbortController | null>(null);
   const allCompaniesLatestRef = useRef(allCompanies);
+  const companyIdLatestRef = useRef(companyId);
   const lastWarmCompletedAtRef = useRef(0);
 
   /** Serial multi-company walk — company list / abort lifecycle */
@@ -78,6 +79,7 @@ export function OfflineWarmSyncManager() {
   const embeddedWalkTimerRef = useRef<number | null>(null);
 
   allCompaniesLatestRef.current = allCompanies;
+  companyIdLatestRef.current = companyId;
 
   /** Shared schedule + cancel — multiple triggers same debounce funnel */
   const scheduleWarmFullSync = useCallback(() => {
@@ -143,7 +145,7 @@ export function OfflineWarmSyncManager() {
     };
   }, [companyId]);
 
-  // APK / static EXE: registry me jitni cloud-backed companies — ek ke baad ek warm (`runOfflineFullWarmSync` HTTPS prefetch + SQLite mirror).
+  // APK / static EXE: registry me jitni cloud-backed companies — ek ke baad ek warm (incremental attachments).
   useEffect(() => {
     if (!BACKGROUND_WARM_SYNC_ENABLED) return;
     embeddedWalkAbortRef.current?.abort();
@@ -164,7 +166,7 @@ export function OfflineWarmSyncManager() {
       const snapshot = allCompaniesLatestRef.current;
       const rows =
         snapshot?.filter((c) => shouldPrefetchAttachmentsForCompany(c as Company | null)) ?? [];
-      const prioritizeId = companyId?.trim() || null;
+      const prioritizeId = companyIdLatestRef.current?.trim() || null;
       const ordered = prioritizeId
         ? [
             ...rows.filter((c) => c.id === prioritizeId),
@@ -172,19 +174,26 @@ export function OfflineWarmSyncManager() {
           ]
         : rows;
 
-      for (const row of ordered) {
-        if (ac.signal.aborted || typeof navigator === "undefined" || !navigator.onLine) break;
-        try {
-          await runEmbeddedCompanyFullPreload({
-            company: row,
-            localCompanyId: String(row.id).trim(),
-            signal: ac.signal,
-            prefetchOverrides: EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
-          });
-        } catch {
-          /* per-row network failure: continue with next company */
+      if (ordered.length === 0) return;
+      try {
+        for (let companyIndex = 0; companyIndex < ordered.length; companyIndex++) {
+          const row = ordered[companyIndex]!;
+          const rowId = String(row.id).trim();
+          if (ac.signal.aborted || typeof navigator === "undefined" || !navigator.onLine) break;
+          try {
+            await runEmbeddedCompanyFullPreload({
+              company: row,
+              localCompanyId: rowId,
+              signal: ac.signal,
+              prefetchOverrides: EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
+            });
+          } catch {
+            /* per-row network failure: continue with next company */
+          }
+          await new Promise((r) => setTimeout(r, EMBEDDED_MULTI_GAP_MS));
         }
-        await new Promise((r) => setTimeout(r, EMBEDDED_MULTI_GAP_MS));
+      } finally {
+        /* silent background warm — no header progress */
       }
     };
 
@@ -199,18 +208,19 @@ export function OfflineWarmSyncManager() {
     const runPeriodicPassLoop = async () => {
       if (ac.signal.aborted || typeof navigator === "undefined") return;
       if (!navigator.onLine) {
-        // No online-event dependency: offline hone par bhi loop ko silent retry mode me zinda rakho.
         scheduleNextPass(30_000);
         return;
       }
       await walkAllCloudCompaniesOnce();
       if (!ac.signal.aborted) lastWarmCompletedAtRef.current = Date.now();
-      // Auto background warm: all-company cache complete hone tak repeated passes (no manual button/click).
       const resweepMs = isElectronDesktopApp() ? EMBEDDED_MULTI_RESWEEP_MS_ELECTRON : EMBEDDED_MULTI_RESWEEP_MS;
       scheduleNextPass(resweepMs);
     };
 
-    scheduleNextPass(EMBEDDED_MULTI_WALK_START_MS);
+    const walkStartMs = isElectronDesktopApp()
+      ? EMBEDDED_MULTI_WALK_START_MS_ELECTRON
+      : EMBEDDED_MULTI_WALK_START_MS;
+    scheduleNextPass(walkStartMs);
 
     return () => {
       ac.abort();
@@ -219,7 +229,7 @@ export function OfflineWarmSyncManager() {
         embeddedWalkTimerRef.current = null;
       }
     };
-  }, [embeddedMultiClient, user, loading, preloadCompanySig, embeddedOnlineWarmTick, gateActive, companyId]);
+  }, [embeddedMultiClient, user, loading, preloadCompanySig, embeddedOnlineWarmTick, gateActive]);
 
   return null;
 }

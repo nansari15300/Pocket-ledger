@@ -32,11 +32,11 @@
   },
   "include": [
     "next-env.d.ts",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
     "**/*.mts",
-    "**/*.ts",
-    "**/*.tsx"
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
@@ -44,6 +44,7 @@
     "reference-other-app",
     "Reference src",
     "public/sw.js",
-    "public/sw.js.map"
+    "public/sw.js.map",
+    "electron/dist"
   ]
 }

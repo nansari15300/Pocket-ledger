@@ -1,6 +1,7 @@
 import "server-only";
 
 import { google } from "googleapis";
+import { createGoogleOAuth2Client } from "@/lib/server/googleOAuthCredentials";
 import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebaseAdmin";
 import type { CloudSyncManifest, LocalCloudSyncOperation } from "@/lib/localCloudSync/types";
 import type { DriveSharedCompanyListItem } from "@/lib/localCloudSync/types";
@@ -61,11 +62,7 @@ async function loadDriveTokens(uid: string): Promise<DriveTokens> {
 }
 
 function oauthClient(tokens: DriveTokens) {
-  const client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID!,
-    process.env.GOOGLE_CLIENT_SECRET!,
-    `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/callback/google`
-  );
+  const client = createGoogleOAuth2Client(google);
   client.setCredentials({
     access_token: tokens.accessToken,
     refresh_token: tokens.refreshToken ?? undefined,

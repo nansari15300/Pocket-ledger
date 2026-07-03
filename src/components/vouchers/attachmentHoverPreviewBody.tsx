@@ -14,13 +14,21 @@ import {
 import { useVoucherAttachmentFallback } from "@/contexts/VoucherAttachmentFallbackContext";
 import { getAttachmentFormatLabel, sniffBlobKindForPreview } from "@/lib/attachmentFormatLabel";
 import { getRemoteAttachmentBlobPreferOfflineCache } from "@/lib/offlineAttachmentUrlCache";
-import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
-import { usesEmbeddedNativeAttachmentStorage } from "@/lib/usesEmbeddedNativeAttachmentStorage";
+import {
+  embeddedAttachmentDisplayUsesLocalBytesOnly,
+  usesEmbeddedNativeAttachmentStorage,
+} from "@/lib/usesEmbeddedNativeAttachmentStorage";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { normalizeAttachmentUrlForDevicePreview } from "@/lib/attachmentHoldClipboard";
 import { getBlobFromAttachmentRefPreferLocalFirst } from "@/lib/attachmentPreviewResolve";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
+import { useCompany } from "@/hooks/useCompany";
+import { canFetchPlServerAttachmentForCompany } from "@/lib/plServerAttachmentFetch";
+import {
+  companyRequiresLocalAttachmentUrlsOnly,
+  resolveStaticAttachmentDisplay,
+} from "@/lib/staticAttachmentDisplayUrl";
 
 /** Dubara hover par turant — blob URL session `Map` (static/APK me repeat IndexedDB + decode kam) */
 const HOVER_HTTPS_UI_CACHE_MAX = 80;
@@ -109,18 +117,21 @@ export async function prewarmVisibleAttachmentRefsForInstantOpen(
   await prewarmHoverPreviewHttpsUrls(urls, options);
 }
 
-/**
- * Hover portal ke andar HTTPS image: IndexedDB/offline warmup pehle = EXE spinner lamba (web browser direct img tez).
- * Electron + online → seedha `src=https` (`web` flow); blob background me LRU me bharo taaki dubara/offline hover tez ho.
- */
+/** EXE preview: download + disk write — isse zyada mat wait karo; retry dikhao. */
+const EMBEDDED_PREVIEW_DOWNLOAD_TIMEOUT_MS = 28_000;
+
+/** EXE/APK: pl-attachments / blob cache; web: online par HTTPS allowed. */
 function HoverPreviewHttpsAwareImage(props: {
   url: string;
   alt?: string;
   className?: string;
   loading?: React.ImgHTMLAttributes<HTMLImageElement>["loading"];
   onDoubleClick?: React.MouseEventHandler<HTMLImageElement>;
+  localLedgerOnly?: boolean;
+  companyId?: string;
 }) {
   const u = String(props.url || "");
+  const localBytesOnly = props.localLedgerOnly === true || embeddedAttachmentDisplayUsesLocalBytesOnly();
   const [displaySrc, setDisplaySrc] = React.useState<string>(() => {
     if (!/^https?:\/\//i.test(u)) {
       if (u.startsWith("blob:") || u.startsWith("data:")) return u;
@@ -130,24 +141,48 @@ function HoverPreviewHttpsAwareImage(props: {
     }
     const fromLru = peekHoverCachedBlobUrl(u);
     if (fromLru) return fromLru;
-    if (
-      !usesEmbeddedNativeAttachmentStorage() &&
-      typeof navigator !== "undefined" &&
-      navigator.onLine &&
-      isElectronDesktopApp()
-    ) {
+    if (typeof navigator !== "undefined" && navigator.onLine) {
       return u;
     }
     return "";
   });
+  const [loadFailed, setLoadFailed] = React.useState(false);
 
   React.useEffect(() => {
     let cancelled = false;
-    /** Sirf is effect ka naya blob — cache miss par banega; cache hit par revoke zaroori nahi */
     let blobUrlToRevoke: string | null = null;
+    setLoadFailed(false);
+    const ac = new AbortController();
+    const timeoutId =
+      localBytesOnly && typeof window !== "undefined"
+        ? window.setTimeout(() => ac.abort(), EMBEDDED_PREVIEW_DOWNLOAD_TIMEOUT_MS)
+        : undefined;
+
+    const applyResolved = (displayUrl: string | null, blob: Blob | null) => {
+      if (cancelled) return;
+      if (displayUrl) {
+        setLoadFailed(false);
+        setDisplaySrc(displayUrl);
+        return;
+      }
+      if (blob && blob.size > 0) {
+        const ou = URL.createObjectURL(blob);
+        rememberHoverBlobUrl(u, ou);
+        blobUrlToRevoke = ou;
+        setLoadFailed(false);
+        setDisplaySrc(ou);
+        return;
+      }
+      if (!localBytesOnly && typeof navigator !== "undefined" && navigator.onLine && /^https?:\/\//i.test(u)) {
+        setLoadFailed(false);
+        setDisplaySrc(u);
+      } else {
+        setDisplaySrc("");
+        setLoadFailed(true);
+      }
+    };
 
     if (!/^https?:\/\//i.test(u)) {
-      // `blob:` / `data:` — direct render; Storage object-path / baaki — cache/SDK se blob (raw path `<img src>` invalid).
       if (u.startsWith("blob:") || u.startsWith("data:")) {
         setDisplaySrc(u);
         return () => {
@@ -155,23 +190,21 @@ function HoverPreviewHttpsAwareImage(props: {
         };
       }
       setDisplaySrc("");
-      void (async () => {
-        const b = await getRemoteAttachmentBlobPreferOfflineCache(u);
-        if (cancelled) return;
-        if (b && b.size > 0) {
-          const ou = URL.createObjectURL(b);
-          if (cancelled) {
-            URL.revokeObjectURL(ou);
-            return;
-          }
-          rememberHoverBlobUrl(u, ou);
-          blobUrlToRevoke = ou;
-          setDisplaySrc(ou);
-          return;
-        }
-      })();
+      void resolveStaticAttachmentDisplay(u, {
+        localLedgerOnly: localBytesOnly,
+        signal: ac.signal,
+        companyId: props.companyId,
+      })
+        .then((resolved) => {
+          applyResolved(resolved.displayUrl, resolved.blob);
+        })
+        .catch(() => {
+          applyResolved(null, null);
+        });
       return () => {
         cancelled = true;
+        if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+        ac.abort();
         if (blobUrlToRevoke && hoverHttpsBlobUrlByKey.get(hoverPreviewBlobCacheKey(u)) !== blobUrlToRevoke) {
           try {
             URL.revokeObjectURL(blobUrlToRevoke);
@@ -187,57 +220,43 @@ function HoverPreviewHttpsAwareImage(props: {
       setDisplaySrc(cached);
       return () => {
         cancelled = true;
+        if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+        ac.abort();
       };
     }
 
-    // Web-only Electron fallback: embedded disk cache (APK jaisa) enabled ho to HTTPS mat.
-    const electronServeRemoteFirst =
-      !usesEmbeddedNativeAttachmentStorage() &&
-      typeof navigator !== "undefined" &&
-      navigator.onLine &&
-      isElectronDesktopApp();
-    if (electronServeRemoteFirst) {
-      setDisplaySrc(u);
-      void (async () => {
-        const b = await getRemoteAttachmentBlobPreferOfflineCache(u);
-        if (cancelled || !b || b.size === 0) return;
-        try {
-          const ou = URL.createObjectURL(b);
-          if (cancelled) {
-            URL.revokeObjectURL(ou);
+    const isHttps = /^https?:\/\//i.test(u);
+    const online = typeof navigator !== "undefined" && navigator.onLine;
+    const canInstantHttps = isHttps && online && !localBytesOnly;
+
+    // Online HTTPS: initial state already `u` — mat clear karo (warna 2–4s spinner).
+    if (!canInstantHttps) {
+      setDisplaySrc("");
+    }
+
+    void resolveStaticAttachmentDisplay(u, { localLedgerOnly: localBytesOnly, signal: ac.signal })
+      .then((resolved) => {
+        if (cancelled) return;
+        if (canInstantHttps) {
+          if (resolved.blob && resolved.blob.size > 0) {
+            applyResolved(resolved.displayUrl, resolved.blob);
             return;
           }
-          rememberHoverBlobUrl(u, ou);
-          // IMG ab HTTPS use kar chuka — optionally blob par switch mat karo (flicker avoid); LRU offline ke liye
-        } catch {
-          /* ignore */
-        }
-      })();
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    setDisplaySrc("");
-    void (async () => {
-      const b = await getRemoteAttachmentBlobPreferOfflineCache(u);
-      if (cancelled) return;
-      if (b && b.size > 0) {
-        const ou = URL.createObjectURL(b);
-        if (cancelled) {
-          URL.revokeObjectURL(ou);
+          if (resolved.displayUrl && resolved.displayUrl !== u) {
+            applyResolved(resolved.displayUrl, resolved.blob);
+          }
           return;
         }
-        rememberHoverBlobUrl(u, ou);
-        blobUrlToRevoke = ou;
-        setDisplaySrc(ou);
-      } else if (!cancelled) {
-        setDisplaySrc(u);
-      }
-    })();
+        applyResolved(resolved.displayUrl, resolved.blob);
+      })
+      .catch(() => {
+        if (!canInstantHttps) applyResolved(null, null);
+      });
 
     return () => {
       cancelled = true;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      ac.abort();
       if (blobUrlToRevoke && hoverHttpsBlobUrlByKey.get(hoverPreviewBlobCacheKey(u)) !== blobUrlToRevoke) {
         try {
           URL.revokeObjectURL(blobUrlToRevoke);
@@ -246,12 +265,46 @@ function HoverPreviewHttpsAwareImage(props: {
         }
       }
     };
-  }, [u]);
+  }, [u, localBytesOnly]);
 
   if (!displaySrc) {
+    if (loadFailed) {
+      return (
+        <div className="flex min-h-[200px] min-w-[220px] flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">
+          <span>File not on device yet</span>
+          <span className="text-xs opacity-80">
+            {typeof navigator !== "undefined" && !navigator.onLine
+              ? "Connect once online to download, or wait for background sync."
+              : "Download timed out or failed — retry or wait for background sync."}
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => {
+              setLoadFailed(false);
+              setDisplaySrc("");
+              void resolveStaticAttachmentDisplay(u, { localLedgerOnly: localBytesOnly, companyId: props.companyId }).then((resolved) => {
+                if (resolved.displayUrl) setDisplaySrc(resolved.displayUrl);
+                else if (resolved.blob && resolved.blob.size > 0) {
+                  const ou = URL.createObjectURL(resolved.blob);
+                  rememberHoverBlobUrl(u, ou);
+                  setDisplaySrc(ou);
+                } else setLoadFailed(true);
+              });
+            }}
+          >
+            Retry download
+          </Button>
+        </div>
+      );
+    }
     return (
-      <div className="flex min-h-[200px] min-w-[220px] items-center justify-center p-6">
+      <div className="flex min-h-[200px] min-w-[220px] flex-col items-center justify-center gap-2 p-6">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" aria-label="Loading preview" />
+        {localBytesOnly ? (
+          <span className="text-xs text-muted-foreground">Downloading to device…</span>
+        ) : null}
       </div>
     );
   }
@@ -276,11 +329,14 @@ export type AttachmentPreviewGalleryOpts = { urls: readonly string[]; startIndex
 export function LocalFileRefTooltipPreview({
   url,
   gallery,
+  companyId: companyIdProp,
 }: {
   url: string;
   gallery?: AttachmentPreviewGalleryOpts;
+  companyId?: string | null;
 }) {
   const voucherAttachmentFb = useVoucherAttachmentFallback();
+  const companyId = companyIdProp ?? voucherAttachmentFb?.companyId ?? null;
   const effectiveUrl = React.useMemo(() => normalizeAttachmentUrlForDevicePreview(url), [url]);
   const [state, setState] = React.useState<
     { status: "loading" } | { status: "error" } | { status: "ready"; objectUrl: string; mime: string }
@@ -306,6 +362,7 @@ export function LocalFileRefTooltipPreview({
         // Table/party preview: `local:` pending blob pehle; `drive:` par filename match / gallery `local:` phir Drive API.
         const blob = await getBlobFromAttachmentRefPreferLocalFirst(url, {
           galleryUrls: gallery?.urls,
+          companyId: companyId ?? undefined,
         });
         if (cancelled) return;
         if (!blob || blob.size === 0) {
@@ -337,7 +394,7 @@ export function LocalFileRefTooltipPreview({
         urlRef.current = null;
       }
     };
-  }, [url, effectiveUrl, gallery?.urls]);
+  }, [url, effectiveUrl, gallery?.urls, companyId]);
 
   const openAttachment = React.useCallback(() => {
     const kind: "pdf" | "image" | "other" =
@@ -349,19 +406,19 @@ export function LocalFileRefTooltipPreview({
     const multi =
       gallery && gallery.urls.length > 1 ? { urls: gallery.urls, startIndex: gallery.startIndex } : undefined;
     const serverFallback =
-      voucherAttachmentFb &&
-      voucherAttachmentFb.companyId &&
-      voucherAttachmentFb.voucherId &&
-      (isLocalFileRef(effectiveUrl) || voucherAttachmentFb.interCompanyPeer)
+      companyId &&
+      (isLocalFileRef(effectiveUrl) || voucherAttachmentFb?.interCompanyPeer)
         ? {
-            companyId: voucherAttachmentFb.companyId,
-            voucherId: voucherAttachmentFb.voucherId,
+            companyId,
+            voucherId: voucherAttachmentFb?.voucherId ?? "",
             clientFileUrls: gallery?.urls,
-            interCompanyPeer: voucherAttachmentFb.interCompanyPeer,
+            interCompanyPeer: voucherAttachmentFb?.interCompanyPeer,
           }
         : undefined;
     void openAttachmentInApp(effectiveUrl, { kind, gallery: multi, serverFallback });
-  }, [effectiveUrl, state, gallery, voucherAttachmentFb]);
+  }, [effectiveUrl, state, gallery, voucherAttachmentFb, companyId]);
+
+  const canRemoteFetch = canFetchPlServerAttachmentForCompany(companyId);
 
   if (state.status === "loading") {
     return (
@@ -374,7 +431,7 @@ export function LocalFileRefTooltipPreview({
   if (state.status === "error") {
     return (
       <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-muted-foreground">
-        <span>File stored on this device</span>
+        <span>{canRemoteFetch ? "File on server PC — Open to load preview" : "File stored on this device"}</span>
         <Button type="button" size="sm" variant="secondary" onClick={openAttachment}>
           Open
         </Button>
@@ -445,6 +502,10 @@ export function SingleAttachmentHoverPreviewBody({
   url: string;
   gallery?: AttachmentPreviewGalleryOpts;
 }) {
+  const { company } = useCompany();
+  const voucherAttachmentFb = useVoucherAttachmentFallback();
+  const localLedgerOnly =
+    companyRequiresLocalAttachmentUrlsOnly(company) || embeddedAttachmentDisplayUsesLocalBytesOnly();
   const normalized = trimEntityFileUrlForPreview(url);
   if (!normalized) {
     return (
@@ -480,10 +541,22 @@ export function SingleAttachmentHoverPreviewBody({
   const openAtt = () =>
     void openAttachmentInApp(effectiveUrl, {
       kind: isImage ? "image" : isPdf ? "pdf" : "other",
+      localLedgerOnly,
       gallery:
         galleryOpts && galleryOpts.urls.length > 1
           ? { urls: galleryOpts.urls, startIndex: galleryOpts.startIndex }
           : undefined,
+      serverFallback:
+        voucherAttachmentFb?.companyId && voucherAttachmentFb?.voucherId
+          ? {
+              companyId: voucherAttachmentFb.companyId,
+              voucherId: voucherAttachmentFb.voucherId,
+              clientFileUrls: galleryOpts?.urls,
+              interCompanyPeer: voucherAttachmentFb.interCompanyPeer,
+            }
+          : company?.id
+            ? { companyId: company.id, voucherId: "" }
+            : undefined,
     });
   const storagePath = storagePathRaw ?? undefined;
   const caption = isPdf ? "PDF" : fmt;
@@ -496,10 +569,16 @@ export function SingleAttachmentHoverPreviewBody({
   return (
     <div className="flex w-max max-w-none flex-col gap-1">
       {usesDeviceBlobPreview ? (
-        <LocalFileRefTooltipPreview url={u} gallery={galleryOpts} />
+        <LocalFileRefTooltipPreview
+          url={u}
+          gallery={galleryOpts}
+          companyId={voucherAttachmentFb?.companyId ?? company?.id}
+        />
       ) : isImage ? (
         <HoverPreviewHttpsAwareImage
           url={u}
+          localLedgerOnly={localLedgerOnly}
+          companyId={voucherAttachmentFb?.companyId ?? company?.id}
           alt=""
           className="block h-auto w-auto max-h-none max-w-none object-contain"
           loading="eager"

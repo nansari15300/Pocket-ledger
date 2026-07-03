@@ -53,6 +53,11 @@ import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
 import { getNextPaidUpgrade, numericEntitlement, companyStorageIsLocal, type PlanId } from "@/config/plans";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import {
+  COMPANY_PERMISSION_ROLE_OPTIONS,
+  COMPANY_SHARE_ROLE_OPTIONS,
+  companyShareRoleLabel,
+} from "@/lib/localCompanyAppRoles";
+import {
   companyProfileChromeRoot,
   companyProfileGreenZone,
   companyProfilePageBg,
@@ -937,11 +942,11 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                                       <SelectValue placeholder="Role" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                      <SelectItem value="viewer">Viewer</SelectItem>
-                                      <SelectItem value="data-entry">Data Entry</SelectItem>
-                                      <SelectItem value="accountant">Accountant</SelectItem>
-                                      <SelectItem value="editor">Editor</SelectItem>
-                                      <SelectItem value="manager">Admin</SelectItem>
+                                      {COMPANY_SHARE_ROLE_OPTIONS.map((r) => (
+                                        <SelectItem key={r.value} value={r.value}>
+                                          {r.label}
+                                        </SelectItem>
+                                      ))}
                                       {sharedUser.role === "owner" ? (
                                         <SelectItem value="owner">
                                           <span className="flex items-center gap-1.5">
@@ -1054,9 +1059,9 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                             <SelectValue placeholder="Select a role to edit" />
                         </SelectTrigger>
                         <SelectContent>
-                            {Object.keys(editablePermissionConfig.roles).map(role => (
-                                <SelectItem key={role} value={role} className="capitalize">
-                                    {role.replace('-', ' ')}
+                            {COMPANY_PERMISSION_ROLE_OPTIONS.map((r) => (
+                                <SelectItem key={r.value} value={r.value}>
+                                    {r.label}
                                 </SelectItem>
                             ))}
                         </SelectContent>
@@ -1139,7 +1144,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                     {/* Role-based File Limits */}
                     {allowAttachmentsGlobal && (
                         <div className="space-y-4 p-4 border rounded-lg">
-                            <h4 className="text-sm font-semibold">File Limits for {selectedRoleForPermissions.replace('-', ' ')} Role</h4>
+                            <h4 className="text-sm font-semibold">File Limits for {companyShareRoleLabel(selectedRoleForPermissions)} Role</h4>
                             {showPlanFileLimitNotice && (
                                 <p className="text-xs text-amber-700">
                                     Role limit is capped by plan. Effective max files is {effectiveRoleMaxFiles}.

@@ -2,17 +2,26 @@
 
 import { BUILTIN_ONLINE_GATE_ID } from "@/lib/gates/gateTypes";
 import { activateGate } from "@/lib/gates/gateRuntime";
+import { defaultBuiltinGateId } from "@/lib/gates/gateClientKind";
+import { getActiveGate, readActiveGateId } from "@/lib/gates/gateStore";
 
 export { isBundledEmbeddedGateClient, defaultBuiltinGateId } from "@/lib/gates/gateClientKind";
 
-/** Online-only app mode: always pin active gate to Online on boot. */
+/** Boot: saved gate restore karo; pehli baar default Online. */
 export function ensureWebDefaultOnlineGate(): void {
   if (typeof window === "undefined") return;
-  activateGate(BUILTIN_ONLINE_GATE_ID);
+  const saved = readActiveGateId();
+  if (saved) {
+    activateGate(saved);
+    return;
+  }
+  activateGate(defaultBuiltinGateId());
 }
 
-/** Online-only app mode: company picker always stays on Online gate. */
+/** Company picker: local_server gate mat hatao — server tab companies dikhein. */
 export function activateOnlineGateForCompanyPicker(): void {
   if (typeof window === "undefined") return;
+  const active = getActiveGate();
+  if (active.type === "local_server") return;
   activateGate(BUILTIN_ONLINE_GATE_ID);
 }

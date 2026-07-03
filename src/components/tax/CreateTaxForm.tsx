@@ -776,6 +776,7 @@ export function CreateTaxForm({
               docsInputRef={docsInputRef}
               onDocsChange={handleDocumentsChange}
               canAttachDocuments={canAttachDocuments}
+              attachmentCompanyId={companyId ?? undefined}
               entityStatementLabel="tax"
               inputId="create-tax-docs"
             />

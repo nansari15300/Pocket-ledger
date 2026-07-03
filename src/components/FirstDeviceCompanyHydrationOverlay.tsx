@@ -31,7 +31,6 @@ import {
   readEmbeddedFullWarmSucceeded,
 } from "@/lib/embeddedWarmBootstrapFlags";
 import { useFirstLoginWarmGate } from "@/contexts/FirstLoginWarmGateContext";
-import { useSetHeaderAttachmentPrefetchPercent } from "@/contexts/EmbeddedAttachmentPrefetchContext";
 import { shouldPrefetchAttachmentsForCompany } from "@/lib/offlineFullWarmSync";
 import {
   clearEmbeddedPendingCompanyDataWarm,
@@ -63,7 +62,6 @@ export function FirstDeviceCompanyHydrationOverlay() {
   const { user, loading: authLoading } = useAuth();
   const { companyId, company, allCompanies, loading: registryLoading } = useCompany();
   const { setGateActive } = useFirstLoginWarmGate();
-  const setHeaderAttachmentPercent = useSetHeaderAttachmentPrefetchPercent();
 
   const uid = user?.uid ?? "";
   const isLoginRoute = pathname === "/" || pathname === "";
@@ -141,7 +139,6 @@ export function FirstDeviceCompanyHydrationOverlay() {
       warmStartedRef.current = false;
       warmAbortRef.current?.abort();
       attachmentBgAbortRef.current?.abort();
-      setHeaderAttachmentPercent(null);
       setWarmPhase("idle");
       setCloudRows([]);
       setProgressById({});
@@ -199,7 +196,6 @@ export function FirstDeviceCompanyHydrationOverlay() {
     warmAbortRef.current?.abort();
     attachmentBgAbortRef.current?.abort();
     warmStartedRef.current = false;
-    setHeaderAttachmentPercent(null);
     if (companyId) clearEmbeddedPendingCompanyDataWarm(uid, companyId);
     dismissedRef.current = true;
     setDisplayPct(100);
@@ -260,17 +256,13 @@ export function FirstDeviceCompanyHydrationOverlay() {
           const localId = String(row.id).trim();
 
           try {
-            setHeaderAttachmentPercent(1);
             await runEmbeddedCompanyFullPreload({
               company: row,
               localCompanyId: localId,
               signal: accountAc.signal,
-              onAttachmentProgressPercent: (pct) => setHeaderAttachmentPercent(pct),
             });
           } catch {
             /* per-company network / abort */
-          } finally {
-            setHeaderAttachmentPercent(null);
           }
 
           setProgressById((prev) => ({
@@ -337,7 +329,6 @@ export function FirstDeviceCompanyHydrationOverlay() {
       warmAbortRef.current?.abort();
       attachmentBgAbortRef.current?.abort();
       setGateActive(false);
-      setHeaderAttachmentPercent(null);
     };
   }, [setGateActive]);
 

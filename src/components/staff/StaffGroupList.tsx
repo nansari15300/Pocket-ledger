@@ -133,7 +133,12 @@ export function StaffGroupList({
                 <motion.li key={group.id} {...rowMotionProps}>
                     {href ? (
                     // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
-                    <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
+                    <Link
+                      prefetch={false}
+                      href={href}
+                      onClick={() => onSelectGroup(group)}
+                      className="block min-w-0 max-w-full overflow-hidden"
+                    >
                       <MasterListRow selected={isSelected} className={cardClassName}>{cardContent}</MasterListRow>
                     </Link>
                   ) : (

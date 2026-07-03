@@ -35,6 +35,7 @@ import { motion } from "framer-motion";
 import { FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
 import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
+import { companyRequiresLocalAttachmentUrlsOnly } from "@/lib/staticAttachmentDisplayUrl";
 import { getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize";
 import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
@@ -100,6 +101,8 @@ export function OpeningBalanceFileCellContent({
 }: {
   fileUrls?: readonly string[] | null;
 }) {
+  const { company } = useCompany();
+  const localLedgerOnly = companyRequiresLocalAttachmentUrlsOnly(company);
   const urls = Array.isArray(fileUrls)
     ? fileUrls.map((u) => String(u)).filter((s) => s.length > 0)
     : [];
@@ -107,11 +110,15 @@ export function OpeningBalanceFileCellContent({
     return <span>-</span>;
   }
   // Hover preview stays enabled; dbl-click on single PDF opens full viewer quickly.
+  const serverFb =
+    company?.id && urls.length > 0
+      ? { companyId: company.id, voucherId: "", clientFileUrls: urls }
+      : undefined;
   const singlePdfOpen =
     urls.length === 1 && getAttachmentFormatLabel(urls[0]!) === "PDF"
       ? (e: React.MouseEvent<HTMLDivElement>) => {
           e.stopPropagation();
-          void openAttachmentInApp(urls[0]!, { kind: "pdf" });
+          void openAttachmentInApp(urls[0]!, { kind: "pdf", localLedgerOnly, serverFallback: serverFb });
         }
       : undefined;
 
@@ -520,15 +527,22 @@ export const getOppositeAccountLabel = (
 
   if (t.type === "sale") return getName(t.partyId);
   if (t.type === "purchase") return getName(t.partyId);
-  // Tax context: for payment_in/out, opposite is the bank; for add_salary, opposite is the expense account
+  // Tax context: add_salary → staff; sale/purchase already party above; payment → party/staff if set
   const isTaxContext = context === "tax" || context === "tax_group";
   if (isTaxContext && t.type === "journal" && t.subType === "add_salary" && Array.isArray(t.entries)) {
-    const expenseEntry = t.entries.find((e: any) => (Number(e?.debit) || 0) > 0);
-    if (expenseEntry?.accountId) return sanitizeOpposite(labelFromJournalEntry(expenseEntry));
+    const staffNames = t.entries
+      .filter((e: any) => {
+        const credit = Number(e.credit) || 0;
+        if (credit <= 0) return false;
+        return !String(e.narration || "").includes("(Staff ID:");
+      })
+      .map((e: any) => getName(e.accountId))
+      .filter(Boolean);
+    if (staffNames.length > 0) return sanitizeOpposite(staffNames.join(", "));
   }
   if (isTaxContext && (t.type === "payment_in" || t.type === "payment_out")) {
-    // payment_in: Dr Bank (accountId), Cr Tax → opposite = bank received into
-    // payment_out: Dr Tax, Cr Bank (fromAccountId for direct_expense; accountId for payment_out)
+    if (t.partyId) return getName(t.partyId);
+    if (t.staffId) return getName(t.staffId);
     const bankId = t.type === "payment_in" ? t.accountId : (t.fromAccountId || t.accountId);
     if (bankId) return getName(bankId);
   }
@@ -891,6 +905,8 @@ export const TransactionRow = React.memo(
     showSpendWiseGroupMenuActions = false,
     onPrintRow,
   }: any) => {
+    const { company } = useCompany();
+    const localLedgerOnly = companyRequiresLocalAttachmentUrlsOnly(company);
     /* Main + narration hover ek block — narration par mouse par bhi dono rows highlight (globals.css [data-pl-txn-hovered]) */
     const [pairHovered, setPairHovered] = React.useState(false);
     const mainRowRef = React.useRef<HTMLTableRowElement>(null);
@@ -1155,12 +1171,23 @@ export const TransactionRow = React.memo(
             {(() => {
               const rowUrls = getVoucherAttachmentUrlsForUi(transaction);
               if (rowUrls.length === 0) return "-";
+              const serverFb = company?.id
+                ? {
+                    companyId: company.id,
+                    voucherId: String(transaction.id || ""),
+                    clientFileUrls: rowUrls,
+                  }
+                : undefined;
               // Shared table rows: click preview + double-click open for single PDF.
               const singlePdfOpen =
                 rowUrls.length === 1 && getAttachmentFormatLabel(rowUrls[0]!) === "PDF"
                   ? (e: React.MouseEvent<HTMLDivElement>) => {
                       e.stopPropagation();
-                      void openAttachmentInApp(rowUrls[0]!, { kind: "pdf" });
+                      void openAttachmentInApp(rowUrls[0]!, {
+                        kind: "pdf",
+                        localLedgerOnly,
+                        serverFallback: serverFb,
+                      });
                     }
                   : undefined;
               return (
@@ -1309,11 +1336,18 @@ export const TransactionRow = React.memo(
           })()}
         <TableCell
           className="w-10 p-1 text-center align-middle"
+          data-pl-txn-row-menu=""
           onClick={(e) => e.stopPropagation()}
         >
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" data-pl-txn-icon-btn="" className={cn(txnTableIconBtnCn, "h-8 w-8 shrink-0")}>
+              <Button
+                variant="ghost"
+                size="icon"
+                data-pl-txn-icon-btn=""
+                data-pl-txn-row-menu-trigger=""
+                className={cn(txnTableIconBtnCn, "h-8 w-8 shrink-0")}
+              >
                 <MoreVertical className="h-4 w-4 text-muted-foreground" />
               </Button>
             </DropdownMenuTrigger>

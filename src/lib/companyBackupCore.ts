@@ -25,10 +25,12 @@ import {
   ensureNativeBackupStoragePermission,
 } from "@/lib/backupSaveLocation";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+import { usesEmbeddedNativeAttachmentStorage } from "@/lib/usesEmbeddedNativeAttachmentStorage";
 import { backupPrefersLocalSnapshot } from "@/lib/backupLocalFirst";
 import {
   buildAttachmentZipFromRefs,
   collectAttachmentRefsFromBackupData,
+  prepareBackupDataForOfflineFileBackup,
 } from "@/lib/attachmentBackupBundle";
 import {
   bytesPerSecToMbps,
@@ -50,24 +52,10 @@ import {
   formatIncrementalMergeProgressDetail,
 } from "@/lib/incrementalBackupFromLocation";
 import type { Company } from "@/hooks/useCompany";
+import { COLLECTIONS_TO_BACKUP } from "@/lib/companyBackupCollections";
 
-export const COLLECTIONS_TO_BACKUP = [
-  "parties",
-  "groups",
-  "bank_accounts",
-  "account_groups",
-  "staff",
-  "staff_groups",
-  "items",
-  "item_groups",
-  "taxes",
-  "tax_groups",
-  "expense_accounts",
-  "expense_groups",
-  "vouchers",
-  /** Auto Monthly schedule + enabled flag — restore ke baad app-open recurring chale. */
-  "recurring_voucher_templates",
-] as const;
+export { COLLECTIONS_TO_BACKUP } from "@/lib/companyBackupCollections";
+export type { CompanyBackupCollection } from "@/lib/companyBackupCollections";
 
 const BACKUP_PAGE_SIZE = 500;
 
@@ -583,16 +571,14 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
         });
       }
 
-      // Static/EXE/APK: local verify pehle; local-only recovery: hamesha device cache check (server skip).
-      if (refsNeedingDownload.length > 0 || (localOnlySource && refs.length > 0)) {
-        const preferLocal = backupPrefersLocalSnapshot() || localOnlySource;
+      // Local-only: slow double-pass preflight skip — ek hi "Collecting attachments" pass (device cache + online fetch).
+      if (!localOnlySource && refsNeedingDownload.length > 0) {
+        const preferLocal = backupPrefersLocalSnapshot();
         onProgress({
           phase: preferLocal ? "Checking attachments" : onlineForBackup ? "Syncing with server" : "Checking attachments",
-          detail: localOnlySource
-            ? "Checking local attachment cache on this device…"
-            : preferLocal
-              ? "Checking local attachment files…"
-              : "Checking attachment files…",
+          detail: preferLocal
+            ? "Checking local attachment files…"
+            : "Checking attachment files…",
           done: 0,
           total: refs.length,
         });
@@ -600,7 +586,7 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
           backupData,
           incrementalCache: incremental.cache,
           signal,
-          skipOnlineAttachmentFetch: localOnlySource,
+          skipOnlineAttachmentFetch: false,
           onProgress: ({ done, total, detail }) => {
             onProgress({
               phase: preferLocal ? "Checking attachments" : onlineForBackup ? "Syncing with server" : "Checking attachments",
@@ -610,7 +596,7 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
             });
           },
         });
-        if (preflight.missingRefs.length > 0 && !localOnlySource) {
+        if (preflight.missingRefs.length > 0) {
           return {
             ok: false,
             error: formatBackupAttachmentPreflightError(
@@ -681,18 +667,17 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
         });
       },
         signal,
-        { previousCache: incremental.cache }
+        { previousCache: incremental.cache, skipDiskWrite: !usesEmbeddedNativeAttachmentStorage() }
       );
       backupData.backupVersion = 3;
       attachmentEmbeddedCount = bundle.manifest.entries.length;
       if (bundle.manifest.entries.length) {
-        backupData.includesAttachments = true;
-        backupData.attachmentZipManifest = bundle.manifest;
+        const offlinePrepared = prepareBackupDataForOfflineFileBackup(backupData, bundle.manifest);
         savedWithAttachments = true;
 
         throwIfAborted();
         onProgress({ phase: "Compressing", detail: "Building compressed zip…" });
-        const zipBytes = packPlbpZipBackup(backupData, bundle.files);
+        const zipBytes = packPlbpZipBackup(offlinePrepared.backupData, bundle.files);
 
         onProgress({ phase: "Encrypting", detail: "Securing backup with company password…" });
         const finalDataString = await encryptBytes(zipBytes, company.password);
@@ -714,6 +699,16 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
           includeAttachments: savedWithAttachments,
           attachmentRefCount,
           attachmentEmbeddedCount,
+        };
+      }
+      if (refs.length > 0) {
+        return {
+          ok: false,
+          error: formatBackupAttachmentPreflightError(
+            refs.length,
+            refs.length,
+            backupPrefersLocalSnapshot() || localOnlySource
+          ),
         };
       }
       backupData.includesAttachments = false;

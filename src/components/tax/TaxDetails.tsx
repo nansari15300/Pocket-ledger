@@ -128,6 +128,11 @@ import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachm
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { getTaxTransactionAmounts, useTransactions } from "@/hooks/use-transactions";
 import { useVouchers } from "@/hooks/useVouchers";
+import {
+  filterTaxLedgerByOppositeAccount,
+  getTaxOppositeAccountFilterOptions,
+} from "@/lib/taxOppositeAccountFilter";
+import { chromePillBtn } from "@/lib/chromePillButton";
 import { useMasterEntityLivePatch } from "@/hooks/useMasterEntityLivePatch";
 import { NotificationBell } from "../vouchers/NotificationBell";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
@@ -185,7 +190,15 @@ export function TaxDetails({
 }: TaxDetailsProps) {
   const { company, companyId } = useCompany();
   const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
-  const { vouchers, journalAccountNames: journalAccountNamesFromHook } = useVouchers();
+  const {
+    vouchers,
+    journalAccountNames: journalAccountNamesFromHook,
+    processedTaxes,
+    processedAccounts,
+    processedExpenseAccounts,
+    processedStaff,
+    processedParties,
+  } = useVouchers();
   const journalAccountNames = journalAccountNamesProp ?? journalAccountNamesFromHook ?? {};
   const mobileSearchNames = useMemo(
     () => ({ ...journalAccountNames, ...(userNames ?? {}) }),
@@ -235,8 +248,14 @@ export function TaxDetails({
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [mobileSearchTerm, setMobileSearchTerm] = useState("");
+  const [oppositeAccountFilter, setOppositeAccountFilter] = useState("");
   const [mobileFooterDialogOpen, setMobileFooterDialogOpen] = useState<null | "payment_in" | "payment_out" | "sale">(null);
   const openingModalRef = React.useRef(false);
+
+  useEffect(() => {
+    setOppositeAccountFilter("");
+    setCurrentPage(1);
+  }, [tax?.id]);
 
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();
@@ -409,13 +428,48 @@ export function TaxDetails({
     [displayTransactions, statusFilter]
   );
 
+  const resolveOppositeAccountName = useCallback(
+    (id: string) => {
+      const fromStaff = (processedStaff || []).find((s: any) => s.id === id);
+      if (fromStaff) return fromStaff.name;
+      const fromParty = (processedParties || []).find((p: any) => p.id === id);
+      if (fromParty) return fromParty.name;
+      const fromAccounts = (processedAccounts || []).find((a: any) => a.id === id);
+      if (fromAccounts) return fromAccounts.accountName;
+      const fromExpense = (processedExpenseAccounts || []).find((e: any) => e.id === id);
+      if (fromExpense) return fromExpense.name;
+      return journalAccountNames[id] || id;
+    },
+    [processedStaff, processedParties, processedAccounts, processedExpenseAccounts, journalAccountNames]
+  );
+
+  const oppositeAccountFilterOptions = useMemo(() => {
+    if (!tax?.id) return [];
+    return getTaxOppositeAccountFilterOptions(
+      displayTransactions,
+      tax.id,
+      processedTaxes || [],
+      resolveOppositeAccountName
+    );
+  }, [displayTransactions, tax?.id, processedTaxes, resolveOppositeAccountName]);
+
+  const oppositeAccountFilteredTransactions = useMemo(() => {
+    if (!tax?.id || !oppositeAccountFilter) return statusFilteredTransactions;
+    return filterTaxLedgerByOppositeAccount(
+      statusFilteredTransactions,
+      tax.id,
+      oppositeAccountFilter,
+      processedTaxes || []
+    );
+  }, [statusFilteredTransactions, tax?.id, oppositeAccountFilter, processedTaxes]);
+
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
         sortTransactionsWithFiscalMergeForCompany(
-          filterByUnapprovedOnly(statusFilteredTransactions),
+          filterByUnapprovedOnly(oppositeAccountFilteredTransactions),
           "date",
           DEFAULT_TRANSACTION_SORT_ORDER,
           undefined,
@@ -423,7 +477,7 @@ export function TaxDetails({
         ),
         openingBalanceForPeriod
       ),
-    [statusFilteredTransactions, filterByUnapprovedOnly, openingBalanceForPeriod, company]
+    [oppositeAccountFilteredTransactions, filterByUnapprovedOnly, openingBalanceForPeriod, company]
   );
 
   const searchFilteredTransactions = useMemo(() => {
@@ -716,6 +770,20 @@ export function TaxDetails({
             </p>
           </div>
           <div className="p-2 border-b flex-shrink-0">
+            {oppositeAccountFilterOptions.length > 0 && (
+              <div className="mb-2 min-h-7 min-w-0">
+                <Combobox
+                  options={oppositeAccountFilterOptions}
+                  value={oppositeAccountFilter}
+                  onChange={(value) => {
+                    setOppositeAccountFilter(value);
+                    setCurrentPage(1);
+                  }}
+                  placeholder="All accounts"
+                  triggerClassName={cn(LEDGER_HEADER_PILL_CN, chromePillBtn(false), "!h-7 min-h-7 text-xs")}
+                />
+              </div>
+            )}
             <div className="flex items-stretch gap-2">
               {!hideReportTaxPicker && allTaxes && allTaxes.length > 0 && (
                 <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
@@ -1100,6 +1168,20 @@ export function TaxDetails({
               </div>
             </div>
             <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            {oppositeAccountFilterOptions.length > 0 && (
+              <div className="w-[200px] shrink-0 min-h-7 overflow-visible py-px">
+                <Combobox
+                  options={oppositeAccountFilterOptions}
+                  value={oppositeAccountFilter}
+                  onChange={(value) => {
+                    setOppositeAccountFilter(value);
+                    setCurrentPage(1);
+                  }}
+                  placeholder="All accounts"
+                  triggerClassName={cn(LEDGER_HEADER_PILL_CN, chromePillBtn(false), "!h-7 min-h-7")}
+                />
+              </div>
+            )}
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker

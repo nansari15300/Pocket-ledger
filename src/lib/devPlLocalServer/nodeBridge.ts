@@ -19,6 +19,8 @@ export function isDevPlLocalServerEnabled(): boolean {
 async function runDevPlCli(action: string, payload: Record<string, unknown> = {}): Promise<unknown> {
   const scriptPath = path.join(process.cwd(), "scripts", "dev-pl-local-server-cli.mjs");
   const payloadJson = JSON.stringify(payload);
+  /** start/restart daemon process exit nahi karta — stdout JSON par resolve karo, close ka wait mat karo. */
+  const longRunningDaemon = action === "start" || action === "restart";
 
   const electronModules = path.join(process.cwd(), "electron", "node_modules");
   return new Promise((resolve, reject) => {
@@ -33,22 +35,47 @@ async function runDevPlCli(action: string, payload: Record<string, unknown> = {}
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finishOk = (value: unknown) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const finishErr = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    };
+    const tryResolveFromStdout = () => {
+      const trimmed = stdout.trim();
+      if (!trimmed) return;
+      try {
+        const parsed = JSON.parse(trimmed) as unknown;
+        if (longRunningDaemon) child.unref();
+        finishOk(parsed);
+      } catch {
+        /* incomplete JSON — wait for more chunks or process close */
+      }
+    };
+
     child.stdout.on("data", (chunk) => {
       stdout += String(chunk);
+      if (longRunningDaemon) tryResolveFromStdout();
     });
     child.stderr.on("data", (chunk) => {
       stderr += String(chunk);
     });
-    child.on("error", reject);
+    child.on("error", (err) => finishErr(err instanceof Error ? err : new Error(String(err))));
     child.on("close", (code) => {
+      if (settled) return;
       if (code !== 0) {
-        reject(new Error(stderr.trim() || `dev-pl-local-server-cli exited ${code}`));
+        finishErr(new Error(stderr.trim() || `dev-pl-local-server-cli exited ${code}`));
         return;
       }
       try {
-        resolve(stdout.trim() ? JSON.parse(stdout) : {});
-      } catch (e) {
-        reject(new Error(`Invalid CLI output: ${stdout.slice(0, 200)}`));
+        finishOk(stdout.trim() ? JSON.parse(stdout) : {});
+      } catch {
+        finishErr(new Error(`Invalid CLI output: ${stdout.slice(0, 200)}`));
       }
     });
   });

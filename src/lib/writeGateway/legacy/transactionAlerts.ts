@@ -1,9 +1,10 @@
 "use client";
 
 import { collection, addDoc, serverTimestamp, getDoc, doc, getDocs, query, where } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
+import { firestore, firestoreNetworkDisabledByApi } from "@/lib/firebase";
 import type { Company } from "@/hooks/useCompany";
 import { getEffectiveNotificationSettings } from "@/lib/localUserNotificationSettings";
+import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
 
 const ONE_LAKH = 100000;
 
@@ -23,6 +24,12 @@ export type TransactionAlertPayload = {
 };
 
 async function resolveUidFromUserRef(userRefId?: string, email?: string): Promise<string | null> {
+  if (preferLocalLedgerReads() || firestoreNetworkDisabledByApi) {
+    return userRefId || null;
+  }
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    return userRefId || null;
+  }
   if (userRefId) {
     const snap = await getDoc(doc(firestore, "users", userRefId));
     if (snap.exists()) {
@@ -94,6 +101,15 @@ export async function sendTransactionAlert(
   if (ownerUid) recipientUserIds.add(ownerUid);
 
   if (recipientUserIds.size === 0) return { success: true };
+
+  // Local/offline: Firebase alerts queue mat — save flow background me hang na ho.
+  if (
+    preferLocalLedgerReads(company) ||
+    firestoreNetworkDisabledByApi ||
+    (typeof navigator !== "undefined" && !navigator.onLine)
+  ) {
+    return { success: true };
+  }
 
   // Do not send "edited" alert when the editor is the company admin (owner).
   if (payload.kind === "edited" && payload.performedByUserId && ownerUid && payload.performedByUserId === ownerUid) {

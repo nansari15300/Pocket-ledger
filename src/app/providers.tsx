@@ -35,6 +35,20 @@ import { EmbeddedAttachmentPrefetchProvider } from "@/contexts/EmbeddedAttachmen
 import { CrossCompanyAttachmentAccessBridge } from "@/components/CrossCompanyAttachmentAccessBridge";
 import { ServerShareableCompaniesBridge } from "@/components/ServerShareableCompaniesBridge";
 import { PlServerAccessBootstrap } from "@/components/settings/PlServerAccessBootstrap";
+import { PlRemoteClientLandingBootstrap } from "@/components/settings/PlRemoteClientLandingBootstrap";
+import { PlServerClientMirrorManager } from "@/components/settings/PlServerClientMirrorManager";
+import { PlServerLiveSyncManager } from "@/components/settings/PlServerLiveSyncManager";
+
+/** Local-only app start: sql.js init pehle se — refresh par company turant SQLite se load. */
+function SqlitePrewarmBootstrap() {
+  useEffect(() => {
+    void import("@/lib/localSqlite").then((m) => m.getBrowserDb());
+  }, []);
+  return null;
+}
+import { PlServerGateLedgerBootstrap } from "@/components/settings/PlServerGateLedgerBootstrap";
+import { PlMirrorExportDevBridge } from "@/components/settings/PlMirrorExportDevBridge";
+import { PlServerGateRefreshBootstrap } from "@/components/settings/PlServerGateRefreshBootstrap";
 import { primeLocalFileRefMetaRuntimeCache } from "@/lib/localPendingFiles";
 import { isPerfDebugEnabled } from "@/lib/perfDebug";
 
@@ -80,9 +94,16 @@ export function Providers({ children }: { children: React.ReactNode }) {
             <EmbeddedOfflineFirestoreTransport />
             <GateProvider>
             <CompanyProvider>
+                <SqlitePrewarmBootstrap />
                 <CrossCompanyAttachmentAccessBridge />
                 <ServerShareableCompaniesBridge />
                 <PlServerAccessBootstrap />
+                <PlServerGateRefreshBootstrap />
+                <PlRemoteClientLandingBootstrap />
+                <PlServerClientMirrorManager />
+                <PlServerLiveSyncManager />
+                <PlServerGateLedgerBootstrap />
+                <PlMirrorExportDevBridge />
                 <EmbeddedLogoutProvider>
                 <EmbeddedAttachmentPrefetchProvider>
                 {/* APK/static pehli login: full warm chalte waqt background warm band — gate overlay set karti hai */}

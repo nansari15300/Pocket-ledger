@@ -21,7 +21,34 @@ function userDataPath() {
 
 function writeRuntime(running, port) {
   fs.mkdirSync(DEV_USER_DATA, { recursive: true });
-  fs.writeFileSync(RUNTIME_FILE, JSON.stringify({ running, port: port ?? null }), "utf8");
+  fs.writeFileSync(
+    RUNTIME_FILE,
+    JSON.stringify({ running, port: port ?? null, pid: running ? process.pid : null }),
+    "utf8"
+  );
+}
+
+function readRuntimeFile() {
+  try {
+    return JSON.parse(fs.readFileSync(RUNTIME_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+/** Previous CLI daemon (start/restart) — alag process me sharing server chalta hai. */
+async function killExistingServerProcess() {
+  const rt = readRuntimeFile();
+  const pid = Number(rt.pid);
+  if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) return;
+  try {
+    process.kill(pid);
+  } catch (e) {
+    if (!e || e.code !== "ESRCH") {
+      /* already gone */
+    }
+  }
+  await new Promise((resolve) => setTimeout(resolve, 400));
 }
 
 function ensureDeps() {
@@ -73,6 +100,7 @@ async function main() {
   let result;
   switch (action) {
     case "start": {
+      await killExistingServerProcess();
       localAppServer.saveConfig(ud, { userWantsRunning: true });
       const port = await localAppServer.startStaticServer(ud);
       writeRuntime(true, port);
@@ -80,6 +108,7 @@ async function main() {
       break;
     }
     case "stop": {
+      await killExistingServerProcess();
       localAppServer.saveConfig(ud, { userWantsRunning: false });
       await localAppServer.stopStaticServer();
       writeRuntime(false, null);
@@ -91,6 +120,7 @@ async function main() {
       if (partial && typeof partial === "object") {
         localAppServer.saveConfig(ud, partial);
       }
+      await killExistingServerProcess();
       await localAppServer.stopStaticServer();
       const cfg = localAppServer.loadConfig(ud);
       if (!localAppServer.shouldHostLocalServer(cfg)) {

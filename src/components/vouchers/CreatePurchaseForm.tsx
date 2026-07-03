@@ -129,6 +129,7 @@ import {
   buildVoucherLineItemComboboxOptions,
   comboboxValueFromLineItemId,
   lineItemIdFromComboboxValue,
+  normalizeVoucherLineItemForForm,
 } from "@/components/vouchers/voucherLineItemCombobox";
 
 
@@ -137,15 +138,18 @@ const fileSchema = z.object({
   preview: z.string(),
 });
 
+/** Optional line string — null from Firestore/SQLite → "" before zod string check. */
+const optionalLineString = () => z.preprocess((val) => (val == null ? "" : val), z.string().optional());
+
 const lineItemSchema = z.object({
   type: z.enum(["item", "service"]),
   // itemId optional: user can save with just Qty + Rate (free-form line)
-  itemId: z.string().optional(),
+  itemId: optionalLineString(),
   quantity: z.coerce.number().min(0, "Quantity must be positive."),
   rate: z.coerce.number().min(0, "Rate must be positive."),
-  unit: z.string().optional(),
+  unit: optionalLineString(),
   amount: z.coerce.number(),
-  taxAccountId: z.string().optional(),
+  taxAccountId: optionalLineString(),
   taxAmount: z.coerce.number().optional(),
   isTaxInclusive: z.boolean(),
   /** Purchase: checkbox beside rate — untick to lock rate to item price. */
@@ -263,10 +267,7 @@ function getInitialFormValues(voucher?: any): PurchaseFormValues {
   // Restore/cache dueDate may be plain Firestore JSON; parse it exactly like voucher date.
   const dueDate = parseFirestoreDateFieldToJsDate(voucher.dueDate ?? voucher.due_date) ?? undefined;
   const lineItemsNorm = Array.isArray(copiedVoucher.lineItems)
-    ? copiedVoucher.lineItems.map((li: any) => ({
-        ...li,
-        allowManualRate: li?.allowManualRate !== false,
-      }))
+    ? copiedVoucher.lineItems.map((li: any) => normalizeVoucherLineItemForForm(li))
     : copiedVoucher.lineItems;
   return {
     ...copiedVoucher,

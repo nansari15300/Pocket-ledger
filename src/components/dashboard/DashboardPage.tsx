@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useCompany } from "@/hooks/useCompany";
+import { sortRecentTransactionsDesc } from "@/lib/recentTransactionsSort";
 import { firestore } from "@/lib/firebase";
 import {
   doc,
@@ -1093,16 +1094,8 @@ export default function DashboardPage() {
 
   const recentTransactions = useMemo(() => {
     if (!allRecentTransactions) return [];
-    let sorted = [...allRecentTransactions].sort((a, b) => {
-        const dateA = safeToDate(a.date)?.getTime() || 0;
-        const dateB = safeToDate(b.date)?.getTime() || 0;
-        if (dateB !== dateA) return dateB - dateA;
-        const creationA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
-        const creationB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
-        return creationB - creationA;
-      });
+    let sorted = sortRecentTransactionsDesc(allRecentTransactions as Record<string, unknown>[]);
     if (recentUnapprovedOnly) {
-      // Approval pending = isApproved true nahin (same highlight logic as row styling).
       sorted = sorted.filter((tx) => (tx as any).isApproved !== true);
       return sorted;
     }

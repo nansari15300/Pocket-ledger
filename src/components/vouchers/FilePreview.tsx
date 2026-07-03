@@ -57,6 +57,11 @@ import { toast as sonnerToast } from "sonner";
 import { useCrossCompanyAttachmentAccess } from "@/hooks/useCrossCompanyAttachmentAccess";
 import { useCompany } from "@/hooks/useCompany";
 import {
+  companyRequiresLocalAttachmentUrlsOnly,
+  prefersLocalAttachmentDisplayFirst,
+  resolveStaticAttachmentDisplay,
+} from "@/lib/staticAttachmentDisplayUrl";
+import {
   collectAccessibleCompanyIdsForAttachmentPolicy,
   isCrossCompanyAttachmentVisibleToUser,
 } from "@/lib/crossCompanyAttachmentAccess";
@@ -73,6 +78,11 @@ function isBlobOrDataDisplayUrl(u: string | null | undefined): boolean {
   return false;
 }
 
+/** `local:` string preview URL nahi — blob / server fetch ke baad hi resolved. */
+function isUnresolvedAttachmentPreviewUrl(url: string | null | undefined): boolean {
+  return !url || isLocalFileRef(String(url || "").trim());
+}
+
 function logFilePreviewForensic(tag: string, payload: Record<string, unknown>) {
   if (!FILE_PREVIEW_FORENSIC) return;
   console.warn("[FORENSIC_FILE_PREVIEW]", { tag, ...payload });
@@ -81,11 +91,12 @@ function logFilePreviewForensic(tag: string, payload: Record<string, unknown>) {
 /** Web preview helper: `local:uuid` -> IndexedDB/Pending blob -> browser `blob:` URL. */
 async function resolveLocalRefToBlobUrlForPreview(
   localRef: string,
-  galleryUrls?: readonly string[]
+  galleryUrls?: readonly string[],
+  companyId?: string
 ): Promise<{ blob: Blob | null; blobUrl: string | null }> {
   const b =
-    (await getBlobFromAttachmentRefPreferLocalFirst(localRef, { galleryUrls })) ||
-    (await getBlobFromLocalFileRef(localRef));
+    (await getBlobFromAttachmentRefPreferLocalFirst(localRef, { galleryUrls, companyId })) ||
+    (await getBlobFromLocalFileRef(localRef, { companyId }));
   if (!b || b.size <= 0) return { blob: null, blobUrl: null };
   // Browser `<img>/<a>` ke liye renderable URL banao.
   return { blob: b, blobUrl: URL.createObjectURL(b) };
@@ -342,7 +353,7 @@ export function FilePreview({
   attachmentCompanyId,
 }: FilePreviewProps) {
   const voucherAttachmentFb = useVoucherAttachmentFallback();
-  const { companyId: shellCompanyId } = useCompany();
+  const { companyId: shellCompanyId, company } = useCompany();
   const { activeCompanyId, accessibleCompanyIds } = useCrossCompanyAttachmentAccess();
   // UI guard: koi stale PL marker aa jaye to preview/open path me underlying src (`local:`/https) use karo.
   const normalizedPreviewFile = React.useMemo(
@@ -351,6 +362,14 @@ export function FilePreview({
   );
   // Edit forms me fallback company id dene se Firebase object-path resolve stable rehta hai.
   const pathCompanyId = attachmentCompanyId ?? voucherAttachmentFb?.companyId ?? shellCompanyId ?? undefined;
+  const localLedgerOnly = React.useMemo(
+    () => companyRequiresLocalAttachmentUrlsOnly(company),
+    [company]
+  );
+  const preferLocalAttachmentFirst = React.useMemo(
+    () => prefersLocalAttachmentDisplayFirst(company),
+    [company]
+  );
   const fileRef = typeof normalizedPreviewFile === "string" ? normalizedPreviewFile.trim() : "";
   const expandedAccessibleCompanyIds = React.useMemo(() => {
     const peerId = voucherAttachmentFb?.interCompanyPeer?.peerCompanyId;
@@ -433,7 +452,9 @@ export function FilePreview({
 
   /** Native/local file ke liye render-time sync fast-path (no Promise wait before `<img src>`). */
   const immediateLocalInfo = React.useMemo(() => {
-    if (!(typeof file === "string" && isLocalFileRef(file) && isCapacitorNativeApp())) return null;
+    if (!(typeof file === "string" && isLocalFileRef(file) && usesEmbeddedNativeAttachmentStorage())) {
+      return null;
+    }
     const meta = getLocalFileRefMetaSync(file);
     if (!meta?.displayUrl) return null;
     let type: "image" | "pdf" | "other" = "other";
@@ -696,45 +717,92 @@ export function FilePreview({
     const processFile = async () => {
       // Decode-on-read: effect ke andar bhi normalized file value use karo.
       const file = normalizedPreviewFile;
-      setIsLoading(true);
       let resolvedUrl: string | null = null;
       let resolvedType: "image" | "pdf" | "other" = "other";
       let resolvedName = "file";
       let resolvedSize: number | null = fileSize ?? null;
       let localFormatHint: string | null = null;
 
+      /** EXE/APK: disk/SQLite cache pehle — spinner + HTTPS fetch avoid (online company bhi). */
+      if (typeof file === "string" && preferLocalAttachmentFirst) {
+        try {
+          const staticResolved = await resolveStaticAttachmentDisplay(file, {
+            localLedgerOnly,
+            signal: controller.signal,
+            companyId: pathCompanyId,
+          });
+          if (staticResolved.displayUrl || (staticResolved.blob && staticResolved.blob.size > 0)) {
+            if (staticResolved.displayUrl) {
+              resolvedUrl = staticResolved.displayUrl;
+            } else if (staticResolved.blob) {
+              objectUrl = URL.createObjectURL(staticResolved.blob);
+              resolvedUrl = objectUrl;
+            }
+            const nativeCt = String(staticResolved.contentType || "").toLowerCase();
+            try {
+              resolvedName = decodeURIComponent(file.split("/").pop()?.split("?")[0] || "file");
+            } catch {
+              resolvedName = file.split("/").pop()?.split("?")[0] || "file";
+            }
+            const lbl = getAttachmentFormatLabel(file);
+            const cleanUrl = file.split("?")[0].toLowerCase();
+            if (nativeCt.includes("pdf")) resolvedType = "pdf";
+            else if (nativeCt.startsWith("image/")) resolvedType = "image";
+            else if (lbl === "PDF" || cleanUrl.endsWith(".pdf") || cleanUrl.includes(".pdf")) {
+              resolvedType = "pdf";
+            } else if (
+              ["JPG", "JPEG", "PNG", "GIF", "WEBP", "BMP", "SVG", "HEIC", "HEIF"].includes(lbl) ||
+              cleanUrl.match(/\.(jpe?g|jfif|gif|png|webp|bmp|svg|heic|heif)(\?|$)/i)
+            ) {
+              resolvedType = "image";
+            }
+            let formatLabel = getAttachmentFormatLabel(file);
+            if (resolvedType === "pdf") formatLabel = "PDF";
+            else if (resolvedType === "image" && (formatLabel === "FILE" || formatLabel === "OTHER")) {
+              formatLabel = "IMAGE";
+            }
+            setFileInfo({
+              url: resolvedUrl,
+              type: resolvedType,
+              name: resolvedName,
+              size: resolvedSize,
+              formatLabel,
+            });
+            setIsLoading(false);
+            if (resolvedType === "pdf" && resolvedUrl) {
+              pdfThumbDebounceTimer = setTimeout(() => {
+                if (!controller.signal.aborted) {
+                  generatePdfThumbnail(file, undefined, resolvedStoragePath, controller.signal);
+                }
+              }, 120);
+            }
+            return;
+          }
+        } catch {
+          /* cache miss — legacy branches */
+        }
+      }
+
+      setIsLoading(true);
+
       if (typeof file === "string") {
         if (/^https?:\/\//i.test(file) && !file.startsWith(LOCAL_FILE_PREFIX)) {
-          let nativeCachedRef: { displayUrl: string; contentType: string | null } | null = null;
-          if (usesEmbeddedNativeAttachmentStorage()) {
-            try {
-              // APK/EXE local-first: SQLite+disk cache row → display URL (HTTPS mat).
-              nativeCachedRef = await getOfflineCachedAttachmentNativeRef(file);
-            } catch {
-              nativeCachedRef = null;
-            }
-          }
-          // Local-first: signed URL + stable object-path + `local:` sab cache keys try karo.
-          const warmEarly = await tryOfflineCachedAttachmentBlobMultiKey(file);
-          let probe: Blob | null = warmEarly && warmEarly.size > 0 ? warmEarly : null;
-          // APK/EXE: `navigator.onLine` false hone par bhi Storage SDK / warm cache chal sakta hai.
-          const navOn =
-            typeof navigator !== "undefined" &&
-            (navigator.onLine || isCapacitorNativeApp() || isElectronDesktopApp());
-          if (!probe && navOn) {
-            probe = await getRemoteAttachmentBlobPreferOfflineCache(file, controller.signal);
-          }
-          if (probe && probe.size > 0) {
-            objectUrl = URL.createObjectURL(probe);
+          const staticResolved = await resolveStaticAttachmentDisplay(file, {
+            localLedgerOnly,
+            signal: controller.signal,
+            companyId: pathCompanyId,
+          });
+          let nativeCt = String(staticResolved.contentType || "").toLowerCase();
+          if (staticResolved.displayUrl) {
+            resolvedUrl = staticResolved.displayUrl;
+          } else if (staticResolved.blob && staticResolved.blob.size > 0) {
+            objectUrl = URL.createObjectURL(staticResolved.blob);
             resolvedUrl = objectUrl;
-          } else if (nativeCachedRef?.displayUrl) {
-            resolvedUrl = nativeCachedRef.displayUrl;
           } else if (
-            !usesEmbeddedNativeAttachmentStorage() &&
             typeof navigator !== "undefined" &&
-            navigator.onLine
+            navigator.onLine &&
+            (!localLedgerOnly || usesEmbeddedNativeAttachmentStorage())
           ) {
-            // Tick/hover jaisa: web online par cache miss → signed HTTPS thumbnail (edit dialog generic FILE fix).
             resolvedUrl = file;
           } else {
             resolvedUrl = null;
@@ -744,7 +812,6 @@ export function FilePreview({
           } catch {
             resolvedName = file.split("/").pop()?.split("?")[0] || "file";
           }
-          const nativeCt = String(nativeCachedRef?.contentType || "").toLowerCase();
           const lbl = getAttachmentFormatLabel(file);
           const cleanUrl = file.split("?")[0].toLowerCase();
           if (nativeCt.includes("pdf")) {
@@ -766,18 +833,6 @@ export function FilePreview({
           else if (resolvedType === "image" && (formatLabel === "FILE" || formatLabel === "OTHER"))
             formatLabel = "IMAGE";
 
-          // Sirf web browser: EXE/APK embedded disk cache miss par HTTPS mat — spinner/blank avoid.
-          const electronServeRemoteFirst =
-            !usesEmbeddedNativeAttachmentStorage() &&
-            !resolvedUrl &&
-            typeof navigator !== "undefined" &&
-            navigator.onLine &&
-            isElectronDesktopApp();
-          if (electronServeRemoteFirst && (resolvedType === "image" || resolvedType === "pdf")) {
-            resolvedUrl = file;
-          }
-
-          // Blob/native miss + label image (non-electron): `<Image src="">` broken — generic file icon
           if (!resolvedUrl && resolvedType === "image") {
             resolvedType = "other";
             logAttachmentPreviewDowngradeToGenericFile(
@@ -785,11 +840,7 @@ export function FilePreview({
               file,
               resolvedUrl,
               resolvedType,
-              {
-                warmEarlyBytes: warmEarly?.size ?? 0,
-                probeAfterHydrateBytes: probe?.size ?? 0,
-                navOn,
-              }
+              { localLedgerOnly }
             );
           }
 
@@ -797,10 +848,7 @@ export function FilePreview({
             originalFile: file,
             resolvedUrl,
             resolvedType,
-            offlineCacheWarmEarlyBytes: warmEarly?.size ?? 0,
-            probeBytes: probe?.size ?? 0,
-            hadNativeCachedRef: Boolean(nativeCachedRef?.displayUrl),
-            navOn,
+            localLedgerOnly,
           });
 
           setFileInfo({
@@ -877,7 +925,7 @@ export function FilePreview({
               typeof file === "string" &&
               !/^https?:\/\//i.test(file)
           );
-        resolvedUrl = isStorageObjectPath ? null : file;
+        resolvedUrl = isStorageObjectPath || isLocalFileRef(file) ? null : file;
         if (isStorageObjectPath) {
           try {
             // Broken relative path flicker avoid: raw `voucher-files/...` ko pehle offline cache/native ref se resolve karo.
@@ -954,7 +1002,11 @@ export function FilePreview({
               localFormatHint = getAttachmentFormatLabelFromHints(localMeta.fileName, localMeta.contentType);
             } else {
               // Offline cache + pending IndexedDB — `local:` ref ko browser preview ke liye blob URL me resolve karo.
-              const localResolved = await resolveLocalRefToBlobUrlForPreview(file, attachmentClientFileUrls);
+              const localResolved = await resolveLocalRefToBlobUrlForPreview(
+                file,
+                attachmentClientFileUrls,
+                pathCompanyId ?? voucherAttachmentFb?.companyId
+              );
               b = localResolved.blob;
               const payload = b ? null : await getPendingPayloadForLocalRef(file);
               if (!b && payload?.blob) b = payload.blob;
@@ -970,17 +1022,38 @@ export function FilePreview({
               }
               if (b && b.size > 0) {
                 const kind = await sniffBlobKindForPreview(b);
+                objectUrl = localResolved.blobUrl || URL.createObjectURL(b);
+                resolvedUrl = objectUrl;
                 if (kind === "pdf") {
                   resolvedType = "pdf";
                 } else if (kind === "image") {
                   resolvedType = "image";
-                  objectUrl = localResolved.blobUrl || URL.createObjectURL(b);
-                  resolvedUrl = objectUrl;
                 }
               }
             }
           } catch {
             /* pending missing */
+          }
+          if (
+            isUnresolvedAttachmentPreviewUrl(resolvedUrl) &&
+            typeof file === "string" &&
+            file.startsWith(LOCAL_FILE_PREFIX) &&
+            (pathCompanyId || voucherAttachmentFb?.companyId)
+          ) {
+            try {
+              const { fetchPlServerAttachmentBlob } = await import("@/lib/plServerAttachmentFetch");
+              const cid = String(pathCompanyId || voucherAttachmentFb?.companyId || "").trim();
+              const remoteBlob = await fetchPlServerAttachmentBlob(cid, file, controller.signal);
+              if (remoteBlob && remoteBlob.size > 0 && !controller.signal.aborted) {
+                objectUrl = URL.createObjectURL(remoteBlob);
+                resolvedUrl = objectUrl;
+                const kind = await sniffBlobKindForPreview(remoteBlob);
+                if (kind === "pdf") resolvedType = "pdf";
+                else if (kind === "image") resolvedType = "image";
+              }
+            } catch {
+              /* pl server attachment early fetch */
+            }
           }
           if (typeof file === "string" && file.startsWith(LOCAL_FILE_PREFIX)) {
             logFilePreviewForensic("local_ref_branch_result", {
@@ -1027,7 +1100,7 @@ export function FilePreview({
             const cleanUrl = file.split("?")[0].toLowerCase();
             if (cleanUrl.endsWith(".pdf")) {
               resolvedType = "pdf";
-            } else if (cleanUrl.match(/\.(jpeg|jpg|gif|png|webp|bmp|svg)(\?|$)/)) {
+            } else if (cleanUrl.match(/\.(jpe?g|jfif|gif|png|webp|bmp|svg|heic|heif)(\?|$)/i)) {
               resolvedType = "image";
             }
           }
@@ -1117,7 +1190,7 @@ export function FilePreview({
         }
         // Save ke turant baad: IndexedDB blob `syncPendingFiles` hata chuka ho, form abhi `local:` string dikhata ho — Firestore HTTPS se thumb restore (openAttachmentInApp jaisa).
         if (
-          !resolvedUrl &&
+          isUnresolvedAttachmentPreviewUrl(resolvedUrl) &&
           typeof file === "string" &&
           file.startsWith(LOCAL_FILE_PREFIX) &&
           voucherAttachmentFb?.companyId &&
@@ -1168,7 +1241,7 @@ export function FilePreview({
                   resolvedType = "pdf";
                 } else if (
                   ["JPG", "JPEG", "PNG", "GIF", "WEBP", "BMP", "SVG", "HEIC", "HEIF"].includes(lbl) ||
-                  cleanUrl.match(/\.(jpeg|jpg|gif|png|webp|bmp|svg)(\?|$)/)
+                  cleanUrl.match(/\.(jpe?g|jfif|gif|png|webp|bmp|svg|heic|heif)(\?|$)/i)
                 ) {
                   resolvedType = "image";
                 } else {
@@ -1185,8 +1258,30 @@ export function FilePreview({
             /* stale-resolve best-effort */
           }
         }
+        if (
+          isUnresolvedAttachmentPreviewUrl(resolvedUrl) &&
+          typeof file === "string" &&
+          file.startsWith(LOCAL_FILE_PREFIX) &&
+          (pathCompanyId || voucherAttachmentFb?.companyId)
+        ) {
+          try {
+            const { fetchPlServerAttachmentBlob } = await import("@/lib/plServerAttachmentFetch");
+            const cid = String(pathCompanyId || voucherAttachmentFb?.companyId || "").trim();
+            const remoteBlob = await fetchPlServerAttachmentBlob(cid, file, controller.signal);
+            if (remoteBlob && remoteBlob.size > 0 && !controller.signal.aborted) {
+              objectUrl = URL.createObjectURL(remoteBlob);
+              resolvedUrl = objectUrl;
+              const kind = await sniffBlobKindForPreview(remoteBlob);
+              if (kind === "pdf") resolvedType = "pdf";
+              else if (kind === "image") resolvedType = "image";
+            }
+          } catch {
+            /* pl server attachment best-effort */
+          }
+        }
         // Render safety: URL source null ho to image/pdf force na karo; warna voucher edit me broken thumbnail flicker hota hai.
-        if (!resolvedUrl) {
+        if (isUnresolvedAttachmentPreviewUrl(resolvedUrl)) {
+          resolvedUrl = null;
           resolvedType = "other";
           logAttachmentPreviewDowngradeToGenericFile(
             "final_guard_resolvedUrl_null_force_type_other",
@@ -1315,6 +1410,8 @@ export function FilePreview({
     attachmentGalleryFingerprint,
     pathCompanyId,
     attachmentCompanyId,
+    localLedgerOnly,
+    preferLocalAttachmentFirst,
   ]);
 
   /** Thumbnail click + hover portal par double-click = browser / in-app open (same rules) */
@@ -1362,8 +1459,32 @@ export function FilePreview({
   });
 
   const openAttachmentFromFileInfo = useCallback(() => {
-    if (!viewFileInfo.url) return;
-    const kind = viewFileInfo.type === "pdf" ? "pdf" : viewFileInfo.type === "image" ? "image" : "other";
+    const rawRef =
+      typeof normalizedPreviewFile === "string"
+        ? normalizeAttachmentUrlForDevicePreview(normalizedPreviewFile)
+        : "";
+    const underlyingLocalRef =
+      typeof normalizedPreviewFile === "string" && isLocalFileRef(normalizedPreviewFile)
+        ? normalizedPreviewFile
+        : "";
+    // Click-open: thumbnail `blob:` mat — canonical `local:` / https ref (revoke / CORS false alarm avoid).
+    const openSrc =
+      underlyingLocalRef ||
+      (rawRef && !rawRef.startsWith("blob:") ? rawRef : "") ||
+      (viewFileInfo.url && !viewFileInfo.url.startsWith("blob:") ? viewFileInfo.url : "") ||
+      rawRef ||
+      viewFileInfo.url ||
+      "";
+    if (!openSrc) return;
+    const kind =
+      viewFileInfo.formatLabel === "PDF" || viewFileInfo.type === "pdf"
+        ? "pdf"
+        : viewFileInfo.type === "image" ||
+            ["JPG", "JPEG", "PNG", "GIF", "WEBP", "BMP", "SVG", "HEIC", "HEIF"].includes(
+              viewFileInfo.formatLabel || ""
+            )
+          ? "image"
+          : "other";
     const g =
       attachmentGallery && attachmentGallery.urls.length > 1
         ? { urls: attachmentGallery.urls, startIndex: attachmentGallery.startIndex }
@@ -1371,26 +1492,37 @@ export function FilePreview({
     const clientList =
       attachmentClientFileUrls ??
       (attachmentGallery?.urls && attachmentGallery.urls.length > 0 ? [...attachmentGallery.urls] : undefined);
+    const cid = String(pathCompanyId || voucherAttachmentFb?.companyId || "").trim();
     const serverFallback =
-      voucherAttachmentFb &&
-      voucherAttachmentFb.companyId &&
-      voucherAttachmentFb.voucherId &&
-      (isLocalFileRef(viewFileInfo.url) || voucherAttachmentFb.interCompanyPeer)
+      cid && (underlyingLocalRef || isLocalFileRef(openSrc) || voucherAttachmentFb?.interCompanyPeer)
         ? {
-            companyId: voucherAttachmentFb.companyId,
-            voucherId: voucherAttachmentFb.voucherId,
+            companyId: cid,
+            voucherId: voucherAttachmentFb?.voucherId ?? "",
             clientFileUrls: clientList,
-            interCompanyPeer: voucherAttachmentFb.interCompanyPeer,
+            interCompanyPeer: voucherAttachmentFb?.interCompanyPeer,
           }
         : undefined;
-    void openAttachmentInApp(viewFileInfo.url, { title: viewFileInfo.name, kind, gallery: g, serverFallback });
+    void openAttachmentInApp(openSrc, {
+      title: viewFileInfo.name,
+      kind,
+      gallery: g,
+      serverFallback,
+      localLedgerOnly,
+    });
   }, [
     viewFileInfo.url,
     viewFileInfo.type,
     viewFileInfo.name,
+    viewFileInfo.formatLabel,
+    normalizedPreviewFile,
     attachmentGalleryFingerprint,
     attachmentClientUrlsFingerprint,
     voucherAttachmentFbFingerprint,
+    pathCompanyId,
+    localLedgerOnly,
+    voucherAttachmentFb?.interCompanyPeer,
+    voucherAttachmentFb?.companyId,
+    voucherAttachmentFb?.voucherId,
   ]);
 
   const handlePreviewClick = (e: React.MouseEvent) => {
@@ -1622,7 +1754,13 @@ export function FilePreview({
           type="button"
           size="sm"
           variant="secondary"
-          onClick={() => void openAttachmentInApp(viewFileInfo.url!, { title: viewFileInfo.name, kind: "pdf" })}
+          onClick={() =>
+            void openAttachmentInApp(viewFileInfo.url!, {
+              title: viewFileInfo.name,
+              kind: "pdf",
+              localLedgerOnly,
+            })
+          }
         >
           Open PDF
         </Button>

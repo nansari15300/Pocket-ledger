@@ -1,5 +1,6 @@
 /**
- * Static build for Capacitor APK.
+ * Static build for Capacitor APK / Electron EXE (`out/`).
+ * Flags: `--fast` → skip plans network fetch (incremental rebuild).
  * Temporarily removes app/api so Next.js static export succeeds
  * (API routes are not supported with output: 'export').
  */
@@ -8,6 +9,9 @@ const path = require("path");
 const { execSync } = require("child_process");
 
 const root = path.join(__dirname, "..");
+if (process.argv.includes("--fast")) {
+  process.env.STATIC_BUILD_SKIP_PLANS_FETCH = "1";
+}
 const sqlWasmSrc = path.join(root, "node_modules", "sql.js", "dist", "sql-wasm.wasm");
 const sqlWasmDest = path.join(root, "public", "sql-wasm.wasm");
 const apiPath = path.join(root, "src", "app", "api");
@@ -171,26 +175,46 @@ try {
     }
   }
 
-  // Next build temp/manifest files stale hone par ENOENT/ENOTEMPTY race aati hai; static build se pehle poora `.next` reset karo.
-  if (fs.existsSync(nextBuildDir)) {
+  // Default: `.next` incremental cache rakho — sirf lock hatao (full wipe = STATIC_BUILD_FORCE_CLEAN=1).
+  const forceCleanNext = process.env.STATIC_BUILD_FORCE_CLEAN === "1";
+  if (forceCleanNext && fs.existsSync(nextBuildDir)) {
     try {
       rmPathRobust(nextBuildDir);
-      console.log("[build-static] Cleaned .next to avoid stale manifest/cache races on Windows");
+      console.log("[build-static] Force-cleaned .next (STATIC_BUILD_FORCE_CLEAN=1)");
     } catch (e) {
       console.error("[build-static] Cannot clean .next — close dev servers/preview tools and retry.");
       throw e;
     }
+  } else if (process.env.STATIC_BUILD_CLEAR_CACHE === "1" && fs.existsSync(nextBuildDir)) {
+    for (const sub of ["cache", "server"]) {
+      const subPath = path.join(nextBuildDir, sub);
+      if (fs.existsSync(subPath)) {
+        try {
+          rmPathRobust(subPath);
+          console.log(`[build-static] Cleared .next/${sub} (STATIC_BUILD_CLEAR_CACHE=1)`);
+        } catch (e) {
+          console.warn(`[build-static] Could not clear .next/${sub}:`, e?.message || e);
+        }
+      }
+    }
+  } else {
+    console.log("[build-static] Keeping .next incremental cache (faster rebuild)");
   }
 
-  try {
-    // Production entitlements mirror: pocket-ledger.com (ya env) se plans JSON — static APK/Electron offline billing
-    execSync("node scripts/fetch-plans-seed-static.cjs", {
-      cwd: root,
-      stdio: "inherit",
-      env: { ...process.env },
-    });
-  } catch (e) {
-    console.warn("[build-static] plans-seed step non-fatal:", e && e.message ? e.message : e);
+  const skipPlansFetch = process.env.STATIC_BUILD_SKIP_PLANS_FETCH === "1";
+  if (!skipPlansFetch) {
+    try {
+      // Production entitlements mirror: pocket-ledger.com (ya env) se plans JSON — static APK/Electron offline billing
+      execSync("node scripts/fetch-plans-seed-static.cjs", {
+        cwd: root,
+        stdio: "inherit",
+        env: { ...process.env },
+      });
+    } catch (e) {
+      console.warn("[build-static] plans-seed step non-fatal:", e && e.message ? e.message : e);
+    }
+  } else {
+    console.log("[build-static] Skipped plans-seed fetch (STATIC_BUILD_SKIP_PLANS_FETCH=1)");
   }
 
   // Turbopack (Next 16 default); pdf alias `next.config` `turbopack.resolveAlias` me — purana `--webpack` hata

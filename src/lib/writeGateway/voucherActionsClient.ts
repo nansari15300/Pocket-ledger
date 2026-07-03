@@ -11,7 +11,7 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 import { addDoc, setDoc, updateDoc, runTransaction } from "@/lib/writeGateway/firestoreMutationsInternal";
-import { auth, firestore, storage } from "@/lib/firebase";
+import { auth, firestore, storage, firestoreNetworkDisabledByApi } from "@/lib/firebase";
 import { ref as storageRef, deleteObject } from "firebase/storage";
 import { moveFilesToVoucherDateClient } from "@/lib/storageClient";
 import { getCompanyDocFromBrowserDb, mirrorVoucherDocToBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
@@ -69,6 +69,7 @@ import {
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { assertCompanyAllowsLedgerMutations } from "@/lib/security/offlinePlanWriteGate";
+import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { hydrateVoucherLocalAttachmentsForServer } from "@/lib/hydrateVoucherLocalAttachmentsForServer";
 import {
   recordContainsLocalPendingVoucherFileRef,
@@ -81,6 +82,7 @@ import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
+import { maybeQueuePlServerMirrorAfterDocWrite } from "@/lib/plServerClientMirrorPush";
 
 /** Edit save: transient `blob:` preview URLs ya khali `fileUrls` se `local:` / Drive refs mat hatao. */
 function persistableVoucherAttachmentUrls(raw: unknown): string[] {
@@ -210,7 +212,16 @@ async function hydrateLocalAttachmentsInPayloadIfOnline(
   payload: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   if (typeof navigator !== "undefined" && !navigator.onLine) return payload;
+  if (firestoreNetworkDisabledByApi) return payload;
   if (!recordContainsLocalPendingVoucherFileRef(payload)) return payload;
+  try {
+    const reg = await getLocalCompanyById(companyId);
+    if (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) {
+      if (!(await canSyncCompanyToServer(companyId))) return payload;
+    }
+  } catch {
+    /* registry miss — niche hydrate try */
+  }
   try {
     const fsCompanyId = await resolveAuthoritativeFirestoreCompanyId(companyId);
     const hydrated = await hydrateVoucherLocalAttachmentsForServer(fsCompanyId, payload);
@@ -651,6 +662,7 @@ export async function patchVoucherFields(
     }
 
     await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
+    void maybeQueuePlServerMirrorAfterDocWrite(companyId, "vouchers", voucherId, payload);
     return;
   }
   try {
@@ -1007,6 +1019,7 @@ async function saveVoucherOfflineLocalCreate(
   await upsertCompanyDocInBrowserDb(companyId, "vouchers", newId, payload);
   await enqueueVoucherOutbox(companyId, "create", newId, payload);
   dispatchSavedVoucherAttachmentUrls(companyId, newId, payload);
+  void maybeQueuePlServerMirrorAfterDocWrite(companyId, "vouchers", newId, payload);
   return { id: newId };
 }
 
@@ -1261,11 +1274,56 @@ export async function saveVoucher(
         }
       )
     ) as Record<string, unknown>;
+    const wasApproved = (existingLocal as Record<string, unknown> | null)?.isApproved === true;
+    if (approveAfterSave) {
+      const approverName = approveAfterSave.approvedByName ?? approveAfterSave.approvedByUserId;
+      mergedLocal.isApproved = true;
+      mergedLocal.approvedByUserId = approveAfterSave.approvedByUserId;
+      mergedLocal.approvedByUserName = approverName;
+      mergedLocal.approvedAt = nowTs;
+      try {
+        const { enabled: historyEnabled, limit: historyLimit } =
+          isLocalOnlyMode() || apkEmbeddedSqliteFirstWritesPreferred()
+            ? { enabled: true, limit: 10 }
+            : await getEffectiveHistorySettings(companyId);
+        if (historyEnabled) {
+          const existingHistory = Array.isArray(mergedLocal.history)
+            ? [...(mergedLocal.history as unknown[])]
+            : [];
+          mergedLocal.history = [
+            {
+              changedAt: new Date(),
+              changedBy: userId,
+              changes: {
+                isApproved: { from: wasApproved, to: true },
+                approvedByUserId: {
+                  from: (existingLocal as Record<string, unknown> | null)?.approvedByUserId ?? "N/A",
+                  to: approveAfterSave.approvedByUserId,
+                },
+                approvedByUserName: {
+                  from: (existingLocal as Record<string, unknown> | null)?.approvedByUserName ?? "N/A",
+                  to: approverName,
+                },
+              },
+            },
+            ...existingHistory,
+          ].slice(0, historyLimit);
+        }
+      } catch {
+        /* history optional on local save */
+      }
+    } else if (wasApproved) {
+      mergedLocal.isApproved = false;
+      mergedLocal.approvedByUserId = null;
+      mergedLocal.approvedByUserName = null;
+      mergedLocal.approvedAt = null;
+    }
     mergedLocal = { ...(await hydrateLocalAttachmentsInPayloadIfOnline(writeCompanyIdLocal, mergedLocal)), id: voucherId! };
     coerceVoucherDocumentDate(mergedLocal);
     await upsertCompanyDocInBrowserDb(writeCompanyIdLocal, "vouchers", voucherId!, mergedLocal);
     await enqueueVoucherOutbox(writeCompanyIdLocal, "update", voucherId!, mergedLocal);
     dispatchSavedVoucherAttachmentUrls(writeCompanyIdLocal, voucherId!, mergedLocal);
+    void maybeQueuePlServerMirrorAfterDocWrite(writeCompanyIdLocal, "vouchers", voucherId!, mergedLocal);
     return { id: voucherId! };
   }
 

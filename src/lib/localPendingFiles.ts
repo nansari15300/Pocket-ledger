@@ -26,6 +26,7 @@ import {
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { getLocalCompanyById, listLocalCompanies } from "@/lib/localCompanyStore";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
+import { isPureLocalLedgerCompany } from "@/lib/companyStorageKind";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
@@ -276,11 +277,19 @@ function companyIdFromDocPath(docPath: string): string | null {
 }
 
 /** Pending upload route: docPath fallback fail ho to bhi storage prefix se company detect karke Drive path force karo. */
-function resolvePendingPayloadCompanyId(item: {
+export function resolvePendingPayloadCompanyId(item: {
   docPath?: string;
   storagePathPrefix?: string;
 }): string | null {
   return companyIdFromDocPath(String(item.docPath || "")) ?? companyIdFromStoragePrefix(item.storagePathPrefix);
+}
+
+async function isLocalOnlyPendingAttachmentCompany(companyId: string): Promise<boolean> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return false;
+  const row = await getLocalCompanyById(cid, { includeDeleted: true });
+  if (!row) return false;
+  return isPureLocalLedgerCompany(row as Parameters<typeof isPureLocalLedgerCompany>[0]);
 }
 
 /** Cloud sync removed — pending attachments always use Firebase Storage / native paths. */
@@ -339,6 +348,8 @@ export type PendingFilePayload = {
   storagePathPrefix: string;
   fileName?: string;
   createdAt?: number;
+  /** Backup restore: SQLite index missing ho to fail — silent skip mat karo. */
+  requireSqliteIndex?: boolean;
 };
 
 type PendingFileMeta = {
@@ -669,7 +680,15 @@ export async function uploadPendingLocalFileRef(
   return url;
 }
 
-export async function putPendingFile(payload: PendingFilePayload): Promise<void> {
+export type PutPendingFileOptions = {
+  /** Server receive path — remote `POST /__pl_attachment` must not re-enqueue upload. */
+  skipPlServerAttachmentUploadEnqueue?: boolean;
+};
+
+export async function putPendingFile(
+  payload: PendingFilePayload,
+  options?: PutPendingFileOptions
+): Promise<void> {
   const createdAt = payload.createdAt ?? Date.now();
   if (usesEmbeddedNativeAttachmentStorage()) {
     // APK/EXE: bytes disk par; SQLite me path/meta row.
@@ -685,16 +704,19 @@ export async function putPendingFile(payload: PendingFilePayload): Promise<void>
       fileName: payload.fileName,
       createdAt,
     };
-    await upsertAttachmentFileRef({
-      scope: "pending_file",
-      id: payload.id,
-      filePath: path,
-      contentType: payload.contentType || payload.blob.type || "application/octet-stream",
-      size: payload.blob.size || 0,
-      metaJson: JSON.stringify(meta),
-      updatedAt: createdAt,
-      sha256Hex,
-    });
+    await upsertAttachmentFileRef(
+      {
+        scope: "pending_file",
+        id: payload.id,
+        filePath: path,
+        contentType: payload.contentType || payload.blob.type || "application/octet-stream",
+        size: payload.blob.size || 0,
+        metaJson: JSON.stringify(meta),
+        updatedAt: createdAt,
+        sha256Hex,
+      },
+      { required: payload.requireSqliteIndex === true }
+    );
     const fileUri = await getAttachmentFileUriFromDataDir(path);
     let displayUrl: string | undefined;
     if (fileUri && isCapacitorNativeApp()) {
@@ -715,6 +737,10 @@ export async function putPendingFile(payload: PendingFilePayload): Promise<void>
       field: payload.field,
       storagePathPrefix: payload.storagePathPrefix,
     });
+    if (!options?.skipPlServerAttachmentUploadEnqueue) {
+      const { enqueuePlServerAttachmentUpload } = await import("@/lib/plServerAttachmentUploadQueue");
+      enqueuePlServerAttachmentUpload(payload);
+    }
     return;
   }
   const db = await openDB();
@@ -736,6 +762,11 @@ export async function putPendingFile(payload: PendingFilePayload): Promise<void>
         field: payload.field,
         storagePathPrefix: payload.storagePathPrefix,
       });
+      if (!options?.skipPlServerAttachmentUploadEnqueue) {
+        void import("@/lib/plServerAttachmentUploadQueue").then(({ enqueuePlServerAttachmentUpload }) => {
+          enqueuePlServerAttachmentUpload(payload);
+        });
+      }
       resolve();
     };
     tx.onerror = () => {
@@ -747,6 +778,41 @@ export async function putPendingFile(payload: PendingFilePayload): Promise<void>
       reject(tx.error);
     };
   });
+}
+
+/**
+ * Backup restore: har file ek-ek karke pl-attachments (EXE/APK) ya IDB me likho,
+ * phir SQLite index turant flush — agla file / reload se pehle bytes safe rahein.
+ */
+export async function saveRestoredAttachmentFile(payload: PendingFilePayload): Promise<string> {
+  await putPendingFile({ ...payload, requireSqliteIndex: true });
+  const localRef = `${LOCAL_FILE_PREFIX}${payload.id}`;
+  if (usesEmbeddedNativeAttachmentStorage()) {
+    const row = await getAttachmentFileRef("pending_file", payload.id);
+    if (!row?.filePath) {
+      throw new Error(
+        `Restore could not index attachment "${payload.fileName || payload.id}" in local database`
+      );
+    }
+    const blob = await readAttachmentBlobFromDataDir(
+      row.filePath,
+      row.contentType,
+      row.sha256Hex ?? undefined
+    );
+    if (!blob || blob.size <= 0) {
+      throw new Error(
+        `Restore could not verify attachment bytes on disk for "${payload.fileName || payload.id}"`
+      );
+    }
+    const { flushPendingBrowserDbSave } = await import("@/lib/localSqlite");
+    await flushPendingBrowserDbSave();
+    return localRef;
+  }
+  const pending = await getPendingFileById(payload.id);
+  if (!pending?.blob || pending.blob.size <= 0) {
+    throw new Error(`Restore could not verify attachment blob for "${payload.fileName || payload.id}"`);
+  }
+  return localRef;
 }
 
 export async function getPendingFiles(): Promise<PendingFilePayload[]> {
@@ -834,6 +900,17 @@ export async function syncOnePendingFile(
   try {
     const preData = await resolvePendingTargetDocOrRemoveOrphan(item.docPath, item.id);
     if (!preData) {
+      return { success: true };
+    }
+
+    const pendingCompanyId = resolvePendingPayloadCompanyId(item);
+    const localOnlyLedger = pendingCompanyId
+      ? await isLocalOnlyPendingAttachmentCompany(pendingCompanyId)
+      : false;
+    if (localOnlyLedger) {
+      if (!fieldStillHasLocalPendingRef(preData[item.field], item.id)) {
+        await removePendingFile(item.id);
+      }
       return { success: true };
     }
 

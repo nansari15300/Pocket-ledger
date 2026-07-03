@@ -7,6 +7,7 @@
 
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { companyRowUsesSqliteLedgerWrites } from "@/lib/companyStorageKind";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
@@ -29,14 +30,18 @@ export function shouldForceFirestoreWritesOnStaticOrApk(): boolean {
 
 /**
  * APK / static build / Electron EXE: vouchers/masters hamesha SQLite + outbox se save.
- * Web (dono false): sirf `isLocalOnlyMode()` + niche company `storageOption` rules.
+ * Web (dono false): company row ke hisaab se — local = SQLite, online Firestore = Firestore.
  */
 export function apkEmbeddedSqliteFirstWritesPreferred(): boolean {
   return isEmbeddedOfflinePreloadClient();
 }
 
 /** Voucher forms: duplicate check / backdate — Firestore `getDoc` offline mat. */
-export function preferLocalLedgerReads(): boolean {
+export function preferLocalLedgerReads(
+  company?: { storageOption?: string | null; syncedFromCloud?: boolean } | null
+): boolean {
+  if (company && companyRowUsesSqliteLedgerWrites(company)) return true;
+  if (company && isOfflineCompanyStorage(company)) return true;
   return isLocalOnlyMode() || apkEmbeddedSqliteFirstWritesPreferred() || isClientNavigatorOffline();
 }
 
@@ -54,24 +59,25 @@ export function apkCloudFirestoreMasterWriteFromCompanyShape(company: { storageO
 }
 
 /**
- * SQLite/outbox voucher path — static/APK par hamesha true; web par local-only / local-storage company.
+ * SQLite/outbox voucher path — local company web/static/EXE/APK par hamesha;
+ * online Firestore company web par seedha Firestore (dev + production).
  */
 export async function apkCloudCompanyUsesSqliteFirstWrites(companyId: string): Promise<boolean> {
   if (apkEmbeddedSqliteFirstWritesPreferred()) return true;
   const cid = String(companyId || "").trim();
-  // Web browser (`npm run dev` / production): online Firebase company = seedha Firestore — `dataSourceMode=local` dev pe bhi `local:` mat likho.
-  const isWebShell =
-    !isCapacitorNativeApp() && !isStaticAppBuild() && !isElectronDesktopApp();
-  if (isWebShell && cid) {
-    try {
-      const row = await getLocalCompanyById(cid);
-      if (row && !isOfflineCompanyStorage(row as { storageOption?: string })) {
-        return false;
-      }
-    } catch {
-      /* registry miss — niche rules */
+  if (!cid) return false;
+
+  try {
+    const row = await getLocalCompanyById(cid, { includeDeleted: true });
+    if (row) {
+      return companyRowUsesSqliteLedgerWrites(row);
     }
+  } catch {
+    /* SQLite unavailable — niche fallback */
   }
+
+  if (isStaticAppBuild()) return true;
+
   if (!isLocalOnlyMode()) return false;
   if (!isCapacitorNativeApp()) return true;
   try {
@@ -83,9 +89,9 @@ export async function apkCloudCompanyUsesSqliteFirstWrites(companyId: string): P
 }
 
 /** Master/item forms: mirror `EditItemDialog` / party — `company` sync available */
-export function apkEntityWriteUsesLocalSqliteMirror(company: { storageOption?: string } | null | undefined): boolean {
+export function apkEntityWriteUsesLocalSqliteMirror(company: { storageOption?: string; syncedFromCloud?: boolean } | null | undefined): boolean {
   if (apkEmbeddedSqliteFirstWritesPreferred()) return true;
-  // `storageOption: local` + Google Drive — web/APK/EXE sab par `local:` staging; Firebase Storage direct upload nahi.
+  if (company && companyRowUsesSqliteLedgerWrites(company)) return true;
   if (company && isOfflineCompanyStorage(company)) return true;
   if (!isLocalOnlyMode()) return false;
   if (!company || !isCapacitorNativeApp()) return true;
@@ -116,4 +122,9 @@ export function apkCloudCompanyOfflineViewOnly(
   /** Static/APK embedded: offline par bhi SQLite/outbox — Save band mat karo. */
   if (apkEmbeddedSqliteFirstWritesPreferred()) return false;
   return !navigatorOnline;
+}
+
+/** Web dev shell — Capacitor/static/Electron nahi; company routing tests ke liye. */
+export function isWebBrowserLedgerShell(): boolean {
+  return !isCapacitorNativeApp() && !isStaticAppBuild() && !isElectronDesktopApp();
 }

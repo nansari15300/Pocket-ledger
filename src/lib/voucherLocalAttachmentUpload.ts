@@ -107,7 +107,9 @@ export async function shouldStageNewVoucherFilesAsLocalPending(companyId: string
   if (isClientNavigatorOffline()) return true;
   // Embedded shells (EXE/APK/static): keep local pending pipeline.
   if (isElectronDesktopApp() || isCapacitorNativeApp() || isStaticAppBuild()) return true;
-  // Standard web browser online: bypass local staging; upload directly and persist HTTPS URL.
+  // Local SQLite ledger company (web dev Firebase mode): attachments device pe — Firestore company root mat chhedo.
+  if (await apkCloudCompanyUsesSqliteFirstWrites(String(companyId || "").trim())) return true;
+  // Standard web browser online + cloud Firestore company: direct Storage upload + HTTPS URL.
   if (typeof navigator !== "undefined" && navigator.onLine) return false;
   // Legacy explicit toggle can force immediate upload mode in non-web contexts.
   if (voucherAttachmentFirestoreImmediateUploadEnabled()) return false;
@@ -119,7 +121,7 @@ export async function shouldStageNewVoucherFilesAsLocalPending(companyId: string
  * save ke waqt `incrementCompanyStorage` await se "Saving…" mat atkao.
  */
 export function shouldDeferStorageIncrementUntilPendingUpload(): boolean {
-  // Web online immediate upload: increment right away; defer only when pending pipeline is used.
+  // Web online immediate upload (cloud Firestore company only): increment right away.
   if (typeof navigator !== "undefined" && navigator.onLine && !isElectronDesktopApp() && !isCapacitorNativeApp() && !isStaticAppBuild()) {
     return false;
   }

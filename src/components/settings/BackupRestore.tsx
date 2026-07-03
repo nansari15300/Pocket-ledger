@@ -40,7 +40,7 @@ import { decryptBytes, encryptData } from "@/lib/encryption";
 import { isPlbpZipPayload, unpackPlbpZipBackup } from "@/lib/plbpBackupZip";
 import Link from "next/link";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
-import { flushBrowserDbToIndexedDB } from "@/lib/localSqlite";
+import { flushBrowserDbToIndexedDB, flushPendingBrowserDbSave, getBrowserDb } from "@/lib/localSqlite";
 import {
   upsertCompanyDocInBrowserDb,
   notifyBrowserDbCollectionUpdated,
@@ -64,8 +64,13 @@ import {
   applyAttachmentRefMapToBackupData,
   backupDataHasAttachmentBundle,
   backupDataHasOrphanAttachmentRefs,
+  countRemoteAttachmentRefsInBackupData,
+  getAttachmentRestoreEntryCount,
+  prepareBackupDataForLocalCompanyRestore,
   restoreAttachmentsFromBackupData,
 } from "@/lib/attachmentBackupBundle";
+import { finalizeLocalCompanyRowAfterBackupRestore, markLocalBackupRestoreSelectionGrace } from "@/lib/localBackupRestoreCompany";
+import { grantOpenLocalCompanySession } from "@/lib/companyUnlockGate";
 import {
   dismissCompanyBackupRunLater,
   isCompanyBackupRunning,
@@ -134,11 +139,16 @@ import {
   type StaticBackupPredownloadProgress,
 } from "@/lib/staticBackupPredownload";
 
-/** Backup cards — header jaisa blue pill tone + sab ki height enable auto backup (h-9) jitni. */
+/** Backup cards — header jaisa blue pill tone; chhoti screen par wrap. */
 const backupCardPillCn = cn(
   chromeProPillCn,
-  "h-9 inline-flex items-center rounded-full px-3 text-sm font-medium"
+  "inline-flex h-auto min-h-9 max-w-full flex-wrap items-center rounded-full px-3 py-1.5 text-sm font-medium"
 );
+
+/** Card header: title upar, actions neeche wrap (mobile); desktop par ek row. */
+const backupCardHeaderLayoutCn = "flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between";
+const backupCardHeaderActionsCn = "flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto sm:justify-end";
+const backupCardActionBtnCn = "w-full sm:w-auto";
 
 type BackupLocationFieldProps = {
   locationLabel: string;
@@ -168,7 +178,14 @@ function BackupLocationField({
         <p className="text-xs text-muted-foreground">{disabledHint}</p>
       ) : null}
       {showButton ? (
-        <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={onChooseLocation}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          onClick={onChooseLocation}
+          className={backupCardActionBtnCn}
+        >
           Backup location
         </Button>
       ) : null}
@@ -498,6 +515,15 @@ function resolveRestoreIncludeAttachments(
   return restoreIncludeAttachments && backupDataHasAttachmentBundle(backupData);
 }
 
+function resolveRestoreZipFiles(
+  stateZip: Map<string, Uint8Array> | null,
+  refZip: Map<string, Uint8Array> | null
+): Map<string, Uint8Array> | null {
+  if (stateZip?.size) return stateZip;
+  if (refZip?.size) return refZip;
+  return stateZip ?? refZip;
+}
+
 /** Cloud restore: `local:` pending blobs → Firebase Storage HTTPS (app / doosre device resolve kar sakein). */
 async function hydrateRestoredFieldsForCloudUpload(
   fsCompanyId: string,
@@ -613,6 +639,7 @@ export function BackupRestore() {
   const restoreAbortRef = useRef<AbortController | null>(null);
   /** v3 zip backup: decrypt ke baad attachment bytes yahan — restore tak memory me. */
   const restoreZipFilesRef = useRef<Map<string, Uint8Array> | null>(null);
+  const [restoreZipFilesByPath, setRestoreZipFilesByPath] = useState<Map<string, Uint8Array> | null>(null);
   const [fileToRestore, setFileToRestore] = useState<File | null>(null);
   const [isOverwriteConfirmOpen, setIsOverwriteConfirmOpen] = useState(false);
   const [confirmationText, setConfirmationText] = useState("");
@@ -691,7 +718,8 @@ export function BackupRestore() {
     setRestoreCompanyNameChoice("target");
     setRestoreTargetMode("replace_current");
     const hasBundle = backupDataHasAttachmentBundle(backupDataToRestore);
-    setRestoreIncludeAttachments(hasBundle && attachmentFeatureOn);
+    // Local device restore: attachments default ON jab backup me embedded files hon.
+    setRestoreIncludeAttachments(Boolean(hasBundle));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: open-only reset
   }, [isOverwriteConfirmOpen]);
 
@@ -1098,9 +1126,10 @@ export function BackupRestore() {
 
     setIsEncryptedBackupConfirmOpen(false);
 
-    // Attachments: static app, ya local-only recovery (device cache — server optional).
-    const withAttachments =
-      includeAttachments && (staticBackupClient || backupSourceMode === "local_only");
+    // Attachments: static app, local-only recovery, ya online plan par embed (offline `.plbp`).
+    const allowsAttachmentEmbed =
+      staticBackupClient || backupSourceMode === "local_only" || attachmentFeatureOn;
+    const withAttachments = includeAttachments && allowsAttachmentEmbed;
 
     let backupCompany = company;
     if (backupSourceMode === "local_only") {
@@ -1317,9 +1346,11 @@ export function BackupRestore() {
           if (isPlbpZipPayload(plainBytes)) {
             const { manifest, filesByPath } = unpackPlbpZipBackup(plainBytes);
             restoreZipFilesRef.current = filesByPath;
+            setRestoreZipFilesByPath(filesByPath);
             backupData = manifest;
           } else {
             restoreZipFilesRef.current = null;
+            setRestoreZipFilesByPath(null);
             backupData = JSON.parse(new TextDecoder().decode(plainBytes)) as Record<string, unknown>;
           }
           
@@ -1475,7 +1506,11 @@ export function BackupRestore() {
         await deleteAllCompanyDocsForCompany(targetCompanyId);
       }
 
+      await getBrowserDb();
+
       let dataToWrite = backupData;
+      let attachmentRefMap: Map<string, string> | undefined;
+      const zipFilesForRestore = resolveRestoreZipFiles(restoreZipFilesByPath, restoreZipFilesRef.current);
       if (restoreAttachments && backupDataHasAttachmentBundle(backupData)) {
         if (!staticBackupClient) {
           const gate = await checkAttachmentRestoreAllowed(user.uid, accountPlanId);
@@ -1486,14 +1521,66 @@ export function BackupRestore() {
             return;
           }
         }
-        const map = await restoreAttachmentsFromBackupData(
+        const zipMan = backupData.attachmentZipManifest as { entries?: unknown[] } | undefined;
+        if (Array.isArray(zipMan?.entries) && zipMan.entries.length > 0 && !zipFilesForRestore?.size) {
+          toast({
+            variant: "destructive",
+            title: "Attachment zip missing",
+            description:
+              "Backup manifest has files but zip bytes were lost. Decrypt the backup again, then restore immediately.",
+            duration: 12_000,
+          });
+        }
+        attachmentRefMap = await restoreAttachmentsFromBackupData(
           backupData,
-          restoreZipFilesRef.current,
+          zipFilesForRestore,
           targetCompanyId,
-          (_done, _total, bytes) => report.tick("Restoring attachments", "", 1, bytes),
+          (done, total, bytes) =>
+            report.tick("Restoring attachments", `${done}/${total} file(s) to device storage…`, 1, bytes),
           signal
         );
-        dataToWrite = applyAttachmentRefMapToBackupData(backupData, map);
+        await flushPendingBrowserDbSave();
+        const expectedFiles = getAttachmentRestoreEntryCount(backupData);
+        const restoredFiles = attachmentRefMap?.size
+          ? new Set(attachmentRefMap.values()).size
+          : 0;
+        if (expectedFiles > 0 && restoredFiles === 0) {
+          toast({
+            variant: "destructive",
+            title: "No attachment files restored",
+            description:
+              "Ledger data will restore, but files could not be written to this device. Check storage space and try again with “With attachments”.",
+            duration: 12_000,
+          });
+        } else if (expectedFiles > 0 && restoredFiles < expectedFiles) {
+          toast({
+            title: "Some attachments skipped",
+            description: `${restoredFiles} of ${expectedFiles} file(s) restored to this device.`,
+            duration: 10_000,
+          });
+        }
+      }
+
+      if (!cloudRestore) {
+        const remoteBefore = countRemoteAttachmentRefsInBackupData(backupData);
+        dataToWrite = prepareBackupDataForLocalCompanyRestore(backupData, attachmentRefMap);
+        const remoteAfter = countRemoteAttachmentRefsInBackupData(dataToWrite);
+        if (restoreAttachments && remoteAfter > 0) {
+          toast({
+            variant: "destructive",
+            title: "Some attachment links removed",
+            description: `${remoteAfter} file link(s) could not be restored as local files — removed so this company stays offline-only.`,
+            duration: 10_000,
+          });
+        } else if (!restoreAttachments && remoteBefore > 0) {
+          toast({
+            title: "Data-only local restore",
+            description: `${remoteBefore} online file link(s) were removed — local company does not use Firebase URLs. Re-backup with “With attachments” to keep files on device.`,
+            duration: 12_000,
+          });
+        }
+      } else if (attachmentRefMap) {
+        dataToWrite = applyAttachmentRefMapToBackupData(backupData, attachmentRefMap);
       }
 
       const safeTimestamp = (val: any): Timestamp | null => {
@@ -1547,26 +1634,37 @@ export function BackupRestore() {
         ...restNoFiscalLocalSafe
       } = restNoFiscal as Record<string, unknown>;
 
-      const localCompanyRow: Record<string, unknown> = {
-        ...(existing || existingBeforeReplace || {}),
-        ...restNoFiscalLocalSafe,
-        id: targetCompanyId,
-        ownerId: user.uid,
-        ownerEmail: user.email ?? (existing as { ownerEmail?: string })?.ownerEmail,
-        fiscalYearStart: fyStart ?? fiscalFieldToLocalIso((existing as { fiscalYearStart?: unknown })?.fiscalYearStart),
-        fiscalYearEnd: fyEnd ?? fiscalFieldToLocalIso((existing as { fiscalYearEnd?: unknown })?.fiscalYearEnd),
-        localCompanyUsers:
-          (rest as { localCompanyUsers?: unknown }).localCompanyUsers ??
-          (existing as { localCompanyUsers?: unknown })?.localCompanyUsers,
-        updatedAt: Date.now(),
-        storageOption: cloudRestore ? "local" : "local",
-        syncedFromCloud: false,
-        syncPolicy: cloudRestore ? "online" : "offline",
-        ...(cloudRestore ? { authoritativeCompanyId: targetCompanyId } : {}),
-        name: resolvedCompanyName.trim() || String((restNoFiscalLocalSafe as { name?: string }).name ?? (existing as { name?: string })?.name ?? ""),
-      };
-      if (!cloudRestore) {
-        delete localCompanyRow.authoritativeCompanyId;
+      const localCompanyRow = finalizeLocalCompanyRowAfterBackupRestore(
+        {
+          ...(existing || existingBeforeReplace || {}),
+          ...restNoFiscalLocalSafe,
+          fiscalYearStart: fyStart ?? fiscalFieldToLocalIso((existing as { fiscalYearStart?: unknown })?.fiscalYearStart),
+          fiscalYearEnd: fyEnd ?? fiscalFieldToLocalIso((existing as { fiscalYearEnd?: unknown })?.fiscalYearEnd),
+          localCompanyUsers:
+            (rest as { localCompanyUsers?: unknown }).localCompanyUsers ??
+            (existing as { localCompanyUsers?: unknown })?.localCompanyUsers,
+          updatedAt: Date.now(),
+          name:
+            resolvedCompanyName.trim() ||
+            String((restNoFiscalLocalSafe as { name?: string }).name ?? (existing as { name?: string })?.name ?? ""),
+        },
+        {
+          companyId: targetCompanyId,
+          ownerUid: user.uid,
+          ownerEmail: user.email ?? null,
+          companyName:
+            resolvedCompanyName.trim() ||
+            String((restNoFiscalLocalSafe as { name?: string }).name ?? ""),
+        }
+      );
+      if (cloudRestore) {
+        localCompanyRow.authoritativeCompanyId = targetCompanyId;
+        localCompanyRow.syncPolicy = "online";
+        localCompanyRow.storageOption = String(
+          (restNoFiscalLocalSafe as { storageOption?: string }).storageOption || "firebase"
+        );
+        localCompanyRow.syncedFromCloud = true;
+        delete localCompanyRow.localRestoredFromBackupAt;
       }
 
       report.tick("Finalizing", "Saving company row…");
@@ -1627,6 +1725,10 @@ export function BackupRestore() {
       }
 
       setCompanyId(targetCompanyId);
+      if (!cloudRestore) {
+        grantOpenLocalCompanySession(targetCompanyId, { role: "owner" });
+        markLocalBackupRestoreSelectionGrace(targetCompanyId);
+      }
 
       if (cloudRestore && deferCloudSkipReload) {
         toast({
@@ -1665,6 +1767,7 @@ export function BackupRestore() {
       setIsRestoring(false);
       restoreAbortRef.current = null;
       restoreZipFilesRef.current = null;
+      setRestoreZipFilesByPath(null);
       setRestoreProgress(null);
       setFileToRestore(null);
     }
@@ -1790,6 +1893,7 @@ export function BackupRestore() {
         const backupCompanyIdFromFile = String(backupData.companyDetails?.[0]?.id ?? "").trim();
 
         let dataToWrite = backupData;
+        const zipFilesForRestore = resolveRestoreZipFiles(restoreZipFilesByPath, restoreZipFilesRef.current);
         if (restoreAttachments && backupDataHasAttachmentBundle(backupData)) {
           if (!staticBackupClient) {
             const gate = await checkAttachmentRestoreAllowed(user.uid, accountPlanId);
@@ -1802,11 +1906,12 @@ export function BackupRestore() {
           }
           const map = await restoreAttachmentsFromBackupData(
             backupData,
-            restoreZipFilesRef.current,
+            zipFilesForRestore,
             targetCompanyId,
             (_done, _total, bytes) => report.tick("Restoring attachments", "", 1, bytes),
             signal
           );
+          await flushPendingBrowserDbSave();
           dataToWrite = applyAttachmentRefMapToBackupData(backupData, map);
         }
 
@@ -1948,6 +2053,7 @@ export function BackupRestore() {
       setIsRestoring(false);
       restoreAbortRef.current = null;
       restoreZipFilesRef.current = null;
+      setRestoreZipFilesByPath(null);
       setRestoreProgress(null);
       setFileToRestore(null);
     }
@@ -1956,15 +2062,15 @@ export function BackupRestore() {
 
   return (
     <>
-      <div className="flex flex-col gap-8">
+      <div className="flex min-w-0 flex-col gap-8">
         {/* PC: Backup + Auto ek row; mobile: Backup phir Auto (order 1–2), baaki cards neeche */}
-        <div className="grid grid-cols-1 gap-8 md:grid-cols-2 md:gap-6 md:items-stretch">
-        <Card className="h-full flex flex-col">
+        <div className="grid min-w-0 grid-cols-1 gap-8 md:grid-cols-2 md:gap-6 md:items-stretch">
+        <Card className="flex h-full min-w-0 flex-col overflow-hidden">
           <CardHeader className="pb-3">
-            {/* Title + Create Backup — web par Backup location disabled (getDirectoryHandle fail). */}
-            <div className="flex flex-nowrap items-center gap-2 overflow-x-auto">
-              <div className="flex shrink-0 items-center gap-1.5">
-                <CardTitle className="text-base whitespace-nowrap">Backup Data</CardTitle>
+            {/* Title + Create Backup — chhoti screen par actions neeche wrap. */}
+            <div className={backupCardHeaderLayoutCn}>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <CardTitle className="text-base">Backup Data</CardTitle>
                 <TooltipProvider delayDuration={200}>
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -1982,13 +2088,14 @@ export function BackupRestore() {
                   </Tooltip>
                 </TooltipProvider>
               </div>
-              <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">
+              <div className={backupCardHeaderActionsCn}>
                 <PermissionButton
                   permission="export_data"
                   variant="outline"
                   size="sm"
                   onClick={handleBackupClick}
                   disabled={isBackingUp}
+                  className={backupCardActionBtnCn}
                 >
                   {isBackingUp ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1997,13 +2104,19 @@ export function BackupRestore() {
                   )}
                   Create Backup
                 </PermissionButton>
-                <Button type="button" variant="outline" size="sm" onClick={openBackupLocationDialog}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={openBackupLocationDialog}
+                  className={backupCardActionBtnCn}
+                >
                   Backup location
                 </Button>
               </div>
             </div>
           </CardHeader>
-          <CardContent className="space-y-3 text-sm text-muted-foreground">
+          <CardContent className="min-w-0 space-y-3 text-sm text-muted-foreground">
             <BackupLocationField
               locationLabel={backupLocationLabel}
               onChooseLocation={openBackupLocationDialog}
@@ -2021,6 +2134,7 @@ export function BackupRestore() {
                   size="sm"
                   disabled={predownloadRunning || isBackingUp || !companyId}
                   onClick={() => void handlePredownloadForBackup()}
+                  className={backupCardActionBtnCn}
                 >
                   {predownloadRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
                   Pre-download data &amp; attachments
@@ -2067,12 +2181,12 @@ export function BackupRestore() {
           ) : null}
         </Card>
 
-        <Card className="h-full flex flex-col">
+        <Card className="flex h-full min-w-0 flex-col overflow-hidden">
           <CardHeader className="pb-3">
-            {/* Auto backup — device prefs se scheduled backup (web + static). */}
-            <div className="flex flex-nowrap items-center gap-2 overflow-x-auto">
-              <div className="flex shrink-0 items-center gap-1.5">
-                <CardTitle className="text-base whitespace-nowrap">auto backup</CardTitle>
+            {/* Auto backup — mobile par frequency + toggle neeche wrap. */}
+            <div className={cn(backupCardHeaderLayoutCn, "gap-3")}>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <CardTitle className="text-base">auto backup</CardTitle>
                 <TooltipProvider delayDuration={200}>
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -2091,9 +2205,10 @@ export function BackupRestore() {
                   </Tooltip>
                 </TooltipProvider>
               </div>
+              <div className={backupCardHeaderActionsCn}>
               <select
                 id="auto-backup-frequency"
-                className={cn(backupCardPillCn, "ml-auto min-w-[7.5rem] shrink-0 cursor-pointer py-0")}
+                className={cn(backupCardPillCn, "min-w-0 flex-1 cursor-pointer sm:min-w-[7.5rem] sm:flex-none")}
                 value={autoBackupPrefs.enabled ? autoBackupPrefs.frequency : "off"}
                 disabled={!autoBackupPrefs.enabled}
                 onChange={(e) => {
@@ -2112,10 +2227,10 @@ export function BackupRestore() {
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
               </select>
-              <div className={cn(backupCardPillCn, "shrink-0 gap-2 py-0")}>
+              <div className={cn(backupCardPillCn, "min-w-0 flex-1 gap-2 sm:flex-none")}>
                 <Label
                   htmlFor="auto-backup-enabled"
-                  className="cursor-pointer text-sm font-medium whitespace-nowrap"
+                  className="cursor-pointer text-sm font-medium leading-snug"
                 >
                   Enable auto backup
                 </Label>
@@ -2138,27 +2253,34 @@ export function BackupRestore() {
                   }}
                 />
               </div>
+              </div>
             </div>
           </CardHeader>
-          <CardContent className="space-y-4 text-sm flex-1">
+          <CardContent className="min-w-0 flex-1 space-y-4 text-sm">
             <BackupLocationField
               locationLabel={backupLocationLabel}
               onChooseLocation={openBackupLocationDialog}
               showButton={false}
             />
-            {/* Backup location + Include attachments — ek hi row me pills. */}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={openBackupLocationDialog}>
+            {/* Backup location + Include attachments — chhoti screen par stack. */}
+            <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={openBackupLocationDialog}
+                className={backupCardActionBtnCn}
+              >
                 Backup location
               </Button>
               {staticBackupClient ? (
               <TooltipProvider delayDuration={200}>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <div className={cn(backupCardPillCn, "gap-2 py-0")}>
+                    <div className={cn(backupCardPillCn, "w-full min-w-0 justify-between gap-2 sm:w-auto sm:justify-center")}>
                       <Label
                         htmlFor="auto-backup-include-attachments"
-                        className="cursor-pointer text-sm font-medium whitespace-nowrap"
+                        className="cursor-pointer text-sm font-medium leading-snug"
                       >
                         Include attachments
                       </Label>
@@ -2190,7 +2312,7 @@ export function BackupRestore() {
         </Card>
         </div>
 
-        <Card>
+        <Card className="min-w-0 overflow-hidden">
           <CardHeader>
             <CardTitle>Restore Data</CardTitle>
             <CardDescription>
@@ -2198,11 +2320,17 @@ export function BackupRestore() {
               nothing merges into an existing slot by mistake.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-2">
+          <CardContent className="min-w-0 space-y-2">
             {nativeRuntime ? (
               <>
                 {/* Native APK: dedicated picker se restore file selection stable rahe. */}
-                <Button type="button" variant="outline" size="sm" onClick={handlePickRestoreFileNative}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handlePickRestoreFileNative}
+                  className={backupCardActionBtnCn}
+                >
                   Choose backup file
                 </Button>
                 <p className="text-xs text-muted-foreground break-all">
@@ -2210,16 +2338,17 @@ export function BackupRestore() {
                 </p>
               </>
             ) : (
-              <Input type="file" accept=".json,.plbp,.webtally" onChange={handleFileSelect} />
+              <Input type="file" accept=".json,.plbp,.webtally" onChange={handleFileSelect} className="max-w-full" />
             )}
           </CardContent>
-          <CardFooter className="flex flex-col items-stretch gap-3 pt-0">
+          <CardFooter className="flex min-w-0 flex-col items-stretch gap-3 pt-0">
             <PermissionButton
               permission="import_data"
               variant="outline"
               size="sm"
               onClick={startRestore}
               disabled={!fileToRestore || isRestoring}
+              className={backupCardActionBtnCn}
             >
               {isRestoring ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
               Restore as new company
@@ -2241,17 +2370,17 @@ export function BackupRestore() {
           </CardFooter>
         </Card>
 
-        <Card>
+        <Card className="min-w-0 overflow-hidden">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Folder className="h-5 w-5" />
-              Data save location
+            <CardTitle className="flex min-w-0 items-center gap-2">
+              <Folder className="h-5 w-5 shrink-0" />
+              <span className="min-w-0">Data save location</span>
             </CardTitle>
           </CardHeader>
-          <CardContent className="text-sm text-muted-foreground space-y-1">
-            <p>
+          <CardContent className="min-w-0 space-y-1 text-sm text-muted-foreground">
+            <p className="break-words">
               Current:{" "}
-              <span className="font-medium text-foreground">
+              <span className="font-medium break-all text-foreground">
                 {nativeRuntime
                   ? liveNativeFolderPath
                     ? formatNativeFolderDisplayPath(liveNativeFolderPath)
@@ -2263,11 +2392,23 @@ export function BackupRestore() {
             </p>
             <p className="text-xs">Debounced sync also runs a few seconds after local saves when a location is active.</p>
           </CardContent>
-          <CardFooter className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => setLiveDataLocationDialogOpen(true)}>
+          <CardFooter className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setLiveDataLocationDialogOpen(true)}
+              className={backupCardActionBtnCn}
+            >
               Select folder
             </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => void handleSyncLiveDataNow()}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void handleSyncLiveDataNow()}
+              className={backupCardActionBtnCn}
+            >
               Sync now
             </Button>
           </CardFooter>
@@ -2539,12 +2680,11 @@ export function BackupRestore() {
           <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
                 <AlertDialogAction
-                  onClick={() =>
-                    void handleBackup(
-                      backupIncludeAttachments &&
-                        (staticBackupClient || backupSourceMode === "local_only")
-                    )
-                  }
+                  onClick={() => {
+                    const allowsAttachmentEmbed =
+                      staticBackupClient || backupSourceMode === "local_only" || attachmentFeatureOn;
+                    void handleBackup(backupIncludeAttachments && allowsAttachmentEmbed);
+                  }}
                 >
                   Proceed
                 </AlertDialogAction>
@@ -2566,25 +2706,33 @@ export function BackupRestore() {
                  <Label>This backup file is encrypted. Please enter the password to restore.</Label>
             </DialogHeader>
             <div className="space-y-2">
-              <Input 
+              <div className="relative">
+                <Input
                   type={showDecryptionPassword ? "text" : "password"}
                   value={decryptionPassword}
                   onChange={(e) => {
-                      setDecryptionPassword(e.target.value)
-                      setDecryptionError(null);
+                    setDecryptionPassword(e.target.value);
+                    setDecryptionError(null);
                   }}
                   placeholder="Enter password..."
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="px-0 h-auto text-xs"
-                onClick={() => setShowDecryptionPassword((prev) => !prev)}
-              >
-                {showDecryptionPassword ? <EyeOff className="h-3.5 w-3.5 mr-1" /> : <Eye className="h-3.5 w-3.5 mr-1" />}
-                {showDecryptionPassword ? "Hide password" : "Show password"}
-              </Button>
+                  className="pr-10"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-0 top-1/2 h-8 w-8 -translate-y-1/2 border-0 shadow-none"
+                  tabIndex={-1}
+                  aria-label={showDecryptionPassword ? "Hide password" : "Show password"}
+                  onClick={() => setShowDecryptionPassword((prev) => !prev)}
+                >
+                  {showDecryptionPassword ? (
+                    <EyeOff className="h-4 w-4" aria-hidden />
+                  ) : (
+                    <Eye className="h-4 w-4" aria-hidden />
+                  )}
+                </Button>
+              </div>
               {decryptionError && <p className="text-sm text-destructive">{decryptionError}</p>}
                {decryptionError && fileToRestore?.name.endsWith('.json') && (
                 <p className="text-sm text-amber-600">This file seems to be encrypted or is corrupted. Please provide a password if it's encrypted.</p>
@@ -2771,7 +2919,15 @@ export function BackupRestore() {
           </div>
           <AlertDialogFooter className="shrink-0 border-t bg-background p-6 pt-4">
             <div className="flex justify-between items-center w-full">
-                <AlertDialogCancel onClick={() => setBackupDataToRestore(null)}>Cancel</AlertDialogCancel>
+                <AlertDialogCancel
+                  onClick={() => {
+                    setBackupDataToRestore(null);
+                    restoreZipFilesRef.current = null;
+                    setRestoreZipFilesByPath(null);
+                  }}
+                >
+                  Cancel
+                </AlertDialogCancel>
                 <AlertDialogAction
                 type="button"
                 onClick={(e) => {

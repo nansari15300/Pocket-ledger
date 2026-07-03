@@ -25,7 +25,7 @@ export function resolvePostAuthCompanyRoute(
   // Offline/local company: remembered token+user must still be valid; then restore local auth.
   // Fast-local synthetic uid (`local:*`) won't match old Firebase-keyed remember entry, so fallback scan by company.
   const rememberedOffline =
-    readStoredOfflineUnlockSession(firebaseUid, selectedCompanyId) ||
+    readStoredOfflineUnlockSession(firebaseUid, selectedCompanyId, userEmail) ||
     readAnyStoredOfflineUnlockSessionForCompany(selectedCompanyId);
   if (rememberedOffline) {
     setLocalAuthToken(selectedCompanyId, rememberedOffline.token, rememberedOffline.user);

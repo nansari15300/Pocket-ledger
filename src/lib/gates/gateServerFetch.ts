@@ -2,9 +2,12 @@
 
 import { CapacitorHttp } from "@capacitor/core";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { normalizeServerUrl } from "@/lib/gates/gateStore";
 
 const ACCESS_HEADER = "x-pocket-ledger-access";
+const ELECTRON_CLIENT_HEADER = "x-pocket-ledger-client";
+const ELECTRON_CLIENT_VALUE = "pocket-ledger-electron";
 
 export type GateServerAccessContext = {
   unrestricted?: boolean;
@@ -14,9 +17,12 @@ export type GateServerAccessContext = {
   error?: string;
 };
 
-async function gateHttpGet(url: string, accessToken: string): Promise<{ status: number; body: string }> {
+export async function gateHttpGet(url: string, accessToken: string): Promise<{ status: number; body: string }> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (accessToken) headers[ACCESS_HEADER] = accessToken;
+  if (typeof window !== "undefined" && isElectronDesktopApp()) {
+    headers[ELECTRON_CLIENT_HEADER] = ELECTRON_CLIENT_VALUE;
+  }
 
   if (typeof window !== "undefined" && isCapacitorNativeApp()) {
     const nativeRes = await CapacitorHttp.request({
@@ -37,6 +43,87 @@ async function gateHttpGet(url: string, accessToken: string): Promise<{ status: 
 
   const res = await fetch(url, { method: "GET", headers, cache: "no-store" });
   return { status: res.status, body: await res.text() };
+}
+
+function buildGateHttpHeaders(accessToken: string, jsonBody?: boolean): Record<string, string> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (jsonBody) headers["Content-Type"] = "application/json";
+  if (accessToken) headers[ACCESS_HEADER] = accessToken;
+  if (typeof window !== "undefined" && isElectronDesktopApp()) {
+    headers[ELECTRON_CLIENT_HEADER] = ELECTRON_CLIENT_VALUE;
+  }
+  return headers;
+}
+
+/** LAN server POST — EXE/APK native HTTP + Electron client marker. */
+export async function gateHttpPost(
+  url: string,
+  accessToken: string,
+  body: Record<string, unknown>
+): Promise<{ status: number; body: string }> {
+  const headers = buildGateHttpHeaders(accessToken, true);
+  const payload = JSON.stringify(body);
+
+  if (typeof window !== "undefined" && isCapacitorNativeApp()) {
+    const nativeRes = await CapacitorHttp.request({
+      url,
+      method: "POST",
+      headers,
+      data: body,
+      responseType: "text",
+    });
+    const status = typeof nativeRes.status === "number" ? nativeRes.status : 0;
+    const resBody =
+      nativeRes.data == null
+        ? ""
+        : typeof nativeRes.data === "string"
+          ? nativeRes.data
+          : JSON.stringify(nativeRes.data);
+    return { status, body: resBody };
+  }
+
+  const res = await fetch(url, { method: "POST", headers, body: payload, cache: "no-store" });
+  return { status: res.status, body: await res.text() };
+}
+
+/** Binary GET — attachment bytes from PL server (`/__pl_attachment`). */
+export async function gateHttpFetchBlob(
+  url: string,
+  accessToken: string,
+  signal?: AbortSignal
+): Promise<{ status: number; blob: Blob | null; contentType: string | null }> {
+  const headers: Record<string, string> = {};
+  if (accessToken) headers[ACCESS_HEADER] = accessToken;
+  if (typeof window !== "undefined" && isElectronDesktopApp()) {
+    headers[ELECTRON_CLIENT_HEADER] = ELECTRON_CLIENT_VALUE;
+  }
+
+  if (typeof window !== "undefined" && isCapacitorNativeApp()) {
+    const nativeRes = await CapacitorHttp.request({
+      url,
+      method: "GET",
+      headers,
+      responseType: "arraybuffer",
+    });
+    const status = typeof nativeRes.status === "number" ? nativeRes.status : 0;
+    if (!status || status >= 400) return { status, blob: null, contentType: null };
+    const ct =
+      (nativeRes.headers && (nativeRes.headers["content-type"] || nativeRes.headers["Content-Type"])) ||
+      "application/octet-stream";
+    const data = nativeRes.data;
+    if (!data) return { status, blob: null, contentType: null };
+    const ab = data instanceof ArrayBuffer ? data : new ArrayBuffer(0);
+    return { status, blob: new Blob([ab], { type: String(ct) }), contentType: String(ct) };
+  }
+
+  const res = await fetch(url, { method: "GET", headers, cache: "no-store", signal });
+  if (!res.ok) return { status: res.status, blob: null, contentType: null };
+  const blob = await res.blob();
+  return {
+    status: res.status,
+    blob: blob.size > 0 ? blob : null,
+    contentType: res.headers.get("content-type"),
+  };
 }
 
 /** Test Pocket Ledger server + token (LAN/WAN). */

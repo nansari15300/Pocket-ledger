@@ -18,6 +18,7 @@ import {
   type UpsertCompanyBrowserOptions,
 } from "@/lib/localCompanyDocMirror";
 import { canSyncCompanyToServer, enqueueCompanyDocOutbox, type VoucherOutboxOp } from "@/lib/localVoucherOutbox";
+import { maybeQueuePlServerMirrorAfterDocWrite } from "@/lib/plServerClientMirrorPush";
 import { assertCompanyAllowsLedgerMutations } from "@/lib/security/offlinePlanWriteGate";
 import { isStaticApkLedgerTransportMode } from "@/lib/staticApkLedgerArchitecture";
 import { buildLedgerTombstoneFields } from "@/lib/ledgerTombstone";
@@ -32,6 +33,7 @@ import {
 import { auth } from "@/lib/firebase";
 import { isSoftDeleteLedgerPatch, purgeGhostLocalCompanyDoc } from "@/lib/purgeGhostLocalCompanyDoc";
 import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
+import { isPureLocalLedgerCompany, companyRowUsesSqliteLedgerWrites } from "@/lib/companyStorageKind";
 
 export type WriteEntityOperation = "create" | "update" | "delete";
 
@@ -58,14 +60,14 @@ async function resolveFirestoreCompanyId(localCompanyId: string): Promise<string
   return raw || localCompanyId.trim();
 }
 
-/** Local-first: SQLite UPSERT + sync_outbox — static/APK par registry row milte hi (pure local bhi), web cloud par nahi. */
+/** Local-first: SQLite UPSERT + sync_outbox — local company web/static par bhi; online Firestore par seedha Firestore. */
 async function shouldWriteLocalLedgerFirst(localCompanyId: string): Promise<boolean> {
-  // Purana "Server writes" toggle hata — `shouldForceFirestoreWritesOnStaticOrApk` ab hamesha false; `saveVoucher` / masters isi gate se align.
   if (shouldForceFirestoreWritesOnStaticOrApk()) return false;
   const reg = await getLocalCompanyById(localCompanyId, { includeDeleted: true });
-  // APK/static/EXE: company ledger seedha Firestore mat — SQLite + outbox hi sync bridge (web cloud unchanged).
   if (isEmbeddedOfflinePreloadClient()) return !!reg;
-  if (isStaticAppBuild()) return !!reg;
+  if (isStaticAppBuild() && reg) return companyRowUsesSqliteLedgerWrites(reg);
+  if (reg && companyRowUsesSqliteLedgerWrites(reg)) return true;
+  if (reg && isPureLocalLedgerCompany(reg)) return true;
   if (!isLocalOnlyMode()) return false;
   return canSyncCompanyToServer(localCompanyId);
 }
@@ -136,6 +138,7 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
         } catch (e) {
           return { ok: false, error: e instanceof Error ? e.message : "outbox delete enqueue failed" };
         }
+        void maybeQueuePlServerMirrorAfterDocWrite(companyId, collectionName, effectiveDocId, merged);
         return { ok: true, docId: effectiveDocId };
       }
       const canFlush = await canSyncCompanyToServer(companyId);
@@ -176,6 +179,7 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : "outbox enqueue failed" };
     }
+    void maybeQueuePlServerMirrorAfterDocWrite(companyId, collectionName, effectiveDocId, merged);
     void notifyRecycleBinAlertAfterWrite(fsCompanyId, companyId, collectionName, effectiveDocId, merged);
     return { ok: true, docId: effectiveDocId };
   }

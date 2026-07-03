@@ -3,6 +3,8 @@
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { demoteCompanyToLocal } from "@/lib/companyDemote";
+import { isDeviceLocalCompany } from "@/lib/companyStorageKind";
+import { isProtectedOwnerLocalBackupCompany } from "@/lib/localBackupRestoreCompany";
 import type { LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { listLocalCompanies, removeLocalCompanyById } from "@/lib/localCompanyStore";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
@@ -118,12 +120,14 @@ export async function reconcileOnlineMirrorsWithServer(user: {
   for (const row of rows) {
     const id = row.id;
     if (isCompanyPendingRestoreCloudPush(id)) continue;
+    // Server-gate mirrored company — sirf SQLite; Firestore root verify mat
+    if ((row as { plServerShared?: boolean }).plServerShared === true) continue;
     const isOwner = isCurrentUserOwnerOfCompanyRow(row, user);
     const storageLocal = String(row.storageOption || "local").toLowerCase() === "local";
     const isDriveSharedJoin = (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;
 
-    // Owner ki sirf device-local company — Firestore par doc expect nahi
-    if (isOwner && storageLocal) {
+    // Owner ki device-local / backup-restore company — Firestore verify mat (online ghost purge)
+    if (isOwner && (storageLocal || isDeviceLocalCompany(row) || isProtectedOwnerLocalBackupCompany(row, user))) {
       continue;
     }
 

@@ -7,6 +7,10 @@ type PlElectronAttachmentsApi = {
     relativePath: string;
     base64: string;
   }) => Promise<{ ok?: boolean; error?: string }>;
+  writeFileBinary?: (args: {
+    relativePath: string;
+    buffer: ArrayBuffer;
+  }) => Promise<{ ok?: boolean; error?: string; bytes?: number }>;
   readFile: (args: {
     relativePath: string;
   }) => Promise<{ ok?: boolean; base64?: string; error?: string }>;
@@ -48,10 +52,24 @@ export async function electronWriteAttachmentBlob(relativePath: string, blob: Bl
   const rel = String(relativePath || "").trim();
   if (!rel) return false;
   try {
+    if (api.writeFileBinary) {
+      const resp = await api.writeFileBinary({ relativePath: rel, buffer: await blob.arrayBuffer() });
+      if (resp.ok === true) return true;
+      console.warn("[electronAttachmentFs] writeFileBinary failed", { rel, error: resp.error });
+    }
     const base64 = await blobToBase64(blob);
     const resp = await api.writeFile({ relativePath: rel, base64 });
+    if (resp.ok !== true && process.env.NODE_ENV !== "production") {
+      console.warn("[electronAttachmentFs] writeFile failed", { rel, error: resp.error });
+    }
     return resp.ok === true;
-  } catch {
+  } catch (e) {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("[electronAttachmentFs] write threw", {
+        rel,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
     return false;
   }
 }
@@ -103,6 +121,33 @@ const ELECTRON_DISPLAY_URL_MAX = 120;
 const electronDisplayUrlByPath = new Map<string, string>();
 const electronDisplayUrlLru: string[] = [];
 
+/** Disk read par galat/empty MIME — EXE `<img>` preview ke liye JPEG/PNG infer (`.jfif` = JPEG). */
+async function blobWithPreviewMime(
+  blob: Blob,
+  contentType?: string | null,
+  relativePath?: string
+): Promise<Blob> {
+  const ct = String(contentType || blob.type || "").toLowerCase();
+  if (ct.startsWith("image/") && !ct.includes("octet-stream")) return blob;
+  const lower = String(relativePath || "").toLowerCase();
+  if (/\.(jpe?g|jfif|pjpeg)$/.test(lower)) return new Blob([blob], { type: "image/jpeg" });
+  if (lower.endsWith(".png")) return new Blob([blob], { type: "image/png" });
+  if (lower.endsWith(".gif")) return new Blob([blob], { type: "image/gif" });
+  if (lower.endsWith(".webp")) return new Blob([blob], { type: "image/webp" });
+  if (blob.size >= 2) {
+    try {
+      const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+      if (head[0] === 0xff && head[1] === 0xd8) return new Blob([blob], { type: "image/jpeg" });
+      if (head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47) {
+        return new Blob([blob], { type: "image/png" });
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return blob;
+}
+
 /** Voucher thumbnail / preview: disk read → stable session `blob:` (revoke on replace only). */
 export async function electronAttachmentDisplayUrlFromPath(
   relativePath: string,
@@ -112,8 +157,9 @@ export async function electronAttachmentDisplayUrlFromPath(
   if (!rel) return null;
   const cached = electronDisplayUrlByPath.get(rel);
   if (cached) return cached;
-  const blob = await electronReadAttachmentBlob(rel, contentType);
-  if (!blob || blob.size <= 0) return null;
+  const raw = await electronReadAttachmentBlob(rel, contentType);
+  if (!raw || raw.size <= 0) return null;
+  const blob = await blobWithPreviewMime(raw, contentType, rel);
   const url = URL.createObjectURL(blob);
   const prev = electronDisplayUrlByPath.get(rel);
   if (prev && prev !== url) {

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { google } from "googleapis";
+import { createGoogleOAuth2Client } from "@/lib/server/googleOAuthCredentials";
 
 export type DriveOAuthState = {
   returnPath: string;
@@ -11,15 +12,7 @@ export type DriveOAuthState = {
 
 /** Server-only — `googleapis` browser bundle me nahi aata. */
 export function buildGoogleDriveAuthUrl(state: DriveOAuthState): string {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
-
-  if (!clientId || !clientSecret) throw new Error("Missing GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET");
-  if (!appUrl) throw new Error("Missing NEXT_PUBLIC_APP_URL");
-
-  const redirectUri = `${appUrl}/api/auth/callback/google`;
-  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+  const oauth2Client = createGoogleOAuth2Client(google);
 
   // drive.file sirf app-created files — sharedWithMe + shared folder read/write ke liye drive scope chahiye.
   const scopes = [

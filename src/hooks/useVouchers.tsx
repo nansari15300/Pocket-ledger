@@ -20,6 +20,7 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticApkLedgerTransportMode } from "@/lib/staticApkLedgerArchitecture";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import {
   BROWSER_DB_COLLECTION_BUMP,
   listCompanyDocsFromBrowserDb,
@@ -47,8 +48,18 @@ import { normalizeVoucherRowAttachmentsForUi, getVoucherAttachmentUrlsForUi } fr
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { getBillWiseAllocatedToTarget, getPaymentStatus as getPaymentStatusResult, isSaleOrPurchaseBillVoucherType } from "@/lib/payment-allocation-utils";
 import { shouldSuppressTransientCompanyClear } from "@/lib/apkLedgerRouteShield";
-import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+import {
+  PL_SERVER_CLIENT_MIRROR_EVENT,
+  type PlServerClientMirrorEventDetail,
+} from "@/lib/plServerClientCompanyMirror";
+import {
+  companyRowUsesSqliteLedgerWrites,
+  isPureLocalLedgerCompany,
+  shouldReadLedgerFromSqliteOnly,
+} from "@/lib/companyStorageKind";
+import { isPlServerSharedCompanyRow } from "@/lib/plServerAccessContext";
 import { embeddedClientPrefersQuietBackgroundSync, embeddedSqliteBumpDebounceMs, sqliteBumpCollectionNeededOnLedgerRoute } from "@/lib/embeddedWarmBootstrapFlags";
+import { livePullDevLog } from "@/lib/plServerLivePullDevLog";
 import { RESTORE_CLOUD_VOUCHERS_REFRESH_EVENT } from "@/lib/restoreCloudBackgroundSync";
 import { resolveInterCompanyLegsForVoucher } from "@/lib/interCompany/interCompanyPostingLegs";
 import {
@@ -513,8 +524,50 @@ export const VoucherProvider = ({
   const pathname = usePathname() || "";
   const { user, customUser, loading: authLoading } = useAuth();
   const { can } = usePermissions();
-  // Selected company may be local even when user is online; treat it as local-data mode.
-  const isLocalCompanySelected = isLocalOnlyMode() || company?.storageOption === "local";
+  const isServerGateCompanyContext =
+    isPlServerSharedCompanyRow(company, null) ||
+    (!!companyId && isPlServerSharedCompanyRow({ id: companyId }, null));
+  // Selected company may be local even when user is online; server-gate mirrored rows bhi SQLite ledger.
+  const isLocalCompanySelected =
+    isLocalOnlyMode() ||
+    companyRowUsesSqliteLedgerWrites(company) ||
+    isServerGateCompanyContext;
+  /** Web dev Firebase mode: company context hydrate se pehle SQLite row se ledger route hint. */
+  const [sqliteLedgerRouteHint, setSqliteLedgerRouteHint] = useState<{
+    usesSqlite: boolean;
+    ownerMatchesUser: boolean;
+  }>({ usesSqlite: false, ownerMatchesUser: false });
+  useEffect(() => {
+    if (!companyId) {
+      setSqliteLedgerRouteHint({ usesSqlite: false, ownerMatchesUser: false });
+      return;
+    }
+    if (companyRowUsesSqliteLedgerWrites(company)) {
+      setSqliteLedgerRouteHint({
+        usesSqlite: true,
+        ownerMatchesUser: String(company?.ownerId || "") === String(user?.uid || ""),
+      });
+      return;
+    }
+    let cancelled = false;
+    void getLocalCompanyById(companyId, { includeDeleted: true })
+      .then((row) => {
+        if (cancelled) return;
+        const usesSqlite = !!row && companyRowUsesSqliteLedgerWrites(row);
+        setSqliteLedgerRouteHint({
+          usesSqlite,
+          ownerMatchesUser: usesSqlite && String(row?.ownerId || "") === String(user?.uid || ""),
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setSqliteLedgerRouteHint({ usesSqlite: false, ownerMatchesUser: false });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, company?.storageOption, company?.syncPolicy, company?.syncedFromCloud, company?.ownerId, user?.uid]);
+  const usesSqliteLedgerForSelectedCompany =
+    isLocalCompanySelected || sqliteLedgerRouteHint.usesSqlite;
   /** Offline unlock same-tab: isCompanyReady / prefetch dubara (localStorage pehle listener ke baad update hota hai). */
   const [localAuthEpoch, setLocalAuthEpoch] = useState(0);
   useEffect(() => {
@@ -545,6 +598,11 @@ export const VoucherProvider = ({
       !!localUser &&
       localCompanyRoleAllowsViewAll(localUser.role);
     if (viewAllRecords || localStaffSeeAll) return applyTargetIcVisibility(activeVouchers);
+
+    // P2P server-gate: gate token se company access mil chuka — local company login na ho to pura ledger dikhao.
+    if (isServerGateCompanyContext && !localUser) {
+      return applyTargetIcVisibility(activeVouchers);
+    }
 
     // Local + viewer/data-entry: apni rows — userId local id / `local` / Firebase uid
     if (isLocalCompanySelected && localUser?.id) {
@@ -825,6 +883,9 @@ export const VoucherProvider = ({
     }
 
     const company = companyRef.current;
+    const isServerGateCompanyContext =
+      isPlServerSharedCompanyRow(company, null) ||
+      (!!companyId && isPlServerSharedCompanyRow({ id: companyId }, null));
 
     const resetAllStates = () => {
       setVouchers([]); setParties([]); setStaff([]); setAccounts([]);
@@ -842,7 +903,7 @@ export const VoucherProvider = ({
 
     // सिंक पेन्डिङ भए वा कम्पनी अपूर्ण भए listener नलगाउने (permission denied रोक्न)।
     // Local/offline company: sharedWithEmails Firebase share hai — SQLite wale users ke liye valid local session kaafi.
-    const shouldUseLocalCompanyData = isLocalCompanySelected;
+    const shouldUseLocalCompanyData = usesSqliteLedgerForSelectedCompany;
     const emailNorm = (e: string) => String(e || "").toLowerCase().trim();
     const userEmailNorm = user?.email ? emailNorm(user.email) : "";
     // EXE/local restore me `sharedWithEmails` kabhi array ke bajay object/string aa sakta hai; `.some` crash avoid.
@@ -853,11 +914,17 @@ export const VoucherProvider = ({
       !!userEmailNorm && sharedWithEmails.some((e) => emailNorm(String(e)) === userEmailNorm);
     const hasLocalUnlockedSession =
       shouldUseLocalCompanyData && !!companyId && !!getLocalAuthToken(companyId);
+    const isServerGateLedgerRow =
+      isPureLocalLedgerCompany(company as Parameters<typeof isPureLocalLedgerCompany>[0]) ||
+      isServerGateCompanyContext;
     const isCompanyReady =
       company?.ownerId === user?.uid ||
       !!company?.ownerEmail ||
       sharedEmailOk ||
-      hasLocalUnlockedSession;
+      hasLocalUnlockedSession ||
+      isServerGateLedgerRow ||
+      isServerGateCompanyContext ||
+      (sqliteLedgerRouteHint.usesSqlite && sqliteLedgerRouteHint.ownerMatchesUser);
     if (!companyId || !user || !isCompanyReady) {
       resetAllStates();
       if (!keepWarmUi) setLoading(false);
@@ -893,9 +960,9 @@ export const VoucherProvider = ({
 
     // Pure offline row: Firestore try mat karo — warna getDoc fail / empty se web jaisa reset ho sakta hai
     const isExplicitLocalRegistryRow =
-      shouldUseLocalCompanyData &&
-      String((company as CloudBackedCompanyShape)?.storageOption || "").toLowerCase() === "local" &&
-      !isCloudBackedCompany(company as CloudBackedCompanyShape);
+      isServerGateCompanyContext ||
+      (shouldUseLocalCompanyData &&
+        (companyRowUsesSqliteLedgerWrites(company) || sqliteLedgerRouteHint.usesSqlite));
 
     /** Company switch / unmount: SQLite callbacks must not write after teardown. */
     let cancelled = false;
@@ -1021,6 +1088,12 @@ export const VoucherProvider = ({
         }
       });
       void loadSqliteChunk(secondary);
+    }
+
+    if (shouldReadLedgerFromSqliteOnly(companyRef.current as Parameters<typeof shouldReadLedgerFromSqliteOnly>[0])) {
+      return () => {
+        cancelled = true;
+      };
     }
 
     // Hybrid Firestore ↔ SQLite — native/APK bundled: wifi off par bhi snapshots bind (snapshot error → SQLite merge niche).
@@ -1373,7 +1446,7 @@ export const VoucherProvider = ({
       unsubRef.current.forEach(u => u());
       unsubRef.current = [];
     };
-  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch, pathname, voucherFormMasterScope]);
+  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch, pathname, voucherFormMasterScope, sqliteLedgerRouteHint.usesSqlite, sqliteLedgerRouteHint.ownerMatchesUser, company?.storageOption, company?.syncPolicy, company?.syncedFromCloud, company?.ownerId]);
 
   // Single-doc / write-path upsert ke baad merge (notify) — collections ke hisaab se state update.
   useEffect(() => {
@@ -1381,12 +1454,14 @@ export const VoucherProvider = ({
     const shouldListenSqliteBump =
       !!companyId &&
       (isLocalOnlyMode() ||
-        String(co?.storageOption || "").toLowerCase() === "local" ||
+        companyRowUsesSqliteLedgerWrites(co as Parameters<typeof companyRowUsesSqliteLedgerWrites>[0]) ||
+        sqliteLedgerRouteHint.usesSqlite ||
         isCloudBackedCompany(co));
       if (shouldSkipHeavyVoucherBootstrap(pathname)) return;
     if (!shouldListenSqliteBump) return;
 
     const mergeCollectionFromSqliteBump = (coll: string) => {
+      livePullDevLog("react_refresh", { companyId, collection: coll, pathname });
       listCompanyDocsFromBrowserDb(companyId, coll, { forBackupMerge: true })
         .then((cached) => {
           if (!cached.length) return;
@@ -1465,7 +1540,29 @@ export const VoucherProvider = ({
       }
       mergeCollectionFromSqliteBump(coll);
     };
+    const mergeActiveCollectionsFromServerMirror = () => {
+      const paths = activeMasterCollectionPathsForRoute(pathname, voucherFormMasterScope);
+      for (const coll of paths) mergeCollectionFromSqliteBump(coll);
+    };
+
+    const onServerMirror = (ev: Event) => {
+      const d = (ev as CustomEvent<PlServerClientMirrorEventDetail>).detail;
+      if (!d?.companyIds?.includes(companyId)) return;
+      if (embeddedClientPrefersQuietBackgroundSync()) {
+        const key = `${companyId}::server-mirror`;
+        const prevTimer = sqliteBumpMergeTimersRef.current[key];
+        if (prevTimer) clearTimeout(prevTimer);
+        sqliteBumpMergeTimersRef.current[key] = setTimeout(() => {
+          delete sqliteBumpMergeTimersRef.current[key];
+          mergeActiveCollectionsFromServerMirror();
+        }, embeddedSqliteBumpDebounceMs(pathname));
+        return;
+      }
+      mergeActiveCollectionsFromServerMirror();
+    };
+
     window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
+    window.addEventListener(PL_SERVER_CLIENT_MIRROR_EVENT, onServerMirror);
     const onRestoreVouchersRefresh = (ev: Event) => {
       const d = (ev as CustomEvent<{ companyId?: string }>).detail;
       if (!d?.companyId || d.companyId !== companyId) return;
@@ -1480,6 +1577,7 @@ export const VoucherProvider = ({
     window.addEventListener(RESTORE_CLOUD_VOUCHERS_REFRESH_EVENT, onRestoreVouchersRefresh);
     return () => {
       window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
+      window.removeEventListener(PL_SERVER_CLIENT_MIRROR_EVENT, onServerMirror);
       window.removeEventListener(RESTORE_CLOUD_VOUCHERS_REFRESH_EVENT, onRestoreVouchersRefresh);
       for (const t of Object.values(sqliteBumpMergeTimersRef.current)) clearTimeout(t);
       sqliteBumpMergeTimersRef.current = {};
@@ -1492,6 +1590,7 @@ export const VoucherProvider = ({
     company?.authoritativeCompanyId,
     pathname,
     voucherFormMasterScope,
+    sqliteLedgerRouteHint.usesSqlite,
   ]);
 
   /** Voucher/account/user display names: masters se pehle, bounded Firestore chunk — `collection('users')` full scan hata (400+ vouchers / large user base = hang). */

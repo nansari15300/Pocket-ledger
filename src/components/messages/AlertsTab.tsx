@@ -45,7 +45,12 @@ import { toast } from "sonner";
 import Link from "next/link";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Badge } from "@/components/ui/badge";
-import { isSuppressibleNewTransactionAlert } from "@/lib/transactionAlerts";
+import {
+  LOCAL_SERVER_SHARE_ALERT_KIND,
+  LOCAL_SERVER_SHARE_ALERT_TYPE,
+  localServerShareAlertGatePath,
+} from "@/lib/plServerShareInvite";
+import { LocalServerShareAlertConnectPanel } from "@/components/messages/LocalServerShareAlertConnectPanel";
 import {
   IC_REVERSE_REQUESTS_CHANGED,
   readInterCompanyReverseInbox,
@@ -59,6 +64,7 @@ import {
   interCompanySystemJoinAlertVisibleForCompany,
   interCompanySystemJoinAlertsGoToPath,
 } from "@/lib/interCompany/interCompanySystemJoinRequest";
+import { isSuppressibleNewTransactionAlert } from "@/lib/transactionAlerts";
 
 type Notification = {
   id: string;
@@ -145,6 +151,7 @@ export function AlertsTab({
     if (kind === "auto_created") return "Auto created voucher";
     if (kind === "ic_reverse_pending") return "Inter Company revert request";
     if (kind === "ic_system_join_pending") return "Inter Company system join";
+    if (kind === "local_server_share_invite") return "Local server invite";
     if (kind === "reconciliation_share_pending") return "Share for Reconciling";
     if (kind === "reconciliation_share_accepted") return "Reconcilink accepted";
     if (kind === "reconciliation_share_unlinked") return "Reconcilink disconnected";
@@ -174,18 +181,6 @@ export function AlertsTab({
   useEffect(() => {
     if (authLoading || !user) {
       if (!authLoading) setLoading(false);
-      return;
-    }
-
-    if (!isCompanyOwner) {
-      setNotifications([]);
-      setLoading(false);
-      return;
-    }
-
-    if (!companyId?.trim()) {
-      setNotifications([]);
-      setLoading(false);
       return;
     }
 
@@ -234,6 +229,53 @@ export function AlertsTab({
       setNotifications(sorted);
       setLoading(false);
     };
+
+    recipientIds.forEach((id) => {
+      const qLocalServer = query(
+        collection(firestore, "admin_notifications"),
+        where("recipientUserId", "==", id),
+        where("kind", "==", LOCAL_SERVER_SHARE_ALERT_KIND)
+      );
+      const unsubLocalServer = onSnapshot(
+        qLocalServer,
+        (snapshot) => {
+          const map = new Map<string, Notification>();
+          snapshot.docs.forEach((d) => map.set(d.id, { id: d.id, ...d.data() } as Notification));
+          byRecipient[`${id}::local_server_share`] = map;
+          recompute();
+        },
+        (error) => {
+          console.warn("Local server share alerts snapshot:", error);
+        }
+      );
+      unsubscribers.push(unsubLocalServer);
+    });
+
+    const recipientEmail = String(user?.email || "").trim().toLowerCase();
+    if (recipientEmail.includes("@")) {
+      const qLocalServerByEmail = query(
+        collection(firestore, "admin_notifications"),
+        where("recipientEmail", "==", recipientEmail),
+        where("kind", "==", LOCAL_SERVER_SHARE_ALERT_KIND)
+      );
+      const unsubLocalServerEmail = onSnapshot(
+        qLocalServerByEmail,
+        (snapshot) => {
+          const map = new Map<string, Notification>();
+          snapshot.docs.forEach((d) => map.set(d.id, { id: d.id, ...d.data() } as Notification));
+          byRecipient[`email::${recipientEmail}::local_server_share`] = map;
+          recompute();
+        },
+        (error) => {
+          console.warn("Local server share alerts (email) snapshot:", error);
+        }
+      );
+      unsubscribers.push(unsubLocalServerEmail);
+    }
+
+    if (!isCompanyOwner || !companyId?.trim()) {
+      return () => unsubscribers.forEach((unsub) => unsub());
+    }
 
     recipientIds.forEach((id) => {
       const q = query(
@@ -434,7 +476,7 @@ export function AlertsTab({
             <div className="space-y-1 sm:space-y-2 pb-4 w-full">
             {loading || authLoading ? (
                 <LoadingSkeleton />
-            ) : !isCompanyOwner ? (
+            ) : !isCompanyOwner && notifications.length === 0 ? (
                 <div className="text-center py-12 sm:py-16 text-muted-foreground text-sm">
                     Alerts are only visible to the company owner.
                 </div>
@@ -452,6 +494,9 @@ export function AlertsTab({
                     const isRecycleBinAlert = (n as any).type === "recycle_bin_alert";
                     const isIcReverseAlert = (n as any).type === "inter_company_reverse_request";
                     const isIcInviteAlert = (n as any).type === "inter_company_invite";
+                    const isLocalServerShareAlert =
+                      (n as any).type === LOCAL_SERVER_SHARE_ALERT_TYPE ||
+                      (n as any).kind === LOCAL_SERVER_SHARE_ALERT_KIND;
                     const isIcSystemJoinAlert =
                       (n as any).kind === "ic_system_join_pending" ||
                       (n as any).type === "inter_company_system_join";
@@ -464,10 +509,13 @@ export function AlertsTab({
                     const icSystemJoinGoTo = isIcSystemJoinAlert
                       ? interCompanySystemJoinAlertsGoToPath(n as Record<string, unknown>, companyId || undefined)
                       : "";
+                    const localServerGatePath = isLocalServerShareAlert
+                      ? localServerShareAlertGatePath(n as Record<string, unknown>)
+                      : "";
                     const hasOpenEdit =
                       (isTransactionAlert || isRecycleBinAlert || isIcReverseAlert) &&
-                      (n as any).voucherId &&
-                      (n as any).companyId;
+                      Boolean((n as any).voucherId) &&
+                      Boolean((n as any).companyId);
                     const timeAgo = n.timestamp?.toDate ? formatDistanceToNow(n.timestamp.toDate(), { addSuffix: true }) : "";
                     const voucherNo = (n as any).voucherNumber;
                     const amountFormatted = (n as any).amountFormatted;
@@ -494,7 +542,8 @@ export function AlertsTab({
                           isTransactionAlert ||
                           isIcReverseAlert ||
                           isIcInviteAlert ||
-                          isIcSystemJoinAlert
+                          isIcSystemJoinAlert ||
+                          isLocalServerShareAlert
                             ? getAlertTitle(n)
                             : "Alert",
                         right: (
@@ -527,6 +576,21 @@ export function AlertsTab({
                             className="text-primary font-medium text-xs sm:text-sm underline underline-offset-2 hover:no-underline"
                           >
                             Go to Inter Company
+                          </Link>
+                        ),
+                      }] : []),
+                      ...(isLocalServerShareAlert && n.message ? [{
+                        label: "Message",
+                        right: <span className="text-sm whitespace-pre-wrap">{n.message}</span>,
+                      }] : []),
+                      ...(isLocalServerShareAlert && localServerGatePath ? [{
+                        label: "Quick link",
+                        right: (
+                          <Link
+                            href={localServerGatePath}
+                            className="text-primary font-medium text-xs sm:text-sm underline underline-offset-2 hover:no-underline"
+                          >
+                            Open Gate (prefilled)
                           </Link>
                         ),
                       }] : []),
@@ -673,6 +737,14 @@ export function AlertsTab({
                                   </div>
                                 </React.Fragment>
                               ))}
+                              {isLocalServerShareAlert ? (
+                                <div className="col-span-2 pt-1">
+                                  <LocalServerShareAlertConnectPanel
+                                    notification={n as Record<string, unknown>}
+                                    onConnected={() => void handleMarkAsRead(n.id)}
+                                  />
+                                </div>
+                              ) : null}
                               <span className="col-span-1" />
                               <div className={cn(
                                 "col-span-2 flex flex-wrap gap-2 items-center",

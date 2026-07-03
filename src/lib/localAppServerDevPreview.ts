@@ -47,16 +47,6 @@ export function isAdminPanelDevPreview(): boolean {
   return isLocalhostDevPreview();
 }
 
-/** Settings → Server nav (EXE / loopback / `npm run dev`, APK par nahi). */
-export function isLocalAppServerSettingsNavVisible(): boolean {
-  if (isCapacitorNativeApp()) return false;
-  if (typeof window === "undefined") return process.env.NODE_ENV === "development";
-  if (process.env.NODE_ENV === "development") return true;
-  if (getEmbeddedLockShellKind() === "exe") return true;
-  if (isElectronPackagedShell()) return true;
-  return isLocalAppServerHost();
-}
-
 export function isAdminPanelNavVisible(isSuperAdminUser: boolean, isStaticAppBundle: boolean): boolean {
   if (isAdminPanelDevPreview()) return true;
   return isSuperAdminUser && !isStaticAppBundle;

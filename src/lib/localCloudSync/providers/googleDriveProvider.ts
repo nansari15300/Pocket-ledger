@@ -1,6 +1,6 @@
 "use client";
 
-import { getBillingApiUrl } from "@/lib/billingApiOrigin";
+import { resolveDriveHostedApiUrl } from "@/lib/driveHostedApiOrigin";
 import { getFirebaseIdTokenForApi } from "@/lib/firebaseAuthForApi";
 import { hostedApiFetch } from "@/lib/hostedApiFetch";
 
@@ -21,7 +21,7 @@ import {
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const { token } = await getFirebaseIdTokenForApi();
   // Static bundle me `/api/local-cloud-sync/*` sirf hosted server par — relative fetch mat karo.
-  const res = await hostedApiFetch(getBillingApiUrl(path), {
+  const res = await hostedApiFetch(resolveDriveHostedApiUrl(path), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

@@ -45,6 +45,10 @@ import { InterCompanyVoucherForm } from "@/components/inter-company/InterCompany
 import type { InterCompanyRibbonTab } from "@/components/inter-company/InterCompanyRibbonNav";
 import { isInterCompanyVoucherEditDeleteBlocked } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { useCompany, CompanyContext } from "@/hooks/useCompany";
+import {
+  listCompaniesForVoucherCopyTo,
+  PL_SERVER_ACCESS_CONTEXT_EVENT,
+} from "@/lib/plServerAccessContext";
 import usePermissions from "@/hooks/usePermissions";
 import { routeHasVoucherFormMastersLoaded, useVouchers, VoucherProvider } from "@/hooks/useVouchers";
 import { determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
@@ -1299,8 +1303,28 @@ export function AddVoucherDialog(props: any) {
   // Outer company context full reference: dialog-scope override provider build karne ke liye (forms ko target company dikhana hai
   // bina global app state badale).
   const outerCompanyContext = useCompany();
-  const { companyId: ctxCompanyId, setCompanyId, company: ctxCompany, effectiveNotificationSettings, allCompanies } =
-    outerCompanyContext;
+  const {
+    companyId: ctxCompanyId,
+    setCompanyId,
+    company: ctxCompany,
+    effectiveNotificationSettings,
+    allCompanies,
+    allCompaniesRegistry,
+  } = outerCompanyContext;
+  /** Save & Copy To header dropdown: local + online + server-shared — gate-filtered sidebar list nahi. */
+  const [copyToListEpoch, setCopyToListEpoch] = React.useState(0);
+  React.useEffect(() => {
+    const bump = () => setCopyToListEpoch((n) => n + 1);
+    window.addEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, bump);
+    return () => window.removeEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, bump);
+  }, []);
+  const copyToCompanies = useMemo(() => {
+    void copyToListEpoch;
+    const registry = allCompaniesRegistry?.length ? allCompaniesRegistry : allCompanies;
+    return listCompaniesForVoucherCopyTo(registry).sort((a, b) =>
+      String(a.name || a.id).localeCompare(String(b.name || b.id), undefined, { sensitivity: "base" })
+    );
+  }, [allCompaniesRegistry, allCompanies, copyToListEpoch]);
   /** Voucher jis company ka hai (Compare Side A/B) — header company se alag ho sakta hai. */
   const companyId = String(editCompanyId?.trim() || ctxCompanyId || "");
   const company = useMemo(() => {
@@ -1461,7 +1485,7 @@ export function AddVoucherDialog(props: any) {
   }, [postCopyNewFormSeed, editCompanyId, ctxCompanyId]);
 
   /** Create / edit / copy: header company dropdown jab account me 1 se zyada company ho. */
-  const showHeaderCompanySelector = allCompanies.length > 1;
+  const showHeaderCompanySelector = copyToCompanies.length > 1;
 
   /** Inter Company tab — header company sirf current (sidebar / edit) company; dropdown lock. */
   const interCompanyHeaderLockedCompanyId = useMemo(() => {
@@ -2396,7 +2420,7 @@ export function AddVoucherDialog(props: any) {
     const sourceCompanyId = String(companyId || "").trim();
     const destinationCompanyId = String(targetCompanyIdRef.current || targetCompanyId || "").trim();
     /** Source lane: APK Firestore-company par local mirror fallback copy-race ko bigaad sakta tha (`apkEntityWriteUsesLocalSqliteMirror`). */
-    const sourceLaneCompany = allCompanies.find((c) => c.id === sourceCompanyId) ?? company ?? null;
+    const sourceLaneCompany = copyToCompanies.find((c) => c.id === sourceCompanyId) ?? company ?? null;
     const readLocalVoucherStaleFallback = apkEntityWriteUsesLocalSqliteMirror(sourceLaneCompany);
     if (!sourceCompanyId || !destinationCompanyId) {
       toast.error("Company not selected.");
@@ -2498,7 +2522,7 @@ export function AddVoucherDialog(props: any) {
           return null;
         }
       }
-      const targetCompanyDoc = allCompanies.find((c) => c.id === destinationCompanyId) || null;
+      const targetCompanyDoc = copyToCompanies.find((c) => c.id === destinationCompanyId) || null;
       const nextVoucherNumber = await getNextVoucherNumberForCompany({
         companyId: destinationCompanyId,
         companyDoc: targetCompanyDoc as Record<string, unknown>,
@@ -2513,7 +2537,7 @@ export function AddVoucherDialog(props: any) {
         sourceCompanyId,
         destinationCompanyId,
         cleaned,
-        allCompanies
+        copyToCompanies
       );
       const { id: _sourceVoucherDocId, ...remappedSansId } = remapped as Record<string, unknown>;
       const copyPayloadBase = {
@@ -2530,7 +2554,7 @@ export function AddVoucherDialog(props: any) {
       const copyPayload = filterVoucherAttachmentsForCompanyContext(
         importedCopy.voucher as Record<string, unknown>,
         destinationCompanyId,
-        new Set(allCompanies.map((c) => c.id).filter(Boolean))
+        new Set(copyToCompanies.map((c) => c.id).filter(Boolean))
       );
       const nextNewFormSeed = {
         ...copyPayload,
@@ -2557,7 +2581,7 @@ export function AddVoucherDialog(props: any) {
     targetCompanyId,
     user?.uid,
     effectiveVoucher?.id,
-    allCompanies,
+    copyToCompanies,
     postCopyNewFormSeed,
     effectiveVoucher,
     defaultVoucherData,
@@ -2577,13 +2601,13 @@ export function AddVoucherDialog(props: any) {
         sourceCompanyId,
         destinationCompanyId,
         cleaned,
-        allCompanies
+        copyToCompanies
       );
       setCopyMismatchCategories(unmatchedCategories);
     } catch {
       /* Firestore list race par ignore — user fir save / company change kar sakta hai */
     }
-  }, [companyId, targetCompanyId, postCopyNewFormSeed, copySourceVoucherSnapshot, allCompanies]);
+  }, [companyId, targetCompanyId, postCopyNewFormSeed, copySourceVoucherSnapshot, copyToCompanies]);
 
   /** Quartet (PI/PO/DInc/DExp) tabs switch — prefilled Create_* dialog cancel + mismatch recount; tab-click se dialog na khule. */
   const onCashflowQuadTabNavigate = useCallback(() => {
@@ -2600,9 +2624,9 @@ export function AddVoucherDialog(props: any) {
     collectLikelyReferenceIds(copySourceVoucherSnapshot, candidateIdsBucket);
     const candidateIds = Array.from(candidateIdsBucket);
     const targetCompanyNameResolved =
-      allCompanies.find((c) => c.id === destinationCompanyId)?.name || "selected company";
-    const sourceLaneCompany = allCompanies.find((c) => c.id === sourceCompanyId) ?? null;
-    const destLaneCompany = allCompanies.find((c) => c.id === destinationCompanyId) ?? null;
+      copyToCompanies.find((c) => c.id === destinationCompanyId)?.name || "selected company";
+    const sourceLaneCompany = copyToCompanies.find((c) => c.id === sourceCompanyId) ?? null;
+    const destLaneCompany = copyToCompanies.find((c) => c.id === destinationCompanyId) ?? null;
 
     /** Jo row/side user ne Copy dabaya — seed snapshot ki exact master id pehle; baaki Set order par depend na ho. */
     const preferredMasterIds = resolvePreferredSourceMasterIdsFromSnapshot(copySourceVoucherSnapshot, opts);
@@ -2715,7 +2739,7 @@ export function AddVoucherDialog(props: any) {
       title: "Reference Not Available For Copy",
       message: formalMessage,
     });
-  }, [companyId, targetCompanyId, copySourceVoucherSnapshot, allCompanies]);
+  }, [companyId, targetCompanyId, copySourceVoucherSnapshot, copyToCompanies]);
 
   // Copy-draft mode me dropdown se target company badle to form ko naye target ke hisaab se auto re-seed karo:
   // voucher number target company ka next number, party/account/item IDs naye company me name-match se remap.
@@ -3678,7 +3702,7 @@ export function AddVoucherDialog(props: any) {
                           <SelectValue placeholder="Company" />
                         </SelectTrigger>
                         <SelectContent>
-                          {allCompanies.map((c) => (
+                          {copyToCompanies.map((c) => (
                             <SelectItem key={c.id} value={c.id}>
                               {c.name}
                             </SelectItem>
@@ -3715,7 +3739,7 @@ export function AddVoucherDialog(props: any) {
                           <SelectValue placeholder="Company" />
                         </SelectTrigger>
                         <SelectContent>
-                          {allCompanies.map((c) => (
+                          {copyToCompanies.map((c) => (
                             <SelectItem key={c.id} value={c.id}>
                               {c.name}
                             </SelectItem>
@@ -4043,13 +4067,13 @@ export function AddVoucherDialog(props: any) {
       return outerCompanyContext;
     }
     const targetCompanyDoc =
-      allCompanies.find((c) => c.id === (targetCompanyId || "")) ?? ctxCompany ?? null;
+      copyToCompanies.find((c) => c.id === (targetCompanyId || "")) ?? ctxCompany ?? null;
     return {
       ...outerCompanyContext,
       companyId: targetCompanyId || outerCompanyContext.companyId,
       company: targetCompanyDoc,
     };
-  }, [apkLedgerPinsShellCompanyContext, outerCompanyContext, targetCompanyId, allCompanies, ctxCompany]);
+  }, [apkLedgerPinsShellCompanyContext, outerCompanyContext, targetCompanyId, copyToCompanies, ctxCompany]);
 
   /**
    * Copy-to / compare-edit: dialog company ≠ shell → nested `VoucherProvider` se doosri company ke masters.
@@ -4103,7 +4127,7 @@ export function AddVoucherDialog(props: any) {
           onEffectiveLinksChange={(v) => setEffectiveHasLinksFromForm(v === undefined ? null : v)}
           onClearEffectiveLinksOnTabChange={clearEffectiveLinksOnTabChange}
           targetCompanyId={targetCompanyId}
-          targetCompanyOptions={allCompanies.map((c) => ({ id: c.id, name: c.name }))}
+          targetCompanyOptions={copyToCompanies.map((c) => ({ id: c.id, name: c.name }))}
           onTargetCompanyChange={handleLedgerHeaderCompanyChange}
           formInstanceKey={copyDraftSeedVersion}
           // Multi-company: create / edit / copy sab par header company dropdown.

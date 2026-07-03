@@ -17,14 +17,14 @@ export function isLocalOnlyMode(): boolean {
 }
 
 /**
- * Static/APK/EXE offline: company list sirf SQLite se.
- * Online: `isLiveFirestoreCompanyRegistry` — web jaisa Firestore onSnapshot.
+ * Local-only builds: company list hamesha SQLite-first (refresh par turant load).
+ * Firestore registry sirf background mirror ke liye — UI `loading` block na kare.
  */
-export function isOfflineSqliteCompanyRegistry(browserOnline: boolean): boolean {
-  return isLocalOnlyMode() && !browserOnline;
+export function isOfflineSqliteCompanyRegistry(_browserOnline: boolean): boolean {
+  return isLocalOnlyMode();
 }
 
-/** Web Firebase mode, ya static/APK jab online ho — live Firestore company registry. */
-export function isLiveFirestoreCompanyRegistry(browserOnline: boolean): boolean {
-  return !isLocalOnlyMode() || browserOnline;
+/** Web Firebase mode — live Firestore onSnapshot company registry. */
+export function isLiveFirestoreCompanyRegistry(_browserOnline: boolean): boolean {
+  return !isLocalOnlyMode();
 }

@@ -1333,7 +1333,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       if (isEdit) {
         // Check edit permission - determine ownership
         // Offline: `getDoc` network par block — mirror se voucher row (save hang avoid).
-        const preferLocalReads = preferLocalLedgerReads();
+        const preferLocalReads = preferLocalLedgerReads(company);
         const fetchVoucher = async (cid: string, vid: string) => {
           if (preferLocalReads) {
             return await getCompanyDocFromBrowserDb(cid, "vouchers", vid);
@@ -1357,7 +1357,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               : new Date(existingVoucher.date);
           } else if (companyId) {
             // Edit date baseline: offline par Firestore read mat karo — mirror row se `date`.
-            const preferLocalReadsDate = preferLocalLedgerReads();
+            const preferLocalReadsDate = preferLocalLedgerReads(company);
             if (preferLocalReadsDate) {
               const row = await getCompanyDocFromBrowserDb(companyId, "vouchers", savedVoucherId);
               if (row?.date != null) {
@@ -1406,7 +1406,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
       if (!idArgForFirestore || data.voucherNumber !== voucher?.voucherNumber) {
         // Duplicate check: offline par `getDocs` hang — mirror scan (outbox/SQLite-backed list).
-        const preferLocalReads = preferLocalLedgerReads();
+        const preferLocalReads = preferLocalLedgerReads(company);
         let duplicateOtherId: string | null = null;
         if (preferLocalReads) {
           const hit = await findVoucherInLocalMirrorByNumberAndType(companyId, data.voucherNumber, voucherType);

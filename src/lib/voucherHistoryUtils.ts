@@ -7,6 +7,8 @@ import { firestore } from "@/lib/firebase";
 import { getPlan, type PlanId } from "@/config/plans";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 
 export type VoucherHistoryFullBehavior = 'block_edit' | 'allow_edit_delete_last';
 
@@ -22,13 +24,21 @@ export function normalizeVoucherHistoryFullBehavior(raw: unknown): VoucherHistor
 }
 
 export async function getEffectiveHistorySettings(companyId: string): Promise<{ enabled: boolean; limit: number; fullBehavior: VoucherHistoryFullBehavior }> {
+  const localDefaults = { enabled: true, limit: 10, fullBehavior: "allow_edit_delete_last" as const };
   if (isLocalOnlyMode()) {
-    // Local-only mode me Firestore reads avoid karo; safe defaults se edit/save flow chalne do.
-    return { enabled: true, limit: 10, fullBehavior: "allow_edit_delete_last" };
+    return localDefaults;
+  }
+  try {
+    const reg = await getLocalCompanyById(companyId);
+    if (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) {
+      return localDefaults;
+    }
+  } catch {
+    /* registry miss */
   }
   // Static/APK + device offline: `getDocFromServer` / company read mat — `saveVoucherOfflineLocalCreate` "Saving…" yahin atakta tha.
   if (apkEmbeddedSqliteFirstWritesPreferred() || (typeof navigator !== "undefined" && !navigator.onLine)) {
-    return { enabled: true, limit: 10, fullBehavior: "allow_edit_delete_last" };
+    return localDefaults;
   }
   // Prefer server read so live settings (from Voucher Settings) apply immediately; fallback to cache if offline
   let companySnap;

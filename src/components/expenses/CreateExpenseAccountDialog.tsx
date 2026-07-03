@@ -841,6 +841,7 @@ export function CreateExpenseAccountDialog({
               docsInputRef={docsInputRef}
               onDocsChange={handleDocumentsChange}
               canAttachDocuments={canAttachDocuments}
+              attachmentCompanyId={companyId ?? undefined}
               entityStatementLabel="income/expense account"
               inputId="create-expense-docs"
             />

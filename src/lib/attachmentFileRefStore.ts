@@ -17,9 +17,17 @@ export type AttachmentFileRefRow = {
 };
 
 /** SQLite row upsert: binary bytes alag DataDirectory me, yahan stable path+meta only. */
-export async function upsertAttachmentFileRef(row: AttachmentFileRefRow): Promise<void> {
+export async function upsertAttachmentFileRef(
+  row: AttachmentFileRefRow,
+  options?: { required?: boolean }
+): Promise<void> {
   const db = await getBrowserDb();
-  if (!db) return;
+  if (!db) {
+    if (options?.required) {
+      throw new Error("Local database not ready — could not index restored attachment");
+    }
+    return;
+  }
   db.prepare(
     `INSERT INTO attachment_file_refs(scope, id, file_path, content_type, size, meta_json, updatedAt, sha256_hex)
      VALUES(?,?,?,?,?,?,?,?)

@@ -26,6 +26,11 @@ const baseConfig: NextConfig = {
   reactStrictMode: false,
   // Pdf.js Turbopack me seedha bundle; SWC transpile se nested bundle clash kam
   transpilePackages: ["pdfjs-dist"],
+  // EXE/APK static export: build-time tsc/eslint skip — alag `npm run typecheck` chalao
+  ...(isStaticBuild && {
+    typescript: { ignoreBuildErrors: true },
+    eslint: { ignoreDuringBuilds: true },
+  }),
   // Static export only when building for APK (npm run build:static)
   ...(isStaticBuild && { output: "export" }),
   // Electron now serves static export over localhost HTTP, so keep default root asset paths (/_next/*).
@@ -46,12 +51,11 @@ const baseConfig: NextConfig = {
   },
 };
 
-// Hosted/static PWA: Serwist `npm run build` + `npm run build:static` dono (`out/` deploy / APK-packaged `webDir`).
-// STATIC_BUILD par `trailingSlash: true` — precache slash +slash-less dono (~offline SPA fallback stable).
+// Hosted/static PWA: Serwist web deploy ke liye. EXE/APK static export par band — har route precache = 10+ min build.
 const withSerwist = withSerwistInit({
   swSrc: "src/app/sw.ts",
   swDest: "public/sw.js",
-  disable: false,
+  disable: isStaticBuild,
   additionalPrecacheEntries: [
     { url: "/~offline", revision: serwistOfflineRevision() },
     ...(isStaticBuild ? [{ url: "/~offline/", revision: serwistOfflineRevision() }] : []),

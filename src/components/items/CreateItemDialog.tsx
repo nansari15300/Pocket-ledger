@@ -1345,6 +1345,7 @@ const capitalizeFirstLetter = (str: string) => {
                     docsInputRef={docsInputRef}
                     onDocsChange={handleDocsChange}
                     canAttachDocuments={canAttachDocuments}
+                    attachmentCompanyId={companyId ?? undefined}
                     entityStatementLabel="item"
                     inputId="create-item-docs-input"
                   />

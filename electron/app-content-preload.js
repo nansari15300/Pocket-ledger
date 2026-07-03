@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld("plElectronBackup", {
 /** EXE: voucher/transaction attachment bytes — userData/pl-attachments (APK DataDirectory jaisa). */
 contextBridge.exposeInMainWorld("plElectronAttachments", {
   writeFile: (args) => ipcRenderer.invoke("pl-attachment-write", args),
+  writeFileBinary: (args) => ipcRenderer.invoke("pl-attachment-write-binary", args),
   readFile: (args) => ipcRenderer.invoke("pl-attachment-read", args),
   deleteFile: (relativePath) => ipcRenderer.invoke("pl-attachment-delete", relativePath),
   exists: (relativePath) => ipcRenderer.invoke("pl-attachment-exists", relativePath),
@@ -48,7 +49,7 @@ contextBridge.exposeInMainWorld("plElectronAttachments", {
 
 /** EXE: Google sign-in system browser (Chrome/Edge) — saved account one-tap. */
 contextBridge.exposeInMainWorld("plElectronAuth", {
-  signInWithGoogleExternal: () => ipcRenderer.invoke("pl-google-auth-external"),
+  signInWithGoogleExternal: (options) => ipcRenderer.invoke("pl-google-auth-external", options),
 });
 
 /** Gate → Connect & open: inject access token on remote server static requests (WAN IP). */

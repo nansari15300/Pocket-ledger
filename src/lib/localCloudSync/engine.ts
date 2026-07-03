@@ -172,6 +172,7 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
         if (!shouldApplyRemoteCloudSyncOp(local, op)) continue;
         const merged = mergeRemotePayloadIntoLocal(local, op);
         await upsertCompanyDocInBrowserDb(cid, op.table, op.rowId, merged, {
+          notify: false,
           skipCloudSyncEnqueue: true,
           force: true,
         });

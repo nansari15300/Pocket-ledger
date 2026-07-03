@@ -166,6 +166,7 @@ export async function canSyncCompanyToServer(companyId: string): Promise<boolean
   // Cloud mirror row: `storageOption` may be missing — old `(c.storageOption || "local")` incorrectly blocked sync
   const localCompany = await getLocalCompanyById(companyId, { includeDeleted: true });
   if (!localCompany) return false;
+  if ((localCompany as { plServerShared?: boolean }).plServerShared === true) return false;
   const c = localCompany as Record<string, unknown>;
   const soRaw = c.storageOption;
   const storageOption =

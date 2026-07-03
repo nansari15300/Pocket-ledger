@@ -33,6 +33,8 @@ import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { findVoucherInLocalMirrorByNumberAndType } from "@/lib/localCompanyDocMirror";
 import {
   appendLocalOnlyVoucherFilesToUrls,
   shouldDeferStorageIncrementUntilPendingUpload,
@@ -925,13 +927,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
     try {
       if (!savedVoucherId || effectiveVoucherNumber !== (voucher?.voucherNumberOut ?? voucher?.voucherNumber)) {
-        const q = query(
-          collection(firestore, `companies/${companyId}/vouchers`),
-          where("voucherNumber", "==", effectiveVoucherNumber),
-          where("type", "==", "contra")
-        );
-        const existingVoucherSnap = await getDocs(q);
-        if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== savedVoucherId) {
+        const preferLocalReads = preferLocalLedgerReads(company);
+        let duplicateOtherId: string | null = null;
+        if (preferLocalReads) {
+          const hit = await findVoucherInLocalMirrorByNumberAndType(companyId, effectiveVoucherNumber, "contra");
+          if (hit && hit.id !== savedVoucherId) duplicateOtherId = hit.id;
+        } else {
+          const q = query(
+            collection(firestore, `companies/${companyId}/vouchers`),
+            where("voucherNumber", "==", effectiveVoucherNumber),
+            where("type", "==", "contra")
+          );
+          const existingVoucherSnap = await getDocs(q);
+          if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== savedVoucherId) {
+            duplicateOtherId = existingVoucherSnap.docs[0].id;
+          }
+        }
+        if (duplicateOtherId) {
           sonnerToast.error("Duplicate Voucher Number", { id: toastId, description: "This voucher number is already in use." });
           setIsLoading(false);
           return;

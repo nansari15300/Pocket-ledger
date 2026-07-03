@@ -30,6 +30,7 @@ export type LocalAppServerAccessTokenSummary = {
   lastUsedAt: string | null;
   tokenPreview: string;
   allowedCompanyIds: string[];
+  invitedEmails?: string[];
 };
 
 export type LocalAppServerStatus = {
@@ -38,6 +39,8 @@ export type LocalAppServerStatus = {
   appUiServing?: boolean;
   sharingActive?: boolean;
   port: number | null;
+  appUiPort?: number | null;
+  sharingPort?: number | null;
   configuredPort: number;
   bindMode: LocalServerBindMode;
   appOnlyAccess: boolean;
@@ -79,7 +82,7 @@ export type PlElectronLocalServerApi = {
   }>;
   updateAccessToken: (
     id: string,
-    input: { label?: string; allowedCompanyIds?: string[] }
+    input: { label?: string; allowedCompanyIds?: string[]; invitedEmails?: string[] }
   ) => Promise<{ ok: boolean; token?: LocalAppServerAccessTokenSummary }>;
   getAccessTokenSecret: (id: string) => Promise<{
     ok: boolean;

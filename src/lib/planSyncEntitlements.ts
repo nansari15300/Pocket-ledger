@@ -27,11 +27,3 @@ export function maxOnlineSlotsRespectingPlan(
   if (!planAllowsFirebaseOnline(planId, livePlan)) return 0;
   return baseMaxOnline;
 }
-
-export function planAllowsLocalAppServer(
-  planId: PlanId | string | null | undefined,
-  livePlan?: Plan | null
-): boolean {
-  const plan = livePlan ?? getPlan((planId as PlanId) || "basic");
-  return entitlementBool(plan.entitlements, "allowLocalAppServer");
-}

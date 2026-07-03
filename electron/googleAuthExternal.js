@@ -120,7 +120,7 @@ function ensureCallbackServer() {
   });
 }
 
-function buildGoogleAuthUrl(redirectUri, sessionId) {
+function buildGoogleAuthUrl(redirectUri, sessionId, options = {}) {
   const params = new URLSearchParams({
     client_id: FIREBASE_WEB_CLIENT_ID,
     redirect_uri: redirectUri,
@@ -128,15 +128,19 @@ function buildGoogleAuthUrl(redirectUri, sessionId) {
     scope: "openid email profile",
     nonce: sessionId,
     state: sessionId,
+    prompt: "select_account",
   });
+  const loginHint = String(options.loginHint || "").trim();
+  if (loginHint) params.set("login_hint", loginHint);
   return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
 }
 
 /**
- * System browser (Chrome/Edge) me Google login — saved account one-tap.
+ * System browser (Chrome/Edge) me Google login — account chooser (select_account).
  * @param {{ openExternal: (url: string) => Promise<void> }} shell
+ * @param {{ loginHint?: string }} [options]
  */
-async function signInWithGoogleExternal(shell) {
+async function signInWithGoogleExternal(shell, options = {}) {
   const port = await ensureCallbackServer();
   const sessionId = crypto.randomUUID();
   const redirectUri = `http://127.0.0.1:${port}${CALLBACK_PATH}`;
@@ -149,7 +153,7 @@ async function signInWithGoogleExternal(shell) {
     pendingSessions.set(sessionId, { resolve, reject, timeout });
   });
 
-  const authUrl = buildGoogleAuthUrl(redirectUri, sessionId);
+  const authUrl = buildGoogleAuthUrl(redirectUri, sessionId, options);
   await shell.openExternal(authUrl);
   return promise;
 }

@@ -27,6 +27,8 @@ import {
   isCurrentUserOwnerOfCompanyRow,
   isCurrentUserSharedOnCompanyRow,
 } from "@/lib/companyOnlineIntegrity";
+import { isDeviceLocalCompany } from "@/lib/companyStorageKind";
+import { isLocalBackupRestoredCompanyRow } from "@/lib/localBackupRestoreCompany";
 import { pullSharedOnlineCompaniesFromFirestore } from "@/lib/sharedCompaniesFirestorePull";
 import { sharedCompanyQuerySpecs } from "@/lib/sharedWithEmailsQuery";
 
@@ -286,11 +288,11 @@ export async function purgeGhostOnlineCompanyMirrors(
     const isOwner = isCurrentUserOwnerOfCompanyRow(row, user);
     const isSharedMirror =
       !isOwner && isCurrentUserSharedOnCompanyRow(row, user);
-    const isPureLocalRow = String((row as { storageOption?: string }).storageOption || "").toLowerCase() === "local";
+    const isPureLocalRow = isDeviceLocalCompany(row);
     const isDriveSharedJoin = (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;
     if (isOwner && isPureLocalRow) continue;
     if (isDriveSharedJoin) continue;
-    if (isPureLocalRow) continue;
+    if (isPureLocalRow || isLocalBackupRestoredCompanyRow(row as Record<string, unknown>)) continue;
     if (isSharedMirror) continue;
     if (localCompanyRowIsDeleted(row)) continue;
     await removeLocalCompanyById(id, { firebaseUid: user.uid });

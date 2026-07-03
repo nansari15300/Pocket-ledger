@@ -5,11 +5,71 @@ import type { PlServerSharedCompanySummary } from "@/lib/localServerShareableCom
 import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 import { isLocalAppServerHost } from "@/lib/localAppServerDevPreview";
 import { getActiveGate } from "@/lib/gates/gateStore";
+import { fetchGateServerAccessContext } from "@/lib/gates/gateServerFetch";
 
 const STORAGE_IDS = "pl_server_allowed_company_ids";
 const STORAGE_LABEL = "pl_server_access_label";
 const STORAGE_COMPANIES = "pl_server_shared_companies_v1";
 const STORAGE_GATE_ID = "pl_server_context_gate_id";
+/** Gate page preview — per gate id (Online active rehne par bhi Test list dikhe). */
+const GATE_PREVIEW_PREFIX = "pl_server_gate_preview_v1:";
+
+type GatePreviewSnapshot = {
+  allowedCompanyIds: string[] | null;
+  label?: string | null;
+  companies: PlServerSharedCompanySummary[];
+  updatedAtMs?: number;
+};
+
+function gatePreviewStorageKey(gateId: string): string {
+  return `${GATE_PREVIEW_PREFIX}${String(gateId || "").trim()}`;
+}
+
+function persistGatePreviewSnapshot(gateId: string, payload: PlServerAccessContextPayload): void {
+  const gid = String(gateId || "").trim();
+  if (!gid || typeof window === "undefined") return;
+  try {
+    const companies = companiesFromAccessPayload(payload);
+    const snap: GatePreviewSnapshot = {
+      allowedCompanyIds: payload.unrestricted ? null : payload.allowedCompanyIds ?? null,
+      label: payload.label ?? null,
+      companies,
+      updatedAtMs: Date.now(),
+    };
+    sessionStorage.setItem(gatePreviewStorageKey(gid), JSON.stringify(snap));
+  } catch {
+    /* ignore */
+  }
+}
+
+function readGatePreviewSnapshot(gateId: string): GatePreviewSnapshot | null {
+  const gid = String(gateId || "").trim();
+  if (!gid || typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(gatePreviewStorageKey(gid));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as GatePreviewSnapshot;
+    return {
+      allowedCompanyIds: Array.isArray(parsed.allowedCompanyIds)
+        ? parsed.allowedCompanyIds.map((x) => String(x).trim()).filter(Boolean)
+        : parsed.allowedCompanyIds,
+      label: parsed.label ?? null,
+      companies: normalizeSharedCompanies(parsed.companies),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Gate remove par us gate ka cached Test preview hatao. */
+export function clearPlServerGatePreview(gateId: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem(gatePreviewStorageKey(String(gateId || "").trim()));
+  } catch {
+    /* ignore */
+  }
+}
 /** Dev: Client settings → access token for filtering company list on localhost. */
 export const PL_DEV_CLIENT_ACCESS_TOKEN_KEY = "pl_dev_client_access_token";
 export const PL_SERVER_ACCESS_CONTEXT_EVENT = "pl-server-access-context";
@@ -22,6 +82,11 @@ export type PlServerAccessContextPayload = {
 };
 
 export type CompanyWithPlServerShared = Company & { plServerShared?: boolean };
+
+/** Registry / gate filters — null rows se `plServerShared` crash avoid. */
+function compactCompanyList(companies: Company[]): Company[] {
+  return companies.filter((c): c is Company => c != null && typeof c === "object" && Boolean(String(c.id || "").trim()));
+}
 
 function isLocalAppHost(): boolean {
   return isLocalAppServerHost();
@@ -82,6 +147,14 @@ function companiesFromAccessPayload(payload: PlServerAccessContextPayload): PlSe
   }));
 }
 
+/** Gate Test toast — same rules as sessionStorage preview (not raw `companies.length` alone). */
+export function countPlServerAccessContextCompanies(
+  payload: PlServerAccessContextPayload
+): number | "all" {
+  if (payload.unrestricted) return "all";
+  return companiesFromAccessPayload(payload).length;
+}
+
 export function clearPlServerAccessContext(): void {
   if (typeof window === "undefined") return;
   try {
@@ -112,6 +185,13 @@ function normalizeSharedCompanies(raw: unknown): PlServerSharedCompanySummary[] 
   return out;
 }
 
+/** Gate Test / mirror — server access context se company rows. */
+export function sharedCompaniesFromAccessPayload(
+  payload: PlServerAccessContextPayload
+): PlServerSharedCompanySummary[] {
+  return companiesFromAccessPayload(payload);
+}
+
 export function applyPlServerAccessContextPayload(
   payload: PlServerAccessContextPayload,
   gateId?: string | null
@@ -132,8 +212,12 @@ export function applyPlServerAccessContextPayload(
       sessionStorage.removeItem(STORAGE_COMPANIES);
     }
     const gid = String(gateId || "").trim();
-    if (gid) sessionStorage.setItem(STORAGE_GATE_ID, gid);
-    else sessionStorage.removeItem(STORAGE_GATE_ID);
+    if (gid) {
+      sessionStorage.setItem(STORAGE_GATE_ID, gid);
+      persistGatePreviewSnapshot(gid, payload);
+    } else {
+      sessionStorage.removeItem(STORAGE_GATE_ID);
+    }
     window.dispatchEvent(new Event(PL_SERVER_ACCESS_CONTEXT_EVENT));
   } catch {
     /* ignore */
@@ -145,20 +229,63 @@ export async function refreshPlServerAccessContext(): Promise<PlServerAccessCont
     clearPlServerAccessContext();
     return null;
   }
-  try {
-    const headers: Record<string, string> = {};
-    const devTok = readDevClientAccessToken();
-    if (devTok) headers["x-pocket-ledger-access"] = devTok;
-    const res = await fetch("/__pl_access_context", { cache: "no-store", headers });
-    if (!res.ok) {
-      clearPlServerAccessContext();
+
+  const activeGate = getActiveGate();
+
+  /** Remote server origin (Gate → Connect): token ke bina mat fetch — 403 + context wipe avoid. */
+  if (isPlRemoteServerClientMode()) {
+    const token = readDevClientAccessToken();
+    if (!token) return null;
+    try {
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+        "x-pocket-ledger-access": token,
+      };
+      const res = await fetch("/__pl_access_context", { cache: "no-store", headers });
+      if (res.status === 403 || !res.ok) return null;
+      const data = (await res.json()) as PlServerAccessContextPayload;
+      applyPlServerAccessContextPayload(
+        data,
+        activeGate.type === "local_server" ? activeGate.id : null
+      );
+      return data;
+    } catch {
       return null;
     }
+  }
+
+  /** Web/APK client + local_server gate: remote server se context — localhost `/__pl_access_context` mat (unrestricted wipe). */
+  if (activeGate.type === "local_server" && activeGate.serverUrl?.trim()) {
+    const token = (activeGate.accessToken || "").trim() || readDevClientAccessToken();
+    if (!token) return null;
+    const ctx = await fetchGateServerAccessContext(activeGate.serverUrl, token);
+    if (ctx.error) {
+      if (/invalid|missing token|403/i.test(ctx.error)) {
+        clearPlServerAccessContext();
+      }
+      return null;
+    }
+    const payload: PlServerAccessContextPayload = {
+      unrestricted: ctx.unrestricted,
+      allowedCompanyIds: ctx.allowedCompanyIds,
+      label: ctx.label ?? null,
+      companies: ctx.companies ?? null,
+    };
+    applyPlServerAccessContextPayload(payload, activeGate.id);
+    return payload;
+  }
+
+  try {
+    const headers: Record<string, string> = { Accept: "application/json" };
+    const devTok = readDevClientAccessToken();
+    if (devTok) headers["x-pocket-ledger-access"] = devTok;
+    else if (!isLocalAppHost()) return null;
+    const res = await fetch("/__pl_access_context", { cache: "no-store", headers });
+    if (!res.ok) return null;
     const data = (await res.json()) as PlServerAccessContextPayload;
     applyPlServerAccessContextPayload(data);
     return data;
   } catch {
-    clearPlServerAccessContext();
     return null;
   }
 }
@@ -173,6 +300,16 @@ export function getPlServerAllowedCompanyIds(): string[] | null {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed) || parsed.length === 0) return null;
     return parsed.map((x) => String(x).trim()).filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+export function getPlServerContextGateId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const id = sessionStorage.getItem(STORAGE_GATE_ID);
+    return id?.trim() || null;
   } catch {
     return null;
   }
@@ -209,13 +346,12 @@ export function readPlServerGatePreviewContext(gateId?: string | null): {
   }
   const forGate = String(gateId || "").trim();
   if (forGate) {
-    try {
-      const storedGate = sessionStorage.getItem(STORAGE_GATE_ID);
-      if (storedGate && storedGate !== forGate) {
-        return { allowedCompanyIds: null, companies: [] };
-      }
-    } catch {
-      /* ignore */
+    const perGate = readGatePreviewSnapshot(forGate);
+    if (perGate) {
+      return {
+        allowedCompanyIds: perGate.allowedCompanyIds,
+        companies: perGate.companies,
+      };
     }
   }
   let allowedCompanyIds: string[] | null = null;
@@ -246,7 +382,7 @@ export function isPlServerSharedCompanyRow(
 ): boolean {
   const id = String(company?.id || "").trim();
   if (!id) return false;
-  if ((company as CompanyWithPlServerShared).plServerShared === true) return true;
+  if (company?.plServerShared === true) return true;
   if (getPlServerSharedCompanies().some((r) => r.id === id)) return true;
   const preview = readPlServerGatePreviewContext(gateId);
   return preview.companies.some((r) => r.id === id);
@@ -270,6 +406,7 @@ export function buildPlServerGatePreviewCompanyList(
   registry: Company[],
   gateId: string
 ): CompanyWithPlServerShared[] {
+  registry = compactCompanyList(registry);
   const { allowedCompanyIds, companies: sharedRows } = readPlServerGatePreviewContext(gateId);
   if (!sharedRows.length && !allowedCompanyIds?.length) return [];
 
@@ -316,23 +453,55 @@ export function buildPlServerGatePreviewCompanyList(
     }
   }
 
-  let list = [...byId.values()].filter((c) => c.isDeleted !== true && c.movedToAdminRecycleAt == null);
+  let list = [...byId.values()].filter(
+    (c) => c && c.isDeleted !== true && c.movedToAdminRecycleAt == null
+  );
   if (allowedSet?.size) {
     list = list.filter((c) => allowedSet.has(String(c.id || "").trim()));
   } else if (sharedRows.length > 0) {
-    list = list.filter((c) => c.plServerShared === true);
+    list = list.filter((c) => c?.plServerShared === true);
   }
   return list;
 }
 
+/** Save & Copy To: owned local + online + server-shared — gate filter / sidebar fallback ke bina. */
+export function listCompaniesForVoucherCopyTo(companies: Company[]): CompanyWithPlServerShared[] {
+  const visible = compactCompanyList(companies).filter(
+    (c) => c.isDeleted !== true && c.movedToAdminRecycleAt == null
+  );
+  return mergePlServerSharedCompaniesIntoRegistry(visible);
+}
+
 export function mergePlServerSharedCompaniesIntoRegistry(companies: Company[]): CompanyWithPlServerShared[] {
+  companies = compactCompanyList(companies);
   const shared = getPlServerSharedCompanies();
-  if (!shared.length) return companies;
   const byId = new Map<string, CompanyWithPlServerShared>(
     companies.map((c) => [String(c.id || "").trim(), c as CompanyWithPlServerShared])
   );
+  // Registry/SQLite me `plServerShared` ho to session context wipe par bhi Server tab me dikhe.
+  for (const c of companies) {
+    if (!isPlServerSharedCompanyRow(c, null)) continue;
+    const id = String(c.id || "").trim();
+    if (!id) continue;
+    const existing = byId.get(id);
+    byId.set(id, {
+      ...(existing ?? c),
+      ...c,
+      plServerShared: true,
+      isOwned: existing?.isOwned ?? c.isOwned ?? false,
+    } as CompanyWithPlServerShared);
+  }
   for (const row of shared) {
-    if (byId.has(row.id)) continue;
+    const existing = byId.get(row.id);
+    if (existing) {
+      byId.set(row.id, {
+        ...existing,
+        name: row.name || existing.name,
+        ownerEmail: row.ownerEmail ?? existing.ownerEmail,
+        plServerShared: true,
+      } as CompanyWithPlServerShared);
+      continue;
+    }
     byId.set(row.id, {
       id: row.id,
       name: row.name,
@@ -346,12 +515,13 @@ export function mergePlServerSharedCompaniesIntoRegistry(companies: Company[]): 
 }
 
 export function filterCompaniesForPlServerAccess(companies: Company[]): CompanyWithPlServerShared[] {
-  if (!shouldFetchPlServerAccessContext()) return companies;
-  const merged = mergePlServerSharedCompaniesIntoRegistry(companies);
+  const compact = compactCompanyList(companies);
+  if (!shouldFetchPlServerAccessContext()) return compact;
+  const merged = mergePlServerSharedCompaniesIntoRegistry(compact);
   const allowed = getPlServerAllowedCompanyIds();
   if (!allowed?.length) {
     if (isPlRemoteServerClientMode()) {
-      return merged.filter((c) => c.plServerShared === true);
+      return merged.filter((c) => c?.plServerShared === true);
     }
     const shared = getPlServerSharedCompanies();
     if (shared.length > 0) {

@@ -1328,7 +1328,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       
       if (isEdit) {
         // Check edit permission - determine ownership
-        const preferLocalReads = preferLocalLedgerReads();
+        const preferLocalReads = preferLocalLedgerReads(company);
         const fetchVoucher = async (cid: string, vid: string) => {
           if (preferLocalReads) {
             const row = await getCompanyDocFromBrowserDb(cid, "vouchers", vid);
@@ -1352,7 +1352,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               ? existingVoucher.date.toDate()
               : new Date(existingVoucher.date);
           } else if (companyId) {
-            const preferLocalReadsDate = preferLocalLedgerReads();
+            const preferLocalReadsDate = preferLocalLedgerReads(company);
             if (preferLocalReadsDate) {
               const row = await getCompanyDocFromBrowserDb(companyId, "vouchers", savedVoucherId);
               if (row?.date != null) {
@@ -1400,7 +1400,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       });
 
       if (!idArgForFirestore || data.voucherNumber !== voucher?.voucherNumber) {
-        const preferLocalReads = preferLocalLedgerReads();
+        const preferLocalReads = preferLocalLedgerReads(company);
         let duplicateOtherId: string | null = null;
         if (preferLocalReads) {
           const hit = await findVoucherInLocalMirrorByNumberAndType(companyId, data.voucherNumber, voucherType);

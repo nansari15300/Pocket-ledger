@@ -6,11 +6,13 @@
 
 import type { Company } from "@/hooks/useCompany";
 import {
+  countPendingAttachmentDownloadsForCompany,
   isCloudBackedCompanyShape,
   runEmbeddedAttachmentPrefetchPhase,
   runOfflineFullWarmSync,
   shouldPrefetchAttachmentsForCompany,
   type AttachmentPrefetchOverrides,
+  type EmbeddedAttachmentPrefetchSummary,
 } from "@/lib/offlineFullWarmSync";
 
 /** Pehli company ke baad agli — APK memory / bandwidth ke liye serial gap. */
@@ -20,7 +22,7 @@ export const EMBEDDED_ACCOUNT_WARM_GAP_MS = 750;
 export const EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH: AttachmentPrefetchOverrides = {
   maxUrls: 55_000,
   maxTotalBytesApprox: 4_200 * 1024 * 1024,
-  concurrency: 7,
+  concurrency: 12,
 };
 
 /** Registry se cloud rows — `prioritizeCompanyId` pehle (selected company fast feel). */
@@ -36,34 +38,49 @@ export function orderCloudCompaniesForAccountWarm(
   return [...first, ...rest];
 }
 
-/** SQLite mirror + saari attachment URLs IndexedDB/native cache — ek company poora offline preload. */
+/** SQLite mirror + missing attachment bytes — pehli baar full; baad me sirf nayi URLs (refresh par bar-bar full nahi). */
 export async function runEmbeddedCompanyFullPreload(args: {
   company: Company;
   localCompanyId: string;
   signal?: AbortSignal;
   prefetchOverrides?: AttachmentPrefetchOverrides;
   onAttachmentProgressPercent?: (pct: number) => void;
-}): Promise<void> {
+}): Promise<EmbeddedAttachmentPrefetchSummary | null> {
   const localId = args.localCompanyId.trim();
-  if (!localId) return;
+  if (!localId) return null;
 
-  await runOfflineFullWarmSync({
-    company: args.company,
-    localCompanyId: localId,
-    signal: args.signal,
-    includeAttachmentPrefetch: false,
-    skipWarmBootstrapFlag: true,
-  });
+  const prefetchEligible = shouldPrefetchAttachmentsForCompany(args.company);
+  const prefetchOverrides = args.prefetchOverrides ?? EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH;
 
-  if (args.signal?.aborted) return;
-  if (!shouldPrefetchAttachmentsForCompany(args.company)) return;
+  if (isCloudBackedCompanyShape(args.company)) {
+    await runOfflineFullWarmSync({
+      company: args.company,
+      localCompanyId: localId,
+      signal: args.signal,
+      includeAttachmentPrefetch: false,
+      skipWarmBootstrapFlag: true,
+    });
+  }
 
-  await runEmbeddedAttachmentPrefetchPhase({
+  if (args.signal?.aborted) return null;
+  if (!prefetchEligible) return null;
+
+  const { pending } = await countPendingAttachmentDownloadsForCompany(localId);
+  if (pending <= 0) {
+    return {
+      attachmentUrlsSeen: 0,
+      prefetchCachedNew: 0,
+      prefetchSkippedCache: 0,
+      prefetchFailures: 0,
+    };
+  }
+
+  return runEmbeddedAttachmentPrefetchPhase({
     company: args.company,
     localCompanyId: localId,
     signal: args.signal,
     onProgressPercent: args.onAttachmentProgressPercent,
-    prefetchOverrides: args.prefetchOverrides ?? EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
+    prefetchOverrides,
   });
 }
 

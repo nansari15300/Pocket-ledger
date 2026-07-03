@@ -73,6 +73,20 @@ export function normalizeCompanyIds(raw: unknown): string[] {
   return out;
 }
 
+export function normalizeInvitedEmails(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const email of raw) {
+    const s = String(email || "").trim().toLowerCase();
+    if (!s || !s.includes("@") || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
 export function loadDevConfig(): LocalAppServerConfig {
   ensureDir();
   try {
@@ -151,6 +165,7 @@ export function listAccessTokens() {
           ? `${t.token.slice(0, 6)}…${t.token.slice(-4)}`
           : "",
       allowedCompanyIds: normalizeCompanyIds(t.allowedCompanyIds),
+      invitedEmails: normalizeInvitedEmails(t.invitedEmails),
     }));
 }
 
@@ -267,7 +282,7 @@ export function revokeAccessToken(id: string): boolean {
 
 export function updateAccessToken(
   id: string,
-  input: { label?: string; allowedCompanyIds?: string[] }
+  input: { label?: string; allowedCompanyIds?: string[]; invitedEmails?: string[] }
 ): LocalAppServerAccessTokenSummary | null {
   const store = loadTokenStore();
   const rec = store.tokens.find((t) => t && t.id === id && !t.revokedAt);
@@ -277,6 +292,9 @@ export function updateAccessToken(
   }
   if (input.allowedCompanyIds != null) {
     rec.allowedCompanyIds = normalizeCompanyIds(input.allowedCompanyIds);
+  }
+  if (input.invitedEmails != null) {
+    rec.invitedEmails = normalizeInvitedEmails(input.invitedEmails);
   }
   saveTokenStore(store);
   const token = String(rec.token || "");
@@ -289,6 +307,7 @@ export function updateAccessToken(
     lastUsedAt: rec.lastUsedAt ? String(rec.lastUsedAt) : null,
     tokenPreview: token.length >= 10 ? `${token.slice(0, 6)}…${token.slice(-4)}` : "",
     allowedCompanyIds: normalizeCompanyIds(rec.allowedCompanyIds),
+    invitedEmails: normalizeInvitedEmails(rec.invitedEmails),
   };
 }
 

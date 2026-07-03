@@ -28,10 +28,13 @@ const projectRoot = process.cwd();
 const devCacheDir = path.join(projectRoot, ".next", "dev");
 
 try {
-  // Clear only dev cache folder so production build artifacts remain untouched.
-  fs.rmSync(devCacheDir, { recursive: true, force: true });
-  // eslint-disable-next-line no-console
-  console.log("[dev-stable] Cleared .next/dev cache");
+  // Default: Turbopack incremental cache rakho — har `npm run dev` par full recompile avoid.
+  // Stuck HMR / corrupt cache ho to: `$env:DEV_CLEAR_NEXT_CACHE=1; npm run dev` (PowerShell)
+  if (process.env.DEV_CLEAR_NEXT_CACHE === "1") {
+    fs.rmSync(devCacheDir, { recursive: true, force: true });
+    // eslint-disable-next-line no-console
+    console.log("[dev-stable] Cleared .next/dev cache (DEV_CLEAR_NEXT_CACHE=1)");
+  }
 } catch (error) {
   // eslint-disable-next-line no-console
   console.warn("[dev-stable] Cache cleanup skipped:", error?.message || error);

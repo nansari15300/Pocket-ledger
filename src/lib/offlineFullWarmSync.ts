@@ -19,7 +19,10 @@ import type { Plan, PlanId } from "@/config/plans";
 import { decryptFirestoreCompanyDocIfNeeded, type ServerBackupCryptoContext } from "@/lib/serverBackupEncryption";
 import { listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { stampLocalMirrorBackedByFirestore } from "@/lib/localMirrorServerMeta";
-import { prefetchHttpsAttachmentUrls } from "@/lib/offlineAttachmentUrlCache";
+import {
+  isOfflineCachedAttachmentOnDevice,
+  prefetchHttpsAttachmentUrls,
+} from "@/lib/offlineAttachmentUrlCache";
 import {
   beginAttachmentPrefetchVoucherLookupSession,
   endAttachmentPrefetchVoucherLookupSession,
@@ -45,7 +48,8 @@ import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { auth } from "@/lib/firebase";
 import { markEmbeddedFullWarmSucceeded } from "@/lib/embeddedWarmBootstrapFlags";
-import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
+import { isServerGateCompany } from "@/lib/companyStorageKind";
 
 /** `_firestore_company_root` SQLite row — authoritative company snapshot for offline dashboards */
 export const COMPANY_ROOT_MIRROR_COLLECTION = "_firestore_company_root";
@@ -65,9 +69,11 @@ export function isCloudBackedCompanyShape(c: Company | null): boolean {
   return false;
 }
 
-/** APK/EXE: Firebase cloud companies only (local Drive sync removed). */
+/** APK/EXE: cloud Firebase + server-gate mirrored companies (SQLite me HTTPS URLs). */
 export function shouldPrefetchAttachmentsForCompany(c: Company | null): boolean {
-  return isCloudBackedCompanyShape(c);
+  if (!c) return false;
+  if (isCloudBackedCompanyShape(c)) return true;
+  return isServerGateCompany(c);
 }
 
 const SCRAPE_SKIP_KEYS = new Set([
@@ -157,6 +163,24 @@ function skipAttachmentScrapeKey(key: string): boolean {
 export async function scrapeLocalMirrorAttachmentUrls(localCompanyId: string): Promise<Set<string>> {
   const scraped = await scrapeLocalMirrorAttachmentUrlsWithVoucherIndex(localCompanyId);
   return scraped.urls;
+}
+
+/** Mirror scrape ke baad kitni attachment URLs abhi disk/IDB par nahi — incremental sync + progress bar gate. */
+export async function countPendingAttachmentDownloadsForCompany(
+  localCompanyId: string
+): Promise<{ total: number; pending: number }> {
+  const trim = localCompanyId.trim();
+  if (!trim) return { total: 0, pending: 0 };
+  const urls = [...(await scrapeLocalMirrorAttachmentUrls(trim))];
+  if (urls.length === 0) return { total: 0, pending: 0 };
+  const batch = 16;
+  let pending = 0;
+  for (let i = 0; i < urls.length; i += batch) {
+    const slice = urls.slice(i, i + batch);
+    const hits = await Promise.all(slice.map((u) => isOfflineCachedAttachmentOnDevice(u)));
+    pending += hits.filter((onDevice) => !onDevice).length;
+  }
+  return { total: urls.length, pending };
 }
 
 /** Warm prefetch: URL set + scrape-time voucher index (exact voucher no. toast ke liye). */
@@ -296,8 +320,7 @@ export async function runOfflineFullWarmSync(options: {
 
   const fsCompanyId = String((company as { authoritativeCompanyId?: string }).authoritativeCompanyId || localCompanyId).trim();
   const isEmbeddedClient =
-    (typeof window !== "undefined" && isCapacitorNativeApp()) ||
-    (typeof window !== "undefined" && window.location.protocol === "file:");
+    typeof window !== "undefined" ? isEmbeddedOfflinePreloadClient() : false;
 
   const result: OfflineFullWarmSyncResult = {
     plansOk: false,
@@ -445,8 +468,11 @@ export async function runEmbeddedAttachmentPrefetchPhase(args: {
   onProgressPercent?: (pct: number) => void;
   /** Default: embedded vs browser alag budget; backfill manager yahan aggressive values bhej sakta hai. */
   prefetchOverrides?: AttachmentPrefetchOverrides;
+  /** Post-sync pass: header % 0 par reset na ho (fast already-cached skip). */
+  continueProgress?: boolean;
 }): Promise<EmbeddedAttachmentPrefetchSummary | null> {
-  const { company, localCompanyId, signal, onProgressPercent, prefetchOverrides } = args;
+  const { company, localCompanyId, signal, onProgressPercent, prefetchOverrides, continueProgress } =
+    args;
   if (offlineWarmForensicEnabled()) {
     console.warn("[FORENSIC_EMBEDDED_PREFETCH_PHASE]", {
       phase: "entry",
@@ -479,8 +505,7 @@ export async function runEmbeddedAttachmentPrefetchPhase(args: {
   }
 
   const isEmbeddedClient =
-    (typeof window !== "undefined" && isCapacitorNativeApp()) ||
-    (typeof window !== "undefined" && window.location.protocol === "file:");
+    typeof window !== "undefined" ? isEmbeddedOfflinePreloadClient() : false;
 
   const scraped = await scrapeLocalMirrorAttachmentUrlsWithVoucherIndex(trim);
   const urls = scraped.urls;
@@ -508,15 +533,18 @@ export async function runEmbeddedAttachmentPrefetchPhase(args: {
     return { attachmentUrlsSeen: 0, prefetchCachedNew: 0, prefetchSkippedCache: 0, prefetchFailures: 0 };
   }
 
-  onProgressPercent?.(0);
+  if (!continueProgress) {
+    onProgressPercent?.(0);
+  }
   const defaultMaxUrls = isEmbeddedClient ? 20_000 : 2600;
   const defaultBudget = isEmbeddedClient ? 2_500 * 1024 * 1024 : 350 * 1024 * 1024;
   const prefetch = await prefetchHttpsAttachmentUrls(urls, {
-    concurrency: Math.max(1, Math.min(8, prefetchOverrides?.concurrency ?? 6)),
+    concurrency: Math.max(1, Math.min(12, prefetchOverrides?.concurrency ?? 6)),
     maxTotalBytesApprox: prefetchOverrides?.maxTotalBytesApprox ?? defaultBudget,
     maxUrls: prefetchOverrides?.maxUrls ?? defaultMaxUrls,
     prioritizeUrls: peekAttachmentPrefetchPrioritySnapshot(),
     signal,
+    skipLeadingZeroReport: continueProgress === true,
     onItemDone: (done, total) => {
       const pct = total <= 0 ? 100 : Math.min(100, Math.round((done / Math.max(1, total)) * 100));
       onProgressPercent?.(pct);
