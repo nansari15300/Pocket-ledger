@@ -104,7 +104,6 @@ export async function fetchAttachmentRefBlob(
     const cached = await tryOfflineCachedAttachmentBlobMultiKey(String(rawUrl).trim());
     if (cached && cached.size > 0) return cached;
     const embedded = await getAttachmentBlobForBackupEmbed(String(rawUrl).trim(), {
-      companyId: options?.companyId,
       skipDiskWrite: true,
     });
     if (embedded && embedded.size > 0) return embedded;

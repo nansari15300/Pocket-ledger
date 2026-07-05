@@ -142,7 +142,7 @@ async function resolveLocalBytesForDriveReupload(ref: string, companyId: string)
     );
     blob = await tryOfflineCachedAttachmentBlobMultiKey(trimmed);
     if (blob && blob.size > 0) return blob;
-    blob = await getAttachmentBlobForBackupEmbed(trimmed, { companyId, skipDiskWrite: true });
+    blob = await getAttachmentBlobForBackupEmbed(trimmed, { skipDiskWrite: true });
     if (blob && blob.size > 0) return blob;
   } catch {
     /* optional caches */

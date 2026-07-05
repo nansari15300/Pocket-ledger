@@ -130,6 +130,7 @@ export function AddLocalCompanyUserDialog({
           companyName: companyName ?? company.name,
           email: gmail,
           appRole,
+          displayName: n,
         });
         void runLocalCloudSyncCycle(company.id, { force: true });
       }

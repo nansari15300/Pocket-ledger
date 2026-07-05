@@ -76,3 +76,74 @@ export async function batchFetchUserDisplayNamesFromFirestore(
   }
   return out;
 }
+
+export type AppUserProfileByEmail = {
+  email: string;
+  photoURL?: string;
+  displayName?: string;
+  uid?: string;
+};
+
+function photoFromUserDoc(data: Record<string, unknown>): string | undefined {
+  for (const key of ["photoURL", "photoUrl", "avatarUrl", "avatar"]) {
+    const v = data[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
+/** Google profile photo — chhota size reliable load ke liye. */
+export function normalizeGooglePhotoUrl(url?: string | null): string | undefined {
+  const raw = String(url ?? "").trim();
+  if (!raw) return undefined;
+  if (raw.includes("googleusercontent.com")) {
+    const base = raw.split("=")[0];
+    return `${base}=s96-c`;
+  }
+  return raw;
+}
+
+/** Firestore users — email case mismatch par bhi profile (photo + name) resolve. */
+export async function fetchAppUserProfileByEmail(email: string): Promise<AppUserProfileByEmail | null> {
+  const trimmed = String(email || "").trim();
+  const lower = trimmed.toLowerCase();
+  if (!lower.includes("@")) return null;
+  const variants = [...new Set([trimmed, lower].filter(Boolean))];
+  for (const em of variants) {
+    try {
+      const snap = await getDocs(query(collection(firestore, "users"), where("email", "==", em)));
+      const docSnap = snap.docs[0];
+      if (!docSnap) continue;
+      const data = docSnap.data() as Record<string, unknown>;
+      const resolvedEmail = String(data.email || em).trim().toLowerCase();
+      return {
+        email: resolvedEmail,
+        photoURL: normalizeGooglePhotoUrl(photoFromUserDoc(data)),
+        displayName:
+          typeof data.displayName === "string"
+            ? data.displayName.trim()
+            : typeof data.name === "string"
+              ? data.name.trim()
+              : undefined,
+        uid: typeof data.uid === "string" ? data.uid : docSnap.id,
+      };
+    } catch {
+      /* offline / rules */
+    }
+  }
+  return null;
+}
+
+/** Share panel — har email ke liye profile (batch me sequential, Firestore `in` cap safe). */
+export async function fetchAppUserProfilesByEmails(emails: string[]): Promise<AppUserProfileByEmail[]> {
+  const seen = new Set<string>();
+  const out: AppUserProfileByEmail[] = [];
+  for (const raw of emails) {
+    const key = String(raw || "").trim().toLowerCase();
+    if (!key.includes("@") || seen.has(key)) continue;
+    seen.add(key);
+    const profile = await fetchAppUserProfileByEmail(raw);
+    if (profile) out.push(profile);
+  }
+  return out;
+}

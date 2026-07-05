@@ -231,12 +231,26 @@ export async function shareDriveFolderUser(input: {
   return { shared, skipped };
 }
 
+type SharedWithRow = {
+  email?: string;
+  name?: string;
+  displayName?: string;
+  photoURL?: string;
+  role?: string;
+};
+
+function readSharedWithRows(reg: LocalCompanyDoc): SharedWithRow[] {
+  const raw = (reg as unknown as { sharedWith?: unknown }).sharedWith;
+  return Array.isArray(raw) ? ([...raw] as SharedWithRow[]) : [];
+}
+
 /** Add Person — local registry + Drive folder writer share. */
 export async function addDriveShareUserToLocalCompany(input: {
   companyId: string;
   companyName?: string;
   email: string;
   appRole?: string;
+  displayName?: string;
 }): Promise<void> {
   const cid = String(input.companyId || "").trim();
   const email = String(input.email || "")
@@ -260,17 +274,98 @@ export async function addDriveShareUserToLocalCompany(input: {
     ? prevUsers.map((u) => (u.email === email ? { ...u, appRole } : u))
     : [...prevUsers, { email, appRole }];
 
+  const { fetchAppUserProfileByEmail } = await import("@/lib/batchFetchUserDisplayNames");
+  const profile = await fetchAppUserProfileByEmail(email);
+  const displayName =
+    String(input.displayName || "").trim() ||
+    profile?.displayName ||
+    email.split("@")[0] ||
+    email;
+
   await shareDriveFolderUser({ companyId: cid, companyName: input.companyName, user: { email, appRole } });
 
   let localCompanyUsers = parseLocalCompanyUserRows((reg as { localCompanyUsers?: unknown }).localCompanyUsers);
   localCompanyUsers = mergeDriveShareUsersIntoLocalCompanyUsers(localCompanyUsers, shareUsers);
+  const gmailIdx = localCompanyUsers.findIndex((u) => u.username.toLowerCase() === email);
+  if (gmailIdx >= 0) {
+    localCompanyUsers[gmailIdx] = {
+      ...localCompanyUsers[gmailIdx],
+      displayName,
+      role: appRole,
+    };
+  }
+
+  const prevSharedWith = readSharedWithRows(reg);
+  const nextSharedWith = prevSharedWith.filter((u) => String(u.email || "").trim().toLowerCase() !== email);
+  nextSharedWith.push({
+    email,
+    name: displayName,
+    displayName,
+    photoURL: profile?.photoURL,
+    role: appRole,
+  });
 
   await upsertLocalCompany({
     ...reg,
     cloudSyncDriveShareUsers: shareUsers,
     cloudSyncSharedEmails: shareUsersToEmailList(shareUsers),
     localCompanyUsers,
+    sharedWith: nextSharedWith,
   } as LocalCompanyDoc);
+}
+
+function normalizeShareEmail(email?: string): string {
+  return String(email || "").trim().toLowerCase();
+}
+
+/** Firestore se mili profile SQLite `sharedWith` me — refresh / sync ke baad avatar na hat jaye. */
+export async function persistShareUserProfilesToLocalCompany(
+  companyId: string,
+  profiles: Array<{ email: string; photoURL?: string; displayName?: string }>
+): Promise<boolean> {
+  const cid = String(companyId || "").trim();
+  if (!cid || !profiles.length) return false;
+  const reg = await getLocalCompanyById(cid, { includeDeleted: true });
+  if (!reg) return false;
+
+  const prev = readSharedWithRows(reg);
+  const byEmail = new Map(prev.map((u) => [normalizeShareEmail(u.email), { ...u }]));
+  let changed = false;
+
+  for (const p of profiles) {
+    const key = normalizeShareEmail(p.email);
+    if (!key.includes("@")) continue;
+    const existing = byEmail.get(key);
+    const photoURL = String(p.photoURL || existing?.photoURL || "").trim() || undefined;
+    const displayName =
+      String(p.displayName || existing?.displayName || existing?.name || "").trim() ||
+      key.split("@")[0] ||
+      key;
+    if (
+      existing &&
+      existing.photoURL === photoURL &&
+      (existing.displayName || existing.name) === displayName
+    ) {
+      continue;
+    }
+    changed = true;
+    byEmail.set(key, {
+      ...existing,
+      email: key,
+      name: displayName,
+      displayName,
+      photoURL,
+      role: existing?.role,
+    });
+  }
+
+  if (!changed) return false;
+  await upsertLocalCompany({
+    ...reg,
+    sharedWith: [...byEmail.values()],
+    updatedAt: Date.now(),
+  } as LocalCompanyDoc);
+  return true;
 }
 
 /** List se user hatao — Drive permission revoke. */

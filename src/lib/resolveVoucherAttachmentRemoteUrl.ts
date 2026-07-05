@@ -132,7 +132,7 @@ export async function tryResolveRemoteUrlForStaleLocalAttachment(
   }
 
   let fileUrls: string[] = [];
-  let source: "firestore_getDoc" | "sqlite_mirror_list" | "none" = "none";
+  let source: "firestore_getDoc" | "sqlite_mirror_list" | "sqlite_mirror_get" | "none" = "none";
   try {
     const read = await readVoucherFileUrlsForStaleLocalResolve(cid, vid);
     fileUrls = read.fileUrls;

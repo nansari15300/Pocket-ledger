@@ -33,7 +33,7 @@ import {
   readCloudSyncDriveShareUsers,
   shareUsersToEmailList,
 } from "@/lib/localCloudSync/companyConfig";
-import { revokeDriveFolderShare, shareDriveFolderUser } from "@/lib/localCloudSync/driveCloudSyncClient";
+import { revokeDriveFolderShare, shareDriveFolderUser, persistShareUserProfilesToLocalCompany } from "@/lib/localCloudSync/driveCloudSyncClient";
 import type { CloudSyncDriveShareUser } from "@/lib/localCloudSync/types";
 import {
   LOCAL_COMPANY_APP_ROLES,
@@ -52,6 +52,10 @@ import { AddLocalCompanyUserDialog } from "@/components/company/AddLocalCompanyU
 import { runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
 import type { Company } from "@/hooks/useCompany";
 import { cn } from "@/lib/utils";
+import {
+  fetchAppUserProfilesByEmails,
+  normalizeGooglePhotoUrl,
+} from "@/lib/batchFetchUserDisplayNames";
 import {
   companyProfileGreenZone,
   cloudSyncSharePanelCard,
@@ -86,15 +90,40 @@ type AppUserProfile = {
 
 const normalizeEmail = (email?: string) => String(email || "").trim().toLowerCase();
 
-/** Google profile photo — chhota size reliable load ke liye. */
-function normalizeGooglePhotoUrl(url?: string | null): string | undefined {
-  const raw = String(url ?? "").trim();
-  if (!raw) return undefined;
-  if (raw.includes("googleusercontent.com")) {
-    const base = raw.split("=")[0];
-    return `${base}=s96-c`;
+type SharedWithProfileRow = {
+  email?: string;
+  name?: string;
+  displayName?: string;
+  photoURL?: string;
+};
+
+/** Parent context refresh se SQLite wali photo/name mat hatao. */
+function mergeSharedWithPreserveProfiles(
+  prev: SharedWithProfileRow[],
+  next: SharedWithProfileRow[]
+): SharedWithProfileRow[] {
+  const byEmail = new Map<string, SharedWithProfileRow>();
+  for (const row of next) {
+    const key = normalizeEmail(row.email);
+    if (!key.includes("@")) continue;
+    byEmail.set(key, { ...row, email: key });
   }
-  return raw;
+  for (const row of prev) {
+    const key = normalizeEmail(row.email);
+    if (!key.includes("@")) continue;
+    const incoming = byEmail.get(key);
+    if (!incoming) {
+      byEmail.set(key, { ...row, email: key });
+      continue;
+    }
+    byEmail.set(key, {
+      ...incoming,
+      photoURL: incoming.photoURL || row.photoURL,
+      displayName: incoming.displayName || incoming.name || row.displayName || row.name,
+      name: incoming.name || incoming.displayName || row.name || row.displayName,
+    });
+  }
+  return [...byEmail.values()];
 }
 
 function photoFromUserDoc(data: Record<string, unknown>): string | undefined {
@@ -105,15 +134,16 @@ function photoFromUserDoc(data: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-/** Firebase / Google photo; fallback dicebear initials. */
+/** Firebase / Google photo; fallback dicebear PNG (SVG Radix Avatar me fail ho sakta hai). */
 const dicebearAvatarUrl = (email: string) =>
-  `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(email)}`;
+  `https://api.dicebear.com/7.x/initials/png?seed=${encodeURIComponent(email)}&size=96`;
 
 function profileForEmail(
   email: string,
   appUsers: AppUserProfile[],
   firebaseUser: FirebaseUser | null,
-  sharedWith: Array<{ email?: string; photoURL?: string; name?: string; displayName?: string }>
+  sharedWith: Array<{ email?: string; photoURL?: string; name?: string; displayName?: string }>,
+  profileCache?: Map<string, AppUserProfile>
 ): { photoURL?: string; displayName?: string } {
   const em = normalizeEmail(email);
 
@@ -122,6 +152,14 @@ function profileForEmail(
     const photoURL = normalizeGooglePhotoUrl(firebaseUser.photoURL);
     const displayName = String(firebaseUser.displayName || "").trim() || undefined;
     if (photoURL || displayName) return { photoURL, displayName };
+  }
+
+  const cached = profileCache?.get(em);
+  if (cached?.photoURL || cached?.displayName) {
+    return {
+      photoURL: normalizeGooglePhotoUrl(cached.photoURL),
+      displayName: cached.displayName?.trim() || undefined,
+    };
   }
 
   const sw = sharedWith.find((u) => normalizeEmail(u.email) === em);
@@ -162,6 +200,7 @@ function ShareUserAvatar({ email, name, photoURL }: { email: string; name: strin
         src={src}
         className="object-cover"
         alt=""
+        referrerPolicy="no-referrer"
         onLoadingStatusChange={(status) => {
           if (status === "error" && src !== fallback) setSrc(fallback);
         }}
@@ -197,9 +236,22 @@ export function LocalDriveShareManagePanel({
   const [showPassword, setShowPassword] = useState(false);
   const [tick, setTick] = useState(0);
   const [localCompany, setLocalCompany] = useState<Record<string, unknown>>(company);
+  const profileCacheRef = useRef<Map<string, AppUserProfile>>(new Map());
 
   useEffect(() => {
-    setLocalCompany(company);
+    setLocalCompany((prev) => {
+      const prevShared = Array.isArray(prev.sharedWith)
+        ? (prev.sharedWith as SharedWithProfileRow[])
+        : [];
+      const nextShared = Array.isArray((company as { sharedWith?: unknown }).sharedWith)
+        ? ((company as { sharedWith: SharedWithProfileRow[] }).sharedWith as SharedWithProfileRow[])
+        : [];
+      return {
+        ...prev,
+        ...company,
+        sharedWith: mergeSharedWithPreserveProfiles(prevShared, nextShared),
+      };
+    });
   }, [company]);
 
   // Parent callback stable ref — har render par naya inline fn se refresh loop na ho.
@@ -222,6 +274,10 @@ export function LocalDriveShareManagePanel({
     notifyParentRegistry();
   }, [reloadLocalState, notifyParentRegistry]);
 
+  useEffect(() => {
+    void reloadLocalState();
+  }, [reloadLocalState]);
+
   /** Share list emails — Firestore query case-sensitive; registry wala casing rakho. */
   const shareEmails = useMemo(() => {
     void tick;
@@ -239,20 +295,31 @@ export function LocalDriveShareManagePanel({
     return out;
   }, [localCompany, tick]);
 
+  /** Firestore `email` query case-sensitive — original + lowercase dono batch me. */
+  const shareEmailsForQuery = useMemo(() => {
+    const variants = new Set<string>();
+    for (const e of shareEmails) {
+      const t = e.trim();
+      if (!t.includes("@")) continue;
+      variants.add(t);
+      variants.add(t.toLowerCase());
+    }
+    return [...variants];
+  }, [shareEmails]);
+
   const sharedWithRows = useMemo(() => {
     const raw = localCompany.sharedWith;
     return Array.isArray(raw) ? (raw as Array<{ email?: string; photoURL?: string; name?: string; displayName?: string }>) : [];
   }, [localCompany.sharedWith]);
 
   useEffect(() => {
-    if (!firebaseUser || shareEmails.length === 0) {
-      setAppUsers([]);
+    if (!firebaseUser || shareEmailsForQuery.length === 0) {
       return;
     }
     const chunk = (arr: string[], size: number) =>
       Array.from({ length: Math.ceil(arr.length / size) }, (_, i) => arr.slice(i * size, i * size + size));
     const unsubs: Array<() => void> = [];
-    for (const batch of chunk(shareEmails, 10)) {
+    for (const batch of chunk(shareEmailsForQuery, 10)) {
       const qy = query(collection(firestore, "users"), where("email", "in", batch));
       const unsub = onSnapshot(qy, (snap) => {
         setAppUsers((prev) => {
@@ -261,11 +328,13 @@ export function LocalDriveShareManagePanel({
             const data = d.data() as Record<string, unknown>;
             const email = normalizeEmail(String(data.email ?? ""));
             if (!email) continue;
-            map.set(email, {
+            const row = {
               email,
               photoURL: photoFromUserDoc(data),
               displayName: typeof data.displayName === "string" ? data.displayName : undefined,
-            });
+            };
+            map.set(email, row);
+            profileCacheRef.current.set(email, row);
           }
           return Array.from(map.values());
         });
@@ -273,7 +342,48 @@ export function LocalDriveShareManagePanel({
       unsubs.push(unsub);
     }
     return () => unsubs.forEach((u) => u());
-  }, [firebaseUser, shareEmails]);
+  }, [firebaseUser, shareEmailsForQuery]);
+
+  // Snapshot miss (email casing / legacy doc id) — profile fetch + SQLite me persist.
+  useEffect(() => {
+    if (!firebaseUser || shareEmails.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const fetched = await fetchAppUserProfilesByEmails(shareEmails);
+      if (cancelled) return;
+      if (fetched.length > 0) {
+        for (const p of fetched) {
+          const key = normalizeEmail(p.email);
+          const existing = profileCacheRef.current.get(key);
+          profileCacheRef.current.set(key, {
+            email: key,
+            photoURL: p.photoURL || existing?.photoURL,
+            displayName: p.displayName || existing?.displayName,
+          });
+        }
+        setAppUsers((prev) => {
+          const map = new Map(prev.map((x) => [normalizeEmail(x.email), x]));
+          for (const p of fetched) {
+            const key = normalizeEmail(p.email);
+            const existing = map.get(key);
+            map.set(key, {
+              email: key,
+              photoURL: p.photoURL || existing?.photoURL,
+              displayName: p.displayName || existing?.displayName,
+            });
+          }
+          return Array.from(map.values());
+        });
+        const persisted = await persistShareUserProfilesToLocalCompany(companyId, fetched);
+        if (persisted && !cancelled) {
+          await reloadLocalState();
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [firebaseUser, shareEmails, tick, companyId, reloadLocalState]);
 
   const rows = useMemo((): ShareRow[] => {
     void tick;
@@ -284,7 +394,7 @@ export function LocalDriveShareManagePanel({
 
     if (ownerEmail.includes("@")) {
       const ownerLocal = localUsers.find((u) => normalizeEmail(u.username) === ownerEmail);
-      const ownerProfile = profileForEmail(ownerEmail, appUsers, firebaseUser, sharedWithRows);
+      const ownerProfile = profileForEmail(ownerEmail, appUsers, firebaseUser, sharedWithRows, profileCacheRef.current);
       out.push({
         email: ownerEmail,
         name: ownerLocal?.displayName || ownerProfile.displayName || ownerEmail.split("@")[0] || "Owner",
@@ -298,14 +408,25 @@ export function LocalDriveShareManagePanel({
     for (const su of shareUsers) {
       if (su.email === ownerEmail) continue;
       const localByGmail = localUsers.find((u) => normalizeEmail(u.username) === su.email);
-      const profile = profileForEmail(su.email, appUsers, firebaseUser, sharedWithRows);
+      const localByAny = localUsers.find(
+        (u) => normalizeEmail(u.displayName) === su.email || normalizeEmail(u.username) === su.email
+      );
+      const profile = profileForEmail(su.email, appUsers, firebaseUser, sharedWithRows, profileCacheRef.current);
+      const sharedRow = sharedWithRows.find((u) => normalizeEmail(u.email) === su.email);
       out.push({
         email: su.email,
-        name: localByGmail?.displayName || profile.displayName || su.email.split("@")[0] || su.email,
+        name:
+          localByGmail?.displayName ||
+          localByAny?.displayName ||
+          profile.displayName ||
+          sharedRow?.displayName ||
+          sharedRow?.name ||
+          su.email.split("@")[0] ||
+          su.email,
         role: normalizeLocalCompanyAppRole(su.appRole),
-        localUserId: localByGmail?.id,
-        loginUsername: localByGmail?.username,
-        photoURL: profile.photoURL,
+        localUserId: localByGmail?.id || localByAny?.id,
+        loginUsername: localByGmail?.username || localByAny?.username,
+        photoURL: profile.photoURL || sharedRow?.photoURL,
       });
     }
     return out;

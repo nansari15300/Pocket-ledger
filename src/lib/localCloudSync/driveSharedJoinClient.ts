@@ -239,6 +239,7 @@ export async function resyncDriveLocalCompanyFromInvite(
   }
 
   await upsertLocalCompany({
+    ...joined,
     id: companyId,
     name: invite.companyName,
     storageOption: "local",
