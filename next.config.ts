@@ -38,7 +38,7 @@ const baseConfig: NextConfig = {
   // Relative assetPrefix ("./") breaks nested routes like /dashboard by turning assets into /dashboard/_next/*.
   // APK / http-server: /party/index.html so refresh & deep links 404 kam (trailing slash URLs)
   ...(isStaticBuild && { trailingSlash: true }),
-  /** Webpack-only escape: `npm run build:webpack` — Turbopack = default `npm run build` */
+  /** Webpack-only escape: `npm run build:turbo` — Firebase/App Hosting par `--webpack` zaroori (native SWC + Turbopack WASM fail). */
   turbopack: {
     resolveAlias: {
       // Browser: pdf.js optional Node canvas — `alias.canvas = false` ka Turbopack equivalent
@@ -49,6 +49,19 @@ const baseConfig: NextConfig = {
         "@/lib/actions/deleteCompanyAction": DELETE_COMPANY_STATIC_STUB,
       }),
     },
+  },
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      config.resolve ??= {};
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        canvas: CANVAS_BROWSER_STUB,
+        ...(isStaticBuild && {
+          "@/lib/actions/deleteCompanyAction": DELETE_COMPANY_STATIC_STUB,
+        }),
+      };
+    }
+    return config;
   },
 };
 
