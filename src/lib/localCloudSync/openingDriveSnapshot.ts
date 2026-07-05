@@ -15,7 +15,7 @@ import {
 } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 import { parseLocalCompanyUserRows, mergeOpeningUsersSnapshotIntoLocalCompanyUsers } from "@/lib/localCompanyUsers";
 import { buildOpeningAvatarDriveRemotePath } from "@/lib/localCloudSync/driveAttachmentPath";
-import { uploadAttachmentBytesToDrive } from "@/lib/localCloudSync/driveCloudSyncClient";
+import { uploadAttachmentBytesToDrive, uploadPendingAttachmentPayloadToDrive } from "@/lib/localCloudSync/driveCloudSyncClient";
 import { isLocalFileRef, getBlobFromLocalFileRef } from "@/lib/localPendingFiles";
 import {
   decryptCloudSyncJsonFromDrive,
@@ -49,16 +49,88 @@ function pickOpeningFields(row: Record<string, unknown>): Record<string, unknown
   return out;
 }
 
+const FIREBASE_STORAGE_HOST = /^https:\/\/firebasestorage\.googleapis\.com/i;
+
+/** Party/staff avatar bytes → Drive `opening/avatars/...`; galat Firebase URL migrate. */
+async function ensureOpeningAvatarOnDriveForRow(
+  cid: string,
+  collection: string,
+  row: Record<string, unknown>,
+  ref: PocketLedgerDriveCompanyRef,
+  reg: NonNullable<Awaited<ReturnType<typeof getLocalCompanyById>>>
+): Promise<{ driveRef: string | null; avatarBytesUploaded: number }> {
+  const entityId = String(row.id ?? "").trim();
+  if (!entityId) return { driveRef: null, avatarBytesUploaded: 0 };
+
+  const field: "fileUrl" | "avatarUrl" =
+    row.fileUrl != null && String(row.fileUrl).trim() ? "fileUrl" : "avatarUrl";
+  const rawUrl = row[field];
+  if (typeof rawUrl !== "string" || !rawUrl.trim()) {
+    return { driveRef: null, avatarBytesUploaded: 0 };
+  }
+  const url = rawUrl.trim();
+  if (isDriveFileRef(url)) return { driveRef: url, avatarBytesUploaded: 0 };
+
+  let blob: Blob | null = null;
+  if (isLocalFileRef(url)) {
+    blob = await getBlobFromLocalFileRef(url, { companyId: cid });
+  } else if (FIREBASE_STORAGE_HOST.test(url)) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) blob = await res.blob();
+    } catch {
+      blob = null;
+    }
+  } else {
+    return { driveRef: url, avatarBytesUploaded: 0 };
+  }
+
+  if (!blob || blob.size <= 0) return { driveRef: null, avatarBytesUploaded: 0 };
+
+  const driveRef = await uploadPendingAttachmentPayloadToDrive({
+    companyId: cid,
+    companyName: ref.companyName,
+    company: reg as Record<string, unknown>,
+    collection,
+    docId: entityId,
+    field,
+    blob,
+    contentType: blob.type || "image/jpeg",
+  });
+
+  const { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, notifyBrowserDbCollectionUpdated } =
+    await import("@/lib/localCompanyDocMirror");
+  const existing = await getCompanyDocFromBrowserDb(cid, collection, entityId, { includeDeleted: true });
+  if (existing) {
+    await upsertCompanyDocInBrowserDb(
+      cid,
+      collection,
+      entityId,
+      { ...existing, [field]: driveRef },
+      { notify: true, force: true }
+    );
+    notifyBrowserDbCollectionUpdated(cid, collection);
+  }
+
+  return { driveRef, avatarBytesUploaded: 1 };
+}
+
 /** Sync cycle par `opening/` tree update — masters + users JSON (sirf owner upload). */
-export async function uploadOpeningSnapshotToDrive(companyId: string): Promise<number> {
+export async function uploadOpeningSnapshotToDrive(companyId: string): Promise<{
+  /** Party/staff/logo avatar bytes is cycle me naye upload hue. */
+  attachmentFiles: number;
+  jsonSegments: number;
+}> {
   const cid = String(companyId || "").trim();
-  if (!cid) return 0;
-  if (!(await shouldUseLocalCloudSync(cid))) return 0;
+  if (!cid) return { attachmentFiles: 0, jsonSegments: 0 };
+  if (!(await shouldUseLocalCloudSync(cid))) return { attachmentFiles: 0, jsonSegments: 0 };
 
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
-  if (!reg) return 0;
+  if (!reg) return { attachmentFiles: 0, jsonSegments: 0 };
   // Joined device owner ka snapshot overwrite na kare — sirf download side.
-  if ((reg as { driveSharedJoin?: unknown }).driveSharedJoin === true) return 0;
+  if ((reg as { driveSharedJoin?: unknown }).driveSharedJoin === true) {
+    return { attachmentFiles: 0, jsonSegments: 0 };
+  }
 
   const ref: PocketLedgerDriveCompanyRef = {
     companyId: cid,
@@ -71,14 +143,45 @@ export async function uploadOpeningSnapshotToDrive(companyId: string): Promise<n
 
   const files: Array<{ relativePath: string; body: Record<string, unknown> }> = [];
   let uploaded = 0;
+  let avatarBytesUploaded = 0;
 
   for (const segment of POCKET_LEDGER_OPENING_MASTER_SEGMENTS) {
     const collection = Object.entries(MASTER_COLLECTION_MAP).find(([, s]) => s === segment)?.[0];
     if (!collection) continue;
     const rows = await listCompanyDocsFromBrowserDb(cid, collection, { forBackupMerge: true });
-    const openingRows = rows
-      .filter((r) => r && typeof r === "object" && (r as Record<string, unknown>).isDeleted !== true)
-      .map((r) => pickOpeningFields(r as Record<string, unknown>));
+    const openingRows: Record<string, unknown>[] = [];
+    for (const r of rows) {
+      if (!r || typeof r !== "object" || (r as Record<string, unknown>).isDeleted === true) continue;
+      const row = r as Record<string, unknown>;
+      const avatarField =
+        row.fileUrl != null && String(row.fileUrl).trim()
+          ? "fileUrl"
+          : row.avatarUrl != null && String(row.avatarUrl).trim()
+            ? "avatarUrl"
+            : null;
+      let picked = pickOpeningFields(row);
+      if (
+        avatarField &&
+        (isLocalFileRef(String(row[avatarField])) || FIREBASE_STORAGE_HOST.test(String(row[avatarField])))
+      ) {
+        const { driveRef, avatarBytesUploaded: n } = await ensureOpeningAvatarOnDriveForRow(
+          cid,
+          collection,
+          row,
+          ref,
+          reg
+        );
+        avatarBytesUploaded += n;
+        if (driveRef) {
+          picked = { ...picked, [avatarField]: driveRef };
+        } else if (avatarField) {
+          picked = { ...picked, [avatarField]: row[avatarField] };
+        }
+      } else if (avatarField === "fileUrl" && FIREBASE_STORAGE_HOST.test(String(row.fileUrl ?? ""))) {
+        delete picked.fileUrl;
+      }
+      openingRows.push(picked);
+    }
     if (openingRows.length === 0) continue;
     const relativePath = buildPocketLedgerDriveRelativePath(
       ref,
@@ -158,10 +261,10 @@ export async function uploadOpeningSnapshotToDrive(companyId: string): Promise<n
     uploaded += 1;
   }
 
-  if (uploaded > 0) {
-    logLocalCloudSync("opening snapshot uploaded", { companyId: cid, uploaded });
+  if (uploaded > 0 || avatarBytesUploaded > 0) {
+    logLocalCloudSync("opening snapshot uploaded", { companyId: cid, uploaded, avatarBytesUploaded });
   }
-  return uploaded;
+  return { attachmentFiles: avatarBytesUploaded, jsonSegments: uploaded };
 }
 
 const OPENING_USERS_BRANCH_PATH = `opening/${POCKET_LEDGER_OPENING_SUB.users}/users.json`;

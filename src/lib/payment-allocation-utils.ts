@@ -26,6 +26,35 @@ export function getAllocationTotal(a: Allocation | { voucherId?: string; amount?
   return Number(a.amount) || 0;
 }
 
+function billWiseAllocationSyncFingerprint(arr: readonly Allocation[] | null | undefined): string {
+  return JSON.stringify(
+    (arr ?? [])
+      .filter((a) => {
+        const id = String(a?.voucherId || "").trim();
+        return id && id !== OPENING_BALANCE_VOUCHER_ID && getAllocationTotal(a) > 0;
+      })
+      .map((a) => ({
+        voucherId: a.voucherId,
+        amount: getAllocationTotal(a),
+        taxAmount: (a as { taxAmount?: number }).taxAmount ?? null,
+        netAmount: (a as { netAmount?: number }).netAmount ?? null,
+        linkedAccountId: (a as { linkedAccountId?: string }).linkedAccountId ?? null,
+      }))
+      .sort((x, y) => x.voucherId.localeCompare(y.voucherId))
+  );
+}
+
+/** Khali `allocations: []` par background bill-wise sync / "Saving links…" mat chalao. */
+export function hasBillWiseAllocationSyncWork(
+  newAllocations: readonly Allocation[] | null | undefined,
+  previousAllocations: readonly Allocation[] | null | undefined
+): boolean {
+  return (
+    billWiseAllocationSyncFingerprint(newAllocations) !==
+    billWiseAllocationSyncFingerprint(previousAllocations)
+  );
+}
+
 export function getTaxFromAllocation(a: Allocation): number {
   return Number((a as any).taxAmount) || 0;
 }

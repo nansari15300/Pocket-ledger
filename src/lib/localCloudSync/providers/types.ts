@@ -4,9 +4,9 @@ import type {
   LocalCloudSyncOperation,
 } from "@/lib/localCloudSync/types";
 
-/** Drive/Dropbox transport — primary DB nahi, sirf delta JSON + attachment bytes. */
+/** Drive transport — primary DB nahi, sirf delta JSON + attachment bytes. */
 export interface SyncProvider {
-  readonly providerId: "google_drive" | "dropbox";
+  readonly providerId: "google_drive";
 
   uploadOperation(ref: CloudSyncCompanyRef, op: LocalCloudSyncOperation): Promise<void>;
 

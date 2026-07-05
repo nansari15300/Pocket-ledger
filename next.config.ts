@@ -24,6 +24,7 @@ const baseConfig: NextConfig = {
   // Next.js 16: dev + prod default Turbopack; purana `webpack()` hata kar `turbopack.resolveAlias` — mix par "misconfiguration" fail
   // Dev me React 18 Strict Mode effect 2× run karta hai — kuch navigation side-effects zyada dikhte hain.
   reactStrictMode: false,
+  serverExternalPackages: ["googleapis", "google-auth-library"],
   // Pdf.js Turbopack me seedha bundle; SWC transpile se nested bundle clash kam
   transpilePackages: ["pdfjs-dist"],
   // EXE/APK static export: build-time tsc/eslint skip — alag `npm run typecheck` chalao

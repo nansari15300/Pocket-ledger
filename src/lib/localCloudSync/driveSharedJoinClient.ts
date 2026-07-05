@@ -40,21 +40,64 @@ export async function listDriveSharedLocalCompanyInvites(): Promise<DriveSharedC
   return res.companies ?? [];
 }
 
-/** Local registry me ye shared folder pehle se join ho chuka? (Drive folder id primary match). */
-export function isDriveSharedInviteAlreadyJoined(
+type DriveJoinLocalRow = {
+  id?: string;
+  storageOption?: unknown;
+  syncPolicy?: unknown;
+  syncedFromCloud?: unknown;
+  cloudSyncEnabled?: unknown;
+  cloudSyncProvider?: unknown;
+  cloudSyncDriveFolderId?: unknown;
+  driveSharedJoin?: unknown;
+  isDeleted?: unknown;
+};
+
+/** Firestore online mirror row — id suffix match par galat "Connected" mat dikhao. */
+export function isLocalDriveRegistryJoinRow(row: DriveJoinLocalRow): boolean {
+  if (row.isDeleted === true) return false;
+  if (row.syncedFromCloud === true) return false;
+  const so = String(row.storageOption ?? "").toLowerCase().trim();
+  if (so === "firebase" || so === "drive") return false;
+  if (String(row.syncPolicy ?? "").toLowerCase().trim() === "online") return false;
+  const folderId = String(row.cloudSyncDriveFolderId ?? "").trim();
+  if (folderId) return true;
+  if (so === "local" && row.cloudSyncEnabled === true && String(row.cloudSyncProvider ?? "").toLowerCase() === "google_drive") {
+    return true;
+  }
+  return false;
+}
+
+function driveInviteMatchesLocalRow(
   invite: DriveSharedCompanyInvite,
-  locals: Array<{ id?: string; cloudSyncDriveFolderId?: unknown; driveSharedJoin?: unknown; isDeleted?: unknown }>
+  row: DriveJoinLocalRow
 ): boolean {
   const inviteId = String(invite.companyId || "").trim();
   const folderId = String(invite.driveFolderId || "").trim();
-  for (const row of locals) {
-    if (row.isDeleted === true) continue;
-    const localId = String(row.id || "").trim();
-    const localFolder = String(row.cloudSyncDriveFolderId ?? "").trim();
-    if (folderId && localFolder && localFolder === folderId) return true;
-    if (localId && inviteId && (localId === inviteId || localId.endsWith(`_${inviteId}`))) return true;
-  }
+  const localId = String(row.id || "").trim();
+  const localFolder = String(row.cloudSyncDriveFolderId ?? "").trim();
+  if (folderId && localFolder && localFolder === folderId) return true;
+  if (localId && inviteId && (localId === inviteId || localId.endsWith(`_${inviteId}`))) return true;
   return false;
+}
+
+/** Local registry me is Drive folder / company ke liye device-local join row. */
+export function findJoinedLocalCompanyForDriveInvite<T extends DriveJoinLocalRow>(
+  invite: DriveSharedCompanyInvite,
+  locals: T[]
+): T | null {
+  for (const row of locals) {
+    if (!isLocalDriveRegistryJoinRow(row)) continue;
+    if (driveInviteMatchesLocalRow(invite, row)) return row;
+  }
+  return null;
+}
+
+/** Local registry me ye shared folder pehle se join ho chuka? (Drive folder id primary match). */
+export function isDriveSharedInviteAlreadyJoined(
+  invite: DriveSharedCompanyInvite,
+  locals: DriveJoinLocalRow[]
+): boolean {
+  return findJoinedLocalCompanyForDriveInvite(invite, locals) != null;
 }
 
 /** Join se pehle manifest — encryption salt / flags pata karne ke liye. */
@@ -164,4 +207,76 @@ export async function joinDriveSharedLocalCompany(
     throw new Error(res.error || "Sync failed after join");
   }
   return canonicalCompanyId;
+}
+
+/** Pehle se device-local join ho to dubara Drive se pull — purge ke baad re-restore. */
+export async function resyncDriveLocalCompanyFromInvite(
+  invite: DriveSharedCompanyInvite,
+  options?: JoinDriveSharedLocalCompanyOptions
+): Promise<string> {
+  const locals = await listLocalCompanies({ includeDeleted: true });
+  const joined = findJoinedLocalCompanyForDriveInvite(invite, locals);
+  if (!joined?.id) {
+    return joinDriveSharedLocalCompany(invite, options);
+  }
+
+  const companyId = String(joined.id).trim();
+  let manifest: CloudSyncManifest = { latestOp: 0 };
+  try {
+    manifest = await peekDriveSharedCompanyManifest(invite);
+  } catch {
+    /* manifest optional */
+  }
+
+  const companyPassword = String(options?.companyPassword ?? "").trim();
+  const encryptData = manifest.cloudSyncEncryptDriveData === true;
+  const encryptFiles = manifest.cloudSyncEncryptDriveFiles === true;
+  const encryptAny = encryptData || encryptFiles;
+  if (encryptAny && !companyPassword) {
+    throw new Error(
+      `${CLOUD_SYNC_ENCRYPTION_KEY_REQUIRED_MSG} Enter the company password below, then Sync from Drive again.`
+    );
+  }
+
+  await upsertLocalCompany({
+    id: companyId,
+    name: invite.companyName,
+    storageOption: "local",
+    driveSharedJoin: invite.isOwnedOnDrive === true ? false : true,
+    cloudSyncEnabled: true,
+    cloudSyncProvider: "google_drive",
+    cloudSyncDriveFolderId: invite.driveFolderId,
+    cloudSyncStatus: "syncing",
+    cloudSyncLastError: null,
+    cloudSyncEncryptDrive: encryptAny,
+    cloudSyncEncryptDriveData: encryptData,
+    cloudSyncEncryptDriveFiles: encryptFiles,
+    cloudSyncDriveEncryptionSalt: manifest.driveEncryptionSalt ?? null,
+    ...(manifest.cloudSyncDriveDateFolderMode
+      ? { cloudSyncDriveDateFolderMode: manifest.cloudSyncDriveDateFolderMode }
+      : {}),
+    ...(companyPassword ? { password: companyPassword } : {}),
+    updatedAt: Date.now(),
+  });
+
+  await mergeRemoteCloudSyncManifestIntoLocalCompany(companyId, manifest);
+
+  if (encryptAny && !(await isCloudSyncEncryptionReady(companyId))) {
+    throw new Error(
+      `${CLOUD_SYNC_ENCRYPTION_KEY_REQUIRED_MSG} Check the company password and try Sync from Drive again.`
+    );
+  }
+
+  await setCloudSyncCursor(companyId, {
+    lastSyncedOp: 0,
+    lastSyncAt: null,
+    syncStatus: "syncing",
+    lastError: null,
+  });
+
+  const res = await runLocalCloudSyncCycle(companyId, { force: true });
+  if (!res.ok) {
+    throw new Error(res.error || "Sync from Drive failed");
+  }
+  return companyId;
 }

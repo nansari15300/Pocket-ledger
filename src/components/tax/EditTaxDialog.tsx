@@ -9,8 +9,8 @@ import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp, onSnapshot, query, collection } from "firebase/firestore";
 import {
-  stageEntityAvatarAndDocuments,
   uploadEntityAvatarAndDocumentsRemote,
+  syncEntityAttachmentsAfterSave,
   isProfileAvatarImageFile,
   isProfileDocumentFile,
 } from "@/lib/entityProfileLocalFiles";
@@ -67,7 +67,6 @@ import { isSystemParentGroup } from "@/lib/system-groups";
 import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
-import { syncPendingFiles } from "@/lib/localPendingFiles";
 import { useVouchers } from "@/hooks/useVouchers";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 
@@ -275,28 +274,13 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
         const needNewDocsUpload = newDocFiles.length > 0 && canAttachDocuments;
         let documentFileUrls = [...keptDocUrls];
         if (companyId && (needAvatarUpload || needNewDocsUpload)) {
-          const runRemote = () =>
-            uploadEntityAvatarAndDocumentsRemote({
-              companyId,
-              collectionSeg: "taxes",
-              entityId: taxRefSnap.id,
-              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
-              documentFiles: needNewDocsUpload ? newDocFiles : [],
-            });
-          const runStage = () =>
-            stageEntityAvatarAndDocuments({
-              companyId,
-              collectionSeg: "taxes",
-              entityId: taxRefSnap.id,
-              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
-              documentFiles: needNewDocsUpload ? newDocFiles : [],
-            });
-          let st: { fileUrl: string | null; documentFileUrls: string[] };
-          if (localSqlMirror) {
-            st = await runStage();
-          } else {
-            st = await runRemote();
-          }
+          const st = await uploadEntityAvatarAndDocumentsRemote({
+            companyId,
+            collectionSeg: "taxes",
+            entityId: taxRefSnap.id,
+            avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+            documentFiles: needNewDocsUpload ? newDocFiles : [],
+          });
           if (st.fileUrl) fileUrl = st.fileUrl;
           documentFileUrls = [...keptDocUrls, ...st.documentFileUrls];
         }
@@ -331,7 +315,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
           const payload: Record<string, unknown> = { ...base, ...updatePayload, id: taxRefSnap.id, companyId };
           await upsertCompanyDocInBrowserDb(companyId, "taxes", taxRefSnap.id, payload);
           await enqueueCompanyDocOutbox(companyId, "taxes", "update", taxRefSnap.id, payload);
-          await syncPendingFiles().catch((e) => console.warn("[EditTaxDialog] syncPendingFiles", e));
+          await syncEntityAttachmentsAfterSave(companyId);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onTaxUpdated({
             id: taxRefSnap.id,
@@ -358,7 +342,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
 
         const taxRef = doc(firestore, `companies/${companyId}/taxes`, taxRefSnap.id);
         await updateDoc(taxRef, updatePayload);
-        await syncPendingFiles().catch((e) => console.warn("[EditTaxDialog] syncPendingFiles", e));
+        await syncEntityAttachmentsAfterSave(companyId);
 
         if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
           const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");

@@ -3,11 +3,9 @@
 import { normalizeAttachmentUrlForDevicePreview } from "@/lib/attachmentHoldClipboard";
 import {
   getBlobFromLocalFileRef,
-  getPendingFiles,
   isLocalFileRef,
-  LOCAL_FILE_PREFIX,
 } from "@/lib/localPendingFiles";
-import { isDriveFileRef, remotePathFromDriveFileRef } from "@/lib/legacyDriveFileRef";
+import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
 
 /** IndexedDB/native offline cache key — `PL_ATTACH` ko decode karke stable `drive:`/`local:`/https ref. */
@@ -84,29 +82,13 @@ export async function fetchAttachmentRefBlob(
         }
       }
     }
-    const logical = remotePathFromDriveFileRef(u) || u;
-    const fileTail = logical.split("/").pop()?.trim().toLowerCase() || "";
-    if (fileTail) {
-      try {
-        for (const row of await getPendingFiles()) {
-          const fn = String(row.fileName || "")
-            .trim()
-            .toLowerCase();
-          if (!fn || fn !== fileTail) continue;
-          const localBlob = await getBlobFromLocalFileRef(`${LOCAL_FILE_PREFIX}${row.id}`, {
-            context: "fetchAttachmentRefBlob",
-            companyId: options?.companyId,
-          });
-          if (localBlob && localBlob.size > 0) return localBlob;
-        }
-      } catch {
-        /* pending optional */
-      }
-    }
     try {
       const { getOfflineCachedAttachmentBlob } = await import("@/lib/offlineAttachmentUrlCache");
-      const cached = await getOfflineCachedAttachmentBlob(rawUrl);
-      if (cached && cached.size > 0) return cached;
+      for (const key of [String(rawUrl).trim(), u]) {
+        if (!key) continue;
+        const cached = await getOfflineCachedAttachmentBlob(key);
+        if (cached && cached.size > 0) return cached;
+      }
     } catch {
       /* offline cache optional */
     }
@@ -115,6 +97,17 @@ export async function fetchAttachmentRefBlob(
       companyId: options?.companyId,
     });
     if (driveBlob && driveBlob.size > 0) return driveBlob;
+
+    const { getAttachmentBlobForBackupEmbed, tryOfflineCachedAttachmentBlobMultiKey } = await import(
+      "@/lib/offlineAttachmentUrlCache"
+    );
+    const cached = await tryOfflineCachedAttachmentBlobMultiKey(String(rawUrl).trim());
+    if (cached && cached.size > 0) return cached;
+    const embedded = await getAttachmentBlobForBackupEmbed(String(rawUrl).trim(), {
+      companyId: options?.companyId,
+      skipDiskWrite: true,
+    });
+    if (embedded && embedded.size > 0) return embedded;
   }
 
   if (/^https?:\/\//i.test(u) || looksLikeFirebaseStorageObjectPath(u)) {

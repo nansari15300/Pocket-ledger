@@ -22,12 +22,24 @@ export const companyProfileTabsTrigger =
 /** Company Profile + Manage Sharing outer card shell */
 export const settingsDetailCardShell = `border border-black ${companyProfilePageBg}`;
 
-/** Cloud sync settings — dashboard tone cards (blue / green / pink / sky) */
-export const cloudSyncProviderCard = "pl-chrome-tone-blue border border-black rounded-md p-3";
-export const cloudSyncEncryptCard = "pl-chrome-tone-emerald border border-black rounded-md p-3 space-y-3";
-export const cloudSyncNepalFolderCard = "pl-chrome-tone-pink border border-black rounded-md p-3 space-y-3";
-export const cloudSyncSharePanelCard = "pl-chrome-tone-sky border border-black rounded-md";
+/** Cloud sync — dashboard stat cards jaisa emerald shell */
+export const cloudSyncPageCard = "pl-chrome-card pl-chrome-tone-emerald border border-black";
+export const cloudSyncPanelBase = `${cloudSyncPageCard} rounded-md p-3`;
+export const cloudSyncEncryptCard = `${cloudSyncPanelBase} space-y-3`;
+export const cloudSyncFirebaseReconcileCard = `${cloudSyncPanelBase} space-y-2`;
+/** Join / restore panel — shrink wrap; h-full mat do (poora page kha jata hai) */
+export const cloudSyncJoinPanelCard = `${cloudSyncPanelBase} space-y-4`;
+/** Share company on Drive — right column poori height */
+export const cloudSyncSharePanelCard = `${cloudSyncPanelBase} space-y-3 h-full flex flex-col min-h-0`;
+/** Share table — andar bhi dashboard emerald, white box nahi */
+export const cloudSyncShareTableShell =
+  "pl-chrome-card pl-chrome-tone-emerald rounded-md overflow-x-auto flex-1 min-h-0 border border-emerald-300/55 dark:border-emerald-800/55";
+export const cloudSyncShareTableClass =
+  "[&_thead_tr]:border-emerald-300/70 [&_th]:bg-emerald-100/80 [&_th]:text-emerald-950 [&_th]:font-semibold dark:[&_th]:bg-emerald-950/50 dark:[&_th]:text-emerald-50 [&_tbody_tr]:border-emerald-200/50 dark:[&_tbody_tr]:border-emerald-900/40 [&_tbody_tr:hover]:bg-emerald-50/70 dark:[&_tbody_tr:hover]:bg-emerald-950/30";
 /** Sync status card — last sync, pending, next sync countdown */
-export const cloudSyncStatusCard = "pl-chrome-tone-blue border border-black rounded-md p-3 space-y-3";
-/** Last sync summary — added / uploaded files & vouchers */
-export const cloudSyncLastSyncSummaryCard = "pl-chrome-tone-amber border border-black rounded-md p-3 space-y-2";
+export const cloudSyncStatusCard = `${cloudSyncPanelBase} space-y-3`;
+/** Sync summary card — added / uploaded files & vouchers */
+export const cloudSyncLastSyncSummaryCard = `${cloudSyncPanelBase} space-y-2`;
+/** Cloud sync settings outer card + join panel nested card */
+export const cloudSyncSettingsPageShell = `${cloudSyncPageCard} rounded-lg`;
+export const cloudSyncNestedCard = `${cloudSyncPageCard} rounded-md border-emerald-200/80 bg-white/55 dark:bg-emerald-950/25`;

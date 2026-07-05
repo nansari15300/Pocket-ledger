@@ -3,7 +3,7 @@
 import type { CloudSyncDriveShareUser } from "@/lib/localCloudSync/types";
 import { shareUsersToEmailList, readCloudSyncConfigFromCompany, readCloudSyncDriveShareUsers, shouldUseLocalCloudSync } from "@/lib/localCloudSync/companyConfig";
 import { logLocalCloudSync, warnLocalCloudSync } from "@/lib/localCloudSync/logger";
-import { toDriveFileRef, driveStoragePathForLogicalFile, remotePathFromDriveFileRef, pocketLedgerDriveCompanyIdPart } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { toDriveFileRef, driveAttachmentUploadStoragePath, driveAttachmentDownloadTryPaths, isDriveAttachmentWrapperStoragePath, remotePathFromDriveFileRef, pocketLedgerDriveCompanyIdPart } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 import { getLocalCompanyById, upsertLocalCompany, listLocalCompanies, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import {
   ensureCloudSyncDriveEncryptionSalt,
@@ -87,7 +87,7 @@ async function resolveCompanyIdForDrivePath(remotePath: string): Promise<string 
   return null;
 }
 
-/** Attachment bytes upload — returns `drive:` ref (logical path; encrypt ON → `.plenc.json` on Drive). */
+/** Attachment bytes upload — encrypt OFF: raw binary; encrypt ON: `.plenc.json` wrapper. */
 export async function uploadAttachmentBytesToDrive(input: {
   companyId: string;
   companyName?: string;
@@ -96,10 +96,15 @@ export async function uploadAttachmentBytesToDrive(input: {
   contentType?: string;
   sha256Hex?: string;
 }): Promise<string> {
+  if (!(await shouldUseLocalCloudSync(input.companyId))) {
+    throw new Error("Drive sync is disabled for this company.");
+  }
   const logicalPath = input.remotePath;
   const reg = await getLocalCompanyById(input.companyId, { includeDeleted: true });
   const flags = readCloudSyncDriveEncryptionFromCompany(reg as Record<string, unknown>);
   const blob = input.bytes instanceof Blob ? input.bytes : new Blob([input.bytes], { type: input.contentType });
+  const contentType = input.contentType || blob.type || "application/octet-stream";
+  const storagePath = driveAttachmentUploadStoragePath(logicalPath, flags.encryptFiles);
 
   if (flags.encryptFiles) {
     const buf = await blob.arrayBuffer();
@@ -108,10 +113,9 @@ export async function uploadAttachmentBytesToDrive(input: {
     const encBody = await encryptDriveFileBytesForUpload(
       input.companyId,
       buf,
-      { contentType: input.contentType || blob.type, originalName },
+      { contentType, originalName },
       reg as Record<string, unknown>
     );
-    const storagePath = driveStoragePathForLogicalFile(logicalPath, true);
     await postDriveJsonViaClient("/api/local-cloud-sync/drive/upload-json", {
       companyId: input.companyId,
       companyName: input.companyName,
@@ -119,19 +123,18 @@ export async function uploadAttachmentBytesToDrive(input: {
       body: encBody,
       contentType: "application/json",
     });
-    return toDriveFileRef(logicalPath);
+  } else {
+    const base64 = await blobToBase64(blob);
+    await postDriveJsonViaClient("/api/local-cloud-sync/drive/upload-file", {
+      companyId: input.companyId,
+      companyName: input.companyName,
+      remotePath: storagePath,
+      base64,
+      contentType,
+      sha256Hex: input.sha256Hex,
+    });
   }
-
-  const base64 = await blobToBase64(blob);
-  const res = await postDriveJsonViaClient<{ remotePath: string }>("/api/local-cloud-sync/drive/upload-file", {
-    companyId: input.companyId,
-    companyName: input.companyName,
-    remotePath: logicalPath,
-    contentType: input.contentType || blob.type || "application/octet-stream",
-    sha256Hex: input.sha256Hex,
-    base64,
-  });
-  return toDriveFileRef(res.remotePath);
+  return toDriveFileRef(logicalPath);
 }
 
 /** `drive:` ref se blob — preview / open; encrypted `.plenc.json` decrypt. */
@@ -144,9 +147,7 @@ export async function downloadDriveAttachmentBlob(
   const reg = cid ? await getLocalCompanyById(cid, { includeDeleted: true }) : null;
   const flags = readCloudSyncDriveEncryptionFromCompany(reg as Record<string, unknown>);
 
-  const tryPaths = flags.encryptFiles
-    ? [driveStoragePathForLogicalFile(logicalPath, true), logicalPath]
-    : [logicalPath];
+  const tryPaths = driveAttachmentDownloadTryPaths(logicalPath, flags.encryptFiles);
 
   for (const path of tryPaths) {
     const res = await postDriveJsonViaClient<{ base64: string | null; contentType?: string | null }>(
@@ -154,7 +155,7 @@ export async function downloadDriveAttachmentBlob(
       { remotePath: path }
     );
     if (!res.base64) continue;
-    if (cid && (path.endsWith(".plenc.json") || res.contentType?.includes("json"))) {
+    if (cid && (isDriveAttachmentWrapperStoragePath(path) || res.contentType?.includes("json"))) {
       try {
         const text = atob(res.base64);
         const { bytes, contentType } = await decryptDriveFilePayloadFromDownload(
@@ -209,6 +210,9 @@ export async function shareDriveFolderUser(input: {
   companyName?: string;
   user: CloudSyncDriveShareUser;
 }): Promise<{ shared: string[]; skipped: string[] }> {
+  if (!(await isGoogleDriveCloudSyncCompany(input.companyId))) {
+    throw new Error("Drive sync is disabled for this company.");
+  }
   const res = await postDriveJsonViaClient<{ shared?: string[]; skipped?: string[] }>(
     "/api/local-cloud-sync/drive/share-folder",
     {

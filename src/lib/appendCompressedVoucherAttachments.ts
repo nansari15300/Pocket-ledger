@@ -1,6 +1,6 @@
 "use client";
 
-import type { Dispatch, SetStateAction } from "react";
+import type { ChangeEvent, Dispatch, SetStateAction } from "react";
 import { compressVoucherAttachment } from "@/lib/compression";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 
@@ -96,4 +96,15 @@ export async function appendCompressedVoucherAttachmentsToState(opts: {
       });
     }
   }
+}
+
+/** `<input type="file" onChange>` — sab voucher forms ek hi path (double-append avoid). */
+export async function handleVoucherAttachmentInputChange(
+  e: ChangeEvent<HTMLInputElement>,
+  opts: Omit<Parameters<typeof appendCompressedVoucherAttachmentsToState>[0], "incomingFiles">
+): Promise<void> {
+  if (!e.target.files?.length) return;
+  const incomingFiles = Array.from(e.target.files);
+  await appendCompressedVoucherAttachmentsToState({ ...opts, incomingFiles });
+  e.target.value = "";
 }

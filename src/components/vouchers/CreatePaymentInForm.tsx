@@ -43,10 +43,9 @@ import BsDatePicker from "../ui/BsDatePicker";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { Staff } from "@/components/staff/types";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
-import { compressVoucherAttachment } from "@/lib/compression";
-import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange } from "@/lib/appendCompressedVoucherAttachments";
+import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
-import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { CreateTaxDialog } from "@/components/tax/CreateTaxDialog";
 import { Combobox } from "@/components/ui/combobox";
@@ -101,7 +100,7 @@ import { getOpeningBalanceBaseAmount, SPEND_WISE_OPENING_BALANCE_ID } from "@/li
 import { LinkPaymentInToSalaryDialog } from "@/components/vouchers/LinkPaymentInToSalaryDialog";
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
 import type { Allocation } from "@/lib/payment-allocation-utils";
-import { getAllocatedByVoucherId, getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import { getAllocatedByVoucherId, getAllocationTotal, hasBillWiseAllocationSyncWork, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import { usePaymentAllocations } from "@/hooks/usePaymentAllocations";
 import { useLinkPaymentToTxnsLinkableCount } from "@/hooks/useLinkPaymentToTxnsLinkableCount";
 import { printPaymentVoucherReceipt } from "@/lib/printPaymentVoucherReceipt";
@@ -1202,9 +1201,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
         form.reset(initialValues);
         setSavedVoucherId(voucher.id);
-        const urls = voucher.fileUrls || [];
+        const urls = voucherAttachmentUrlsForFormState(voucher);
         setFiles(urls);
-        initialFilesRef.current = urls; // Track initial so _isFileDirty detects user remove/add
+        initialFilesRef.current = urls;
         setSavePdfAsImage(shouldSuggestPdfAsImage(urls));
         if (lastSyncedVoucherIdRef.current !== voucher.id) {
           lastSyncedVoucherIdRef.current = voucher.id;
@@ -1216,7 +1215,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         // Sirf pehli baar defaults hydrate karo — har `isFormDirty` / effect rerun par `setFiles([])` se user ki File gayab ho jati thi (console me append dikhta, UI khaali).
         if (lastSyncedVoucherIdRef.current !== "new") {
           lastSyncedVoucherIdRef.current = "new";
-          const urls = defaultVoucherData.fileUrls || [];
+          const urls = voucherAttachmentUrlsForFormState(defaultVoucherData);
           setFiles(urls);
           initialFilesRef.current = urls.filter((f: unknown): f is string => typeof f === "string");
           setSavePdfAsImage(shouldSuggestPdfAsImage(urls));
@@ -1263,7 +1262,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const hasUnsavedFilePick = files.some((f) => f instanceof File);
     if (hasUnsavedFilePick) return;
     if (_isFileDirty) return;
-    const incoming = (voucher.fileUrls || []).filter((u: unknown): u is string => typeof u === "string");
+    const incoming = voucherAttachmentUrlsForFormState(voucher);
     const cur = files.filter((f): f is string => typeof f === "string");
     const snap = savedFileUrlsSnapshotRef.current;
     if (snap) {
@@ -1581,10 +1580,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const rawFileUrlsForPostSave = (sanitizedData.fileUrls || []).filter(
           (u: unknown): u is string => typeof u === "string"
         );
+        const needsBillWiseLinkSync =
+          !!(billWiseAllocations && companyId && docId) &&
+          hasBillWiseAllocationSyncWork(billWiseAllocations, previousBillWiseAllocations);
         const needsBackgroundSync =
-          !!(spendWisePending && docId && user?.uid) ||
-          !!(billWiseAllocations && companyId && docId) ||
-          !!(docId && companyId && rawFileUrlsForPostSave.length > 0);
+          !!(spendWisePending && docId && user?.uid) || needsBillWiseLinkSync;
 
         if (approveBanner) {
           replaceVoucherSaveLoadingWithShortSuccess(
@@ -1637,7 +1637,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               setPendingLinkedPaymentOut(null);
             }
 
-            if (billWiseAllocations && companyId && docId) {
+            if (needsBillWiseLinkSync && billWiseAllocations && companyId && docId) {
               try {
                 await syncBillWiseAllocationsToTargetVouchers(
                   companyId,
@@ -1651,7 +1651,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 sonnerToast.error("Receipt saved but bill-wise link sync to target vouchers failed.");
               }
             }
-
             if (voucherType === "payment_in" && billWiseAllocations) {
               initialAllocationsRef.current = billWiseAllocations.map((a: any) => ({
                 voucherId: a.voucherId,
@@ -1659,7 +1658,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               }));
             }
 
-            if (docId && companyId) {
+            if (docId && companyId && _isFileDirty) {
               const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
                 companyId,
                 voucherId: docId,
@@ -1881,119 +1880,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   };
   
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const picked = e.target.files?.length ?? 0;
-    tracePaymentInAttach("handleFileChange", { picked, allowAttachments });
-
-    if (!e.target.files) {
-      tracePaymentInAttach("exit: files null (unexpected)");
-      return;
-    }
-    if (picked === 0) {
-      tracePaymentInAttach("exit: 0 files — user cancelled ya empty pick");
-      return;
-    }
+    tracePaymentInAttach("handleFileChange", { picked: e.target.files?.length ?? 0, allowAttachments });
     if (!allowAttachments) {
-      tracePaymentInAttach("exit: allowAttachments false (toast nahi tha pehle — ab pata chala)");
+      tracePaymentInAttach("exit: allowAttachments false");
       return;
     }
-
-    const maxFiles = fileAttachmentLimits.maxFileCount || 0;
-    if (maxFiles === 0) {
-      tracePaymentInAttach("exit: maxFileCount 0");
-      toast({
-        variant: "destructive",
-        title: "File Attachments Disabled",
-        description: "File attachments are not allowed for your role.",
-      });
-      return;
-    }
-
-    const newFiles = Array.from(e.target.files);
-    const remainingSlots = maxFiles - files.length;
-    
-    if (remainingSlots <= 0) {
-      tracePaymentInAttach("exit: limit", { maxFiles, currentFiles: files.length });
-      toast({
-        variant: "destructive",
-        title: "Limit Reached",
-        description: `You can only upload up to ${maxFiles} file${maxFiles > 1 ? 's' : ''}.`,
-      });
-      return;
-    }
-
-    const filesToProcess = newFiles.slice(0, remainingSlots);
-    tracePaymentInAttach("processing", { count: filesToProcess.length, names: filesToProcess.map((f) => f.name) });
-  
-    for (const file of filesToProcess) {
-      // Check file type
-      const isImage = file.type.startsWith("image/");
-      const isPDF =
-        file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-      
-      if (!fileAttachmentLimits.allowImage && isImage) {
-        tracePaymentInAttach("skip file: image not allowed for role", { name: file.name });
-        toast({
-          variant: "destructive",
-          title: "File Type Not Allowed",
-          description: "Image files are not allowed for your role.",
-        });
-        continue;
-      }
-      
-      if (!fileAttachmentLimits.allowPDF && isPDF) {
-        tracePaymentInAttach("skip file: pdf not allowed for role", { name: file.name });
-        toast({
-          variant: "destructive",
-          title: "File Type Not Allowed",
-          description: "PDF files are not allowed for your role.",
-        });
-        continue;
-      }
-
-      if (!isImage && !isPDF) {
-        tracePaymentInAttach("skip file: not image/pdf", { name: file.name, mime: file.type });
-        toast({
-          variant: "destructive",
-          title: "File Type Not Allowed",
-          description: "Only image and PDF files are allowed.",
-        });
-        continue;
-      }
-
-      try {
-        const maxBytes = attachmentMaxBytes();
-        tracePaymentInAttach("compress start", { name: file.name, size: file.size });
-        const processedFile = await compressVoucherAttachment(file, maxBytes);
-        if (processedFile.size > maxBytes) {
-          tracePaymentInAttach("skip: still too large after compress", { after: processedFile.size, maxBytes });
-          toast({
-            variant: "destructive",
-            ...attachmentStillTooLargeToastFields(),
-          });
-          continue;
-        }
-        setFiles((prev) => {
-          if (prev.length >= maxFiles) {
-            tracePaymentInAttach("setFiles no-op: at cap", { prevLen: prev.length, maxFiles });
-            return prev;
-          }
-          tracePaymentInAttach("setFiles appended", { prevLen: prev.length, added: processedFile.name });
-          return [...prev, processedFile];
-        });
-      } catch (error) {
-        console.error("Compression error:", error);
-        tracePaymentInAttach("compress threw", {
-          name: file.name,
-          err: error instanceof Error ? error.message : String(error),
-        });
-        toast({
-          variant: "destructive",
-          title: "Could not process file",
-          description: error instanceof Error ? error.message : "Compression or PDF read failed.",
-        });
-      }
-    }
-    e.target.value = "";
+    await handleVoucherAttachmentInputChange(e, {
+      currentFiles: files,
+      maxFiles: fileAttachmentLimits.maxFileCount || 0,
+      allowImage: fileAttachmentLimits.allowImage,
+      allowPDF: fileAttachmentLimits.allowPDF,
+      setFiles,
+      toast,
+    });
     tracePaymentInAttach("handleFileChange finished");
   };
   

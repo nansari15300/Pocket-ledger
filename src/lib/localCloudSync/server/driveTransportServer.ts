@@ -1,5 +1,6 @@
 import "server-only";
 
+import { Readable } from "node:stream";
 import { google } from "googleapis";
 import { createGoogleOAuth2Client } from "@/lib/server/googleOAuthCredentials";
 import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebaseAdmin";
@@ -18,6 +19,16 @@ import {
   logicalPathFromDriveStoragePath,
   type PocketLedgerDriveCompanyRef,
 } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+
+/** googleapis `media.body` — plain string/Buffer fail; Readable stream with `.pipe()` required. */
+function driveMediaBody(data: Buffer | string): Readable {
+  const buf = typeof data === "string" ? Buffer.from(data, "utf8") : data;
+  const stream = new Readable();
+  stream._read = () => {};
+  stream.push(buf);
+  stream.push(null);
+  return stream;
+}
 
 type DriveTokens = {
   accessToken: string;
@@ -300,19 +311,20 @@ export async function driveUpdateManifest(
   const drive = google.drive({ version: "v3", auth });
   const dataFolderId = await ensureCompanyBranchFolder(drive, ref, "data");
   const body = JSON.stringify({ ...manifest, updatedAt: Date.now() });
+  const media = { mimeType: "application/json", body: driveMediaBody(body) };
   const q = `'${dataFolderId}' in parents and name = 'manifest.json' and trashed = false`;
   const list = await drive.files.list({ q, fields: "files(id)", pageSize: 1 });
   const existingId = list.data.files?.[0]?.id;
   if (existingId) {
     await drive.files.update({
       fileId: existingId,
-      media: { mimeType: "application/json", body },
+      media,
     });
     return;
   }
   await drive.files.create({
     requestBody: { name: "manifest.json", parents: [dataFolderId] },
-    media: { mimeType: "application/json", body },
+    media,
   });
 }
 
@@ -333,15 +345,16 @@ export async function driveUploadOperation(
   const opsFolder = await ensureCompanyDataOpsFolder(drive, ref);
   const name = opFileName(opSeq);
   const body = JSON.stringify(op);
+  const media = { mimeType: "application/json", body: driveMediaBody(body) };
   const q = `'${opsFolder}' in parents and name = '${name.replace(/'/g, "\\'")}' and trashed = false`;
   const list = await drive.files.list({ q, fields: "files(id)", pageSize: 1 });
   const existingId = list.data.files?.[0]?.id;
   if (existingId) {
-    await drive.files.update({ fileId: existingId, media: { mimeType: "application/json", body } });
+    await drive.files.update({ fileId: existingId, media });
   } else {
     await drive.files.create({
       requestBody: { name, parents: [opsFolder] },
-      media: { mimeType: "application/json", body },
+      media,
     });
   }
 }
@@ -397,7 +410,7 @@ async function upsertBinaryFileInFolder(
   const q = `'${folderId}' in parents and name = '${fileName.replace(/'/g, "\\'")}' and trashed = false`;
   const list = await drive.files.list({ q, fields: "files(id)", pageSize: 1 });
   const existingId = list.data.files?.[0]?.id;
-  const media = { mimeType, body: body as unknown as string };
+  const media = { mimeType, body: driveMediaBody(body) };
   if (existingId) {
     await drive.files.update({ fileId: existingId, media });
     return;
@@ -808,15 +821,16 @@ export async function driveUploadJsonAtRemotePath(
   for (const seg of folderParts) {
     parentId = await ensureFolder(drive, parentId, seg);
   }
+  const media = { mimeType: contentType, body: driveMediaBody(body) };
   const q = `'${parentId}' in parents and name = '${fileName.replace(/'/g, "\\'")}' and trashed = false`;
   const list = await drive.files.list({ q, fields: "files(id)", pageSize: 1 });
   const existingId = list.data.files?.[0]?.id;
   if (existingId) {
-    await drive.files.update({ fileId: existingId, media: { mimeType: contentType, body } });
+    await drive.files.update({ fileId: existingId, media });
   } else {
     await drive.files.create({
       requestBody: { name: fileName, parents: [parentId] },
-      media: { mimeType: contentType, body },
+      media,
     });
   }
   return { remotePath };
@@ -947,7 +961,7 @@ async function listFilesRecursive(
       if (name === "manifest.json") continue;
       const storagePath = [...prefixParts, name].join("/");
       const encrypted = name.endsWith(DRIVE_ENCRYPTED_FILE_SUFFIX);
-      const logicalPath = encrypted ? logicalPathFromDriveStoragePath(storagePath) : storagePath;
+      const logicalPath = logicalPathFromDriveStoragePath(storagePath);
       out.push({ storagePath, logicalPath, encrypted });
     }
     pageToken = res.data.nextPageToken ?? undefined;

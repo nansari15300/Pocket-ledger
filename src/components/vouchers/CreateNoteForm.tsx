@@ -20,8 +20,8 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "
 import { Loader2, Trash2, CalendarIcon, PlusCircle, CheckCircle, History, Printer } from "lucide-react";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_PC_DATE_ROW, VOUCHER_PC_DATE_BOTH_SLOT, VOUCHER_PC_DATE_BS_PILL, VOUCHER_PC_DATE_AD_PILL } from "@/components/vouchers/voucherButtonStyles";
 import { FilePreview } from "./FilePreview";
-import { compressVoucherAttachment } from "@/lib/compression";
-import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange } from "@/lib/appendCompressedVoucherAttachments";
+import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
@@ -299,10 +299,11 @@ export function CreateNoteForm({
         void form.trigger();
       });
     }
-    if (voucher.fileUrls) {
-      setFiles(voucher.fileUrls);
-      initialFilesRef.current = Array.isArray(voucher.fileUrls) ? [...voucher.fileUrls] : [];
-      setSavePdfAsImage(shouldSuggestPdfAsImage(voucher.fileUrls));
+    const urls = voucherAttachmentUrlsForFormState(voucher);
+    if (urls.length > 0) {
+      setFiles(urls);
+      initialFilesRef.current = [...urls];
+      setSavePdfAsImage(shouldSuggestPdfAsImage(urls));
     } else {
       setFiles([]);
       initialFilesRef.current = [];
@@ -417,89 +418,15 @@ export function CreateNoteForm({
   }, [selectedContext, getEntityOptions, form]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || !allowAttachments) return;
-    
-    const maxFiles = fileAttachmentLimits.maxFileCount || 0;
-    if (maxFiles === 0) {
-      toast({
-        variant: "destructive",
-        title: "File Attachments Disabled",
-        description: "File attachments are not allowed for your role.",
-      });
-      return;
-    }
-
-    const newFiles = Array.from(e.target.files);
-    const remainingSlots = maxFiles - files.length;
-    
-    if (remainingSlots <= 0) {
-      toast({
-        variant: "destructive",
-        title: "Limit Reached",
-        description: `You can only upload up to ${maxFiles} file${maxFiles > 1 ? 's' : ''}.`,
-      });
-      return;
-    }
-
-    const filesToProcess = newFiles.slice(0, remainingSlots);
-  
-    for (const file of filesToProcess) {
-      // Check file type
-      const isImage = file.type.startsWith("image/");
-      const isPDF =
-        file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-      
-      if (!fileAttachmentLimits.allowImage && isImage) {
-        toast({
-          variant: "destructive",
-          title: "File Type Not Allowed",
-          description: "Image files are not allowed for your role.",
-        });
-        continue;
-      }
-      
-      if (!fileAttachmentLimits.allowPDF && isPDF) {
-        toast({
-          variant: "destructive",
-          title: "File Type Not Allowed",
-          description: "PDF files are not allowed for your role.",
-        });
-        continue;
-      }
-
-      if (!isImage && !isPDF) {
-        toast({
-          variant: "destructive",
-          title: "File Type Not Allowed",
-          description: "Only image and PDF files are allowed.",
-        });
-        continue;
-      }
-
-      try {
-        const maxBytes = attachmentMaxBytes();
-        const processedFile = await compressVoucherAttachment(file, maxBytes);
-        if (processedFile.size > maxBytes) {
-          toast({
-            variant: "destructive",
-            ...attachmentStillTooLargeToastFields(),
-          });
-          continue;
-        }
-        setFiles((prev) => {
-          if (prev.length >= maxFiles) return prev;
-          return [...prev, processedFile];
-        });
-      } catch (error) {
-        console.error("Compression error:", error);
-        toast({
-          variant: "destructive",
-          title: "Could not process file",
-          description: error instanceof Error ? error.message : "Compression or PDF read failed.",
-        });
-      }
-    }
-    e.target.value = "";
+    if (!allowAttachments) return;
+    await handleVoucherAttachmentInputChange(e, {
+      currentFiles: files,
+      maxFiles: fileAttachmentLimits.maxFileCount || 0,
+      allowImage: fileAttachmentLimits.allowImage,
+      allowPDF: fileAttachmentLimits.allowPDF,
+      setFiles,
+      toast,
+    });
   };
 
   // Validated `data` — nested mobile date + `getValues()` से miss न हो

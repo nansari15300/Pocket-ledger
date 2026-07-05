@@ -78,7 +78,7 @@ import {
 } from "@/lib/voucherLocalAttachmentUpload";
 import { parseAttachmentHoldClipboardText } from "@/lib/attachmentHoldClipboard";
 import { dispatchVoucherLivePatch, dispatchVoucherAttachmentSaved, materializeVoucherAttachmentsInSavePayload } from "@/lib/voucherFormAttachmentSave";
-import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
+import { normalizeFileUrlsField, dedupeVoucherAttachmentUrlList } from "@/lib/voucherAttachmentNormalize";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
@@ -86,8 +86,10 @@ import { maybeQueuePlServerMirrorAfterDocWrite } from "@/lib/plServerClientMirro
 
 /** Edit save: transient `blob:` preview URLs ya khali `fileUrls` se `local:` / Drive refs mat hatao. */
 function persistableVoucherAttachmentUrls(raw: unknown): string[] {
-  return normalizeFileUrlsField(raw).filter(
-    (s) => !s.startsWith("blob:") && !s.startsWith("data:")
+  return dedupeVoucherAttachmentUrlList(
+    normalizeFileUrlsField(raw).filter(
+      (s) => !s.startsWith("blob:") && !s.startsWith("data:")
+    )
   );
 }
 
@@ -1776,6 +1778,13 @@ export async function syncBillWiseAllocationsToTargetVouchers(
   previousAllocations: Allocation[] = []
 ): Promise<void> {
   if (!companyId || !sourceVoucherId) return;
+  const hasNew = newAllocations.some(
+    (a) => a.voucherId && a.voucherId !== OPENING_BALANCE_VOUCHER_ID && getAllocationTotal(a) > 0
+  );
+  const hasPrev = previousAllocations.some(
+    (a) => a.voucherId && a.voucherId !== OPENING_BALANCE_VOUCHER_ID && getAllocationTotal(a) > 0
+  );
+  if (!hasNew && !hasPrev) return;
   // Multi-doc allocation sync — APK par turant-heavy write burst; ledger shield ek hi entry se arm
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
   if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) {

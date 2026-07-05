@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, Cloud, Lock, UserPlus } from "lucide-react";
+import { Loader2, Cloud, UserPlus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
   getGoogleDriveAuthUrl,
@@ -20,9 +20,10 @@ import {
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import {
-  isDriveSharedInviteAlreadyJoined,
+  findJoinedLocalCompanyForDriveInvite,
   joinDriveSharedLocalCompany,
   listDriveSharedLocalCompanyInvites,
+  resyncDriveLocalCompanyFromInvite,
   type DriveSharedCompanyInvite,
 } from "@/lib/localCloudSync/driveSharedJoinClient";
 import { listLocalCompanies, type LocalCompanyDoc } from "@/lib/localCompanyStore";
@@ -31,7 +32,9 @@ import {
   isCloudSyncEncryptionKeyRequiredError,
 } from "@/lib/localCloudSync/driveEncryption";
 import { cn } from "@/lib/utils";
-import { cloudSyncSharePanelCard } from "@/lib/companyProfileChrome";
+import { cloudSyncJoinPanelCard, cloudSyncNestedCard } from "@/lib/companyProfileChrome";
+import { CloudSyncHelpPopover } from "@/components/company/CloudSyncHelpPopover";
+import { purgeAllLocalCompaniesMissingOnDrive } from "@/lib/localCloudSync/driveCompanyFolderLifecycle";
 
 type Props = {
   /** false = list load mat karo (dialog band) */
@@ -71,6 +74,11 @@ export function JoinSharedLocalCompanyPanel({
     setLoading(true);
     setError(null);
     try {
+      const purged = await purgeAllLocalCompaniesMissingOnDrive(user?.uid ?? null);
+      if (purged.length > 0) {
+        reloadLocalCompanyRegistry();
+        await refreshLocalJoinState();
+      }
       const rows = await listDriveSharedLocalCompanyInvites();
       setInvites(rows);
     } catch (e) {
@@ -80,7 +88,7 @@ export function JoinSharedLocalCompanyPanel({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user?.uid, reloadLocalCompanyRegistry, refreshLocalJoinState]);
 
   useEffect(() => {
     if (!active) return;
@@ -167,14 +175,49 @@ export function JoinSharedLocalCompanyPanel({
     }
   };
 
+  const handleResync = async (invite: DriveSharedCompanyInvite) => {
+    setJoiningId(invite.companyId);
+    try {
+      const rowPassword = passwordByFolderId[invite.driveFolderId]?.trim() || undefined;
+      const syncedCompanyId = await resyncDriveLocalCompanyFromInvite(invite, {
+        companyPassword: rowPassword,
+      });
+      reloadLocalCompanyRegistry();
+      await refreshLocalJoinState();
+      await loadInvites();
+      toast({
+        title: "Synced from Drive",
+        description: `${invite.companyName} data refreshed from Google Drive.`,
+      });
+      onJoined?.(syncedCompanyId);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast({
+        variant: "destructive",
+        title: "Sync from Drive failed",
+        description:
+          msg === CLOUD_SYNC_DRIVE_SALT_MISSING_MSG
+            ? msg
+            : isCloudSyncEncryptionKeyRequiredError(msg)
+              ? msg
+              : msg,
+      });
+    } finally {
+      setJoiningId(null);
+    }
+  };
+
   /** Company naam | password (beech) | Restore/Join — har row alag encrypt password. */
   const renderInviteRow = (inv: DriveSharedCompanyInvite, actionLabel: "Restore" | "Join") => {
-    const alreadyJoined = isDriveSharedInviteAlreadyJoined(inv, localRegistryRows);
+    const joinedLocal = findJoinedLocalCompanyForDriveInvite(inv, localRegistryRows);
+    const alreadyJoined = joinedLocal != null;
+    const joinedLocalId = joinedLocal?.id ? String(joinedLocal.id).trim() : "";
     const rowPassword = passwordByFolderId[inv.driveFolderId] ?? "";
+    const busy = joiningId === inv.companyId;
     return (
       <div
         key={inv.driveFolderId}
-        className="flex flex-col gap-2 rounded-md border border-black/20 bg-background/60 p-3 sm:flex-row sm:items-center"
+        className="flex flex-col gap-2 rounded-md border border-emerald-200/80 bg-white/70 p-3 sm:flex-row sm:items-center dark:border-emerald-900/45 dark:bg-emerald-950/25"
       >
         <div className="min-w-0 flex-1">
           <p className="font-medium truncate">{inv.companyName}</p>
@@ -197,42 +240,97 @@ export function JoinSharedLocalCompanyPanel({
               className="h-9"
             />
           </div>
+        ) : inv.isOwnedOnDrive ? (
+          <div className="flex min-w-0 flex-1 flex-col gap-1 sm:max-w-[14rem]">
+            <Label htmlFor={`join-pwd-${inv.driveFolderId}`} className="sr-only">
+              {inv.companyName} password
+            </Label>
+            <Input
+              id={`join-pwd-${inv.driveFolderId}`}
+              type="password"
+              autoComplete="current-password"
+              placeholder="Password for Sync from Drive"
+              value={rowPassword}
+              onChange={(e) =>
+                setPasswordByFolderId((prev) => ({ ...prev, [inv.driveFolderId]: e.target.value }))
+              }
+              className="h-9"
+            />
+          </div>
         ) : null}
-        <Button
-          type="button"
-          size="sm"
-          variant={alreadyJoined ? "secondary" : "default"}
-          className="rounded-full shrink-0 sm:self-center"
-          disabled={alreadyJoined || joiningId === inv.companyId}
-          onClick={() => void handleJoin(inv)}
-        >
-          {joiningId === inv.companyId ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : alreadyJoined ? (
-            "Connected"
+        <div className="flex flex-wrap items-center gap-2 shrink-0 sm:self-center">
+          {alreadyJoined && joinedLocalId ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="default"
+              className="rounded-full"
+              disabled={busy}
+              onClick={() => onJoined?.(joinedLocalId)}
+            >
+              Select
+            </Button>
+          ) : null}
+          {alreadyJoined ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="rounded-full"
+              disabled={busy}
+              onClick={() => void handleResync(inv)}
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Sync from Drive"}
+            </Button>
           ) : (
-            <>
-              <UserPlus className="h-4 w-4 mr-1" />
-              {actionLabel}
-            </>
+            <Button
+              type="button"
+              size="sm"
+              variant="default"
+              className="rounded-full"
+              disabled={busy}
+              onClick={() => void handleJoin(inv)}
+            >
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <>
+                  <UserPlus className="h-4 w-4 mr-1" />
+                  {actionLabel}
+                </>
+              )}
+            </Button>
           )}
-        </Button>
+          {alreadyJoined ? (
+            <span className="text-xs font-medium text-primary px-2 py-1 rounded-full bg-primary/10">
+              Connected
+            </span>
+          ) : null}
+        </div>
       </div>
     );
   };
 
   return (
-    <div className={cn(!embedded && cloudSyncSharePanelCard, "space-y-4", !embedded && "p-4", className)}>
+    <div className={cn(!embedded && cloudSyncJoinPanelCard, !embedded && "p-4", "h-full min-h-0 flex flex-col", className)}>
       {!embedded ? (
-        <div>
-          <p className="flex items-center gap-2 text-base font-semibold">
+        <div className="flex items-center gap-2 shrink-0">
+          <p className="flex items-center gap-2 text-base font-semibold text-emerald-900 dark:text-emerald-100">
             <Cloud className="h-4 w-4 shrink-0" />
             Join shared local company
           </p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Your own companies under My Drive → Pocket Ledger, plus folders others shared with your Gmail. Use the same
-            Gmail as Firebase login. If empty after sync, Connect Google Drive again then Refresh list.
-          </p>
+          <CloudSyncHelpPopover
+            label="Join shared local company"
+            description={
+              <>
+                <p>
+                  Your own companies under My Drive → Pocket Ledger, plus folders others shared with your Gmail.
+                </p>
+                <p>Use the same Gmail as Firebase login.</p>
+                <p>If empty after sync, Connect Google Drive again then Refresh list.</p>
+              </>
+            }
+          />
         </div>
       ) : null}
 
@@ -265,13 +363,28 @@ export function JoinSharedLocalCompanyPanel({
       ) : (
         <div className="space-y-4">
           {ownedInvites.length > 0 ? (
-            <Card className="border border-black/25 bg-white/40">
+            <Card className={cloudSyncNestedCard}>
               <CardHeader className="py-3 px-4">
-                <CardTitle className="text-sm font-medium">My companies on Drive</CardTitle>
-                <p className="text-xs text-muted-foreground font-normal flex items-start gap-1.5 pt-1">
-                  <Lock className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                  Encrypt ON ho to har company ka apna Company Profile password — usi row me likho, phir Restore.
-                </p>
+                <CardTitle className="text-sm font-medium text-emerald-900 dark:text-emerald-100 flex items-center gap-1.5">
+                  My companies on Drive
+                  <CloudSyncHelpPopover
+                    label="My companies on Drive"
+                    description={
+                      <div className="space-y-2 text-sm">
+                        <p>
+                          Encrypt ON ho to har company ka apna Company Profile password — usi row me likho, phir
+                          Restore.
+                        </p>
+                        <p>
+                          Google Drive se folder hard-delete hone par yahan list me nahi dikhega. Drive sync ON hai aur
+                          folder Drive par nahi mila to device se local company bhi hatt jati hai. Sync OFF hai to local
+                          company device par rehti hai — sirf yahan card se hat jati hai.
+                        </p>
+                        <p>Local delete ke liye company settings me Danger zone use karein.</p>
+                      </div>
+                    }
+                  />
+                </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 px-4 pb-4 pt-0">
                 {ownedInvites.map((inv) => renderInviteRow(inv, "Restore"))}
@@ -279,16 +392,20 @@ export function JoinSharedLocalCompanyPanel({
             </Card>
           ) : null}
           {groupedBySharer.map(([email, rows]) => (
-            <Card key={email} className="border border-black/25 bg-white/40">
+            <Card key={email} className={cloudSyncNestedCard}>
               <CardHeader className="py-3 px-4">
-                <CardTitle className="text-sm font-medium">
-                  Shared with me · {rows[0]?.sharedByName ? `${rows[0].sharedByName} · ` : ""}
-                  {email}
+                <CardTitle className="text-sm font-medium text-emerald-900 dark:text-emerald-100 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                  <span>
+                    Shared with me · {rows[0]?.sharedByName ? `${rows[0].sharedByName} · ` : ""}
+                    {email}
+                  </span>
+                  <CloudSyncHelpPopover
+                    label="Shared with me"
+                    description={
+                      <p>Owner ne encrypt ON kiya ho to us company ka password middle field me — phir Join.</p>
+                    }
+                  />
                 </CardTitle>
-                <p className="text-xs text-muted-foreground font-normal flex items-start gap-1.5 pt-1">
-                  <Lock className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                  Owner ne encrypt ON kiya ho to us company ka password middle field me — phir Join.
-                </p>
               </CardHeader>
               <CardContent className="space-y-2 px-4 pb-4 pt-0">
                 {rows.map((inv) => renderInviteRow(inv, "Join"))}

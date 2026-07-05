@@ -9,8 +9,8 @@ import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp, onSnapshot, collection, query, Timestamp } from "firebase/firestore";
 import {
-  stageEntityAvatarAndDocuments,
   uploadEntityAvatarAndDocumentsRemote,
+  syncEntityAttachmentsAfterSave,
   isProfileAvatarImageFile,
   isProfileDocumentFile,
 } from "@/lib/entityProfileLocalFiles";
@@ -56,7 +56,6 @@ import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirro
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
-import { syncPendingFiles } from "@/lib/localPendingFiles";
 import { useLiveEntityDocAttachments } from "@/hooks/useLiveEntityDocAttachments";
 import { softDeleteCompanySubdocToRecycleBin } from "@/lib/recycleBinEntityLifecycle";
 import { countActiveInterCompanyVouchersForCounterpartyParty, purgeInterCompanyCounterpartyPartyIfUnused } from "@/lib/interCompany/cleanupInterCompanyCounterpartyParty";
@@ -85,6 +84,10 @@ function normalizePartyEditGroupId(groupId: string | null | undefined): string {
   const u = getUngroupedGroupId("party");
   if (!groupId || groupId === u) return u;
   return groupId;
+}
+
+async function syncPartyAttachmentsAfterSave(companyId: string): Promise<void> {
+  await syncEntityAttachmentsAfterSave(companyId);
 }
 
 const formSchema = z.object({
@@ -328,30 +331,13 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         const needNewDocsUpload = newDocFiles.length > 0 && canAttachDocuments;
         let documentFileUrls = [...keptDocUrls];
         if (companyId && (needAvatarUpload || needNewDocsUpload)) {
-          const runRemote = () =>
-            uploadEntityAvatarAndDocumentsRemote({
-              companyId,
-              collectionSeg: "parties",
-              entityId: partyRefSnap.id,
-              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
-              documentFiles: needNewDocsUpload ? newDocFiles : [],
-            });
-          const runStage = () =>
-            stageEntityAvatarAndDocuments({
-              companyId,
-              collectionSeg: "parties",
-              entityId: partyRefSnap.id,
-              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
-              documentFiles: needNewDocsUpload ? newDocFiles : [],
-            });
-
-          // Local/Drive company: kabhi seedha Firebase Storage; `local:` + cloud sync (`runRemote` bhi guard karta hai).
-          let st: { fileUrl: string | null; documentFileUrls: string[] };
-          if (localSqlMirror) {
-            st = await runStage();
-          } else {
-            st = await runRemote();
-          }
+          const st = await uploadEntityAvatarAndDocumentsRemote({
+            companyId,
+            collectionSeg: "parties",
+            entityId: partyRefSnap.id,
+            avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+            documentFiles: needNewDocsUpload ? newDocFiles : [],
+          });
           if (st.fileUrl) fileUrl = st.fileUrl;
           documentFileUrls = [...keptDocUrls, ...st.documentFileUrls];
         }
@@ -398,7 +384,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           };
           await upsertCompanyDocInBrowserDb(companyId, "parties", partyRefSnap.id, payload);
           await enqueueCompanyDocOutbox(companyId, "parties", "update", partyRefSnap.id, payload);
-          await syncPendingFiles().catch((e) => console.warn("[EditPartyDialog] syncPendingFiles", e));
+          await syncPartyAttachmentsAfterSave(companyId);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onPartyUpdated({
             id: partyRefSnap.id,
@@ -438,7 +424,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           groupId: resolvedGroupId,
           updatedAt: serverTimestamp(),
         });
-        await syncPendingFiles().catch((e) => console.warn("[EditPartyDialog] syncPendingFiles", e));
+        await syncPartyAttachmentsAfterSave(companyId);
 
         if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
           await balanceOpeningBalanceWithCapital(companyId, "parties", partyRefSnap.id, oldOpeningBalance, newOpeningBalance);

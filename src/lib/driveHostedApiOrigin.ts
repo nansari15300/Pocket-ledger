@@ -9,8 +9,7 @@ function isLocalDevBrowserHost(): boolean {
 }
 
 /**
- * Drive OAuth + `/api/local-cloud-sync/drive/*` — localhost dev par hamesha pocket-ledger.com
- * (local `.env` me GOOGLE_CLIENT_* / galat NEXT_PUBLIC_APP_URL se bachne ke liye).
+ * Drive OAuth + sync — localhost dev par bhi pocket-ledger.com (GOOGLE_CLIENT_SECRET deploy par hai).
  */
 export function resolveDriveHostedApiUrl(apiPath: string): string {
   const path = String(apiPath || "").trim();

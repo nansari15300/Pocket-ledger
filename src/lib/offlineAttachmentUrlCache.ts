@@ -517,6 +517,13 @@ export async function tryOfflineCachedAttachmentBlobMultiKey(urlStr: string): Pr
   const trimmed = String(urlStr || "").trim();
   if (!trimmed) return null;
 
+  // Pending `local:` — SHA hash loop se pehle direct IndexedDB get.
+  const decoded = offlineCacheKeyForAttachmentRef(trimmed);
+  if (isLocalFileRef(decoded || trimmed)) {
+    const localBlob = await getBlobFromLocalFileRef(decoded || trimmed);
+    if (localBlob && localBlob.size > 0) return localBlob;
+  }
+
   const tryKey = async (key: string): Promise<Blob | null> => {
     const k = String(key || "").trim();
     if (!k) return null;
@@ -539,11 +546,6 @@ export async function tryOfflineCachedAttachmentBlobMultiKey(urlStr: string): Pr
   if (norm && norm !== trimmed) {
     hit = await tryKey(norm);
     if (hit) return hit;
-  }
-
-  if (isLocalFileRef(trimmed)) {
-    const localBlob = await getBlobFromLocalFileRef(trimmed);
-    if (localBlob && localBlob.size > 0) return localBlob;
   }
 
   return null;

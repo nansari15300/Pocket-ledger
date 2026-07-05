@@ -591,7 +591,10 @@ function SettingsPageContent() {
                     {/* Drive sync — andar scroll + fixed action bar; baaki tabs yahi scroll */}
                     <div
                         className={cn(
-                            "min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]"
+                            "min-h-0 flex-1 overflow-x-hidden [scrollbar-gutter:stable]",
+                            activeView === "local_cloud_sync"
+                              ? "flex flex-col overflow-hidden"
+                              : "overflow-y-auto"
                         )}
                     >
                         {settingsNavStall ? (
@@ -689,7 +692,10 @@ function SettingsPageContent() {
             {/* `scrollbar-gutter:stable` — toggle/toast se scrollbar on/off par poora layout shift na ho (multi-device switch shake). */}
             <div
               className={cn(
-                "min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]"
+                "min-h-0 min-w-0 flex-1 overflow-x-hidden [scrollbar-gutter:stable]",
+                activeView === "local_cloud_sync"
+                  ? "flex flex-col overflow-hidden"
+                  : "overflow-y-auto"
               )}
             >
               {settingsNavStall ? (

@@ -16,6 +16,7 @@ import {
   blobToFile,
   refreshAttachmentHoldSessionBackup,
   persistableAttachmentRefFromHoldPayload,
+  voucherFormFilesIncludePersistableRef,
   ATTACHMENT_HOLD_CROSS_TAB_BACKUP_KEY,
 } from "@/lib/attachmentHoldClipboard";
 import { toast as sonnerToast } from "sonner";
@@ -107,19 +108,21 @@ export function AttachmentHoldPasteSurface({
       voucherAttachmentReuseEnabled() &&
       voucherAttachmentReuse &&
       reuseRef &&
-      !voucherAttachmentReuse.currentFiles.some(
-        (f) => typeof f === "string" && f.trim() === reuseRef
-      );
+      !voucherFormFilesIncludePersistableRef(voucherAttachmentReuse.currentFiles, reuseRef);
+
+    const pasteReusedUrl = async (ref: string) => {
+      if (companyId) await linkCloudAttachmentRefs(companyId, [ref]);
+      voucherAttachmentReuse!.setFiles((prev) => [...prev, ref]);
+      refreshAttachmentHoldSessionBackup(payload);
+      sonnerToast.success("Pasted — same file reused", {
+        description: "No new upload on save. Shared link stays on other vouchers too.",
+      });
+      setMobilePasteRevealed(false);
+    };
 
     if (canReuseUrl) {
       try {
-        if (companyId) await linkCloudAttachmentRefs(companyId, [reuseRef]);
-        voucherAttachmentReuse.setFiles((prev) => [...prev, reuseRef]);
-        refreshAttachmentHoldSessionBackup(payload);
-        sonnerToast.success("Pasted — same file reused", {
-          description: "No new upload on save. Shared link stays on other vouchers too.",
-        });
-        setMobilePasteRevealed(false);
+        await pasteReusedUrl(reuseRef);
         return;
       } catch (e) {
         sonnerToast.error("Could not link attachment", {
@@ -129,8 +132,26 @@ export function AttachmentHoldPasteSurface({
       }
     }
 
-    const got = await fetchBlobForAttachmentHoldPaste(payload);
+    const got = await fetchBlobForAttachmentHoldPaste(payload, undefined, {
+      companyId: companyId ?? undefined,
+    });
     if (!got || got.blob.size === 0) {
+      if (
+        voucherAttachmentReuseEnabled() &&
+        voucherAttachmentReuse &&
+        reuseRef &&
+        !voucherFormFilesIncludePersistableRef(voucherAttachmentReuse.currentFiles, reuseRef)
+      ) {
+        try {
+          await pasteReusedUrl(reuseRef);
+          return;
+        } catch (e) {
+          sonnerToast.error("Could not link attachment", {
+            description: e instanceof Error ? e.message : String(e),
+          });
+          return;
+        }
+      }
       sonnerToast.error("Could not read attachment (offline or link expired)");
       return;
     }

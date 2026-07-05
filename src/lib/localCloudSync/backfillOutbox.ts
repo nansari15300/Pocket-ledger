@@ -18,15 +18,21 @@ function isAliveDoc(row: Record<string, unknown>): boolean {
  * Ek baar saari alive rows enqueue karo taaki `data/ops/op_*.json` Drive par banein.
  * Pehle `lastLocalOpSeq === 0` check tha — ek bhi naya save hone par purana data kabhi upload nahi hota tha.
  */
-export async function backfillLocalDocsToCloudSyncOutbox(companyId: string): Promise<number> {
+export async function backfillLocalDocsToCloudSyncOutbox(
+  companyId: string,
+  options?: { force?: boolean }
+): Promise<number> {
   const cid = String(companyId || "").trim();
   if (!cid) return 0;
   if (!(await shouldUseLocalCloudSync(cid))) return 0;
 
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
   if (!reg) return 0;
-  // Pehle hi backfill ho chuka — dubara poora ledger enqueue mat karo.
-  if ((reg as { cloudSyncHistoricalBackfillDone?: boolean }).cloudSyncHistoricalBackfillDone === true) {
+  // Pehle hi backfill ho chuka — dubara poora ledger enqueue mat karo (Drive wipe par force: true).
+  if (
+    !options?.force &&
+    (reg as { cloudSyncHistoricalBackfillDone?: boolean }).cloudSyncHistoricalBackfillDone === true
+  ) {
     return 0;
   }
 

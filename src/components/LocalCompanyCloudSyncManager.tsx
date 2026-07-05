@@ -12,7 +12,7 @@ import { logLocalCloudSync } from "@/lib/localCloudSync/logger";
 import { MIN_CLOUD_SYNC_TICK_MS } from "@/lib/localCloudSync/types";
 import { hasRealFirebaseAuthSession, waitForFirebaseAuthReady } from "@/lib/firebaseAuthForApi";
 
-/** Har MIN tick: enabled companies — har company ka apna interval (10–60 sec). */
+/** Har MIN tick: enabled companies — har company ka apna interval (2–60 sec). */
 export function LocalCompanyCloudSyncManager() {
   const { company, clearCompanyId, reloadLocalCompanyRegistry } = useCompany();
   const { user } = useAuth();
@@ -34,7 +34,7 @@ export function LocalCompanyCloudSyncManager() {
       runningRef.current = true;
       try {
         const now = Date.now();
-        // ~60 sec: shared user ke device se Drive gayab company hatao.
+        // ~60 sec: Drive sync ON par folder gayab companies device se hatao.
         if (now - lastDrivePurgeAtRef.current >= 60_000) {
           lastDrivePurgeAtRef.current = now;
           const purged = await purgeAllLocalCompaniesMissingOnDrive(user?.uid ?? null);
@@ -46,7 +46,7 @@ export function LocalCompanyCloudSyncManager() {
             for (const row of purged) {
               toast({
                 title: "Company removed",
-                description: `"${row.companyName}" is no longer on Google Drive and was removed from this device.`,
+                description: `"${row.companyName}" Google Drive par nahi mili (sync ON) — is device se hata di.`,
               });
             }
           }

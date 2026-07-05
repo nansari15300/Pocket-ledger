@@ -49,8 +49,9 @@ import {
 } from "@/lib/hydrateVoucherLocalAttachmentsForServer";
 import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
 import {
-  canReconcileLocalCollectionViaFirebase,
+  canReconcileLocalDocViaFirebase,
   readLocalFirebaseReconcileConfig,
+  stripAttachmentFieldsForInvitedLedgerReconcile,
 } from "@/lib/localFirebaseReconcile";
 
 /** REST `Commit` pe idem create race → `already-exists`; outbox duplicate-cleanup pehchan ke liye. */
@@ -189,15 +190,18 @@ export async function canSyncCompanyToServer(companyId: string): Promise<boolean
   );
 }
 
-/** Collection-level gate: local company par sirf invited pages Firebase reconcile karein. */
+/** Doc-level gate: local company par sirf invited reconciliation ledger + related vouchers. */
 export async function canSyncCompanyCollectionToServer(
   companyId: string,
-  collectionName: string
+  collectionName: string,
+  docId?: string,
+  payload?: Record<string, unknown>
 ): Promise<boolean> {
   const localCompany = await getLocalCompanyById(companyId, { includeDeleted: true });
   if (!localCompany) return false;
   if (await canSyncCompanyToServer(companyId)) return true;
-  return canReconcileLocalCollectionViaFirebase(localCompany, collectionName);
+  if (!docId) return false;
+  return canReconcileLocalDocViaFirebase(localCompany, companyId, collectionName, docId, payload);
 }
 
 /** Drop outbox rows only for truly local-only companies — if `storageOption` is missing, treat as ambiguous and do not delete. */
@@ -230,7 +234,7 @@ export async function enqueueCompanyDocOutbox(
     !docId
   )
     return;
-  if (!(await canSyncCompanyCollectionToServer(companyId, collectionName))) return;
+  if (!(await canSyncCompanyCollectionToServer(companyId, collectionName, docId, payload))) return;
   const db = await getBrowserDb();
   if (!db) return;
   const outboxId =
@@ -402,20 +406,31 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
         // Company registry not hydrated yet — do not delete the row (used to wrongly drop online sync deletes here)
         continue;
       }
-      const rowSyncAllowed = await canSyncCompanyCollectionToServer(row.company_id, row.collection_name);
+      const data = outboxJsonParse(row.payload);
+      const rowSyncAllowed = await canSyncCompanyCollectionToServer(
+        row.company_id,
+        row.collection_name,
+        row.doc_id,
+        typeof data === "object" && data ? (data as Record<string, unknown>) : undefined
+      );
       if (!rowSyncAllowed) {
         // Pure-local + no reconcile setting: drop row. Drive-connected pause: keep row for later.
         const localReconcileCfg = readLocalFirebaseReconcileConfig(reg);
         const dropPureLocalRow =
           isPureLocalOnlyCompanyRow(reg) &&
           !localReconcileCfg.blockedByDrive &&
-          !canReconcileLocalCollectionViaFirebase(reg, row.collection_name);
+          !(await canReconcileLocalDocViaFirebase(
+            reg,
+            row.company_id,
+            row.collection_name,
+            row.doc_id,
+            typeof data === "object" && data ? (data as Record<string, unknown>) : undefined
+          ));
         if (dropPureLocalRow) {
           db.prepare(`DELETE FROM sync_outbox WHERE outbox_id = ?`).run(row.outbox_id);
         }
         continue;
       }
-      const data = outboxJsonParse(row.payload);
       if (row.collection_name === "vouchers" && typeof data === "object" && data && PL_CLIENT_OFFLINE_FIRST_PERSIST_MS in data) {
         delete (data as Record<string, unknown>)[PL_CLIENT_OFFLINE_FIRST_PERSIST_MS];
       }
@@ -449,9 +464,20 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
           /* mirror merge best-effort */
         }
       }
-      const localFirebaseReconcile = canReconcileLocalCollectionViaFirebase(reg, row.collection_name);
-      // Local reconcile mode: data-only Firebase sync, files always device-only (`local:` remains local).
-      if (!localFirebaseReconcile) {
+      const localFirebaseReconcile = await canReconcileLocalDocViaFirebase(
+        reg,
+        row.company_id,
+        row.collection_name,
+        row.doc_id,
+        docFieldsToWrite
+      );
+      // Invited-ledger reconcile: data-only — attachments Firebase par nahi.
+      if (localFirebaseReconcile) {
+        docFieldsToWrite = stripAttachmentFieldsForInvitedLedgerReconcile(
+          row.collection_name,
+          docFieldsToWrite
+        );
+      } else {
         if (row.collection_name === "vouchers") {
           docFieldsToWrite = await hydrateVoucherLocalAttachmentsForServer(fsCompanyId, docFieldsToWrite);
         } else {

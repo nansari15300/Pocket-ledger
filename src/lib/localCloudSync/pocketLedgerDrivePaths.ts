@@ -127,12 +127,18 @@ export function pocketLedgerDriveBackupFileName(isoTimestamp: string): string {
 /** Encrypted file wrapper extension — logical path same, Drive par ye naam. */
 export const DRIVE_ENCRYPTED_FILE_SUFFIX = ".plenc.json";
 
+/** Non-encrypted attachment wrapper — web/static/APK/EXE sab par same JSON upload path. */
+export const DRIVE_PLAIN_ATTACHMENT_SUFFIX = ".plattach.json";
+
 /** Drive attachment URL prefix — `local:` jaisa, SQLite me remote path store. */
 export const DRIVE_FILE_PREFIX = "drive:";
 
-/** Logical attachment path → Drive storage name (files encrypt ON → `.plenc.json`). */
+/** Purana cloud-sync ref — read-only compat. */
+export const LEGACY_DRIVE_FILE_PREFIX = "drive://";
+
+/** Logical attachment path → Drive storage name (encrypt OFF → raw file; ON → `.plenc.json`). */
 export function driveStoragePathForLogicalFile(logicalPath: string, encryptFiles: boolean): string {
-  if (!encryptFiles) return logicalPath;
+  if (!encryptFiles) return String(logicalPath || "").trim();
   const parts = logicalPath.split("/");
   const file = parts.pop() || "file";
   if (file.endsWith(DRIVE_ENCRYPTED_FILE_SUFFIX)) return logicalPath;
@@ -140,17 +146,53 @@ export function driveStoragePathForLogicalFile(logicalPath: string, encryptFiles
   return parts.join("/");
 }
 
-/** `.plenc.json` storage path se logical path (SQLite `drive:` ref). */
+/** Plain (non-encrypted) attachment bytes → Drive JSON wrapper path. */
+export function drivePlainAttachmentStoragePath(logicalPath: string): string {
+  const path = String(logicalPath || "").trim();
+  if (!path || path.endsWith(DRIVE_PLAIN_ATTACHMENT_SUFFIX)) return path;
+  return `${path}${DRIVE_PLAIN_ATTACHMENT_SUFFIX}`;
+}
+
+/** Upload — ek hi helper web / static / APK / EXE ke liye. */
+export function driveAttachmentUploadStoragePath(logicalPath: string, encryptFiles: boolean): string {
+  return driveStoragePathForLogicalFile(logicalPath, encryptFiles);
+}
+
+/** Download — storage paths try order (legacy `.plattach.json` fallback jab encrypt OFF). */
+export function driveAttachmentDownloadTryPaths(logicalPath: string, encryptFiles: boolean): string[] {
+  if (encryptFiles) {
+    return [driveStoragePathForLogicalFile(logicalPath, true), logicalPath];
+  }
+  const plain = String(logicalPath || "").trim();
+  const legacy = drivePlainAttachmentStoragePath(plain);
+  return legacy !== plain ? [plain, legacy] : [plain];
+}
+
+export function isDriveAttachmentWrapperStoragePath(path: string): boolean {
+  const p = String(path || "");
+  return p.endsWith(DRIVE_ENCRYPTED_FILE_SUFFIX) || p.endsWith(DRIVE_PLAIN_ATTACHMENT_SUFFIX);
+}
+
+/** Drive storage path se logical path (SQLite `drive:` ref) — wrapper suffix hatao. */
 export function logicalPathFromDriveStoragePath(storagePath: string): string {
-  if (!storagePath.endsWith(DRIVE_ENCRYPTED_FILE_SUFFIX)) return storagePath;
-  const parts = storagePath.split("/");
-  const file = parts.pop() || "";
-  parts.push(file.slice(0, -DRIVE_ENCRYPTED_FILE_SUFFIX.length));
-  return parts.join("/");
+  const path = String(storagePath || "").trim();
+  if (path.endsWith(DRIVE_ENCRYPTED_FILE_SUFFIX)) {
+    const parts = path.split("/");
+    const file = parts.pop() || "";
+    parts.push(file.slice(0, -DRIVE_ENCRYPTED_FILE_SUFFIX.length));
+    return parts.join("/");
+  }
+  if (path.endsWith(DRIVE_PLAIN_ATTACHMENT_SUFFIX)) {
+    return path.slice(0, -DRIVE_PLAIN_ATTACHMENT_SUFFIX.length);
+  }
+  return path;
 }
 
 export function isDriveFileRef(url: string): boolean {
-  return typeof url === "string" && url.startsWith(DRIVE_FILE_PREFIX);
+  if (typeof url !== "string") return false;
+  const t = url.trim();
+  if (t.startsWith(LEGACY_DRIVE_FILE_PREFIX)) return t.length > LEGACY_DRIVE_FILE_PREFIX.length;
+  return t.startsWith(DRIVE_FILE_PREFIX) && t.length > DRIVE_FILE_PREFIX.length;
 }
 
 export function toDriveFileRef(remotePath: string): string {
@@ -158,9 +200,17 @@ export function toDriveFileRef(remotePath: string): string {
 }
 
 export function remotePathFromDriveFileRef(url: string): string | null {
-  if (!isDriveFileRef(url)) return null;
-  const path = url.slice(DRIVE_FILE_PREFIX.length).trim();
-  return path || null;
+  if (typeof url !== "string") return null;
+  const t = url.trim();
+  if (t.startsWith(LEGACY_DRIVE_FILE_PREFIX)) {
+    const path = t.slice(LEGACY_DRIVE_FILE_PREFIX.length).trim();
+    return path || null;
+  }
+  if (t.startsWith(DRIVE_FILE_PREFIX)) {
+    const path = t.slice(DRIVE_FILE_PREFIX.length).trim();
+    return path || null;
+  }
+  return null;
 }
 
 /** Attachment / backup file name safe segment. */

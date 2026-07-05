@@ -24,18 +24,15 @@ export function isLocalCompanyDriveFolderOwner(
   return !!uid && !!ownerId && uid === ownerId;
 }
 
-/** Drive shared join / non-owner — folder gayab ho to local company auto hatao. */
+/** Drive sync ON + folder Drive par nahi — local SQLite se hatao (owner + shared join). Sync OFF par local rehni chahiye. */
 export function shouldPurgeLocalCompanyWhenDriveFolderMissing(
   reg: LocalCompanyDoc | Record<string, unknown>,
-  firebaseUid: string | null | undefined
+  _firebaseUid: string | null | undefined
 ): boolean {
   const cfg = readCloudSyncConfigFromCompany(reg as LocalCompanyDoc);
   if (!cfg.cloudSyncEnabled || cfg.cloudSyncProvider !== "google_drive") return false;
   if (localCompanyRowIsDeleted(reg)) return false;
-  if ((reg as { driveSharedJoin?: unknown }).driveSharedJoin === true) return true;
-  const uid = String(firebaseUid || "").trim();
-  const ownerId = String((reg as { ownerId?: unknown }).ownerId || "").trim();
-  return !!uid && !!ownerId && uid !== ownerId;
+  return true;
 }
 
 /** Recycle bin permanent delete — pehle owner ka Drive folder, phir SQLite. */
@@ -92,7 +89,7 @@ export async function permanentDeleteLocalCompanyWithDriveCleanup(
 
 export type DriveMissingPurgeResult = { companyId: string; companyName: string };
 
-/** Shared user: Drive par company folder nahi — device se local row hatao. */
+/** Drive sync ON + folder missing — device se local row hatao (owner ya shared join). */
 export async function purgeLocalCompanyIfDriveFolderMissing(
   companyId: string,
   firebaseUid: string | null | undefined
@@ -110,26 +107,19 @@ export async function purgeLocalCompanyIfDriveFolderMissing(
   const folderId = String(reg.cloudSyncDriveFolderId ?? "").trim();
   const companyName = typeof reg.name === "string" ? reg.name : cid;
 
-  // Join row bina folder id — orphan; hata do.
-  if (!folderId) {
-    await removeLocalCompanyById(cid, { firebaseUid: firebaseUid ?? null });
-    logLocalCloudSync("purged local company — missing drive folder id", { companyId: cid });
-    return { companyId: cid, companyName };
-  }
-
   try {
     const res = await postDriveJsonViaClient<{ accessible?: boolean }>(
       "/api/local-cloud-sync/drive/folder-accessible",
       {
         companyId: cid,
         companyName: typeof reg.name === "string" ? reg.name : undefined,
-        driveFolderId: folderId,
+        driveFolderId: folderId || undefined,
       }
     );
     if (res.accessible === true) return null;
 
     await removeLocalCompanyById(cid, { firebaseUid: firebaseUid ?? null });
-    logLocalCloudSync("purged local company — drive folder gone", { companyId: cid, folderId });
+    logLocalCloudSync("purged local company — drive folder gone", { companyId: cid, folderId: folderId || null });
     return { companyId: cid, companyName };
   } catch (e) {
     // Offline / Drive not connected — local row mat todo.
@@ -141,7 +131,7 @@ export async function purgeLocalCompanyIfDriveFolderMissing(
   }
 }
 
-/** Background tick — saari shared/join companies jinka Drive folder gayab ho. */
+/** Background tick — Drive sync ON companies jinka Drive folder gayab ho. */
 export async function purgeAllLocalCompaniesMissingOnDrive(
   firebaseUid: string | null | undefined
 ): Promise<DriveMissingPurgeResult[]> {

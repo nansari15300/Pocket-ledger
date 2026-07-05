@@ -5,8 +5,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Trash2, CalendarIcon } from "lucide-react";
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
-  stageEntityAvatarAndDocuments,
   uploadEntityAvatarAndDocumentsRemote,
+  syncEntityAttachmentsAfterSave,
   isProfileAvatarImageFile,
   isProfileDocumentFile,
 } from "@/lib/entityProfileLocalFiles";
@@ -255,28 +255,13 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
         const needNewDocsUpload = newDocFiles.length > 0 && canAttachDocuments;
         let documentFileUrls = [...keptDocUrls];
         if (companyId && (needAvatarUpload || needNewDocsUpload)) {
-          const runRemote = () =>
-            uploadEntityAvatarAndDocumentsRemote({
-              companyId,
-              collectionSeg: "expense_accounts",
-              entityId: accountRefSnap.id,
-              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
-              documentFiles: needNewDocsUpload ? newDocFiles : [],
-            });
-          const runStage = () =>
-            stageEntityAvatarAndDocuments({
-              companyId,
-              collectionSeg: "expense_accounts",
-              entityId: accountRefSnap.id,
-              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
-              documentFiles: needNewDocsUpload ? newDocFiles : [],
-            });
-          let st: { fileUrl: string | null; documentFileUrls: string[] };
-          if (localSqlMirror) {
-            st = await runStage();
-          } else {
-            st = await runRemote();
-          }
+          const st = await uploadEntityAvatarAndDocumentsRemote({
+            companyId,
+            collectionSeg: "expense_accounts",
+            entityId: accountRefSnap.id,
+            avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+            documentFiles: needNewDocsUpload ? newDocFiles : [],
+          });
           if (st.fileUrl) fileUrl = st.fileUrl;
           documentFileUrls = [...keptDocUrls, ...st.documentFileUrls];
         }
@@ -309,6 +294,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
           const payload: Record<string, unknown> = { ...base, ...updatePayload, id: accountRefSnap.id, companyId };
           await upsertCompanyDocInBrowserDb(companyId, "expense_accounts", accountRefSnap.id, payload);
           await enqueueCompanyDocOutbox(companyId, "expense_accounts", "update", accountRefSnap.id, payload);
+          await syncEntityAttachmentsAfterSave(companyId);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onAccountUpdated();
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
@@ -333,6 +319,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
           await balanceOpeningBalanceWithCapital(companyId, "expense_accounts", accountRefSnap.id, oldOpeningBalance, newOpeningBalance);
         }
 
+        await syncEntityAttachmentsAfterSave(companyId);
         onAccountUpdated();
         sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
       } catch (error) {

@@ -1,7 +1,9 @@
 "use client";
 
 import { canSyncCompanyToServer } from "@/lib/localVoucherOutbox";
-import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
+import { getLocalCompanyById, upsertLocalCompany, localCompanyRowIsDeleted, type LocalCompanyDoc } from "@/lib/localCompanyStore";
+import { isDeviceLocalCompany, shouldReadLedgerFromSqliteOnly } from "@/lib/companyStorageKind";
+import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import type {
   CloudSyncCompanyConfig,
   CloudSyncManifest,
@@ -17,6 +19,9 @@ import {
 } from "@/lib/localCloudSync/types";
 import { normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
 import { mergeDriveShareUsersIntoLocalCompanyUsers, parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
+import { resolveDriveAttachmentDateFolderMode } from "@/lib/localCloudSync/driveAttachmentPath";
+import { parseCloudSyncSummaryHistory } from "@/lib/localCloudSync/syncSummaryHistory";
+import type { CloudSyncSummaryHistoryEntry } from "@/lib/localCloudSync/syncSummaryHistory";
 
 /** Registry se share user list — purani writer/reader ya `role` field migrate. */
 export function readCloudSyncDriveShareUsers(
@@ -53,7 +58,6 @@ export function shareUsersToEmailList(users: CloudSyncDriveShareUser[]): string[
 function parseProvider(raw: unknown): CloudSyncProviderId | null {
   const s = String(raw ?? "").toLowerCase().trim();
   if (s === "google_drive" || s === "drive") return "google_drive";
-  if (s === "dropbox") return "dropbox";
   return null;
 }
 
@@ -80,9 +84,8 @@ function parseCloudSyncLastSyncSummary(raw: unknown): CloudSyncLastSyncSummary {
     addedVouchers,
     uploadedFiles: n("uploadedFiles"),
     uploadedVouchers: n("uploadedVouchers"),
-    // Purane registry rows me sirf added* tha — UI downloaded row ke liye fallback.
-    downloadedFiles: n("downloadedFiles") || addedFiles,
-    downloadedVouchers: n("downloadedVouchers") || addedVouchers,
+    downloadedFiles: n("downloadedFiles"),
+    downloadedVouchers: n("downloadedVouchers"),
   };
 }
 
@@ -101,12 +104,7 @@ export function readCloudSyncConfigFromCompany(
     cloudSyncLastError: typeof c.cloudSyncLastError === "string" ? c.cloudSyncLastError : null,
     cloudSyncSharedEmails: shareUsersToEmailList(readCloudSyncDriveShareUsers(c)),
     cloudSyncDriveShareUsers: readCloudSyncDriveShareUsers(c),
-    cloudSyncDriveDateFolderMode:
-      c.cloudSyncDriveDateFolderMode === "bs" ||
-      c.cloudSyncDriveDateFolderMode === "ad" ||
-      c.cloudSyncDriveDateFolderMode === "both"
-        ? c.cloudSyncDriveDateFolderMode
-        : null,
+    cloudSyncDriveDateFolderMode: resolveDriveAttachmentDateFolderMode(c),
     cloudSyncEncryptDrive: (() => {
       const legacy = c.cloudSyncEncryptDrive === true;
       const data =
@@ -133,17 +131,74 @@ export function readCloudSyncConfigFromCompany(
         : null,
     cloudSyncIntervalSec: parseCloudSyncIntervalSec(c.cloudSyncIntervalSec),
     cloudSyncLastSyncSummary: parseCloudSyncLastSyncSummary(c.cloudSyncLastSyncSummary),
+    cloudSyncSummaryHistory: parseCloudSyncSummaryHistory(c.cloudSyncSummaryHistory, {
+      summary: parseCloudSyncLastSyncSummary(c.cloudSyncLastSyncSummary),
+      at:
+        typeof c.cloudSyncLastSyncAt === "number" && Number.isFinite(c.cloudSyncLastSyncAt)
+          ? c.cloudSyncLastSyncAt
+          : null,
+    }),
+    cloudSyncSummaryResetAt:
+      typeof c.cloudSyncSummaryResetAt === "number" && Number.isFinite(c.cloudSyncSummaryResetAt)
+        ? c.cloudSyncSummaryResetAt
+        : null,
   };
 }
 
-/** Sirf pure local companies — Firestore-backed rows kabhi Drive/Dropbox sync na karein. */
+/** Sirf pure local companies — Firestore-backed rows kabhi Drive sync na karein. */
+export function localRegistryFieldsForDriveSyncLedger(): Pick<
+  LocalCompanyDoc,
+  "storageOption" | "syncPolicy" | "syncedFromCloud"
+> {
+  return {
+    storageOption: "local",
+    syncPolicy: "offline",
+    syncedFromCloud: false,
+  };
+}
+
+/** Drive sync ON par Firestore mirror ne firebase mark kiya ho to SQLite row theek karo. */
+export async function ensureLocalRegistryRowForDriveSync(
+  companyId: string
+): Promise<LocalCompanyDoc | null> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return null;
+  const reg = await getLocalCompanyById(cid, { includeDeleted: true });
+  if (!reg) return null;
+  const cfg = readCloudSyncConfigFromCompany(reg);
+  if (!cfg.cloudSyncEnabled || !cfg.cloudSyncProvider) return reg;
+  if (shouldReadLedgerFromSqliteOnly(reg as Parameters<typeof shouldReadLedgerFromSqliteOnly>[0])) {
+    return reg;
+  }
+  if (!(await canSyncCompanyToServer(cid))) return reg;
+  const fixed = {
+    ...reg,
+    ...localRegistryFieldsForDriveSyncLedger(),
+  } as LocalCompanyDoc;
+  await upsertLocalCompany(fixed);
+  return fixed;
+}
+
 export async function isPureLocalCompany(companyId: string): Promise<boolean> {
   const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
   if (!reg) return false;
+  if ((reg as { plServerShared?: boolean }).plServerShared === true) return false;
+
+  if (shouldReadLedgerFromSqliteOnly(reg as Parameters<typeof shouldReadLedgerFromSqliteOnly>[0])) {
+    return true;
+  }
+
+  if (isEligibleLocalDriveSyncCompanyRow(reg)) {
+    const cfg = readCloudSyncConfigFromCompany(reg);
+    if (cfg.cloudSyncEnabled && cfg.cloudSyncProvider) return true;
+    if (String((reg as Record<string, unknown>).cloudSyncDriveFolderId ?? "").trim()) return true;
+  }
+
   return !(await canSyncCompanyToServer(companyId));
 }
 
 export async function shouldUseLocalCloudSync(companyId: string): Promise<boolean> {
+  await ensureLocalRegistryRowForDriveSync(companyId);
   if (!(await isPureLocalCompany(companyId))) return false;
   const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
   if (!reg) return false;
@@ -168,11 +223,20 @@ export async function patchLocalCompanyCloudSyncFields(
     cloudSyncDriveEncryptionSalt: string | null;
     cloudSyncIntervalSec: CloudSyncIntervalSec;
     cloudSyncLastSyncSummary: CloudSyncLastSyncSummary;
+    cloudSyncSummaryHistory: CloudSyncSummaryHistoryEntry[];
+    cloudSyncSummaryResetAt: number | null;
   }>
 ): Promise<void> {
   const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
   if (!reg) return;
-  await upsertLocalCompany({ ...reg, ...patch } as LocalCompanyDoc);
+  const keepLocalLedger =
+    patch.cloudSyncEnabled === true ||
+    readCloudSyncConfigFromCompany(reg).cloudSyncEnabled === true;
+  await upsertLocalCompany({
+    ...reg,
+    ...(keepLocalLedger ? localRegistryFieldsForDriveSyncLedger() : {}),
+    ...patch,
+  } as LocalCompanyDoc);
 }
 
 /** Drive `data/manifest.json` se share list + encryption salt — decrypt se pehle local registry me. */
@@ -234,15 +298,10 @@ export async function mergeRemoteCloudSyncManifestIntoLocalCompany(
     changed = true;
   }
 
-  if (
-    manifest.cloudSyncDriveDateFolderMode === "ad" ||
-    manifest.cloudSyncDriveDateFolderMode === "bs" ||
-    manifest.cloudSyncDriveDateFolderMode === "both"
-  ) {
-    if (reg.cloudSyncDriveDateFolderMode !== manifest.cloudSyncDriveDateFolderMode) {
-      next = { ...next, cloudSyncDriveDateFolderMode: manifest.cloudSyncDriveDateFolderMode } as LocalCompanyDoc;
-      changed = true;
-    }
+  const derivedFolderMode = resolveDriveAttachmentDateFolderMode(next);
+  if (next.cloudSyncDriveDateFolderMode !== derivedFolderMode) {
+    next = { ...next, cloudSyncDriveDateFolderMode: derivedFolderMode } as LocalCompanyDoc;
+    changed = true;
   }
 
   if (!changed) return reg;
@@ -267,5 +326,31 @@ export function buildCloudSyncManifestFromCompany(
     cloudSyncEncryptDriveData: cfg.cloudSyncEncryptDriveData,
     cloudSyncEncryptDriveFiles: cfg.cloudSyncEncryptDriveFiles,
     cloudSyncDriveDateFolderMode: cfg.cloudSyncDriveDateFolderMode ?? undefined,
+  };
+}
+
+/** Drive sync settings UI — device-local + Firestore-mirror overwrite ke baad bhi. */
+export function isEligibleLocalDriveSyncCompanyRow(
+  row: LocalCompanyDoc | Record<string, unknown> | null | undefined
+): boolean {
+  if (!row) return false;
+  if (localCompanyRowIsDeleted(row as { isDeleted?: unknown })) return false;
+  if (isDeviceLocalCompany(row as Parameters<typeof isDeviceLocalCompany>[0])) return true;
+  if (isOfflineCompanyStorage(row as Parameters<typeof isOfflineCompanyStorage>[0])) return true;
+  const raw = row as Record<string, unknown>;
+  if (String(raw.cloudSyncDriveFolderId ?? "").trim()) return true;
+  const cfg = readCloudSyncConfigFromCompany(row);
+  return cfg.cloudSyncEnabled === true && cfg.cloudSyncProvider === "google_drive";
+}
+
+/** Firestore mirror ne storageOption firebase kar diya ho — sync UI ke liye local shape. */
+export function normalizeRowForLocalDriveSyncUi(row: LocalCompanyDoc): LocalCompanyDoc {
+  if (isOfflineCompanyStorage(row as Parameters<typeof isOfflineCompanyStorage>[0])) return row;
+  if (isDeviceLocalCompany(row)) return row;
+  return {
+    ...row,
+    storageOption: "local",
+    syncedFromCloud: false,
+    syncPolicy: "offline",
   };
 }

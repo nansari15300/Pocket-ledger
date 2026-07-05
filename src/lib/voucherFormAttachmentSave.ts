@@ -12,7 +12,10 @@ import {
 } from "@/lib/attachmentHoldClipboard";
 import { storage } from "@/lib/firebase";
 import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
-import { getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize";
+import {
+  dedupeVoucherAttachmentUrlList,
+  getVoucherAttachmentUrlsForUi,
+} from "@/lib/voucherAttachmentNormalize";
 
 /**
  * Form `files` state me `PL_ATTACH_V1:local:uuid` clipboard marker strings ho sakti hain (paste / Reuse).
@@ -34,6 +37,17 @@ export function normalizeFormFileUrlsForSave(rawUrls: string[]): string[] {
 export function isStandardWebBrowserClient(): boolean {
   if (typeof navigator === "undefined") return false;
   return !isElectronDesktopApp() && !isCapacitorNativeApp() && !isStaticAppBuild();
+}
+
+/** Local / Drive sync company — web par Firebase materialize mat karo (syncPendingFiles / Drive cycle). */
+async function shouldSkipWebFirebaseMaterializeForCompany(companyId: string): Promise<boolean> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return true;
+  const { apkCloudCompanyUsesSqliteFirstWrites } = await import("@/lib/apkOnlineFirestoreWritePolicy");
+  if (await apkCloudCompanyUsesSqliteFirstWrites(cid)) return true;
+  const { shouldUseLocalCloudSync } = await import("@/lib/localCloudSync/companyConfig");
+  if (await shouldUseLocalCloudSync(cid)) return true;
+  return false;
 }
 
 /**
@@ -80,6 +94,7 @@ export async function materializeVoucherFileUrlsForWebSave(params: {
   // Embedded/offline clients par existing pending-sync flow hi source of truth hai.
   if (isElectronDesktopApp() || isCapacitorNativeApp() || isStaticAppBuild()) return normalized;
   if (typeof navigator !== "undefined" && !navigator.onLine) return normalized;
+  if (await shouldSkipWebFirebaseMaterializeForCompany(cid)) return normalized;
 
   const out: string[] = [];
   for (const raw of normalized) {
@@ -245,28 +260,29 @@ export async function applyVoucherAttachmentsAfterFormSave(params: {
   let raw = params.rawFileUrls.filter(
     (u): u is string => typeof u === "string" && Boolean(String(u).trim())
   );
-  if (!cid || !vid) return [...raw];
+  if (!cid || !vid) return dedupeVoucherAttachmentUrlList(raw);
 
-  // EXE/APK create: form state ab bhi `local:` ho sakta hai — SQLite me hydrate ke baad HTTPS padha ho.
-  if (raw.some((u) => isLocalFileRef(u)) && (isElectronDesktopApp() || isCapacitorNativeApp() || isStaticAppBuild())) {
+  // Local / Drive / EXE / APK — Firebase duplicate upload mat; mirror + background sync source of truth.
+  if (
+    isElectronDesktopApp() ||
+    isCapacitorNativeApp() ||
+    isStaticAppBuild() ||
+    (await shouldSkipWebFirebaseMaterializeForCompany(cid))
+  ) {
+    let urls = dedupeVoucherAttachmentUrlList(raw);
     try {
       const row = (await getCompanyDocFromBrowserDb(cid, "vouchers", vid)) as Record<string, unknown> | null;
-      const fromDb = Array.isArray(row?.fileUrls)
-        ? row!.fileUrls!.filter((u): u is string => typeof u === "string" && Boolean(String(u).trim()))
-        : [];
-      if (fromDb.length > 0 && fromDb.some((u) => !isLocalFileRef(u))) {
-        raw = fromDb;
-      }
+      const fromDb = getVoucherAttachmentUrlsForUi(row);
+      if (fromDb.length > 0) urls = dedupeVoucherAttachmentUrlList(fromDb);
     } catch {
-      /* mirror miss — resolve fallback */
+      /* mirror miss — form raw */
     }
+    dispatchVoucherAttachmentSaved(cid, vid, urls);
+    return urls;
   }
 
-  const persisted = await resolvePersistedVoucherFileUrlsAfterSave(
-    cid,
-    vid,
-    raw,
-    params.storageFolder
+  const persisted = dedupeVoucherAttachmentUrlList(
+    await resolvePersistedVoucherFileUrlsAfterSave(cid, vid, raw, params.storageFolder)
   );
   dispatchVoucherAttachmentSaved(cid, vid, persisted);
   return persisted;

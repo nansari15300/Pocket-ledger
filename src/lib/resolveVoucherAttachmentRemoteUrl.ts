@@ -5,10 +5,11 @@ import { firestore } from "@/lib/firebase";
 import { isLocalFileRef, LOCAL_FILE_PREFIX } from "@/lib/localPendingFiles";
 import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
+import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
+import { shouldReadLedgerFromSqliteOnly } from "@/lib/companyStorageKind";
 
 /** HTTPS / Drive / blob — `local:` staging ke opposite; edit dialog merge me remote prefer karo. */
 export function isRemoteAttachmentUrl(u: string): boolean {
@@ -42,23 +43,50 @@ async function resolveAuthoritativeFirestoreCompanyIdForAttachmentRead(companyId
 
 /**
  * Stale `local:` resolve ke liye `fileUrls` source:
- * - Online: **pehle Firestore** (background `syncPendingFiles` mirror se pehle HTTPS likh chuka ho sakta hai).
- * - Miss/offline: SQLite mirror (`isLocalOnlyMode` / static APK par mirror kabhi 1–2 beat peeche rehta tha → preview/open fail).
+ * - Local / SQLite ledger: **pehle ek voucher row** (`getCompanyDocFromBrowserDb`) — poori vouchers list scan mat.
+ * - Online cloud miss: Firestore getDoc (HTTPS upgrade ho chuka ho to).
  */
 async function readVoucherFileUrlsForStaleLocalResolve(
   registryCompanyId: string,
   voucherId: string
-): Promise<{ fileUrls: string[]; source: "firestore_getDoc" | "sqlite_mirror_list" | "none" }> {
+): Promise<{ fileUrls: string[]; source: "firestore_getDoc" | "sqlite_mirror_get" | "none" }> {
   const regCid = String(registryCompanyId || "").trim();
   const vid = String(voucherId || "").trim();
   if (!regCid || !vid) return { fileUrls: [], source: "none" };
 
-  const tryFirestoreFirst =
+  const readSqliteRow = async (): Promise<string[]> => {
+    try {
+      const row = (await getCompanyDocFromBrowserDb(regCid, "vouchers", vid)) as {
+        fileUrls?: unknown;
+      } | null;
+      if (!row) return [];
+      return normalizeFileUrlsField(row.fileUrls);
+    } catch {
+      return [];
+    }
+  };
+
+  let sqliteFirst = isLocalOnlyMode();
+  if (!sqliteFirst) {
+    try {
+      const reg = await getLocalCompanyById(regCid, { includeDeleted: true });
+      sqliteFirst = shouldReadLedgerFromSqliteOnly(reg as Parameters<typeof shouldReadLedgerFromSqliteOnly>[0]);
+    } catch {
+      sqliteFirst = false;
+    }
+  }
+
+  if (sqliteFirst) {
+    const fileUrls = await readSqliteRow();
+    if (fileUrls.length > 0) return { fileUrls, source: "sqlite_mirror_get" };
+  }
+
+  const tryFirestore =
     typeof navigator === "undefined" ||
     navigator.onLine !== false ||
     isCapacitorNativeApp();
 
-  if (tryFirestoreFirst) {
+  if (tryFirestore && !sqliteFirst) {
     try {
       const fsCid = await resolveAuthoritativeFirestoreCompanyIdForAttachmentRead(regCid);
       const snap = await getDoc(doc(firestore, "companies", fsCid, "vouchers", vid));
@@ -70,19 +98,13 @@ async function readVoucherFileUrlsForStaleLocalResolve(
         }
       }
     } catch {
-      /* mirror fallback niche */
+      /* sqlite fallback niche */
     }
   }
 
-  try {
-    const rows = await listCompanyDocsFromBrowserDb(regCid, "vouchers");
-    const row = rows.find((r: { id?: string }) => r.id === vid) as { fileUrls?: unknown } | undefined;
-    if (!row) return { fileUrls: [], source: "none" };
-    const fileUrls = normalizeFileUrlsField(row.fileUrls);
-    return { fileUrls, source: "sqlite_mirror_list" };
-  } catch {
-    return { fileUrls: [], source: "none" };
-  }
+  const fileUrls = await readSqliteRow();
+  if (fileUrls.length > 0) return { fileUrls, source: "sqlite_mirror_get" };
+  return { fileUrls: [], source: "none" };
 }
 
 /**

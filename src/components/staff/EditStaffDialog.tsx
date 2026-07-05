@@ -9,14 +9,13 @@ import { z } from "zod";
 import { doc, updateDoc, serverTimestamp, onSnapshot, query, collection } from "firebase/firestore";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import {
-  stageEntityAvatarAndDocuments,
   uploadEntityAvatarAndDocumentsRemote,
+  syncEntityAttachmentsAfterSave,
   isProfileAvatarImageFile,
   isProfileDocumentFile,
 } from "@/lib/entityProfileLocalFiles";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
-import { syncPendingFiles } from "@/lib/localPendingFiles";
 import { useAuth } from "@/hooks/useAuth";
 import {
   EntityProfilePhotoBlock,
@@ -295,29 +294,13 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
         const needNewDocsUpload = newDocFiles.length > 0 && canAttachDocuments;
         let documentFileUrls = [...keptDocUrls];
         if (companyId && (needAvatarUpload || needNewDocsUpload)) {
-          const runRemote = () =>
-            uploadEntityAvatarAndDocumentsRemote({
-              companyId,
-              collectionSeg: "staff",
-              entityId: staffRefSnap.id,
-              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
-              documentFiles: needNewDocsUpload ? newDocFiles : [],
-            });
-          const runStage = () =>
-            stageEntityAvatarAndDocuments({
-              companyId,
-              collectionSeg: "staff",
-              entityId: staffRefSnap.id,
-              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
-              documentFiles: needNewDocsUpload ? newDocFiles : [],
-            });
-
-          let st: { fileUrl: string | null; documentFileUrls: string[] };
-          if (localSqlMirror) {
-            st = await runStage();
-          } else {
-            st = await runRemote();
-          }
+          const st = await uploadEntityAvatarAndDocumentsRemote({
+            companyId,
+            collectionSeg: "staff",
+            entityId: staffRefSnap.id,
+            avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+            documentFiles: needNewDocsUpload ? newDocFiles : [],
+          });
           if (st.fileUrl) fileUrl = st.fileUrl;
           documentFileUrls = [...keptDocUrls, ...st.documentFileUrls];
         }
@@ -356,7 +339,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           };
           await upsertCompanyDocInBrowserDb(companyId, "staff", staffRefSnap.id, payload);
           await enqueueCompanyDocOutbox(companyId, "staff", "update", staffRefSnap.id, payload);
-          await syncPendingFiles().catch((e) => console.warn("[EditStaffDialog] syncPendingFiles", e));
+          await syncEntityAttachmentsAfterSave(companyId);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onStaffUpdated({
             id: staffRefSnap.id,
@@ -397,7 +380,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           groupId: values.groupId || null,
           updatedAt: serverTimestamp(),
         });
-        await syncPendingFiles().catch((e) => console.warn("[EditStaffDialog] syncPendingFiles", e));
+        await syncEntityAttachmentsAfterSave(companyId);
 
         if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
           const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");

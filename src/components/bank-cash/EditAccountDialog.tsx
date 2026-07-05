@@ -9,8 +9,8 @@ import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp, onSnapshot, collection, query, getDoc } from "firebase/firestore";
 import {
-  stageEntityAvatarAndDocuments,
   uploadEntityAvatarAndDocumentsRemote,
+  syncEntityAttachmentsAfterSave,
   isProfileAvatarImageFile,
   isProfileDocumentFile,
 } from "@/lib/entityProfileLocalFiles";
@@ -64,7 +64,6 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { useAuth } from "@/hooks/useAuth";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
-import { syncPendingFiles } from "@/lib/localPendingFiles";
 import { FilePreview } from "../vouchers/FilePreview";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
@@ -398,28 +397,13 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         const needNewDocsUpload = newDocFiles.length > 0 && canAttachDocuments;
         let documentFileUrls = [...keptDocUrls];
         if (companyId && (needAvatarUpload || needNewDocsUpload)) {
-          const runRemote = () =>
-            uploadEntityAvatarAndDocumentsRemote({
-              companyId,
-              collectionSeg: "bank_accounts",
-              entityId: accountRefSnap.id,
-              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
-              documentFiles: needNewDocsUpload ? newDocFiles : [],
-            });
-          const runStage = () =>
-            stageEntityAvatarAndDocuments({
-              companyId,
-              collectionSeg: "bank_accounts",
-              entityId: accountRefSnap.id,
-              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
-              documentFiles: needNewDocsUpload ? newDocFiles : [],
-            });
-          let st: { fileUrl: string | null; documentFileUrls: string[] };
-          if (localSqlMirror) {
-            st = await runStage();
-          } else {
-            st = await runRemote();
-          }
+          const st = await uploadEntityAvatarAndDocumentsRemote({
+            companyId,
+            collectionSeg: "bank_accounts",
+            entityId: accountRefSnap.id,
+            avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+            documentFiles: needNewDocsUpload ? newDocFiles : [],
+          });
           if (st.fileUrl) fileUrl = st.fileUrl;
           documentFileUrls = [...keptDocUrls, ...st.documentFileUrls];
         }
@@ -464,7 +448,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           const payload: Record<string, unknown> = { ...base, ...updatePayload, id: accountRefSnap.id, companyId };
           await upsertCompanyDocInBrowserDb(companyId, "bank_accounts", accountRefSnap.id, payload);
           await enqueueCompanyDocOutbox(companyId, "bank_accounts", "update", accountRefSnap.id, payload);
-          await syncPendingFiles().catch((e) => console.warn("[EditAccountDialog] syncPendingFiles", e));
+          await syncEntityAttachmentsAfterSave(companyId);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onAccountUpdated({
             id: accountRefSnap.id,
@@ -495,7 +479,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
 
         const accountRef = doc(firestore, `companies/${companyId}/bank_accounts`, accountRefSnap.id);
         await updateDoc(accountRef, updatePayload);
-        await syncPendingFiles().catch((e) => console.warn("[EditAccountDialog] syncPendingFiles", e));
+        await syncEntityAttachmentsAfterSave(companyId);
 
         // Automatically balance opening balance change with Capital Account
         if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {

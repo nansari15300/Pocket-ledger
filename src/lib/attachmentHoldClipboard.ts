@@ -5,12 +5,12 @@
 import { storage } from "@/lib/firebase";
 import { ref, getBlob } from "firebase/storage";
 import { getBlobFromLocalFileRef, isLocalFileRef } from "@/lib/localPendingFiles";
+import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import {
   getRemoteAttachmentBlobPreferOfflineCache,
 } from "@/lib/offlineAttachmentUrlCache";
+import { getBlobFromAttachmentRefPreferLocalFirst } from "@/lib/attachmentPreviewResolve";
 import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageDownloadUrl";
-import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
-import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 export const ATTACHMENT_HOLD_CLIPBOARD_PREFIX = "PL_ATTACH_V1:";
 
 export type AttachmentHoldPayloadV1 = {
@@ -37,7 +37,8 @@ const sameTabBlobs = new Map<string, { blob: Blob; createdAt: number }>();
 
 function embeddedSharesAttachmentHoldAcrossTabs(): boolean {
   if (typeof window === "undefined") return false;
-  return isElectronDesktopApp() || isCapacitorNativeApp();
+  // Web bhi multi-tab: Tab A copy → Tab B paste (localStorage); EXE/APK pehle se.
+  return true;
 }
 
 function writeHoldClipboardBackup(encoded: string): void {
@@ -223,13 +224,17 @@ export async function writeAttachmentHoldClipboard(
 ): Promise<boolean> {
   const encoded = encodePayload(payload);
   writeHoldClipboardBackup(encoded);
-  const raw = String(opts?.clipboardDisplayUrl || "").trim();
+  const persistable = persistableAttachmentRefFromHoldPayload(payload);
+  const raw = String(opts?.clipboardDisplayUrl || persistable || "").trim();
   const usePlain =
     raw.length > 0 &&
     !raw.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX) &&
     !raw.startsWith("blob:") &&
     !raw.startsWith("data:") &&
-    (raw.startsWith("http://") || raw.startsWith("https://"));
+    (raw.startsWith("http://") ||
+      raw.startsWith("https://") ||
+      isLocalFileRef(raw) ||
+      isDriveFileRef(raw));
   const toWrite = usePlain ? raw : encoded;
   try {
     if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
@@ -247,28 +252,57 @@ export async function readAttachmentHoldClipboardText(): Promise<string | null> 
   return payload ? encodePayload(payload) : null;
 }
 
+/** Paste / reuse: form `files[]` me ref pehle se hai? (`PL_ATTACH` marker bhi match). */
+export function voucherFormFilesIncludePersistableRef(
+  currentFiles: readonly (File | string)[],
+  ref: string
+): boolean {
+  const target = String(ref || "").trim();
+  if (!target) return false;
+  return currentFiles.some((f) => {
+    if (typeof f !== "string") return false;
+    const s = String(f).trim();
+    if (!s) return false;
+    if (s === target) return true;
+    const norm = normalizeAttachmentUrlForDevicePreview(s);
+    return norm === target;
+  });
+}
+
+function attachmentHoldPayloadReuseScore(payload: AttachmentHoldPayloadV1 | null): number {
+  if (!payload) return 0;
+  const ref = persistableAttachmentRefFromHoldPayload(payload);
+  if (ref && (isLocalFileRef(ref) || isDriveFileRef(ref))) return 4;
+  if (ref && (ref.startsWith("companies/") || ref.startsWith("voucher-files/"))) return 3;
+  if (ref && (ref.startsWith("http://") || ref.startsWith("https://"))) return 2;
+  if (ref) return 2;
+  if (payload.sid) return 1;
+  return 0;
+}
+
 /**
- * Paste button / Ctrl+V: pehle OS clipboard (doosri tab / Notepad se copy), phir session/local backup.
+ * Paste button / Ctrl+V: OS clipboard + session/local backup — local:/drive: src wale payload ko
+ * plain https clipboard line se prefer karo (local company paste fail fix).
  */
 export async function resolveAttachmentHoldPayloadForPaste(): Promise<AttachmentHoldPayloadV1 | null> {
+  let fromOs: AttachmentHoldPayloadV1 | null = null;
   try {
     if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
       const t = (await navigator.clipboard.readText())?.trim();
-      if (t) {
-        const fromOs = parseAttachmentHoldPayloadFromAnyText(t);
-        if (fromOs) return fromOs;
-      }
+      if (t) fromOs = parseAttachmentHoldPayloadFromAnyText(t);
     }
   } catch {
     /* permission / insecure context */
   }
 
-  const fromStores = readHoldClipboardBackupFromStores();
-  if (fromStores) {
-    const parsed = parseAttachmentHoldClipboardText(fromStores);
-    if (parsed) return parsed;
-  }
-  return null;
+  const fromStoresRaw = readHoldClipboardBackupFromStores();
+  const fromStores = fromStoresRaw ? parseAttachmentHoldClipboardText(fromStoresRaw) : null;
+
+  const osScore = attachmentHoldPayloadReuseScore(fromOs);
+  const storeScore = attachmentHoldPayloadReuseScore(fromStores);
+  if (storeScore > osScore) return fromStores;
+  if (osScore > 0) return fromOs;
+  return fromStores ?? fromOs;
 }
 
 /** EXE multi-tab: doosri tab me copy hone par Paste chip refresh ke liye. */
@@ -277,7 +311,8 @@ export const ATTACHMENT_HOLD_CROSS_TAB_BACKUP_KEY = LOCAL_CROSS_TAB_BACKUP_KEY;
 /** Copy source se Blob — paste ke liye naya File banane me (dubara upload ho). */
 export async function fetchBlobForAttachmentHoldPaste(
   payload: AttachmentHoldPayloadV1,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: { companyId?: string }
 ): Promise<{ blob: Blob; fileName: string; contentType: string } | null> {
   if (payload.sid) {
     const blob = getSameTabBlob(payload.sid);
@@ -289,13 +324,24 @@ export async function fetchBlobForAttachmentHoldPaste(
 
   const src = String(payload.src || "").trim();
   const path = String(payload.p || "").trim();
+  const companyId = String(options?.companyId || "").trim() || undefined;
 
   if (src && isLocalFileRef(src)) {
-    const b = await getBlobFromLocalFileRef(src);
+    const b = await getBlobFromLocalFileRef(src, companyId ? { companyId } : undefined);
     if (!b || b.size === 0) return null;
     return {
       blob: b,
       fileName: payload.n || "attachment",
+      contentType: payload.t || b.type || "application/octet-stream",
+    };
+  }
+
+  if (src && isDriveFileRef(src)) {
+    const b = await getBlobFromAttachmentRefPreferLocalFirst(src, { companyId });
+    if (!b || b.size === 0 || signal?.aborted) return null;
+    return {
+      blob: b,
+      fileName: payload.n || src.split("/").pop() || "attachment",
       contentType: payload.t || b.type || "application/octet-stream",
     };
   }
@@ -328,7 +374,9 @@ export async function fetchBlobForAttachmentHoldPaste(
   }
 
   if (src.startsWith("http://") || src.startsWith("https://")) {
-    let blob: Blob | null = await getRemoteAttachmentBlobPreferOfflineCache(src, signal);
+    let blob: Blob | null = await getRemoteAttachmentBlobPreferOfflineCache(src, signal, {
+      companyId,
+    });
     if ((!blob || blob.size === 0) && !signal?.aborted) {
       const res = await fetch(src, { mode: "cors", credentials: "omit", signal });
       if (res.ok) blob = await res.blob();
@@ -365,13 +413,15 @@ export function blobToFile(blob: Blob, fileName: string, contentType: string): F
   return new File([blob], fileName, { type });
 }
 
-/** Paste / reuse: voucher `fileUrls` me save ho sakne wala ref (`https`, `local:`, `drive:`, …). */
+/** Copy/paste: voucher `fileUrls` me save ho sakne wala ref (`https`, `local:`, `drive:`, …). */
 export function persistableAttachmentRefFromHoldPayload(
   payload: AttachmentHoldPayloadV1
 ): string | null {
   const src = normalizeAttachmentUrlForDevicePreview(String(payload.src || "").trim());
-  if (!src || src.startsWith("blob:")) return null;
-  return src;
+  if (src && !src.startsWith("blob:")) return src;
+  const path = String(payload.p || "").trim();
+  if (path && !path.includes("://")) return path;
+  return null;
 }
 
 /** FilePreview / avatar se hold-copy payload banana */

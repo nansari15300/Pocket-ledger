@@ -8,7 +8,12 @@ import {
 import { postDriveJsonViaClient } from "@/lib/localCloudSync/driveApiClient";
 import { getSyncProviderForCompany } from "@/lib/localCloudSync/providers";
 import { logLocalCloudSync } from "@/lib/localCloudSync/logger";
-import { driveStoragePathForLogicalFile } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import {
+  DRIVE_PLAIN_ATTACHMENT_SUFFIX,
+  driveStoragePathForLogicalFile,
+  isDriveAttachmentWrapperStoragePath,
+} from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { decryptDriveFilePayloadFromDownload } from "@/lib/localCloudSync/driveEncryption";
 import type { CloudSyncCompanyRef } from "@/lib/localCloudSync/types";
 
 type DriveListedFile = {
@@ -19,7 +24,7 @@ type DriveListedFile = {
 
 /** Encryption ON ke baad — plain Drive ops dubara upload (encrypt lag jayega). */
 export async function forceReencryptDriveData(companyId: string, ref: CloudSyncCompanyRef): Promise<number> {
-  const provider = getSyncProviderForCompany("google_drive");
+  const provider = getSyncProviderForCompany();
   const ops = await provider.downloadOperations(ref, 0);
   let n = 0;
   for (const op of ops) {
@@ -53,15 +58,29 @@ export async function forceReencryptDriveFiles(companyId: string, ref: CloudSync
       { remotePath: f.storagePath }
     );
     if (!dl.base64) continue;
-    const bin = atob(dl.base64);
-    const buf = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
     const parts = f.logicalPath.split("/");
     const originalName = parts[parts.length - 1] || "file";
+    let fileBytes: ArrayBuffer;
+    let fileContentType = dl.contentType || "application/octet-stream";
+    if (
+      isDriveAttachmentWrapperStoragePath(f.storagePath) ||
+      f.storagePath.endsWith(DRIVE_PLAIN_ATTACHMENT_SUFFIX) ||
+      dl.contentType?.includes("json")
+    ) {
+      const text = atob(dl.base64);
+      const decoded = await decryptDriveFilePayloadFromDownload(companyId, text, reg as Record<string, unknown>);
+      fileBytes = decoded.bytes;
+      fileContentType = decoded.contentType || fileContentType;
+    } else {
+      const bin = atob(dl.base64);
+      const buf = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+      fileBytes = buf.buffer;
+    }
     const encBody = await encryptDriveFileBytesForUpload(
       companyId,
-      buf.buffer,
-      { contentType: dl.contentType, originalName },
+      fileBytes,
+      { contentType: fileContentType, originalName },
       reg as Record<string, unknown>
     );
     const storagePath = driveStoragePathForLogicalFile(f.logicalPath, true);

@@ -29,6 +29,26 @@ export function getVoucherAttachmentUrlsForUi(
   return [];
 }
 
+/** Duplicate `fileUrls` / double-upload race se bachne ke liye stable unique list. */
+export function dedupeVoucherAttachmentUrlList(urls: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of urls) {
+    const u = String(raw || "").trim();
+    if (!u || seen.has(u)) continue;
+    seen.add(u);
+    out.push(u);
+  }
+  return out;
+}
+
+/** Voucher edit form `files` state — UI + save dono ke liye ek source. */
+export function voucherAttachmentUrlsForFormState(
+  row: { fileUrls?: unknown; unassignedFile?: unknown } | null | undefined
+): string[] {
+  return dedupeVoucherAttachmentUrlList(getVoucherAttachmentUrlsForUi(row));
+}
+
 /** Voucher list rows — table / filters ke liye hamesha `fileUrls: string[]`. */
 export function normalizeVoucherRowAttachmentsForUi<T extends Record<string, unknown>>(row: T): T {
   const urls = getVoucherAttachmentUrlsForUi(row);

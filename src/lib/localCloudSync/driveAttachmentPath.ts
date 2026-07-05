@@ -49,18 +49,19 @@ function parseVoucherDate(raw: unknown): Date {
   return new Date();
 }
 
-/** Company country NP ho to user mode; warna hamesha AD folder. */
+/** Nepal → BS+AD folder (`2082-05-24__2026-07-05`); baaki countries → AD only. */
+export function isNepalCompanyForDriveAttachmentFolders(
+  company: Record<string, unknown> | null | undefined
+): boolean {
+  const country = String(company?.country ?? company?.countryCode ?? "").trim().toUpperCase();
+  return country === "NP" || country === "NEPAL";
+}
+
+/** Company country se — manual setting nahi. */
 export function resolveDriveAttachmentDateFolderMode(
   company: Record<string, unknown> | null | undefined
 ): DriveAttachmentDateFolderMode {
-  const country = String(company?.country ?? company?.countryCode ?? "").trim().toUpperCase();
-  const stored = String(company?.cloudSyncDriveDateFolderMode ?? "").trim().toLowerCase();
-  if (country === "NP" || country === "NEPAL") {
-    if (stored === "bs" || stored === "both") return stored;
-    if (stored === "ad") return "ad";
-    return "ad";
-  }
-  return "ad";
+  return isNepalCompanyForDriveAttachmentFolders(company) ? "both" : "ad";
 }
 
 function formatAdDateFolder(date: Date): string {

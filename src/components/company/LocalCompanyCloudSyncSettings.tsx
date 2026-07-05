@@ -1,18 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { CloudSyncHelpPopover } from "@/components/company/CloudSyncHelpPopover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { useToast } from "@/hooks/use-toast";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
-import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import {
   disconnectGoogleDrive,
   getGoogleDriveAuthUrl,
@@ -22,26 +31,35 @@ import {
 import { markDriveOAuthReturnGrace } from "@/lib/driveOAuthReturnGrace";
 import { getLocalCloudSyncStatus, runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
 import { backfillLocalDocsToCloudSyncOutbox } from "@/lib/localCloudSync/backfillOutbox";
+import { ensureFreshDriveSyncWhenDriveFolderMissing } from "@/lib/localCloudSync/driveFullReupload";
 import { setCloudSyncCursor } from "@/lib/localCloudSync/queue";
 import { ensureCloudSyncDriveEncryptionSalt } from "@/lib/localCloudSync/driveEncryption";
-import { patchLocalCompanyCloudSyncFields, readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConfig";
-import type { CloudSyncIntervalSec, CloudSyncProviderId } from "@/lib/localCloudSync/types";
+import { patchLocalCompanyCloudSyncFields, readCloudSyncConfigFromCompany, isEligibleLocalDriveSyncCompanyRow, localRegistryFieldsForDriveSyncLedger } from "@/lib/localCloudSync/companyConfig";
+import type { CloudSyncIntervalSec } from "@/lib/localCloudSync/types";
 import { CLOUD_SYNC_INTERVAL_SEC_OPTIONS } from "@/lib/localCloudSync/types";
-import type { DriveAttachmentDateFolderMode } from "@/lib/localCloudSync/driveAttachmentPath";
+import {
+  aggregateSyncSummaryForRange,
+  clearSyncSummaryHistoryInRange,
+  CLOUD_SYNC_SUMMARY_RANGE_OPTIONS,
+  CLOUD_SYNC_SUMMARY_RESET_OPTIONS,
+  emptyCloudSyncLastSyncSummary,
+  lastSyncSummaryFromHistory,
+  type CloudSyncSummaryRange,
+  type CloudSyncSummaryResetRange,
+} from "@/lib/localCloudSync/syncSummaryHistory";
 import { forceReencryptDriveIfNeeded } from "@/lib/localCloudSync/forceReencryptDrive";
 import {
   cloudSyncEncryptCard,
-  cloudSyncNepalFolderCard,
-  cloudSyncProviderCard,
+  cloudSyncFirebaseReconcileCard,
   cloudSyncStatusCard,
   cloudSyncLastSyncSummaryCard,
+  cloudSyncSettingsPageShell,
   companyProfileChromeRoot,
-  settingsDetailCardShell,
 } from "@/lib/companyProfileChrome";
 import { DriveShareUsersPanel } from "@/components/company/DriveShareUsersPanel";
 import { JoinSharedLocalCompanyDialog } from "@/components/company/JoinSharedLocalCompanyDialog";
 import { formatDistanceToNow } from "date-fns";
-import { Cloud, Info, Loader2, RefreshCw, Save, Share2 } from "lucide-react";
+import { Check, ChevronDown, Cloud, Loader2, RefreshCw, Save, Share2 } from "lucide-react";
 import { settingsViewHref } from "@/lib/appNavHref";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -59,22 +77,12 @@ import {
   isStoredDriveAuthError,
   waitForFirebaseAuthReady,
 } from "@/lib/firebaseAuthForApi";
-import {
-  LOCAL_FIREBASE_RECONCILE_COLLECTION_OPTIONS,
-  readLocalFirebaseReconcileConfig,
-  type LocalFirebaseReconcileCollection,
-} from "@/lib/localFirebaseReconcile";
+import { readLocalFirebaseReconcileConfig } from "@/lib/localFirebaseReconcile";
 
 type Props = {
   companyId: string;
   company: LocalCompanyDoc | Record<string, unknown>;
 };
-
-function dateFolderModeLabel(mode: DriveAttachmentDateFolderMode): string {
-  if (mode === "bs") return "BS only";
-  if (mode === "both") return "Both";
-  return "AD only";
-}
 
 /** Sync card error — encryption / auth / generic alag message. */
 function renderCloudSyncStatusError(
@@ -119,52 +127,6 @@ function renderCloudSyncStatusError(
   return <p className="text-xs text-destructive">Error: {lastError}</p>;
 }
 
-/** (i) icon — English help popover (Manage Sharing jaisa). */
-function CloudSyncHelpPopover({
-  label,
-  description,
-  hasError,
-}: {
-  label: string;
-  description: ReactNode;
-  hasError?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-blue-700 hover:bg-blue-100",
-            open && "bg-blue-100",
-            hasError && "text-destructive ring-1 ring-destructive/40"
-          )}
-          aria-label={label}
-          aria-expanded={open}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setOpen((v) => !v);
-          }}
-        >
-          <Info className="h-3.5 w-3.5" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        side="top"
-        align="start"
-        collisionPadding={12}
-        className="z-[10050] max-w-[min(22rem,calc(100vw-2rem))] p-3 text-xs leading-relaxed text-foreground"
-        onOpenAutoFocus={(e) => e.preventDefault()}
-      >
-        <p className="font-semibold text-sm mb-1.5">{label}</p>
-        <div className="text-muted-foreground space-y-2">{description}</div>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
 /** Sirf device-local companies — Firestore companies par ye card hide. */
 export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
   const { user } = useAuth();
@@ -191,6 +153,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
   };
 
   const [busy, setBusy] = useState(false);
+  const [summaryRange, setSummaryRange] = useState<CloudSyncSummaryRange>("last");
   const [status, setStatus] = useState({
     pending: 0,
     lastSyncAt: null as number | null,
@@ -204,19 +167,33 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
       downloadedFiles: 0,
       downloadedVouchers: 0,
     },
+    syncSummaryHistory: [] as Array<{
+      at: number;
+      addedFiles: number;
+      addedVouchers: number;
+      uploadedFiles: number;
+      uploadedVouchers: number;
+      downloadedFiles: number;
+      downloadedVouchers: number;
+    }>,
+    syncSummaryResetAt: null as number | null,
   });
+
+  const displayedSyncSummary = useMemo(
+    () =>
+      aggregateSyncSummaryForRange(
+        summaryRange,
+        status.syncSummaryHistory,
+        status.lastSyncSummary,
+        status.syncSummaryResetAt
+      ),
+    [summaryRange, status.syncSummaryHistory, status.lastSyncSummary, status.syncSummaryResetAt]
+  );
 
   const cfg = readCloudSyncConfigFromCompany(company);
   const localFirebaseCfg = readLocalFirebaseReconcileConfig(company);
   const [enabled, setEnabled] = useState(cfg.cloudSyncEnabled);
-  const [provider, setProvider] = useState<CloudSyncProviderId>(cfg.cloudSyncProvider ?? "google_drive");
   const [firebaseReconcileEnabled, setFirebaseReconcileEnabled] = useState(localFirebaseCfg.enabled);
-  const [firebaseReconcileCollections, setFirebaseReconcileCollections] = useState<LocalFirebaseReconcileCollection[]>(
-    localFirebaseCfg.selectedCollections
-  );
-  const [dateFolderMode, setDateFolderMode] = useState<DriveAttachmentDateFolderMode>(
-    cfg.cloudSyncDriveDateFolderMode ?? "ad"
-  );
   const [encryptDriveData, setEncryptDriveData] = useState(cfg.cloudSyncEncryptDriveData);
   const [encryptDriveFiles, setEncryptDriveFiles] = useState(cfg.cloudSyncEncryptDriveFiles);
   // Background sync interval — registry se load, dropdown change par save.
@@ -224,27 +201,21 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
   // Next auto-sync countdown — lastSyncAt + interval se target; har 1 sec UI update.
   const nextSyncAtMsRef = useRef(Date.now() + cfg.cloudSyncIntervalSec * 1000);
   const [nextSyncInSec, setNextSyncInSec] = useState<number>(cfg.cloudSyncIntervalSec);
-  const isNepalCompany = ["NP", "NEPAL"].includes(
-    String((company as { country?: string }).country ?? "").trim().toUpperCase()
-  );
+  /** Untick / toggle ke baad parent company refresh se checkbox wapas tick na ho jab tak Save na ho. */
+  const settingsDirtyRef = useRef(false);
   // Local unlock synthetic uid — UI signed-in dikhe par Firebase token nahi hota.
   const localSyntheticAuth = isLocalSyntheticAuthUid(user?.uid);
-  const driveConnected = enabled && !!provider;
-
-  const savedDateFolderMode = cfg.cloudSyncDriveDateFolderMode ?? "ad";
-  const folderModeDirty = isNepalCompany && dateFolderMode !== savedDateFolderMode;
+  const driveConnected = enabled;
 
   useEffect(() => {
+    if (settingsDirtyRef.current) return;
     const next = readCloudSyncConfigFromCompany(company);
     const localNext = readLocalFirebaseReconcileConfig(company);
     setEnabled(next.cloudSyncEnabled);
-    if (next.cloudSyncProvider) setProvider(next.cloudSyncProvider);
-    if (next.cloudSyncDriveDateFolderMode) setDateFolderMode(next.cloudSyncDriveDateFolderMode);
     setEncryptDriveData(next.cloudSyncEncryptDriveData);
     setEncryptDriveFiles(next.cloudSyncEncryptDriveFiles);
     setSyncIntervalSec(next.cloudSyncIntervalSec);
     setFirebaseReconcileEnabled(localNext.enabled);
-    setFirebaseReconcileCollections(localNext.selectedCollections);
   }, [company]);
 
   const refreshStatus = useCallback(async () => {
@@ -255,8 +226,39 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
       status: s.status,
       lastError: s.lastError,
       lastSyncSummary: s.lastSyncSummary,
+      syncSummaryHistory: s.syncSummaryHistory,
+      syncSummaryResetAt: s.syncSummaryResetAt,
     });
   }, [companyId]);
+
+  const resetSyncSummaryCounts = useCallback(
+    async (range: CloudSyncSummaryResetRange) => {
+      const nextHistory = clearSyncSummaryHistoryInRange(status.syncSummaryHistory, range);
+      const nextLastSummary =
+        range === "all" ? emptyCloudSyncLastSyncSummary() : lastSyncSummaryFromHistory(nextHistory);
+      const resetAt = range === "all" ? Date.now() : status.syncSummaryResetAt;
+      await patchLocalCompanyCloudSyncFields(companyId, {
+        cloudSyncSummaryHistory: range === "all" ? [] : nextHistory,
+        cloudSyncLastSyncSummary: nextLastSummary,
+        ...(range === "all" ? { cloudSyncSummaryResetAt: resetAt } : {}),
+      });
+      setStatus((prev) => ({
+        ...prev,
+        syncSummaryHistory: range === "all" ? [] : nextHistory,
+        lastSyncSummary: nextLastSummary,
+        ...(range === "all" ? { syncSummaryResetAt: resetAt } : {}),
+      }));
+      const label = CLOUD_SYNC_SUMMARY_RESET_OPTIONS.find((o) => o.value === range)?.label ?? range;
+      toast({
+        title: "Sync counts reset",
+        description: `Cleared sync summary counts for ${label}.`,
+      });
+    },
+    [companyId, status.syncSummaryHistory, status.syncSummaryResetAt, toast]
+  );
+
+  const summaryRangeLabel =
+    CLOUD_SYNC_SUMMARY_RANGE_OPTIONS.find((o) => o.value === summaryRange)?.label ?? summaryRange;
 
   useEffect(() => {
     void refreshStatus();
@@ -311,42 +313,31 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
     return () => window.clearInterval(id);
   }, [enabled, status.status, status.lastSyncAt, syncIntervalSec, busy]);
 
-  if (!isOfflineCompanyStorage(company as { storageOption?: string })) return null;
+  if (!isEligibleLocalDriveSyncCompanyRow(company)) return null;
 
   const saveConfig = async (patch: Partial<LocalCompanyDoc>) => {
     const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
     if (!reg) return;
-    await upsertLocalCompany({ ...reg, ...patch } as LocalCompanyDoc);
+    const keepLocalLedger =
+      patch.cloudSyncEnabled === true ||
+      readCloudSyncConfigFromCompany(reg).cloudSyncEnabled === true ||
+      readCloudSyncConfigFromCompany({ ...reg, ...patch }).cloudSyncEnabled === true;
+    await upsertLocalCompany({
+      ...reg,
+      ...(keepLocalLedger ? localRegistryFieldsForDriveSyncLedger() : {}),
+      ...patch,
+    } as LocalCompanyDoc);
     reloadLocalCompanyRegistry();
   };
 
-  const onToggleEnabled = async (checked: boolean) => {
+  const onToggleEnabled = (checked: boolean) => {
+    settingsDirtyRef.current = true;
     setEnabled(checked);
-    await saveConfig({
-      cloudSyncEnabled: checked,
-      cloudSyncProvider: provider,
-    });
-    if (checked) {
-      const n = await backfillLocalDocsToCloudSyncOutbox(companyId);
-      if (n > 0) void runLocalCloudSyncCycle(companyId, { force: true });
-    }
-  };
-
-  const onProviderChange = async (p: CloudSyncProviderId) => {
-    setProvider(p);
-    await saveConfig({ cloudSyncProvider: p, cloudSyncEnabled: enabled });
   };
 
   const onSyncIntervalChange = async (sec: CloudSyncIntervalSec) => {
     setSyncIntervalSec(sec);
     await saveConfig({ cloudSyncIntervalSec: sec });
-  };
-
-  const toggleFirebaseReconcileCollection = (key: LocalFirebaseReconcileCollection, checked: boolean) => {
-    setFirebaseReconcileCollections((prev) => {
-      if (checked) return Array.from(new Set([...prev, key]));
-      return prev.filter((item) => item !== key);
-    });
   };
 
   const saveEncryptionFlags = async (data: boolean, files: boolean, forceReencrypt: boolean) => {
@@ -398,48 +389,40 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
     await saveEncryptionFlags(encryptDriveData, checked, checked);
   };
 
-  const saveFolderMode = async () => {
-    if (!folderModeDirty) return;
-    const folderModeToSave: DriveAttachmentDateFolderMode = isNepalCompany ? dateFolderMode : "ad";
-    setBusy(true);
-    try {
-      await saveConfig({ cloudSyncDriveDateFolderMode: folderModeToSave });
-      toast({
-        title: "Folder option saved",
-        description: `Attachment folder: ${dateFolderModeLabel(folderModeToSave)} — new uploads use this mode.`,
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  /** Footer Save — provider, encrypt, interval, Nepal folder mode ek saath registry me. */
   const saveAllCloudSyncSettings = async () => {
     setBusy(true);
     try {
       const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
-      const folderModeToSave: DriveAttachmentDateFolderMode = isNepalCompany ? dateFolderMode : "ad";
       const salt =
         encryptDriveData || encryptDriveFiles
           ? ensureCloudSyncDriveEncryptionSalt(String(reg?.cloudSyncDriveEncryptionSalt ?? ""))
           : String(reg?.cloudSyncDriveEncryptionSalt ?? "").trim() || null;
-      await saveConfig({
+      await patchLocalCompanyCloudSyncFields(companyId, {
         cloudSyncEnabled: enabled,
-        cloudSyncProvider: provider,
-        localFirebaseReconcileEnabled: firebaseReconcileEnabled,
-        localFirebaseReconcileCollections: firebaseReconcileCollections,
+        cloudSyncProvider: enabled ? "google_drive" : null,
+        cloudSyncStatus: "idle",
+        cloudSyncLastError: null,
         cloudSyncEncryptDriveData: encryptDriveData,
         cloudSyncEncryptDriveFiles: encryptDriveFiles,
         cloudSyncEncryptDrive: encryptDriveData || encryptDriveFiles,
         cloudSyncIntervalSec: syncIntervalSec,
-        cloudSyncDriveDateFolderMode: folderModeToSave,
         ...(salt ? { cloudSyncDriveEncryptionSalt: salt } : {}),
       });
+      await saveConfig({
+        localFirebaseReconcileEnabled: firebaseReconcileEnabled,
+      });
+      settingsDirtyRef.current = false;
+      reloadLocalCompanyRegistry();
+      if (enabled) {
+        const freshDrive = await ensureFreshDriveSyncWhenDriveFolderMissing(companyId);
+        const n = await backfillLocalDocsToCloudSyncOutbox(companyId, freshDrive ? { force: true } : undefined);
+        if (n > 0 || freshDrive) void runLocalCloudSyncCycle(companyId, { force: true });
+      }
       toast({
         title: "Settings saved",
-        description: folderModeDirty
-          ? `Cloud sync saved · attachment folder: ${dateFolderModeLabel(folderModeToSave)}.`
-          : "Cloud sync settings saved for this company.",
+        description: enabled
+          ? "Drive sync settings saved for this company."
+          : "Drive sync is turned off for this company.",
       });
     } catch (e) {
       toast({
@@ -499,7 +482,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
   const forceSync = async () => {
     setBusy(true);
     try {
-      const backfilled = await backfillLocalDocsToCloudSyncOutbox(companyId);
+      const backfilled = await backfillLocalDocsToCloudSyncOutbox(companyId, { force: true });
       const res = await runLocalCloudSyncCycle(companyId, { force: true });
       await refreshStatus();
       if (!res.ok) {
@@ -550,15 +533,15 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
 
   return (
     <Card
-      className={cn(settingsDetailCardShell, "flex h-full min-h-full flex-col")}
+      className={cn(cloudSyncSettingsPageShell, "flex min-h-0 flex-1 flex-col overflow-hidden")}
       {...{ [companyProfileChromeRoot]: "" }}
     >
       <CardHeader className="shrink-0">
-        <CardTitle className="flex flex-wrap items-center gap-x-2 gap-y-1 text-base">
+        <CardTitle className="flex flex-wrap items-center gap-x-2 gap-y-1 text-base text-emerald-900 dark:text-emerald-100">
           <Cloud className="h-4 w-4 shrink-0" />
-          <span>Cloud sync (local company)</span>
+          <span>Drive sync (local company)</span>
           <CloudSyncHelpPopover
-            label="About cloud sync"
+            label="About Drive sync"
             description={
               <>
                 <p>
@@ -583,78 +566,62 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
             <Checkbox
               id="local-company-cloud-sync-enabled"
               checked={enabled}
-              onCheckedChange={(v) => void onToggleEnabled(v === true)}
+              onCheckedChange={(v) => onToggleEnabled(v === true)}
             />
             <Label htmlFor="local-company-cloud-sync-enabled" className="text-sm font-normal cursor-pointer">
-              Enable cloud sync
+              Enable Drive sync
             </Label>
           </div>
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-1 min-h-0 flex-col gap-4">
-        {enabled ? (
-          <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,7fr)_minmax(0,13fr)] gap-4 items-stretch">
-            {/* Left 35% — sync, encrypt, folder options */}
-            <div className="flex w-full min-w-0 flex-col space-y-4 order-2 lg:order-1 h-full min-h-0">
-              <div className={cn("space-y-2", cloudSyncProviderCard)}>
-                <Label>Provider</Label>
-                <div className="flex flex-wrap gap-4 text-sm">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="cloudSyncProvider"
-                      checked={provider === "google_drive"}
-                      onChange={() => void onProviderChange("google_drive")}
-                    />
-                    Google Drive
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="cloudSyncProvider"
-                      checked={provider === "dropbox"}
-                      onChange={() => void onProviderChange("dropbox")}
-                    />
-                    Dropbox
-                  </label>
-                </div>
-              </div>
 
-              <div className="pl-chrome-tone-amber border border-black rounded-md p-3 space-y-2">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-4">
+        {enabled ? (
+          <div className="grid min-h-0 grid-cols-1 lg:grid-cols-[minmax(0,7fr)_minmax(0,13fr)] gap-4 items-stretch">
+            {/* Left 35% — sync, encrypt, folder options */}
+            <div className="flex w-full min-w-0 flex-col space-y-4 order-2 lg:order-1 min-h-0">
+              <div className={cloudSyncFirebaseReconcileCard}>
                 <div className="flex items-center justify-between gap-2">
-                  <Label
-                    htmlFor="local-company-firebase-reconcile-enabled"
-                    className="text-sm font-medium cursor-pointer"
-                  >
-                    Firebase reconcile (invited pages only)
-                  </Label>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <Label
+                      htmlFor="local-company-firebase-reconcile-enabled"
+                      className="text-sm font-medium cursor-pointer"
+                    >
+                      Firebase reconcile (invited ledger only)
+                    </Label>
+                    <CloudSyncHelpPopover
+                      label="Firebase reconcile (invited ledger only)"
+                      description={
+                        <>
+                          <p>
+                            Jab Google Drive sync band ho aur yeh ON ho, to Firebase par sirf{" "}
+                            <strong>linked reconciliation</strong> wala account jayega — poori company nahi.
+                          </p>
+                          <p>
+                            Us account se related vouchers bhi (ledger lines) — share ki date range ke andar ho to.
+                          </p>
+                          <p>
+                            <strong>Files / attachments Firebase par nahi</strong> — sirf data (amount, date,
+                            narration, etc.).
+                          </p>
+                          <p>Drive sync ON hone par yeh mode auto-pause rehta hai taake conflict na ho.</p>
+                        </>
+                      }
+                    />
+                  </div>
                   <Checkbox
                     id="local-company-firebase-reconcile-enabled"
                     checked={firebaseReconcileEnabled}
-                    onCheckedChange={(v) => setFirebaseReconcileEnabled(v === true)}
+                    onCheckedChange={(v) => {
+                      settingsDirtyRef.current = true;
+                      setFirebaseReconcileEnabled(v === true);
+                    }}
                     disabled={busy || driveConnected}
                   />
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Drive connected hone par yeh mode auto-pause rahega. File URLs / bytes Firebase par upload nahi honge;
-                  sirf selected page data reconcile hoga.
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {LOCAL_FIREBASE_RECONCILE_COLLECTION_OPTIONS.map((row) => (
-                    <label key={row.key} className="flex items-center gap-2 text-sm cursor-pointer">
-                      <Checkbox
-                        checked={firebaseReconcileCollections.includes(row.key)}
-                        onCheckedChange={(v) =>
-                          toggleFirebaseReconcileCollection(row.key, v === true)
-                        }
-                        disabled={busy || !firebaseReconcileEnabled || driveConnected}
-                      />
-                      <span>{row.label}</span>
-                    </label>
-                  ))}
-                </div>
                 {driveConnected ? (
-                  <p className="text-xs text-amber-700">
+                  <p className="text-xs text-emerald-800 dark:text-emerald-300">
                     Google Drive sync active hai — Firebase reconcile temporarily paused to avoid conflicts.
                   </p>
                 ) : null}
@@ -662,7 +629,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
 
               <div className={cloudSyncEncryptCard}>
                 <div className="flex items-center gap-1.5">
-                  <p className="text-xs font-medium text-foreground">Encrypt on Google Drive / Dropbox (AES)</p>
+                  <p className="text-xs font-medium text-foreground">Encrypt on Google Drive (AES)</p>
                   <CloudSyncHelpPopover
                     label="Encryption"
                     description={
@@ -707,67 +674,113 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                 </div>
               </div>
 
-              {provider === "google_drive" && isNepalCompany ? (
-                <div className={cloudSyncNepalFolderCard}>
-                  <div className="flex items-center gap-1.5">
-                    <Label>Attachment date folder (Nepal)</Label>
-                    <CloudSyncHelpPopover
-                      label="Attachment date folders"
-                      description={
-                        <>
-                          <p>Choose AD, BS, or Both for new attachment uploads on Drive.</p>
-                          <p>Click Save folder option to apply. Existing folders stay as they are; only new uploads use the saved mode.</p>
-                          <p>
-                            Saved: <strong>{dateFolderModeLabel(savedDateFolderMode)}</strong>
-                            {folderModeDirty ? " (unsaved change)" : null}
-                          </p>
-                        </>
-                      }
-                    />
-                  </div>
-                  <div className="flex flex-wrap gap-3 text-sm">
-                    {(["ad", "bs", "both"] as const).map((mode) => (
-                      <label key={mode} className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="radio"
-                          name="cloudSyncDriveDateFolderMode"
-                          checked={dateFolderMode === mode}
-                          onChange={() => setDateFolderMode(mode)}
-                        />
-                        {dateFolderModeLabel(mode)}
-                      </label>
-                    ))}
-                  </div>
-                  <Button
-                    type="button"
-                    variant={folderModeDirty ? "default" : "secondary"}
-                    size="sm"
-                    disabled={busy || !folderModeDirty}
-                    onClick={() => void saveFolderMode()}
-                  >
-                    Save folder option
-                  </Button>
-                </div>
-              ) : null}
-
-              {/* Last sync summary — added / uploaded / downloaded counts */}
+              {/* Sync summary — compact grid table */}
               <div className={cloudSyncLastSyncSummaryCard}>
-                <p className="font-medium text-sm text-foreground">Last sync summary</p>
-                <p className="text-sm">
-                  Added: <strong>{status.lastSyncSummary.addedFiles}</strong> files ·{" "}
-                  <strong>{status.lastSyncSummary.addedVouchers}</strong> vouchers
-                </p>
-                <p className="text-sm">
-                  Uploaded: <strong>{status.lastSyncSummary.uploadedFiles}</strong> files ·{" "}
-                  <strong>{status.lastSyncSummary.uploadedVouchers}</strong> vouchers
-                </p>
-                <p className="text-sm">
-                  Downloaded from Drive: <strong>{status.lastSyncSummary.downloadedFiles}</strong> files ·{" "}
-                  <strong>{status.lastSyncSummary.downloadedVouchers}</strong> vouchers
-                </p>
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <p className="font-medium text-sm text-foreground shrink-0">Sync summary</p>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-7 min-w-[6.5rem] max-w-[9rem] shrink-0 justify-between gap-1 px-2 text-xs font-normal"
+                      >
+                        <span className="truncate">{summaryRangeLabel}</span>
+                        <ChevronDown className="size-3 shrink-0 opacity-50" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="min-w-[8.5rem]">
+                      {CLOUD_SYNC_SUMMARY_RANGE_OPTIONS.map((opt) => (
+                        <DropdownMenuItem
+                          key={opt.value}
+                          className="text-xs"
+                          onSelect={() => setSummaryRange(opt.value)}
+                        >
+                          <Check
+                            className={cn(
+                              "mr-2 size-3.5",
+                              summaryRange === opt.value ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                          {opt.label}
+                        </DropdownMenuItem>
+                      ))}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuSub>
+                        <DropdownMenuSubTrigger className="text-xs">Reset count</DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent className="min-w-[8.5rem]">
+                          {CLOUD_SYNC_SUMMARY_RESET_OPTIONS.map((opt) => (
+                            <DropdownMenuItem
+                              key={opt.value}
+                              className="text-xs"
+                              onSelect={() => void resetSyncSummaryCounts(opt.value)}
+                            >
+                              {opt.label}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+                <div className="overflow-hidden rounded-md border border-black/25 bg-white/55 dark:border-emerald-900/55 dark:bg-emerald-950/25">
+                  <table className="w-full table-fixed text-xs border-collapse">
+                    <colgroup>
+                      <col />
+                      <col className="w-[30%]" />
+                      <col className="w-[30%]" />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th className="border-b border-r border-black/25 py-1.5 px-2 text-left font-medium dark:border-emerald-900/55">
+                          Action
+                        </th>
+                        <th className="border-b border-r border-black/25 py-1.5 px-2 text-center font-medium dark:border-emerald-900/55">
+                          file
+                        </th>
+                        <th className="border-b border-black/25 py-1.5 px-2 text-center font-medium dark:border-emerald-900/55">
+                          voucher
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="tabular-nums">
+                      <tr>
+                        <td className="border-b border-r border-black/25 py-1.5 px-2 font-medium capitalize text-muted-foreground dark:border-emerald-900/55">
+                          added
+                        </td>
+                        <td className="border-b border-r border-black/25 py-1.5 px-2 text-center dark:border-emerald-900/55">
+                          {displayedSyncSummary.addedFiles}
+                        </td>
+                        <td className="border-b border-black/25 py-1.5 px-2 text-center dark:border-emerald-900/55">
+                          {displayedSyncSummary.addedVouchers}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="border-b border-r border-black/25 py-1.5 px-2 font-medium capitalize text-muted-foreground dark:border-emerald-900/55">
+                          uploaded
+                        </td>
+                        <td className="border-b border-r border-black/25 py-1.5 px-2 text-center dark:border-emerald-900/55">
+                          {displayedSyncSummary.uploadedFiles}
+                        </td>
+                        <td className="border-b border-black/25 py-1.5 px-2 text-center dark:border-emerald-900/55">
+                          {displayedSyncSummary.uploadedVouchers}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="border-r border-black/25 py-1.5 px-2 font-medium capitalize text-muted-foreground dark:border-emerald-900/55">
+                          downloaded
+                        </td>
+                        <td className="border-r border-black/25 py-1.5 px-2 text-center dark:border-emerald-900/55">
+                          {displayedSyncSummary.downloadedFiles}
+                        </td>
+                        <td className="py-1.5 px-2 text-center">{displayedSyncSummary.downloadedVouchers}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
-              {/* Left column — sync status (same width as Provider / Encrypt / Nepal cards) */}
+              {/* Left column — sync status */}
               <div className={cloudSyncStatusCard}>
                 <div className="space-y-1 text-sm">
                   <p className="font-medium text-foreground">Sync status</p>
@@ -816,26 +829,29 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
             </div>
 
             {/* Right 65% — Share company on Drive (poori card height) */}
-            {provider === "google_drive" ? (
-              <div className="flex w-full min-w-0 order-1 lg:order-2 h-full min-h-0 flex-col">
-                <DriveShareUsersPanel
+            <div className="flex w-full min-w-0 order-1 lg:order-2 h-full min-h-0 flex-col">
+              <DriveShareUsersPanel
                   companyId={companyId}
                   companyName={typeof company.name === "string" ? company.name : undefined}
                   company={company}
                   disabled={busy}
                   onUsersChanged={reloadLocalCompanyRegistry}
                 />
-              </div>
-            ) : null}
+            </div>
           </div>
         ) : (
-          <div className="min-h-0 flex-1" aria-hidden />
+          <p className="py-2 text-sm text-muted-foreground">
+            Enable Drive sync above to configure Google Drive settings. After turning it off, click{" "}
+            <strong>Save</strong> below to apply.
+          </p>
         )}
+        </div>
 
-        {/* Footer — sync actions left, Join shared right */}
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-black/10 pt-3 mt-auto">
-          <div className="flex flex-wrap items-center gap-2">
-          {enabled && provider === "google_drive" ? (
+        {/* Footer — sync actions; hamesha card ke niche fixed, content overlap nahi */}
+        <footer className="shrink-0 border-t border-emerald-200/80 bg-emerald-50/70 px-6 py-3 shadow-[0_-2px_8px_rgba(16,185,129,0.06)] dark:border-emerald-900/50 dark:bg-emerald-950/35">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 min-w-0 flex-1">
+          {enabled ? (
             <>
               <Button
                 type="button"
@@ -864,7 +880,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
               <Button
                 type="button"
                 size="sm"
-                className="rounded-full px-4"
+                className="rounded-full bg-emerald-600 px-4 text-white hover:bg-emerald-700 dark:bg-emerald-700 dark:hover:bg-emerald-600"
                 disabled={busy}
                 onClick={() => void forceSync()}
               >
@@ -880,17 +896,6 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                 onClick={() => void redownloadFromDrive()}
               >
                 Re-download from Drive
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="rounded-full px-4"
-                disabled={busy || !enabled}
-                onClick={() => void saveAllCloudSyncSettings()}
-              >
-                <Save className="h-4 w-4 mr-1.5" />
-                Save
               </Button>
               <CloudSyncHelpPopover
                 label="Sync status & actions"
@@ -929,6 +934,17 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
               />
             </>
           ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="rounded-full px-4"
+            disabled={busy}
+            onClick={() => void saveAllCloudSyncSettings()}
+          >
+            <Save className="h-4 w-4 mr-1.5" />
+            Save
+          </Button>
           </div>
           <Button
             type="button"
@@ -942,7 +958,8 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
             Join shared local company
           </Button>
         </div>
-      </CardContent>
+        </footer>
+      </div>
 
       <JoinSharedLocalCompanyDialog
         open={joinOpen}

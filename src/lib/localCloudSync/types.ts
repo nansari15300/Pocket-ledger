@@ -1,6 +1,8 @@
-/** Local-company cloud sync (Drive/Dropbox transport) — Firestore companies is path se bahar. */
+/** Local-company Google Drive cloud sync — Firestore companies is path se bahar. */
 
-export type CloudSyncProviderId = "google_drive" | "dropbox";
+import type { CloudSyncSummaryHistoryEntry } from "@/lib/localCloudSync/syncSummaryHistory";
+
+export type CloudSyncProviderId = "google_drive";
 
 export type CloudSyncAction = "create" | "update" | "delete";
 
@@ -45,10 +47,10 @@ export type CloudSyncLastSyncSummary = {
 };
 
 /** Background auto-sync interval (seconds) — UI + LocalCompanyCloudSyncManager. */
-export const CLOUD_SYNC_INTERVAL_SEC_OPTIONS = [10, 15, 20, 30, 40, 60] as const;
+export const CLOUD_SYNC_INTERVAL_SEC_OPTIONS = [2, 5, 10, 15, 20, 30, 40, 60] as const;
 export type CloudSyncIntervalSec = (typeof CLOUD_SYNC_INTERVAL_SEC_OPTIONS)[number];
 export const DEFAULT_CLOUD_SYNC_INTERVAL_SEC: CloudSyncIntervalSec = 30;
-export const MIN_CLOUD_SYNC_TICK_MS = 10_000;
+export const MIN_CLOUD_SYNC_TICK_MS = 2_000;
 
 /** Drive folder share row — Drive par hamesha writer; appRole company permissions ke liye. */
 export type CloudSyncDriveShareUser = {
@@ -75,13 +77,17 @@ export type CloudSyncCompanyConfig = {
   /** Drive attachments + opening/avatars — AES encrypt file bytes. */
   cloudSyncEncryptDriveFiles: boolean;
   cloudSyncDriveEncryptionSalt: string | null;
-  /** Background sync timer — 10–60 sec (default 30). */
+  /** Background sync timer — 2–60 sec (default 30). */
   cloudSyncIntervalSec: CloudSyncIntervalSec;
   /** Last sync cycle counts — added/downloaded vs uploaded to Drive. */
   cloudSyncLastSyncSummary: CloudSyncLastSyncSummary;
+  /** Per-cycle sync counts — UI time-range dropdown ke liye. */
+  cloudSyncSummaryHistory: CloudSyncSummaryHistoryEntry[];
+  /** Manual reset / Drive full re-upload ke baad — is time se pehle ki history UI me mat gino. */
+  cloudSyncSummaryResetAt: number | null;
 };
 
-/** Drive/Dropbox API calls — folder segment `{name}__{id}` banane ke liye name bhi chahiye. */
+/** Drive API calls — folder segment `{name}__{id}` banane ke liye name bhi chahiye. */
 export type CloudSyncCompanyRef = {
   companyId: string;
   companyName?: string;

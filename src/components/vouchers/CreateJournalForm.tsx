@@ -90,8 +90,8 @@ import type { Staff } from "@/components/staff/types";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
-import { compressVoucherAttachment } from "@/lib/compression";
-import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange } from "@/lib/appendCompressedVoucherAttachments";
+import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
@@ -572,7 +572,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         });
         setSavedVoucherId(voucher.id);
         // Gallery / storage: `unassignedFile.url` bhi list me (sirf fileUrls tha to kabhi list khaali)
-        const urlsEdit = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
+        const urlsEdit = voucherAttachmentUrlsForFormState(voucher);
         setFiles(urlsEdit);
         initialFilesRef.current = urlsEdit.filter((f: any) => typeof f === "string");
         setSavePdfAsImage(shouldSuggestPdfAsImage(urlsEdit));
@@ -612,7 +612,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           });
           setJournalAllocationsBySide({ debit: [], credit: [] });
           initialJournalAllocationsRef.current = { debit: [], credit: [] };
-          const urlsNew = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
+          const urlsNew = voucherAttachmentUrlsForFormState(voucher);
           setFiles(urlsNew);
           initialFilesRef.current = urlsNew.filter((f: any) => typeof f === "string");
           setSavePdfAsImage(shouldSuggestPdfAsImage(urlsNew));
@@ -633,9 +633,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const hasUnsavedFilePick = files.some((f) => f instanceof File);
     if (hasUnsavedFilePick) return;
     if (_isFileDirty) return;
-    const incoming = voucher.unassignedFile?.url
-      ? [voucher.unassignedFile.url]
-      : (voucher.fileUrls || []).filter((u: unknown): u is string => typeof u === "string");
+    const incoming = voucherAttachmentUrlsForFormState(voucher);
     const cur = files.filter((f): f is string => typeof f === "string");
     const snap = savedFileUrlsSnapshotRef.current;
     if (snap) {
@@ -1854,89 +1852,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   };
   
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || !allowAttachments) return;
-    
-    const maxFiles = fileAttachmentLimits.maxFileCount || 0;
-    if (maxFiles === 0) {
-      toast({
-        variant: "destructive",
-        title: "File Attachments Disabled",
-        description: "File attachments are not allowed for your role.",
-      });
-      return;
-    }
-
-    const newFiles = Array.from(e.target.files);
-    const remainingSlots = maxFiles - files.length;
-    
-    if (remainingSlots <= 0) {
-      toast({
-        variant: "destructive",
-        title: "Limit Reached",
-        description: `You can only upload up to ${maxFiles} file${maxFiles > 1 ? 's' : ''}.`,
-      });
-      return;
-    }
-
-    const filesToProcess = newFiles.slice(0, remainingSlots);
-  
-    for (const file of filesToProcess) {
-      // Check file type first
-      const isImage = file.type.startsWith("image/");
-      const isPDF =
-        file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-      
-      if (!fileAttachmentLimits.allowImage && isImage) {
-        toast({
-          variant: "destructive",
-          title: "File Type Not Allowed",
-          description: "Image files are not allowed for your role.",
-        });
-        continue;
-      }
-      
-      if (!fileAttachmentLimits.allowPDF && isPDF) {
-        toast({
-          variant: "destructive",
-          title: "File Type Not Allowed",
-          description: "PDF files are not allowed for your role.",
-        });
-        continue;
-      }
-
-      if (!isImage && !isPDF) {
-        toast({
-          variant: "destructive",
-          title: "File Type Not Allowed",
-          description: "Only image and PDF files are allowed.",
-        });
-        continue;
-      }
-
-      try {
-        const maxBytes = attachmentMaxBytes();
-        const processedFile = await compressVoucherAttachment(file, maxBytes);
-        if (processedFile.size > maxBytes) {
-          toast({
-            variant: "destructive",
-            ...attachmentStillTooLargeToastFields(),
-          });
-          continue;
-        }
-        setFiles((prev) => {
-          if (prev.length >= maxFiles) return prev;
-          return [...prev, processedFile];
-        });
-      } catch (error) {
-        console.error("Compression error:", error);
-        toast({
-          variant: "destructive",
-          title: "Could not process file",
-          description: error instanceof Error ? error.message : "Compression or PDF read failed.",
-        });
-      }
-    }
-    e.target.value = "";
+    if (!allowAttachments) return;
+    await handleVoucherAttachmentInputChange(e, {
+      currentFiles: files,
+      maxFiles: fileAttachmentLimits.maxFileCount || 0,
+      allowImage: fileAttachmentLimits.allowImage,
+      allowPDF: fileAttachmentLimits.allowPDF,
+      setFiles,
+      toast,
+    });
   };
 
   const handleCreateNew = (type: 'party' | 'account' | 'staff' | 'expense' | 'tax', newName?: string) => {

@@ -52,7 +52,12 @@ import { AddLocalCompanyUserDialog } from "@/components/company/AddLocalCompanyU
 import { runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
 import type { Company } from "@/hooks/useCompany";
 import { cn } from "@/lib/utils";
-import { companyProfileGreenZone, cloudSyncSharePanelCard } from "@/lib/companyProfileChrome";
+import {
+  companyProfileGreenZone,
+  cloudSyncSharePanelCard,
+  cloudSyncShareTableClass,
+  cloudSyncShareTableShell,
+} from "@/lib/companyProfileChrome";
 
 type Props = {
   companyId: string;
@@ -487,13 +492,18 @@ export function LocalDriveShareManagePanel({
     <div
       className={cn(
         "h-full flex flex-col dark:border-black",
-        isFull ? "border-0 bg-transparent" : cn(cloudSyncSharePanelCard, "p-3 space-y-3")
+        isFull ? "border-0 bg-transparent" : cloudSyncSharePanelCard
       )}
     >
       <div className={cn("flex flex-col gap-2", isFull ? "px-0" : "")}>
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
-            <Label className={cn("font-semibold", isFull ? "text-base" : "text-sm")}>
+            <Label
+              className={cn(
+                "font-semibold text-emerald-900 dark:text-emerald-100",
+                isFull ? "text-base" : "text-sm"
+              )}
+            >
               {isFull ? (
                 <>
                   Manage Sharing{" "}
@@ -509,11 +519,12 @@ export function LocalDriveShareManagePanel({
             </p>
           </div>
           <div className="flex flex-col items-end gap-1 shrink-0">
-            <span className="text-xs text-muted-foreground">Users: {rows.length}</span>
+            <span className="text-xs text-emerald-800/80 dark:text-emerald-300/90">Users: {rows.length}</span>
             <Button
               type="button"
               variant="outline"
               size="sm"
+              className="rounded-full border-emerald-400/80 bg-emerald-50/90 text-emerald-900 hover:bg-emerald-100 hover:text-emerald-950 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-100 dark:hover:bg-emerald-900/50"
               disabled={disabled || !!busyEmail}
               onClick={() => setAddOpen(true)}
             >
@@ -524,8 +535,10 @@ export function LocalDriveShareManagePanel({
         </div>
       </div>
 
-      <div className={cn("rounded-md overflow-x-auto flex-1 min-h-0 border border-black/25 bg-white/50 dark:bg-background/40", isFull ? companyProfileGreenZone : "")}>
-        <Table>
+      <div
+        className={cn(isFull ? companyProfileGreenZone : cloudSyncShareTableShell, isFull ? "overflow-x-auto" : "")}
+      >
+        <Table className={cloudSyncShareTableClass}>
           <TableHeader>
             <TableRow>
               <TableHead className={isFull ? "w-2/5" : "min-w-[140px]"}>Email</TableHead>
@@ -543,7 +556,7 @@ export function LocalDriveShareManagePanel({
                     <div className="min-w-0">
                       <div className="text-xs sm:text-sm truncate">{row.email}</div>
                       {row.role === "owner" ? (
-                        <span className="text-[10px] text-amber-600 font-bold flex items-center gap-0.5">
+                        <span className="text-[10px] text-emerald-700 font-bold flex items-center gap-0.5 dark:text-emerald-400">
                           <Crown className="h-3 w-3" /> OWNER
                         </span>
                       ) : null}
@@ -564,7 +577,7 @@ export function LocalDriveShareManagePanel({
                 </TableCell>
                 <TableCell>
                   {row.role === "owner" ? (
-                    <span className="inline-flex items-center text-sm text-amber-700">
+                    <span className="inline-flex items-center text-sm text-emerald-800 dark:text-emerald-300">
                       <Crown className="mr-1 h-3.5 w-3.5" /> Owner
                     </span>
                   ) : (
@@ -642,7 +655,7 @@ export function LocalDriveShareManagePanel({
           </TableBody>
         </Table>
         {sharedCount === 0 ? (
-          <p className="text-center text-xs text-muted-foreground p-4">
+          <p className="text-center text-xs text-emerald-800/75 dark:text-emerald-300/80 p-4">
             No shared users yet. Click Add Person to invite staff.
           </p>
         ) : null}

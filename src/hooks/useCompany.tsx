@@ -1071,9 +1071,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     if (!hasCheckedStorageRef.current) return;
     const id = String(companyId || "").trim();
-    if (!id || company?.id === id) return;
-    if (bootSqliteHydrateAttemptedRef.current === id) return;
-    bootSqliteHydrateAttemptedRef.current = id;
+    if (!id) return;
 
     let cancelled = false;
     void (async () => {
@@ -1082,8 +1080,30 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         if (cancelled || !row) return;
         const normalized = normalizeLocalCompany(row as unknown as Company);
         if (!isCompanyVisibleInMainApp(normalized)) return;
+
+        const sqliteIsLocalLedger = shouldReadLedgerFromSqliteOnly(
+          normalized as Parameters<typeof shouldReadLedgerFromSqliteOnly>[0]
+        );
+        const contextIsLocalLedger =
+          company?.id === id &&
+          shouldReadLedgerFromSqliteOnly(company as Parameters<typeof shouldReadLedgerFromSqliteOnly>[0]);
+        if (!sqliteIsLocalLedger) {
+          if (company?.id === id) return;
+          if (bootSqliteHydrateAttemptedRef.current === id) return;
+          bootSqliteHydrateAttemptedRef.current = id;
+        } else if (contextIsLocalLedger) {
+          return;
+        }
+
         setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, normalized));
-        setAllCompanies((prev) => (prev.some((c) => c.id === id) ? prev : [...prev, normalized]));
+        setAllCompanies((prev) => {
+          const idx = prev.findIndex((c) => c.id === id);
+          if (idx < 0) return [...prev, normalized];
+          if (!sqliteIsLocalLedger) return prev;
+          const next = [...prev];
+          next[idx] = mergeOnlineCompanyWithLocalPlanOverlay(prev[idx], normalized);
+          return next;
+        });
         setLoading(false);
         if (isServerGateCompany(normalized)) {
           const gateId = getPlServerContextGateId();
@@ -1099,7 +1119,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       cancelled = true;
     };
-  }, [companyId, company?.id, normalizeLocalCompany]);
+  }, [companyId, company?.id, company?.storageOption, normalizeLocalCompany]);
 
   /** Local-only heavy path: Firestore owned/shared → SQLite mirror + stale purge; deferred / bump / cold-start ke liye. */
   type LocalRegistryMirrorMode = "deferred" | "immediate-empty" | "registry-bump";
@@ -1954,6 +1974,14 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           ? ((c as { sharedWith: unknown[] }).sharedWith as any[])
           : [];
         const mergedLocalUsers = mergeSharedWithIntoLocalCompanyUsers(prevUsers, sw);
+        // Device-local / Drive-sync row — Firestore mirror se storageOption mat overwrite karo.
+        if (existing && shouldReadLedgerFromSqliteOnly(existing as Company)) {
+          await upsertLocalCompany({
+            ...existing,
+            localCompanyUsers: mergedLocalUsers,
+          } as import("@/lib/localCompanyStore").LocalCompanyDoc);
+          return;
+        }
         await upsertLocalCompany({
           ...(c as any),
           storageOption: "firebase",

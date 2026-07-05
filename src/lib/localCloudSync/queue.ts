@@ -146,6 +146,18 @@ export async function markLocalCloudSyncOpsSynced(companyId: string, throughOpSe
   ).run(now, companyId, throughOpSeq);
 }
 
+/** Single op — upload ke turant baad mark (batch gap / cursor bug se bachao). */
+export async function markLocalCloudSyncOpSynced(companyId: string, opSeq: number): Promise<void> {
+  const db = await getBrowserDb();
+  if (!db) return;
+  const seq = Number(opSeq);
+  if (!Number.isFinite(seq) || seq <= 0) return;
+  const now = Date.now();
+  db.prepare(
+    `UPDATE cloud_sync_outbox SET synced_at = ? WHERE company_id = ? AND op_seq = ? AND synced_at IS NULL`
+  ).run(now, companyId, seq);
+}
+
 export async function countPendingLocalCloudSyncOps(companyId: string): Promise<number> {
   const db = await getBrowserDb();
   if (!db) return 0;

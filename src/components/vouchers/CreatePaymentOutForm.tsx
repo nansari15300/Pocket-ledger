@@ -66,8 +66,8 @@ import BsDatePicker from "../ui/BsDatePicker";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { Staff } from "@/components/staff/types";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
-import { compressVoucherAttachment } from "@/lib/compression";
-import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange } from "@/lib/appendCompressedVoucherAttachments";
+import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -100,7 +100,7 @@ import { LinkPaymentOutToSalaryDialog } from "@/components/vouchers/LinkPaymentO
 import { LinkPaymentInToPaymentOutDialog } from "@/components/vouchers/LinkPaymentInToPaymentOutDialog";
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
 import type { Allocation } from "@/lib/payment-allocation-utils";
-import { getAllocatedByVoucherIdFromPaymentOuts, getAllocationTotal, getTaxNetAllocatedByVoucherIdFromPaymentOuts, getPaymentInRemaining, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import { getAllocatedByVoucherIdFromPaymentOuts, getAllocationTotal, getTaxNetAllocatedByVoucherIdFromPaymentOuts, getPaymentInRemaining, hasBillWiseAllocationSyncWork, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import { allocatePaymentInAmounts, getSpendWiseInflowPartyLabel } from "@/lib/paymentInAllocation";
 import { getOpeningBalanceBaseAmount, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
 import { usePaymentOutAllocations } from "@/hooks/usePaymentAllocations";
@@ -1143,7 +1143,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
         form.reset(initialValues);
         setSavedVoucherId(voucher.id);
-        const editUrls = voucher.fileUrls || [];
+        const editUrls = voucherAttachmentUrlsForFormState(voucher);
         setFiles(editUrls);
         initialFilesRef.current = editUrls;
         setSavePdfAsImage(shouldSuggestPdfAsImage(editUrls));
@@ -1158,7 +1158,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         // Gallery preload + defaults sirf ek baar — warna `isFormDirty` par effect dubara `setFiles` se locally added File mita deta tha.
         if (lastSyncedVoucherIdRef.current !== "new") {
           lastSyncedVoucherIdRef.current = "new";
-          const initialUrls = defaultVoucherData.unassignedFile?.url ? [defaultVoucherData.unassignedFile.url] : (defaultVoucherData.fileUrls || []);
+          const initialUrls = voucherAttachmentUrlsForFormState(defaultVoucherData);
           setFiles(initialUrls);
           initialFilesRef.current = initialUrls.filter((f: any) => typeof f === "string");
           setSavePdfAsImage(shouldSuggestPdfAsImage(initialUrls));
@@ -1210,7 +1210,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const hasUnsavedFilePick = files.some((f) => f instanceof File);
     if (hasUnsavedFilePick) return;
     if (_isFileDirty) return;
-    const incoming = (voucher.fileUrls || []).filter((u: unknown): u is string => typeof u === "string");
+    const incoming = voucherAttachmentUrlsForFormState(voucher);
     const cur = files.filter((f): f is string => typeof f === "string");
     const snap = savedFileUrlsSnapshotRef.current;
     if (snap) {
@@ -1613,9 +1613,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const rawFileUrlsForPostSave = (sanitizedData.fileUrls || []).filter(
           (u: unknown): u is string => typeof u === "string"
         );
-        const needsBackgroundSync =
-          !!(billWiseAllocations && companyId && docId) ||
-          !!(docId && companyId && rawFileUrlsForPostSave.length > 0);
+        const needsBillWiseLinkSync =
+          !!(billWiseAllocations && companyId && docId) &&
+          hasBillWiseAllocationSyncWork(billWiseAllocations, previousAllocationsForSync);
+        const needsBackgroundSync = needsBillWiseLinkSync;
 
         if (approveBanner) {
           replaceVoucherSaveLoadingWithShortSuccess(
@@ -1636,7 +1637,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const postSaveTail = async () => {
           let bgSyncPartialFailure = false;
           try {
-            if (billWiseAllocations && companyId && docId) {
+            if (needsBillWiseLinkSync && billWiseAllocations && companyId && docId) {
               try {
                 await syncBillWiseAllocationsToTargetVouchers(
                   companyId,
@@ -1656,7 +1657,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 amount: getAllocationTotal(a),
               }));
             }
-            if (docId && companyId) {
+            if (docId && companyId && _isFileDirty) {
               const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
                 companyId,
                 voucherId: docId,
@@ -1878,89 +1879,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   };
   
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || !allowAttachments) return;
-    
-    const maxFiles = fileAttachmentLimits.maxFileCount || 0;
-    if (maxFiles === 0) {
-      toast({
-        variant: "destructive",
-        title: "File Attachments Disabled",
-        description: "File attachments are not allowed for your role.",
-      });
-      return;
-    }
-
-    const newFiles = Array.from(e.target.files);
-    const remainingSlots = maxFiles - files.length;
-    
-    if (remainingSlots <= 0) {
-      toast({
-        variant: "destructive",
-        title: "Limit Reached",
-        description: `You can only upload up to ${maxFiles} file${maxFiles > 1 ? 's' : ''}.`,
-      });
-      return;
-    }
-
-    const filesToProcess = newFiles.slice(0, remainingSlots);
-  
-    for (const file of filesToProcess) {
-      // Check file type
-      const isImage = file.type.startsWith("image/");
-      const isPDF =
-        file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-      
-      if (!fileAttachmentLimits.allowImage && isImage) {
-        toast({
-          variant: "destructive",
-          title: "File Type Not Allowed",
-          description: "Image files are not allowed for your role.",
-        });
-        continue;
-      }
-      
-      if (!fileAttachmentLimits.allowPDF && isPDF) {
-        toast({
-          variant: "destructive",
-          title: "File Type Not Allowed",
-          description: "PDF files are not allowed for your role.",
-        });
-        continue;
-      }
-
-      if (!isImage && !isPDF) {
-        toast({
-          variant: "destructive",
-          title: "File Type Not Allowed",
-          description: "Only image and PDF files are allowed.",
-        });
-        continue;
-      }
-
-      try {
-        const maxBytes = attachmentMaxBytes();
-        const processedFile = await compressVoucherAttachment(file, maxBytes);
-        if (processedFile.size > maxBytes) {
-          toast({
-            variant: "destructive",
-            ...attachmentStillTooLargeToastFields(),
-          });
-          continue;
-        }
-        setFiles((prev) => {
-          if (prev.length >= maxFiles) return prev;
-          return [...prev, processedFile];
-        });
-      } catch (error) {
-        console.error("Compression error:", error);
-        toast({
-          variant: "destructive",
-          title: "Could not process file",
-          description: error instanceof Error ? error.message : "Compression or PDF read failed.",
-        });
-      }
-    }
-    e.target.value = "";
+    if (!allowAttachments) return;
+    await handleVoucherAttachmentInputChange(e, {
+      currentFiles: files,
+      maxFiles: fileAttachmentLimits.maxFileCount || 0,
+      allowImage: fileAttachmentLimits.allowImage,
+      allowPDF: fileAttachmentLimits.allowPDF,
+      setFiles,
+      toast,
+    });
   };  
   const isOwner = user?.uid === company?.ownerId;
   const availableAccounts = processedAccounts.filter(acc => {

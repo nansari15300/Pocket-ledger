@@ -24,10 +24,12 @@ import {
   upsertAttachmentFileRef,
 } from "@/lib/attachmentFileRefStore";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
+import { isGoogleDriveCloudSyncCompany, uploadPendingAttachmentPayloadToDrive } from "@/lib/localCloudSync/driveCloudSyncClient";
 import { getLocalCompanyById, listLocalCompanies } from "@/lib/localCompanyStore";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { isPureLocalLedgerCompany } from "@/lib/companyStorageKind";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { shouldUseLocalCloudSync, isEligibleLocalDriveSyncCompanyRow } from "@/lib/localCloudSync/companyConfig";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
 
@@ -39,19 +41,19 @@ function localPendingFilesForensicEnabled(): boolean {
   return typeof process !== "undefined" && process.env.NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG === "1";
 }
 
-/** Upload ke baad SQLite mirror me HTTPS URL — verify hone ke baad hi local blob delete. */
-async function verifyLocalMirrorHasHttpsUrl(
+/** Upload ke baad SQLite mirror me final ref (https / drive:) verify. */
+async function verifyLocalMirrorHasFieldRef(
   companyId: string,
   collection: string,
   docId: string,
   field: string,
-  httpsUrl: string
+  expectedRef: string
 ): Promise<boolean> {
   const row = await getCompanyDocFromBrowserDb(companyId, collection, docId, { includeDeleted: true });
   if (!row) return false;
   const cur = row[field];
-  if (typeof cur === "string") return cur === httpsUrl;
-  if (Array.isArray(cur)) return cur.some((v) => v === httpsUrl);
+  if (typeof cur === "string") return cur === expectedRef;
+  if (Array.isArray(cur)) return cur.some((v) => v === expectedRef);
   return false;
 }
 
@@ -59,7 +61,7 @@ async function mirrorUploadedFileUrlToLocalSqlite(
   docPath: string,
   field: string,
   localId: string,
-  httpsUrl: string
+  finalRef: string
 ): Promise<boolean> {
   const m = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(String(docPath || "").trim());
   if (!m) return false;
@@ -73,10 +75,10 @@ async function mirrorUploadedFileUrlToLocalSqlite(
     const arr = [...cur];
     const idx = arr.findIndex((v) => v === needle);
     if (idx < 0) return false;
-    arr[idx] = httpsUrl;
+    arr[idx] = finalRef;
     patch[field] = arr;
   } else if (cur === needle) {
-    patch[field] = httpsUrl;
+    patch[field] = finalRef;
   } else {
     return false;
   }
@@ -91,7 +93,18 @@ async function mirrorUploadedFileUrlToLocalSqlite(
     { notify: true, force: true }
   );
   notifyBrowserDbCollectionUpdated(companyId!, collection!);
-  return verifyLocalMirrorHasHttpsUrl(companyId!, collection!, docId!, field, httpsUrl);
+  return verifyLocalMirrorHasFieldRef(companyId!, collection!, docId!, field, finalRef);
+}
+
+/** Upload ke baad SQLite mirror me HTTPS URL — verify hone ke baad hi local blob delete. */
+async function verifyLocalMirrorHasHttpsUrl(
+  companyId: string,
+  collection: string,
+  docId: string,
+  field: string,
+  httpsUrl: string
+): Promise<boolean> {
+  return verifyLocalMirrorHasFieldRef(companyId, collection, docId, field, httpsUrl);
 }
 
 /** Firestore pe HTTPS aa chuka ho lekin SQLite abhi `local:` — dubara upload ke bina mirror + delete. */
@@ -258,8 +271,20 @@ async function patchPendingFileTargetField(
       const markerSrc = decodeMarkerLocalSrc(v);
       return markerSrc === needle;
     });
-    if (idx >= 0) arr[idx] = newValue;
-    else arr.push(newValue);
+    if (idx >= 0) {
+      arr[idx] = newValue;
+    } else if (arr.includes(newValue)) {
+      /* already patched — race se duplicate push mat karo */
+    } else {
+      const orphanLocalIdx = arr.findIndex((v) => {
+        if (typeof v !== "string") return false;
+        if (isLocalFileRef(v)) return true;
+        const markerSrc = decodeMarkerLocalSrc(v);
+        return markerSrc === needle;
+      });
+      if (orphanLocalIdx >= 0) arr[orphanLocalIdx] = newValue;
+      else arr.push(newValue);
+    }
     await patchCompanyDocViaGateway(docRef, { [field]: arr });
     return;
   }
@@ -284,21 +309,85 @@ export function resolvePendingPayloadCompanyId(item: {
   return companyIdFromDocPath(String(item.docPath || "")) ?? companyIdFromStoragePrefix(item.storagePathPrefix);
 }
 
-async function isLocalOnlyPendingAttachmentCompany(companyId: string): Promise<boolean> {
+async function shouldKeepAttachmentsOffFirebase(companyId: string): Promise<boolean> {
   const cid = String(companyId || "").trim();
   if (!cid) return false;
+  if (await shouldUseLocalCloudSync(cid)) return true;
+  if (await isGoogleDriveCloudSyncCompany(cid)) return true;
   const row = await getLocalCompanyById(cid, { includeDeleted: true });
   if (!row) return false;
+  if (isOfflineCompanyStorage(row as { storageOption?: string })) return true;
+  if (isEligibleLocalDriveSyncCompanyRow(row)) return true;
   return isPureLocalLedgerCompany(row as Parameters<typeof isPureLocalLedgerCompany>[0]);
 }
 
-/** Cloud sync removed — pending attachments always use Firebase Storage / native paths. */
-import { isGoogleDriveCloudSyncCompany } from "@/lib/localCloudSync/driveCloudSyncClient";
+/** @deprecated — use shouldKeepAttachmentsOffFirebase */
+async function isLocalOnlyPendingAttachmentCompany(companyId: string): Promise<boolean> {
+  return shouldKeepAttachmentsOffFirebase(companyId);
+}
 
+/** Cloud sync removed — pending attachments always use Firebase Storage / native paths. */
 export async function resolvePendingAttachmentCloudSyncProvider(
   companyId: string
 ): Promise<"google_drive" | null> {
   return (await isGoogleDriveCloudSyncCompany(companyId)) ? "google_drive" : null;
+}
+
+/** Pending item → device registry company id (Drive upload + SQLite patch). */
+async function resolveRegistryCompanyIdForPendingItem(item: PendingFilePayload): Promise<string | null> {
+  const fromPath = resolvePendingPayloadCompanyId(item);
+  if (!fromPath) return null;
+  const reg = await getLocalCompanyById(fromPath, { includeDeleted: true });
+  if (reg) return fromPath;
+  const rows = await listLocalCompanies({ includeDeleted: true });
+  for (const row of rows) {
+    const auth = String((row as Record<string, unknown>).authoritativeCompanyId ?? "").trim();
+    if (row.id === fromPath || auth === fromPath) return row.id;
+  }
+  return fromPath;
+}
+
+async function syncOnePendingFileToDrive(
+  item: PendingFilePayload,
+  preData: Record<string, unknown>,
+  registryCompanyId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (!item.blob || item.blob.size <= 0) {
+      throw new Error("Pending attachment bytes missing on this device.");
+    }
+    if (!fieldStillHasLocalPendingRef(preData[item.field], item.id)) {
+      await removePendingFile(item.id);
+      return { success: true };
+    }
+    const docMatch = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(String(item.docPath || "").trim());
+    if (!docMatch) return { success: false, error: "invalid doc path" };
+    const [, , collection, docId] = docMatch;
+    const reg = await getLocalCompanyById(registryCompanyId, { includeDeleted: true });
+    const driveRef = await uploadPendingAttachmentPayloadToDrive({
+      companyId: registryCompanyId,
+      companyName: typeof reg?.name === "string" ? reg.name : undefined,
+      company: (reg ?? null) as Record<string, unknown> | null,
+      collection,
+      docId,
+      field: item.field,
+      blob: item.blob,
+      contentType: item.contentType,
+      fileName: item.fileName,
+    });
+    await patchPendingFileTargetField(item.docPath, item.field, item.id, driveRef);
+    const deleted = await removePendingFileAfterMirrorReady(item.id, item.docPath, item.field, driveRef);
+    if (!deleted) {
+      return {
+        success: true,
+        error: "Uploaded to Drive; local copy kept until this device finishes loading the file.",
+      };
+    }
+    return { success: true };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { success: false, error: msg };
+  }
 }
 
 /** Party/Bank/Staff/Item pending sync ke liye bhi yahi ref (pehle sirf vouchers tha). */
@@ -615,8 +704,12 @@ export async function getBlobFromLocalFileRef(
   options?: LocalFileReadOptions
 ): Promise<Blob | null> {
   if (isDriveFileRef(url)) {
-    // Legacy drive refs after cloud sync removal — no remote fetch.
-    return null;
+    try {
+      const { downloadDriveAttachmentBlob } = await import("@/lib/localCloudSync/driveCloudSyncClient");
+      return await downloadDriveAttachmentBlob(url, options?.companyId);
+    } catch {
+      return null;
+    }
   }
   if (!isLocalFileRef(url)) return null;
   const localId = url.slice(LOCAL_FILE_PREFIX.length);
@@ -904,10 +997,17 @@ export async function syncOnePendingFile(
     }
 
     const pendingCompanyId = resolvePendingPayloadCompanyId(item);
-    const localOnlyLedger = pendingCompanyId
-      ? await isLocalOnlyPendingAttachmentCompany(pendingCompanyId)
+    const registryCompanyId =
+      (pendingCompanyId ? await resolveRegistryCompanyIdForPendingItem(item) : null) ?? pendingCompanyId;
+    const keepOffFirebase = registryCompanyId
+      ? await shouldKeepAttachmentsOffFirebase(registryCompanyId)
       : false;
-    if (localOnlyLedger) {
+    if (keepOffFirebase && registryCompanyId) {
+      const driveSync =
+        (await resolvePendingAttachmentCloudSyncProvider(registryCompanyId)) === "google_drive";
+      if (driveSync) {
+        return syncOnePendingFileToDrive(item, preData, registryCompanyId);
+      }
       if (!fieldStillHasLocalPendingRef(preData[item.field], item.id)) {
         await removePendingFile(item.id);
       }
