@@ -663,6 +663,8 @@ export function LocalDriveShareManagePanel({
 
       <AddLocalCompanyUserDialog
         company={companyForDialog}
+        companyName={companyName}
+        variant="driveShare"
         open={addOpen}
         onOpenChange={setAddOpen}
         onUserAdded={() => void refreshAfterMutation()}

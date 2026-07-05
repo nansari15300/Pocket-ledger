@@ -43,3 +43,11 @@ export const cloudSyncLastSyncSummaryCard = `${cloudSyncPanelBase} space-y-2`;
 /** Cloud sync settings outer card + join panel nested card */
 export const cloudSyncSettingsPageShell = `${cloudSyncPageCard} rounded-lg`;
 export const cloudSyncNestedCard = `${cloudSyncPageCard} rounded-md border-emerald-200/80 bg-white/55 dark:bg-emerald-950/25`;
+
+/** Drive share dialogs — panel jaisa emerald tone */
+export const cloudSyncDialogContent = `${cloudSyncNestedCard} sm:max-w-md border-emerald-300/70 dark:border-emerald-800/55`;
+export const cloudSyncDialogTitleClass = "text-emerald-950 dark:text-emerald-50";
+export const cloudSyncDialogPrimaryButton =
+  "bg-emerald-700 text-white hover:bg-emerald-800 dark:bg-emerald-600 dark:hover:bg-emerald-500";
+export const cloudSyncDialogOutlineButton =
+  "border-emerald-400/80 bg-emerald-50/90 text-emerald-900 hover:bg-emerald-100 hover:text-emerald-950 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-100 dark:hover:bg-emerald-900/50";

@@ -12,6 +12,8 @@ import {
   readCloudSyncDriveEncryptionFromCompany,
 } from "@/lib/localCloudSync/driveEncryption";
 import { postDriveJsonViaClient } from "@/lib/localCloudSync/driveApiClient";
+import { normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
+import { mergeDriveShareUsersIntoLocalCompanyUsers, parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 
 async function blobToBase64(blob: Blob): Promise<string> {
   const buf = await blob.arrayBuffer();
@@ -227,6 +229,48 @@ export async function shareDriveFolderUser(input: {
     throw new Error(`Drive share failed for ${input.user.email}. Owner: Connect Drive and try Force sync.`);
   }
   return { shared, skipped };
+}
+
+/** Add Person — local registry + Drive folder writer share. */
+export async function addDriveShareUserToLocalCompany(input: {
+  companyId: string;
+  companyName?: string;
+  email: string;
+  appRole?: string;
+}): Promise<void> {
+  const cid = String(input.companyId || "").trim();
+  const email = String(input.email || "")
+    .trim()
+    .toLowerCase();
+  if (!cid || !email.includes("@")) {
+    throw new Error("Valid Gmail required to share on Google Drive.");
+  }
+  const reg = await getLocalCompanyById(cid, { includeDeleted: true });
+  if (!reg) throw new Error("Local company not found.");
+
+  const appRole = normalizeLocalCompanyAppRole(input.appRole ?? "manager");
+  const prevUsers = readCloudSyncDriveShareUsers(reg as Record<string, unknown>);
+  const ownerEmail = String((reg as Record<string, unknown>).ownerEmail || "")
+    .trim()
+    .toLowerCase();
+  if (ownerEmail && email === ownerEmail) {
+    throw new Error("Owner already has Drive access.");
+  }
+  const shareUsers: CloudSyncDriveShareUser[] = prevUsers.some((u) => u.email === email)
+    ? prevUsers.map((u) => (u.email === email ? { ...u, appRole } : u))
+    : [...prevUsers, { email, appRole }];
+
+  await shareDriveFolderUser({ companyId: cid, companyName: input.companyName, user: { email, appRole } });
+
+  let localCompanyUsers = parseLocalCompanyUserRows((reg as { localCompanyUsers?: unknown }).localCompanyUsers);
+  localCompanyUsers = mergeDriveShareUsersIntoLocalCompanyUsers(localCompanyUsers, shareUsers);
+
+  await upsertLocalCompany({
+    ...reg,
+    cloudSyncDriveShareUsers: shareUsers,
+    cloudSyncSharedEmails: shareUsersToEmailList(shareUsers),
+    localCompanyUsers,
+  } as LocalCompanyDoc);
 }
 
 /** List se user hatao — Drive permission revoke. */
