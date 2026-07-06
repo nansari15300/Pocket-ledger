@@ -2,12 +2,13 @@
 
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { getBrowserIndexedDbHostScope } from "@/lib/localSqlite";
+import { PENDING_AUTHORITATIVE_COMPANY_DOC_STORE } from "@/lib/plServerAuthoritativePendingTypes";
 
 /** Shared IndexedDB for offline data (companies, pending files). */
 const BASE_DB_NAME = "pocket-ledger-pending";
 // Browser me pehle se zyada version ho to `open(..., 2)` fail: "requested version < existing".
 // Purane builds ne 8 tak bump kiya — v9 `offlineAttachmentBlobs`: warm-sync attachment bytes cache.
-const DB_VERSION = 9;
+const DB_VERSION = 10;
 
 /** Warm/preview dono isi naam se `openDB` kholte hain — forensic SAVE vs READ grep + drift guard. */
 export function getPendingIndexedDbFullName(): string {
@@ -69,6 +70,14 @@ export function openDB(): Promise<IDBDatabase> {
         if (!db.objectStoreNames.contains(name)) {
           db.createObjectStore(name, { keyPath: "id" });
         }
+      }
+      if (!db.objectStoreNames.contains(PENDING_AUTHORITATIVE_COMPANY_DOC_STORE)) {
+        const store = db.createObjectStore(PENDING_AUTHORITATIVE_COMPANY_DOC_STORE, {
+          keyPath: "queueItemId",
+        });
+        store.createIndex("byCoalesceKey", "coalesceKey", { unique: true });
+        store.createIndex("byCreatedAt", "createdAt", { unique: false });
+        store.createIndex("byState", "state", { unique: false });
       }
       if (pendingIdbForensicEnabled()) {
         console.warn("[FORENSIC_DB_OPEN_UPGRADE]", {

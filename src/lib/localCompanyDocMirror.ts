@@ -732,33 +732,11 @@ export async function upsertCompanyDocInBrowserDb(
       await assertCompanyAllowsLedgerMutations(companyId);
     }
 
-    const { shouldCommitOnHostBridge, invokeHostBridgeCompanyDocUpsert } = await import("@/lib/hostBridgeWrite");
-    const skipHostBridgeVerify =
-      typeof window !== "undefined" &&
-      Boolean(
-        (window as unknown as { __plPhase1bVerifySkipHostBridgeForNextUpsert?: boolean })
-          .__plPhase1bVerifySkipHostBridgeForNextUpsert
-      );
-    if (skipHostBridgeVerify) {
-      delete (window as unknown as { __plPhase1bVerifySkipHostBridgeForNextUpsert?: boolean })
-        .__plPhase1bVerifySkipHostBridgeForNextUpsert;
+    const { orchestrateCompanyDocBrowserWrite } = await import("@/lib/plServerAuthoritativeWriteRouting");
+    const route = await orchestrateCompanyDocBrowserWrite(companyId, collectionName, docId, data, options);
+    if (route.kind === "local_commit") {
+      await commitCompanyDocOnRenderer(companyId, collectionName, docId, data, options);
     }
-    if (!skipHostBridgeVerify && (await shouldCommitOnHostBridge(companyId, options))) {
-      await invokeHostBridgeCompanyDocUpsert(companyId, collectionName, docId, data, options);
-      return;
-    }
-
-    const { shouldRoutePlServerAuthoritativeWrite, invokePlServerAuthoritativeDocUpsert } = await import(
-      "@/lib/plServerClientAuthoritativeWrite"
-    );
-    if (await shouldRoutePlServerAuthoritativeWrite(companyId, options, {
-      simulateLanClient: skipHostBridgeVerify,
-    })) {
-      await invokePlServerAuthoritativeDocUpsert(companyId, collectionName, docId, data, options);
-      return;
-    }
-
-    await commitCompanyDocOnRenderer(companyId, collectionName, docId, data, options);
   } catch (e) {
     if ((e as { plAuthoritativeWriteFailed?: boolean })?.plAuthoritativeWriteFailed) {
       throw e;

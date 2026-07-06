@@ -13,6 +13,16 @@ const VOUCHER_HOST = "phase1b-v-host-save";
 const VOUCHER_HTTP_AUTH = "phase1b-v-http-auth";
 const VOUCHER_CLIENT_ROUTE = "phase1b-v-client-route";
 const VOUCHER_HOST_REGRESSION = "phase1b-v-host-regression";
+const VOUCHER_PENDING_9 = "phase1b-v-pending-9";
+const VOUCHER_PENDING_10 = "phase1b-v-pending-10";
+const VOUCHER_PENDING_11 = "phase1b-v-pending-11";
+const VOUCHER_PENDING_12A = "phase1b-v-pending-12a";
+const VOUCHER_PENDING_12B = "phase1b-v-pending-12b";
+const VOUCHER_PENDING_12C = "phase1b-v-pending-12c";
+const VOUCHER_PENDING_13 = "phase1b-v-pending-13";
+const VOUCHER_PENDING_14 = "phase1b-v-pending-14";
+const VOUCHER_PENDING_15 = "phase1b-v-pending-15";
+const VOUCHER_PENDING_16 = "phase1b-v-pending-16";
 const VOUCHER_MIRROR = "phase1b-v-mirror-push";
 const VOUCHER_NOOP = "phase1b-v-noop-save";
 const VOUCHER_RESTART = "phase1b-v-restart-persist";
@@ -84,6 +94,19 @@ function voucherPayload(id, amount) {
   };
 }
 
+/** Fixed timestamps so replay idempotency (notify:false) can noop on the Host. */
+function stableVoucherPayload(id, amount) {
+  return {
+    id,
+    type: "payment",
+    amount,
+    updatedAt: 1_700_000_001_000,
+    lastEditedAt: 1_700_000_001_000,
+    createdAt: 1_700_000_001_000,
+    isDeleted: false,
+  };
+}
+
 async function seedCompanyOnBridge(runInServerAppRenderer) {
   return runInServerAppRenderer(
     `(async () => {
@@ -126,6 +149,112 @@ async function uiFlushDb(uiWc) {
     `(async () => {
       if (typeof window.__plPhase1bVerifyFlushDb !== "function") return { ok: false };
       return await window.__plPhase1bVerifyFlushDb();
+    })()`,
+    true
+  );
+}
+
+async function installLanClientGateUi(uiWc, sharingPort, token) {
+  return uiWc.executeJavaScript(
+    `(async () => {
+      if (typeof window.__plPhase1bVerifyInstallLanClientGate !== "function") return { ok: false };
+      return await window.__plPhase1bVerifyInstallLanClientGate(
+        ${JSON.stringify(`http://127.0.0.1:${sharingPort}`)},
+        ${JSON.stringify(token)},
+        ${JSON.stringify(COMPANY_ID)}
+      );
+    })()`,
+    true
+  );
+}
+
+async function clearLanClientGateUi(uiWc) {
+  return uiWc.executeJavaScript(
+    `(async () => {
+      if (typeof window.__plPhase1bVerifyClearLanClientGate !== "function") return { ok: false };
+      return await window.__plPhase1bVerifyClearLanClientGate();
+    })()`,
+    true
+  );
+}
+
+async function countPendingAuthoritativeUi(uiWc) {
+  return uiWc.executeJavaScript(
+    `(async () => {
+      if (typeof window.__plPhase1bVerifyCountPendingAuthoritativeWrites !== "function") return -1;
+      return await window.__plPhase1bVerifyCountPendingAuthoritativeWrites();
+    })()`,
+    true
+  );
+}
+
+async function drainPendingAuthoritativeUi(uiWc) {
+  return uiWc.executeJavaScript(
+    `(async () => {
+      if (typeof window.__plPhase1bVerifyDrainPendingAuthoritativeQueue !== "function") return { drained: -1 };
+      return await window.__plPhase1bVerifyDrainPendingAuthoritativeQueue();
+    })()`,
+    true
+  );
+}
+
+async function coldStartPendingReplayUi(uiWc) {
+  return uiWc.executeJavaScript(
+    `(async () => {
+      if (typeof window.__plPhase1bVerifyColdStartPendingReplay !== "function") return { drained: -1 };
+      return await window.__plPhase1bVerifyColdStartPendingReplay();
+    })()`,
+    true
+  );
+}
+
+async function getPendingStateUi(uiWc, docId) {
+  return uiWc.executeJavaScript(
+    `(async () => {
+      if (typeof window.__plPhase1bVerifyGetPendingAuthoritativeState !== "function") return null;
+      return await window.__plPhase1bVerifyGetPendingAuthoritativeState(
+        ${JSON.stringify(COMPANY_ID)},
+        ${JSON.stringify(docId)}
+      );
+    })()`,
+    true
+  );
+}
+
+async function lanClientUpsertVoucher(uiWc, voucherId, payload) {
+  return uiWc.executeJavaScript(
+    `(async () => {
+      window.__plPhase1bVerifySkipHostBridgeForNextUpsert = true;
+      if (typeof window.__plPhase1bVerifyUpsertVoucher !== "function") return { ok: false };
+      return await window.__plPhase1bVerifyUpsertVoucher(
+        ${JSON.stringify(COMPANY_ID)},
+        ${JSON.stringify(voucherId)},
+        ${JSON.stringify(payload)}
+      );
+    })()`,
+    true
+  );
+}
+
+async function drainUntilPendingZero(uiWc, maxRounds = 12) {
+  for (let i = 0; i < maxRounds; i += 1) {
+    await drainPendingAuthoritativeUi(uiWc);
+    await sleep(500);
+    const remaining = await countPendingAuthoritativeUi(uiWc);
+    if (remaining === 0) return 0;
+  }
+  return countPendingAuthoritativeUi(uiWc);
+}
+
+async function enableVerifyLanClientReplayRoute(uiWc) {
+  await uiWc.executeJavaScript(`window.__plPhase1bVerifySimulateLanClientAuthoritativeRoute = true;`, true);
+}
+
+async function clearAllPendingUi(uiWc) {
+  return uiWc.executeJavaScript(
+    `(async () => {
+      if (typeof window.__plPhase1bVerifyClearAllPendingAuthoritativeWrites !== "function") return { ok: false };
+      return await window.__plPhase1bVerifyClearAllPendingAuthoritativeWrites();
     })()`,
     true
   );
@@ -483,6 +612,261 @@ async function runPhase1bRuntimeVerify(deps) {
       { label: "export contains voucher", pass: exportIds8.includes(VOUCHER_HOST_REGRESSION), actual: exportIds8 },
     ])
   );
+
+  // --- Milestone 3: Pending authoritative write scenarios (9–16) ---
+  await clearLanClientGateUi(uiWin.webContents);
+  await clearAllPendingUi(uiWin.webContents);
+  await uiWin.webContents.executeJavaScript(
+    `window.__plPhase1bVerifyForceRecoverPendingSends = true; window.__plPhase1bVerifyPauseBackgroundAuthoritativeReplay = true;`,
+    true
+  );
+
+  // Scenario 9 — Host unavailable → pending created
+  await installLanClientGateUi(uiWin.webContents, sharingPort, tokenRec.token);
+  await enableVerifyLanClientReplayRoute(uiWin.webContents);
+  await deps.stopSharingOnly();
+  deps.resetVerifyStats();
+  await resetCapture(bridge);
+  await resetCapture(uiWin.webContents);
+
+  const payload9 = voucherPayload(VOUCHER_PENDING_9, 901);
+  await lanClientUpsertVoucher(uiWin.webContents, VOUCHER_PENDING_9, payload9);
+  await sleep(400);
+
+  const pending9 = await countPendingAuthoritativeUi(uiWin.webContents);
+  const uiCap9 = await readCapture(uiWin.webContents);
+  const bridgeCap9 = await readCapture(bridge);
+  const stats9 = deps.getVerifyStats();
+
+  report.scenarios.push(
+    assertScenario("Scenario 9 — Host unavailable → pending created", [
+      { label: "pending queue count === 1", pass: pending9 === 1, actual: pending9 },
+      { label: "UI sqlite upserts === 0", pass: uiCap9.sqliteUpserts === 0, actual: uiCap9.sqliteUpserts },
+      { label: "bridge sqlite upserts === 0", pass: bridgeCap9.sqliteUpserts === 0, actual: bridgeCap9.sqliteUpserts },
+      { label: "authoritative HTTP === 0", pass: stats9.authoritativeHttp === 0, actual: stats9.authoritativeHttp },
+      { label: "bridge IPC === 0", pass: stats9.bridgeIpc === 0, actual: stats9.bridgeIpc },
+      { label: "mirror queue === 0", pass: uiCap9.mirrorQueues === 0, actual: uiCap9.mirrorQueues },
+    ])
+  );
+
+  // Scenario 10 — Reconnect → replay succeeds
+  await deps.startSharedLocalServer();
+  deps.resetVerifyStats();
+  await resetCapture(bridge);
+  await resetCapture(uiWin.webContents);
+
+  const drain10 = await drainPendingAuthoritativeUi(uiWin.webContents);
+  await sleep(800);
+
+  const pending10 = await countPendingAuthoritativeUi(uiWin.webContents);
+  const stats10 = deps.getVerifyStats();
+  const bridgeCap10 = await readCapture(bridge);
+  const exportIds10 = await exportVoucherIds(deps.runMirrorCollectionExportWithMeta);
+
+  report.scenarios.push(
+    assertScenario("Scenario 10 — Reconnect → replay succeeds", [
+      { label: "drain drained >= 1", pass: (drain10?.drained ?? 0) >= 1, actual: drain10 },
+      { label: "pending queue count === 0", pass: pending10 === 0, actual: pending10 },
+      { label: "authoritative HTTP === 1", pass: stats10.authoritativeHttp === 1, actual: stats10.authoritativeHttp },
+      { label: "bridge sqlite upserts >= 1", pass: bridgeCap10.sqliteUpserts >= 1, actual: bridgeCap10.sqliteUpserts },
+      { label: "export contains voucher", pass: exportIds10.includes(VOUCHER_PENDING_9), actual: exportIds10 },
+    ])
+  );
+
+  // Scenario 11 — Cold start while pending → replay after restart simulation
+  await deps.stopSharingOnly();
+  deps.resetVerifyStats();
+  const payload11 = voucherPayload(VOUCHER_PENDING_11, 911);
+  await lanClientUpsertVoucher(uiWin.webContents, VOUCHER_PENDING_11, payload11);
+  await sleep(300);
+  const pending11Before = await countPendingAuthoritativeUi(uiWin.webContents);
+
+  await deps.startSharedLocalServer();
+  deps.resetVerifyStats();
+  await resetCapture(bridge);
+  const cold11 = await coldStartPendingReplayUi(uiWin.webContents);
+  await sleep(800);
+
+  const pending11After = await countPendingAuthoritativeUi(uiWin.webContents);
+  const stats11 = deps.getVerifyStats();
+  const exportIds11 = await exportVoucherIds(deps.runMirrorCollectionExportWithMeta);
+
+  report.scenarios.push(
+    assertScenario("Scenario 11 — Cold start replay while pending", [
+      { label: "pending before >= 1", pass: pending11Before >= 1, actual: pending11Before },
+      { label: "cold start drained >= 1", pass: (cold11?.drained ?? 0) >= 1, actual: cold11 },
+      { label: "pending queue count === 0", pass: pending11After === 0, actual: pending11After },
+      { label: "authoritative HTTP >= 1", pass: stats11.authoritativeHttp >= 1, actual: stats11.authoritativeHttp },
+      { label: "export contains voucher", pass: exportIds11.includes(VOUCHER_PENDING_11), actual: exportIds11 },
+    ])
+  );
+
+  // Scenario 12 — Multiple queued writes
+  await clearAllPendingUi(uiWin.webContents);
+  await deps.stopSharingOnly();
+  deps.resetVerifyStats();
+  await lanClientUpsertVoucher(uiWin.webContents, VOUCHER_PENDING_12A, voucherPayload(VOUCHER_PENDING_12A, 921));
+  await lanClientUpsertVoucher(uiWin.webContents, VOUCHER_PENDING_12B, voucherPayload(VOUCHER_PENDING_12B, 922));
+  await lanClientUpsertVoucher(uiWin.webContents, VOUCHER_PENDING_12C, voucherPayload(VOUCHER_PENDING_12C, 923));
+  await sleep(300);
+  const pending12Before = await countPendingAuthoritativeUi(uiWin.webContents);
+
+  await deps.startSharedLocalServer();
+  deps.resetVerifyStats();
+  await resetCapture(bridge);
+  const pending12After = await drainUntilPendingZero(uiWin.webContents, 20);
+  await sleep(400);
+
+  const stats12 = deps.getVerifyStats();
+  const exportIds12 = await exportVoucherIds(deps.runMirrorCollectionExportWithMeta);
+
+  report.scenarios.push(
+    assertScenario("Scenario 12 — Multiple queued writes", [
+      { label: "pending before === 3", pass: pending12Before === 3, actual: pending12Before },
+      { label: "pending queue count === 0", pass: pending12After === 0, actual: pending12After },
+      { label: "authoritative HTTP === 3", pass: stats12.authoritativeHttp === 3, actual: stats12.authoritativeHttp },
+      { label: "export contains 12a", pass: exportIds12.includes(VOUCHER_PENDING_12A), actual: exportIds12 },
+      { label: "export contains 12b", pass: exportIds12.includes(VOUCHER_PENDING_12B), actual: exportIds12 },
+      { label: "export contains 12c", pass: exportIds12.includes(VOUCHER_PENDING_12C), actual: exportIds12 },
+    ])
+  );
+
+  // Scenario 13 — Duplicate replay protection (parallel drain)
+  await clearAllPendingUi(uiWin.webContents);
+  await deps.stopSharingOnly();
+  const payload13 = voucherPayload(VOUCHER_PENDING_13, 931);
+  await lanClientUpsertVoucher(uiWin.webContents, VOUCHER_PENDING_13, payload13);
+  await sleep(200);
+  await deps.startSharedLocalServer();
+  deps.resetVerifyStats();
+  await resetCapture(bridge);
+
+  await uiWin.webContents.executeJavaScript(
+    `(async () => {
+      const drain = window.__plPhase1bVerifyDrainPendingAuthoritativeQueue;
+      if (typeof drain !== "function") return { ok: false };
+      const [a, b] = await Promise.all([drain(), drain()]);
+      return { ok: true, a, b };
+    })()`,
+    true
+  );
+  await sleep(800);
+
+  const pending13 = await countPendingAuthoritativeUi(uiWin.webContents);
+  const stats13 = deps.getVerifyStats();
+
+  report.scenarios.push(
+    assertScenario("Scenario 13 — Duplicate replay protection", [
+      { label: "pending queue count === 0", pass: pending13 === 0, actual: pending13 },
+      { label: "authoritative HTTP === 1", pass: stats13.authoritativeHttp === 1, actual: stats13.authoritativeHttp },
+    ])
+  );
+
+  // Scenario 14 — Authentication failure
+  await clearAllPendingUi(uiWin.webContents);
+  await clearLanClientGateUi(uiWin.webContents);
+  await installLanClientGateUi(uiWin.webContents, sharingPort, "invalid-verify-token");
+  await deps.stopSharingOnly();
+  const payload14 = voucherPayload(VOUCHER_PENDING_14, 941);
+  await lanClientUpsertVoucher(uiWin.webContents, VOUCHER_PENDING_14, payload14);
+  await sleep(200);
+  await deps.startSharedLocalServer();
+  deps.resetVerifyStats();
+  await resetCapture(bridge);
+  await drainPendingAuthoritativeUi(uiWin.webContents);
+  await sleep(400);
+
+  const state14 = await getPendingStateUi(uiWin.webContents, VOUCHER_PENDING_14);
+  const stats14 = deps.getVerifyStats();
+  const bridgeCap14 = await readCapture(bridge);
+
+  report.scenarios.push(
+    assertScenario("Scenario 14 — Authentication failure", [
+      { label: "state failed_permanent", pass: state14 === "failed_permanent", actual: state14 },
+      { label: "authoritative HTTP === 0", pass: stats14.authoritativeHttp === 0, actual: stats14.authoritativeHttp },
+      { label: "bridge sqlite upserts === 0", pass: bridgeCap14.sqliteUpserts === 0, actual: bridgeCap14.sqliteUpserts },
+    ])
+  );
+
+  // Scenario 15 — Permanent rejection (company not allowed for token)
+  await clearAllPendingUi(uiWin.webContents);
+  await clearLanClientGateUi(uiWin.webContents);
+  const denyTokenRec = accessTokens.createAccessToken(deps.userDataPath, {
+    label: "Phase1B Verify Deny Company",
+    allowedCompanyIds: ["other-company-not-verify"],
+  });
+  await installLanClientGateUi(uiWin.webContents, sharingPort, denyTokenRec.token);
+  await deps.stopSharingOnly();
+  const payload15 = voucherPayload(VOUCHER_PENDING_15, 951);
+  await lanClientUpsertVoucher(uiWin.webContents, VOUCHER_PENDING_15, payload15);
+  await sleep(200);
+  await deps.startSharedLocalServer();
+  deps.resetVerifyStats();
+  await drainPendingAuthoritativeUi(uiWin.webContents);
+  await sleep(400);
+
+  const state15 = await getPendingStateUi(uiWin.webContents, VOUCHER_PENDING_15);
+  const stats15 = deps.getVerifyStats();
+
+  report.scenarios.push(
+    assertScenario("Scenario 15 — Permanent rejection", [
+      { label: "state failed_permanent", pass: state15 === "failed_permanent", actual: state15 },
+      { label: "authoritative HTTP === 0", pass: stats15.authoritativeHttp === 0, actual: stats15.authoritativeHttp },
+    ])
+  );
+
+  // Scenario 16 — Success boundary crash recovery (skip delete then replay)
+  await clearAllPendingUi(uiWin.webContents);
+  await clearLanClientGateUi(uiWin.webContents);
+  await installLanClientGateUi(uiWin.webContents, sharingPort, tokenRec.token);
+  await enableVerifyLanClientReplayRoute(uiWin.webContents);
+  await deps.stopSharingOnly();
+  const payload16 = stableVoucherPayload(VOUCHER_PENDING_16, 961);
+  await lanClientUpsertVoucher(uiWin.webContents, VOUCHER_PENDING_16, payload16);
+  await sleep(200);
+  await deps.startSharedLocalServer();
+
+  deps.resetVerifyStats();
+  await resetCapture(bridge);
+  await uiWin.webContents.executeJavaScript(`window.__plPhase1bVerifySkipPendingDeleteOnReplaySuccess = true;`, true);
+  const stats16BeforeFirst = deps.getVerifyStats();
+  await drainPendingAuthoritativeUi(uiWin.webContents);
+  await sleep(300);
+
+  const pending16Mid = await countPendingAuthoritativeUi(uiWin.webContents);
+  const stats16AfterFirst = deps.getVerifyStats();
+  const firstHttpDelta = stats16AfterFirst.authoritativeHttp - stats16BeforeFirst.authoritativeHttp;
+
+  await resetCapture(bridge);
+  await uiWin.webContents.executeJavaScript(`window.__plPhase1bVerifySkipPendingDeleteOnReplaySuccess = false;`, true);
+  const stats16BeforeSecond = deps.getVerifyStats();
+  await drainPendingAuthoritativeUi(uiWin.webContents);
+  await sleep(600);
+
+  const pending16Final = await countPendingAuthoritativeUi(uiWin.webContents);
+  const stats16AfterSecond = deps.getVerifyStats();
+  const secondHttpDelta = stats16AfterSecond.authoritativeHttp - stats16BeforeSecond.authoritativeHttp;
+  const bridgeCap16Second = await readCapture(bridge);
+  const exportIds16 = await exportVoucherIds(deps.runMirrorCollectionExportWithMeta);
+
+  report.scenarios.push(
+    assertScenario("Scenario 16 — Success boundary crash recovery", [
+      { label: "pending after first replay >= 1", pass: pending16Mid >= 1, actual: pending16Mid },
+      { label: "first authoritative HTTP delta === 1", pass: firstHttpDelta === 1, actual: firstHttpDelta },
+      { label: "second authoritative HTTP delta === 1", pass: secondHttpDelta === 1, actual: secondHttpDelta },
+      { label: "second bridge sqlite upserts === 0", pass: bridgeCap16Second.sqliteUpserts === 0, actual: bridgeCap16Second.sqliteUpserts },
+      { label: "pending queue count === 0", pass: pending16Final === 0, actual: pending16Final },
+      { label: "export contains voucher", pass: exportIds16.includes(VOUCHER_PENDING_16), actual: exportIds16 },
+    ])
+  );
+
+  await clearLanClientGateUi(uiWin.webContents);
+  await uiWin.webContents.executeJavaScript(
+    `delete window.__plPhase1bVerifySimulateLanClientAuthoritativeRoute; delete window.__plPhase1bVerifyForceRecoverPendingSends; delete window.__plPhase1bVerifyPauseBackgroundAuthoritativeReplay;`,
+    true
+  );
+  deps.localAppServer.saveConfig(deps.userDataPath, { userWantsRunning: true });
+  await deps.startSharedLocalServer();
 
   // --- Scenario 2: Mirror apply (simulated LAN client) ---
   deps.resetVerifyStats();

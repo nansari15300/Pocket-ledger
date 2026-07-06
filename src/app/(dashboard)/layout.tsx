@@ -18,6 +18,7 @@ import { useToast } from "@/hooks/use-toast";
 import { MobileFloatingButton, ReportsMobileReportListFab } from "@/components/layout/MobileFloatingButton";
 import { CompanyDemotedBanner } from "@/components/company/CompanyDemotedBanner";
 import { PlanAuthoritativeSyncBanner } from "@/components/company/PlanAuthoritativeSyncBanner";
+import { PlServerAuthoritativePendingBanner } from "@/components/PlServerAuthoritativePendingBanner";
 import { FileHoverPreviewProvider } from "@/contexts/FileHoverPreviewContext";
 import { ReportPartyViewProvider } from "@/contexts/ReportPartyViewContext";
 import { ReportListProvider } from "@/contexts/ReportListContext";
@@ -905,6 +906,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       <CompanyDemotedBanner />
                       <PlanAuthoritativeSyncBanner />
                       <ApkCloudOfflineViewBanner />
+                      <PlServerAuthoritativePendingBanner />
                       <ApkCloudOnlineSyncToast />
                       <DashboardMainShell
                         className={cn(

@@ -40,6 +40,7 @@ import { PlServerAccessBootstrap } from "@/components/settings/PlServerAccessBoo
 import { PlRemoteClientLandingBootstrap } from "@/components/settings/PlRemoteClientLandingBootstrap";
 import { PlServerClientMirrorManager } from "@/components/settings/PlServerClientMirrorManager";
 import { PlServerLiveSyncManager } from "@/components/settings/PlServerLiveSyncManager";
+import { PlServerAuthoritativeReplayManager } from "@/components/PlServerAuthoritativeReplayManager";
 
 /** Local-only app start: sql.js init pehle se — refresh par company turant SQLite se load. */
 function SqlitePrewarmBootstrap() {
@@ -106,6 +107,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 <PlRemoteClientLandingBootstrap />
                 <PlServerClientMirrorManager />
                 <PlServerLiveSyncManager />
+                <PlServerAuthoritativeReplayManager />
                 <PlServerGateLedgerBootstrap />
                 <PlMirrorExportDevBridge />
                 <EmbeddedLogoutProvider>
