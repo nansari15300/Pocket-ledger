@@ -1,6 +1,7 @@
 
 "use client";
 
+import { bankAccountDisplayName } from "@/lib/bankAccountDisplayName";
 import type { Account } from "@/components/bank-cash/types";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
@@ -70,7 +71,8 @@ export function AccountList({
       return accounts
         .filter(account => {
             if (account.isSpecial && !canViewSpecialAccount) return false;
-            if (!account.accountName || !account.accountName.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+            const label = bankAccountDisplayName(account);
+            if (!label || !label.toLowerCase().includes(searchTerm.toLowerCase())) return false;
             const bal = Number(account.balance || 0);
             // Footer quick filters: list short/filter from same control on mobile + desktop.
             if (quickFilter === "dr") return bal > 0;
@@ -80,7 +82,9 @@ export function AccountList({
             return true;
         })
         .sort((a, b) => {
-          if (quickFilter === "name") return String(a.accountName || "").localeCompare(String(b.accountName || ""));
+          if (quickFilter === "name") {
+            return bankAccountDisplayName(a).localeCompare(bankAccountDisplayName(b));
+          }
           if (quickFilter === "date") return toDateMs(b.openingBalanceDate) - toDateMs(a.openingBalanceDate);
           return Math.abs(Number(b.balance || 0)) - Math.abs(Number(a.balance || 0));
         });
@@ -100,6 +104,7 @@ export function AccountList({
             {filteredAndSortedAccounts.map((account) => {
               const isSelected = selectedAccount?.id === account.id;
               const isSpecial = account.isSpecial;
+              const displayName = bankAccountDisplayName(account);
               const href = getItemHref?.(account);
               const attachmentPreviewUrl = trimEntityFileUrlForPreview(account.fileUrl);
               const cardClassName = masterListRowUnselectedCn(isSelected);
@@ -114,7 +119,7 @@ export function AccountList({
                         <ResolvedEntityAvatar
                           className="h-8 w-8 text-xs"
                           src={attachmentPreviewUrl ?? undefined}
-                          alt={account.accountName}
+                          alt={displayName}
                           fallbackSlot={
                             isSpecial ? (
                               <Crown className="h-4 w-4 text-amber-500" />
@@ -142,10 +147,10 @@ export function AccountList({
                         onPointerDown={(e) => e.stopPropagation()}
                         className={cn(masterListNameTriggerCn, isSpecial && "text-amber-600")}
                       >
-                        {account.accountName}
+                        {displayName}
                       </TooltipTrigger>
                       <TooltipContent>
-                        <p>{account.accountName}</p>
+                        <p>{displayName}</p>
                         {(pendingApprovalByAccountId[account.id] ?? 0) > 0 && (
                           <p className="text-xs text-muted-foreground">{pendingApprovalByAccountId[account.id]} pending approval</p>
                         )}

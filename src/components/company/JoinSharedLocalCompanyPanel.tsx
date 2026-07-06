@@ -23,8 +23,10 @@ import {
   findJoinedLocalCompanyForDriveInvite,
   joinDriveSharedLocalCompany,
   listDriveSharedLocalCompanyInvites,
+  preloadDriveSharedCompanyLoginFromInvite,
   resyncDriveLocalCompanyFromInvite,
   type DriveSharedCompanyInvite,
+  type DriveSharedJoinCompleteSource,
 } from "@/lib/localCloudSync/driveSharedJoinClient";
 import { listLocalCompanies, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import {
@@ -35,11 +37,12 @@ import { cn } from "@/lib/utils";
 import { cloudSyncJoinPanelCard, cloudSyncNestedCard } from "@/lib/companyProfileChrome";
 import { CloudSyncHelpPopover } from "@/components/company/CloudSyncHelpPopover";
 import { purgeAllLocalCompaniesMissingOnDrive } from "@/lib/localCloudSync/driveCompanyFolderLifecycle";
+import { markSuppressFirestorePermissionForCompany } from "@/lib/firestorePermissionSuppress";
 
 type Props = {
   /** false = list load mat karo (dialog band) */
   active?: boolean;
-  onJoined?: (companyId: string) => void;
+  onJoined?: (companyId: string, source?: DriveSharedJoinCompleteSource) => void;
   className?: string;
   /** Drive OAuth ke baad wapas is path par aao */
   returnPath?: string;
@@ -101,6 +104,17 @@ export function JoinSharedLocalCompanyPanel({
     void refreshLocalJoinState();
   }, [active, refreshLocalJoinState, invites, localCompanyRegistryEpoch, joiningId]);
 
+  // Drive-shared local rows — Firestore registry listeners deny expected; dev overlay suppress.
+  useEffect(() => {
+    if (!active) return;
+    for (const row of localRegistryRows) {
+      if ((row as { driveSharedJoin?: boolean }).driveSharedJoin === true && row.id) {
+        markSuppressFirestorePermissionForCompany(String(row.id));
+        break;
+      }
+    }
+  }, [active, localRegistryRows]);
+
   const ownedInvites = useMemo(() => invites.filter((inv) => inv.isOwnedOnDrive), [invites]);
 
   const groupedBySharer = useMemo(() => {
@@ -145,19 +159,20 @@ export function JoinSharedLocalCompanyPanel({
       const joinedCompanyId = await joinDriveSharedLocalCompany(invite, {
         companyPassword: rowPassword,
       });
+      markSuppressFirestorePermissionForCompany(joinedCompanyId);
       reloadLocalCompanyRegistry();
       await refreshLocalJoinState();
       await loadInvites();
       toast({
         title: "Company joined",
-        description: `${invite.companyName} synced from Drive.`,
+        description: `${invite.companyName} ledger loaded. Files are syncing in the background.`,
       });
       setPasswordByFolderId((prev) => {
         const next = { ...prev };
         delete next[invite.driveFolderId];
         return next;
       });
-      onJoined?.(joinedCompanyId);
+      onJoined?.(joinedCompanyId, "join");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       toast({
@@ -182,14 +197,15 @@ export function JoinSharedLocalCompanyPanel({
       const syncedCompanyId = await resyncDriveLocalCompanyFromInvite(invite, {
         companyPassword: rowPassword,
       });
+      markSuppressFirestorePermissionForCompany(syncedCompanyId);
       reloadLocalCompanyRegistry();
       await refreshLocalJoinState();
       await loadInvites();
       toast({
         title: "Synced from Drive",
-        description: `${invite.companyName} data refreshed from Google Drive.`,
+        description: `${invite.companyName} ledger loaded. Files are syncing in the background.`,
       });
-      onJoined?.(syncedCompanyId);
+      onJoined?.(syncedCompanyId, "resync");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       toast({
@@ -201,6 +217,26 @@ export function JoinSharedLocalCompanyPanel({
             : isCloudSyncEncryptionKeyRequiredError(msg)
               ? msg
               : msg,
+      });
+    } finally {
+      setJoiningId(null);
+    }
+  };
+
+  const handleSelectConnected = async (inv: DriveSharedCompanyInvite) => {
+    setJoiningId(inv.companyId);
+    try {
+      const companyId = await preloadDriveSharedCompanyLoginFromInvite(inv);
+      markSuppressFirestorePermissionForCompany(companyId);
+      reloadLocalCompanyRegistry();
+      await refreshLocalJoinState();
+      onJoined?.(companyId, "select");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast({
+        variant: "destructive",
+        title: "Could not open company",
+        description: msg,
       });
     } finally {
       setJoiningId(null);
@@ -266,7 +302,7 @@ export function JoinSharedLocalCompanyPanel({
               variant="default"
               className="rounded-full"
               disabled={busy}
-              onClick={() => onJoined?.(joinedLocalId)}
+              onClick={() => void handleSelectConnected(inv)}
             >
               Select
             </Button>

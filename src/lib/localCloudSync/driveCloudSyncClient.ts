@@ -3,7 +3,7 @@
 import type { CloudSyncDriveShareUser } from "@/lib/localCloudSync/types";
 import { shareUsersToEmailList, readCloudSyncConfigFromCompany, readCloudSyncDriveShareUsers, shouldUseLocalCloudSync } from "@/lib/localCloudSync/companyConfig";
 import { logLocalCloudSync, warnLocalCloudSync } from "@/lib/localCloudSync/logger";
-import { toDriveFileRef, driveAttachmentUploadStoragePath, driveAttachmentDownloadTryPaths, isDriveAttachmentWrapperStoragePath, remotePathFromDriveFileRef, pocketLedgerDriveCompanyIdPart } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
+import { toDriveFileRef, driveAttachmentUploadStoragePath, driveAttachmentDownloadTryPaths, isDriveAttachmentWrapperStoragePath, remotePathFromDriveFileRef, pocketLedgerDriveCompanyIdPart, branchRelativePathFromPocketLedgerRemotePath } from "@/lib/localCloudSync/pocketLedgerDrivePaths";
 import { getLocalCompanyById, upsertLocalCompany, listLocalCompanies, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import {
   ensureCloudSyncDriveEncryptionSalt,
@@ -104,14 +104,32 @@ export async function uploadAttachmentBytesToDrive(input: {
   const logicalPath = input.remotePath;
   const reg = await getLocalCompanyById(input.companyId, { includeDeleted: true });
   const flags = readCloudSyncDriveEncryptionFromCompany(reg as Record<string, unknown>);
-  const blob = input.bytes instanceof Blob ? input.bytes : new Blob([input.bytes], { type: input.contentType });
+  const pathParts = logicalPath.split("/");
+  const originalName = pathParts[pathParts.length - 1] || "file";
+  let blob = input.bytes instanceof Blob ? input.bytes : new Blob([input.bytes], { type: input.contentType });
+  const { compressAttachmentBlobForDriveUpload } = await import("@/lib/compression");
+  blob = await compressAttachmentBlobForDriveUpload(blob, {
+    fileName: originalName,
+    contentType: input.contentType || blob.type,
+  });
   const contentType = input.contentType || blob.type || "application/octet-stream";
+  const { computeSha256HexFromBlob } = await import("@/lib/security/sha256Hex");
+  const sha256Hex = input.sha256Hex ?? (await computeSha256HexFromBlob(blob));
   const storagePath = driveAttachmentUploadStoragePath(logicalPath, flags.encryptFiles);
+  const driveSharedFolderId =
+    typeof reg?.cloudSyncDriveFolderId === "string" && reg.cloudSyncDriveFolderId.trim()
+      ? reg.cloudSyncDriveFolderId.trim()
+      : undefined;
+  const companyName =
+    input.companyName ?? (typeof reg?.name === "string" ? reg.name : undefined);
+  const uploadCtx = {
+    companyId: input.companyId,
+    companyName,
+    driveSharedFolderId,
+  };
 
   if (flags.encryptFiles) {
     const buf = await blob.arrayBuffer();
-    const parts = logicalPath.split("/");
-    const originalName = parts[parts.length - 1] || "file";
     const encBody = await encryptDriveFileBytesForUpload(
       input.companyId,
       buf,
@@ -119,8 +137,7 @@ export async function uploadAttachmentBytesToDrive(input: {
       reg as Record<string, unknown>
     );
     await postDriveJsonViaClient("/api/local-cloud-sync/drive/upload-json", {
-      companyId: input.companyId,
-      companyName: input.companyName,
+      ...uploadCtx,
       relativePath: storagePath,
       body: encBody,
       contentType: "application/json",
@@ -128,8 +145,7 @@ export async function uploadAttachmentBytesToDrive(input: {
   } else {
     const base64 = await blobToBase64(blob);
     await postDriveJsonViaClient("/api/local-cloud-sync/drive/upload-file", {
-      companyId: input.companyId,
-      companyName: input.companyName,
+      ...uploadCtx,
       remotePath: storagePath,
       base64,
       contentType,
@@ -148,14 +164,47 @@ export async function downloadDriveAttachmentBlob(
   const cid = companyId || (await resolveCompanyIdForDrivePath(logicalPath));
   const reg = cid ? await getLocalCompanyById(cid, { includeDeleted: true }) : null;
   const flags = readCloudSyncDriveEncryptionFromCompany(reg as Record<string, unknown>);
+  const sharedFolderId =
+    typeof reg?.cloudSyncDriveFolderId === "string" && reg.cloudSyncDriveFolderId.trim()
+      ? reg.cloudSyncDriveFolderId.trim()
+      : undefined;
+  const companyName = typeof reg?.name === "string" ? reg.name : undefined;
 
   const tryPaths = driveAttachmentDownloadTryPaths(logicalPath, flags.encryptFiles);
 
   for (const path of tryPaths) {
-    const res = await postDriveJsonViaClient<{ base64: string | null; contentType?: string | null }>(
-      "/api/local-cloud-sync/drive/download-file",
-      { remotePath: path }
-    );
+    let res: { base64: string | null; contentType?: string | null } | null = null;
+
+    if (cid) {
+      const branchRel = branchRelativePathFromPocketLedgerRemotePath(path);
+      if (branchRel) {
+        try {
+          res = await postDriveJsonViaClient<{ base64: string | null; contentType?: string | null }>(
+            "/api/local-cloud-sync/drive/download-file",
+            {
+              companyId: cid,
+              companyName,
+              driveSharedFolderId: sharedFolderId,
+              branchRelativePath: branchRel,
+            }
+          );
+        } catch {
+          res = null;
+        }
+      }
+    }
+
+    if (!res?.base64) {
+      try {
+        res = await postDriveJsonViaClient<{ base64: string | null; contentType?: string | null }>(
+          "/api/local-cloud-sync/drive/download-file",
+          { remotePath: path }
+        );
+      } catch {
+        continue;
+      }
+    }
+
     if (!res.base64) continue;
     if (cid && (isDriveAttachmentWrapperStoragePath(path) || res.contentType?.includes("json"))) {
       try {
@@ -496,7 +545,6 @@ export async function uploadPendingAttachmentPayloadToDrive(input: {
     buildItemAttachmentDriveRemotePath,
     buildOpeningAvatarDriveRemotePath,
   } = await import("@/lib/localCloudSync/driveAttachmentPath");
-  const { computeSha256HexFromBlob } = await import("@/lib/security/sha256Hex");
   const ref = { companyId: input.companyId, companyName: input.companyName };
   const avatarCollections = new Set(["parties", "bank_accounts", "staff", "company"]);
   const isAvatarField = input.field === "fileUrl" && avatarCollections.has(input.collection);
@@ -525,13 +573,11 @@ export async function uploadPendingAttachmentPayloadToDrive(input: {
           originalFileName: input.fileName,
           company: input.company ?? null,
         });
-  const sha256Hex = await computeSha256HexFromBlob(input.blob);
   return uploadAttachmentBytesToDrive({
     companyId: input.companyId,
     companyName: input.companyName,
     remotePath,
     bytes: input.blob,
     contentType: input.contentType,
-    sha256Hex,
   });
 }

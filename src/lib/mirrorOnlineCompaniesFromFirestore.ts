@@ -29,6 +29,7 @@ import {
 } from "@/lib/companyOnlineIntegrity";
 import { isDeviceLocalCompany } from "@/lib/companyStorageKind";
 import { isLocalBackupRestoredCompanyRow } from "@/lib/localBackupRestoreCompany";
+import { isProtectedDriveLocalRegistryRow } from "@/lib/driveRestoredLocalCompany";
 import { pullSharedOnlineCompaniesFromFirestore } from "@/lib/sharedCompaniesFirestorePull";
 import { sharedCompanyQuerySpecs } from "@/lib/sharedWithEmailsQuery";
 
@@ -292,6 +293,7 @@ export async function purgeGhostOnlineCompanyMirrors(
     const isDriveSharedJoin = (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;
     if (isOwner && isPureLocalRow) continue;
     if (isDriveSharedJoin) continue;
+    if (isProtectedDriveLocalRegistryRow(row as Record<string, unknown>, user)) continue;
     if (isPureLocalRow || isLocalBackupRestoredCompanyRow(row as Record<string, unknown>)) continue;
     if (isSharedMirror) continue;
     if (localCompanyRowIsDeleted(row)) continue;

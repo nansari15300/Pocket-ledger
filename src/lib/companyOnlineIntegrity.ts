@@ -5,6 +5,7 @@ import { firestore } from "@/lib/firebase";
 import { demoteCompanyToLocal } from "@/lib/companyDemote";
 import { isDeviceLocalCompany } from "@/lib/companyStorageKind";
 import { isProtectedOwnerLocalBackupCompany } from "@/lib/localBackupRestoreCompany";
+import { isProtectedDriveLocalRegistryRow } from "@/lib/driveRestoredLocalCompany";
 import type { LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { listLocalCompanies, removeLocalCompanyById } from "@/lib/localCompanyStore";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
@@ -133,6 +134,11 @@ export async function reconcileOnlineMirrorsWithServer(user: {
 
     // Google Drive shared join — sirf Drive folder + SQLite; Firestore `companies/{id}` nahi
     if (isDriveSharedJoin && storageLocal) {
+      continue;
+    }
+
+    // Drive restore/join — Firestore root doc verify mat (ghost purge se SQLite mat udao)
+    if (isProtectedDriveLocalRegistryRow(row as Record<string, unknown>, user)) {
       continue;
     }
 

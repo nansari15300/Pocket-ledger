@@ -17,6 +17,7 @@ import {
   isLocalOnlyMode,
   isOfflineSqliteCompanyRegistry,
 } from "@/lib/localMode";
+import { markActiveAttachmentCompanyId, markSuppressFirestorePermissionForCompany } from "@/lib/firestorePermissionSuppress";
 import {
   getLocalCompanyById,
   listLocalCompanies,
@@ -35,8 +36,12 @@ import {
   reconcileOnlineMirrorsWithServer,
   resolveCompanyIsOwnedForUser,
 } from "@/lib/companyOnlineIntegrity";
-import { isPureLocalLedgerCompany, shouldReadLedgerFromSqliteOnly, isDeviceLocalCompany } from "@/lib/companyStorageKind";
+import { isPureLocalLedgerCompany, shouldReadLedgerFromSqliteOnly, isDeviceLocalCompany, isLocalSelectorCompanyRow } from "@/lib/companyStorageKind";
 import { isLocalBackupRestoredCompanyRow, readLocalBackupRestoreSelectionGrace } from "@/lib/localBackupRestoreCompany";
+import {
+  isProtectedDriveLocalRegistryRow,
+  readDriveRestoreSelectionGrace,
+} from "@/lib/driveRestoredLocalCompany";
 import { overlayOwnerAccountPlanOnLocalCompany } from "@/lib/accountPlanForOwner";
 import { readDriveOAuthReturnGrace } from "@/lib/driveOAuthReturnGrace";
 import { BUMP_LOCAL_COMPANY_REGISTRY_EVENT } from "@/lib/applyStripePlanToLocalCompany";
@@ -977,6 +982,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       setLoading(true);
     }
     setCompanyIdState(nextId);
+    if (nextId) {
+      markActiveAttachmentCompanyId(nextId);
+    }
+    if (fromList && isLocalSelectorCompanyRow(fromList)) {
+      markSuppressFirestorePermissionForCompany(nextId);
+    }
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("pl-company-switched", { detail: { companyId: nextId } }));
     }
@@ -1201,7 +1212,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           const isOwnerLocalBackup =
             Boolean(user?.uid) &&
             resolveCompanyIsOwnedForUser(norm, shareUser) &&
-            (isDeviceLocalCompany(norm) || isLocalBackupRestoredCompanyRow(norm as Record<string, unknown>));
+            (isDeviceLocalCompany(norm) ||
+              isLocalBackupRestoredCompanyRow(norm as Record<string, unknown>) ||
+              isProtectedDriveLocalRegistryRow(norm as Record<string, unknown>, shareUser));
           if (isOwnerLocalBackup) {
             companyById.set(norm.id, {
               ...norm,
@@ -1896,7 +1909,18 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         const isOwnerRow =
           !user?.uid ||
           isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user?.email ?? null });
-        if ((isPureLocalRow || isLocalBackupRestoredCompanyRow(row as Record<string, unknown>)) && isOwnerRow) {
+        const shareUserForRow = user?.uid
+          ? { uid: user.uid, email: user?.email ?? null }
+          : null;
+        const isDriveRegistryRow = isProtectedDriveLocalRegistryRow(
+          row as Record<string, unknown>,
+          shareUserForRow
+        );
+        if (
+          ((isPureLocalRow || isLocalBackupRestoredCompanyRow(row as Record<string, unknown>)) &&
+            isOwnerRow) ||
+          isDriveRegistryRow
+        ) {
           companyMap.set(
             c.id,
             overlayOwnerAccountPlanOnLocalCompany(
@@ -1911,7 +1935,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         if (
           user?.uid &&
           !isOwnerRow &&
-          !isDriveSharedJoin
+          !isDriveSharedJoin &&
+          !isDriveRegistryRow
         ) {
           const isOnlineMirrorRow =
             !isPureLocalRow ||
@@ -2145,6 +2170,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           }
           if (err?.code === 'permission-denied' || err?.code === 'PERMISSION_DENIED' || String(err?.message || '').includes('permission')) {
             console.warn('[PERMISSION_DENIED TRACK] source=useCompany query=ownedLegacy (companies where ownerId==legacyUserDocId)', { code: err?.code });
+            ownedLegacySnapRef.current = emptySnap();
+            triggerUpdate();
+            return;
           }
           console.error("Owned legacy-id companies listener error:", err);
         })
@@ -2274,7 +2302,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       });
       if (cancelled) return;
       if (selectedAtStart && result.removedIds.includes(selectedAtStart)) {
-        if (shouldSuppressTransientCompanyClear()) {
+        if (
+          shouldSuppressTransientCompanyClear() ||
+          readLocalBackupRestoreSelectionGrace(selectedAtStart) ||
+          readDriveRestoreSelectionGrace(selectedAtStart)
+        ) {
           plDbgCompanyRecovery("reconcileOnline:selectedRemoved:shieldHold", { selectedAtStart });
           plNavDbg("useCompany.reconcileOnline:shieldHold skip clear", { selectedAtStart });
           return;

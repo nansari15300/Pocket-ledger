@@ -490,10 +490,7 @@ function PartyPageContent() {
     return processedGroups.filter((g) => (pendingApprovalByGroupId[g.id] ?? 0) > 0);
   }, [processedGroups, showOnlyPartyGroupsWithPendingApproval, showApproveOnList, pendingApprovalByGroupId]);
 
-  const partyUrlState = useMemo(
-    () => readPartyPageUrlState(viewFromUrl, selectedIdFromUrl),
-    [viewFromUrl, selectedIdFromUrl, activeView]
-  );
+  const partyUrlState = readPartyPageUrlState(viewFromUrl, selectedIdFromUrl);
 
   // URL sync effect ko har voucher snapshot par re-run na karo — refs se latest lists
   const processedPartiesRef = useRef(processedParties);
@@ -824,6 +821,7 @@ function PartyPageContent() {
         : "pan" in item
           ? `/party?selected=${encodeURIComponent(item.id)}`
           : `/party?view=groups&selected=${encodeURIComponent(item.id)}`;
+    const syncRouter = useQueryNav && shouldReplaceWithMasterDetailCanonical(path);
     // replaceState pehle — URL effect ko turant sahi id mile (1-click-late bug fix)
     if (typeof window !== "undefined") {
       try {
@@ -832,8 +830,10 @@ function PartyPageContent() {
         /* ignore */
       }
     }
-    router.replace(path, { scroll: false });
-  }, [router, setSelected]);
+    if (syncRouter) {
+      router.replace(path, { scroll: false });
+    }
+  }, [router, setSelected, useQueryNav]);
 
   const partiesForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
@@ -1014,7 +1014,7 @@ function PartyPageContent() {
             quickFilter={groupListQuickFilter}
             onQuickFilterChange={setGroupListQuickFilter}
             hideQuickFilterBar
-            hideCategoryHeaders={isMobile}
+            hideCategoryHeaders
           />
         </div>
       </div>

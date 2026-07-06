@@ -57,6 +57,10 @@ export async function resolveStaticAttachmentDisplay(
   const url = normalizeAttachmentUrlForDevicePreview(String(rawUrl || "").trim());
   if (!url) return { displayUrl: null, blob: null, contentType: null };
 
+  const { readActiveAttachmentCompanyId } = await import("@/lib/firestorePermissionSuppress");
+  const companyId = options?.companyId ?? readActiveAttachmentCompanyId() ?? undefined;
+  const cacheOpts = { companyId, signal: options?.signal };
+
   if (url.startsWith("blob:") || url.startsWith("data:")) {
     return { displayUrl: url, blob: null, contentType: null };
   }
@@ -72,10 +76,10 @@ export async function resolveStaticAttachmentDisplay(
         };
       }
     }
-    let blob = await getBlobFromLocalFileRef(url);
-    if ((!blob || blob.size <= 0) && options?.companyId) {
+    let blob = await getBlobFromLocalFileRef(url, { companyId });
+    if ((!blob || blob.size <= 0) && companyId) {
       const { fetchPlServerAttachmentBlob } = await import("@/lib/plServerAttachmentFetch");
-      blob = await fetchPlServerAttachmentBlob(options.companyId, url, options.signal);
+      blob = await fetchPlServerAttachmentBlob(companyId, url, options?.signal);
     }
     return { displayUrl: null, blob, contentType: blob?.type ?? null };
   }
@@ -84,20 +88,21 @@ export async function resolveStaticAttachmentDisplay(
   const localLedgerOnly = options?.localLedgerOnly === true;
 
   if (!isHttpsAttachmentRef(url) && !localLedgerOnly) {
-    const ensured = await ensureOfflineCachedAttachmentDisplay(url, options?.signal);
-    return ensured;
+    return ensureOfflineCachedAttachmentDisplay(url, options?.signal, cacheOpts);
   }
 
   if (!isHttpsAttachmentRef(url)) {
-    const ensured = await ensureOfflineCachedAttachmentDisplay(url, options?.signal);
-    return ensured;
+    return ensureOfflineCachedAttachmentDisplay(url, options?.signal, cacheOpts);
   }
 
   const online = typeof navigator !== "undefined" && navigator.onLine;
 
   // EXE/APK online (cloud): turant HTTPS — poora disk blob read click par mat karo (20ms jaisa pehle).
   if (isEmbeddedNative && online && !localLedgerOnly) {
-    void getRemoteAttachmentBlobPreferOfflineCache(url, options?.signal, { awaitDiskWrite: false });
+    void getRemoteAttachmentBlobPreferOfflineCache(url, options?.signal, {
+      awaitDiskWrite: false,
+      companyId,
+    });
     return { displayUrl: url, blob: null, contentType: null };
   }
 
@@ -112,7 +117,7 @@ export async function resolveStaticAttachmentDisplay(
   }
 
   if (localLedgerOnly || (isEmbeddedNative && !online)) {
-    const ensured = await ensureOfflineCachedAttachmentDisplay(url, options?.signal);
+    const ensured = await ensureOfflineCachedAttachmentDisplay(url, options?.signal, cacheOpts);
     if (ensured.displayUrl || ensured.blob) return ensured;
     return { displayUrl: null, blob: null, contentType: null };
   }

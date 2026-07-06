@@ -86,10 +86,6 @@ function normalizePartyEditGroupId(groupId: string | null | undefined): string {
   return groupId;
 }
 
-async function syncPartyAttachmentsAfterSave(companyId: string): Promise<void> {
-  await syncEntityAttachmentsAfterSave(companyId);
-}
-
 const formSchema = z.object({
   name: z.string().min(2, { message: "Party name must be at least 2 characters." }),
   email: z.string().email({ message: "Please enter a valid email." }).optional().or(z.literal("")),
@@ -195,6 +191,10 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
   };
 
   useEffect(() => {
+    if (isOpen) setIsLoading(false);
+  }, [isOpen, party.id]);
+
+  useEffect(() => {
     if (!isOpen || !companyId) return;
     let cancelled = false;
 
@@ -262,6 +262,12 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
     };
   }, [isOpen, companyId, toast, sqliteListsOnlyNoSnapshot]);
 
+
+  useEffect(() => {
+    if (isOpen) {
+      setIsLoading(false);
+    }
+  }, [isOpen, party.id]);
 
   useEffect(() => {
     if (isOpen) {
@@ -347,6 +353,22 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         const resolvedGroupId = values.groupId?.trim() || getUngroupedGroupId("party");
         const narrationClean = values.openingBalanceNarration?.trim() || null;
 
+        /** Firestore `undefined` field skip / local mirror — explicit payload (EditAccountDialog jaisa) */
+        const updatePayload: Record<string, unknown> = {
+          name: values.name,
+          address: values.address ?? "",
+          phone: values.phone ?? "",
+          email: values.email ?? "",
+          pan: values.pan ?? "",
+          openingBalance: newOpeningBalance,
+          openingBalanceDate: values.openingBalanceDate ?? null,
+          openingBalanceNarration: narrationClean,
+          groupId: resolvedGroupId,
+          fileUrl,
+          documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+          updatedAt: serverTimestamp(),
+        };
+
         if (localSqlMirror) {
           const fromDb = await getCompanyDocFromBrowserDb(companyId, "parties", partyRefSnap.id);
           const { serverTimestampTraceLog } = await import("@/lib/plServerLivePullDevLog");
@@ -366,25 +388,10 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
             credit: partyRefSnap.credit ?? 0,
             isDeleted: false,
           };
-          const payload: Record<string, unknown> = {
-            ...base,
-            id: partyRefSnap.id,
-            name: values.name,
-            address: values.address ?? "",
-            phone: values.phone ?? "",
-            email: values.email ?? "",
-            pan: values.pan ?? "",
-            openingBalance: newOpeningBalance,
-            openingBalanceDate: values.openingBalanceDate ?? null,
-            openingBalanceNarration: narrationClean,
-            groupId: resolvedGroupId,
-            companyId,
-            fileUrl: fileUrl ?? (base.fileUrl as string | null) ?? null,
-            documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
-          };
+          const payload: Record<string, unknown> = { ...base, ...updatePayload, id: partyRefSnap.id, companyId };
           await upsertCompanyDocInBrowserDb(companyId, "parties", partyRefSnap.id, payload);
           await enqueueCompanyDocOutbox(companyId, "parties", "update", partyRefSnap.id, payload);
-          await syncPartyAttachmentsAfterSave(companyId);
+          await syncEntityAttachmentsAfterSave(companyId);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onPartyUpdated({
             id: partyRefSnap.id,
@@ -410,21 +417,8 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         }
 
         const partyRef = doc(firestore, `companies/${companyId}/parties`, partyRefSnap.id);
-        await updateDoc(partyRef, {
-          name: values.name,
-          email: values.email ?? "",
-          phone: values.phone ?? "",
-          pan: values.pan ?? "",
-          address: values.address ?? "",
-          openingBalance: newOpeningBalance,
-          openingBalanceDate: values.openingBalanceDate ?? null,
-          openingBalanceNarration: narrationClean,
-          fileUrl: fileUrl ?? null,
-          documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
-          groupId: resolvedGroupId,
-          updatedAt: serverTimestamp(),
-        });
-        await syncPartyAttachmentsAfterSave(companyId);
+        await updateDoc(partyRef, updatePayload);
+        await syncEntityAttachmentsAfterSave(companyId);
 
         if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
           await balanceOpeningBalanceWithCapital(companyId, "parties", partyRefSnap.id, oldOpeningBalance, newOpeningBalance);
@@ -769,13 +763,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                     </p>
                   ) : (
                     <div className="flex items-center gap-4 flex-wrap">
-                      {file ? (
-                        <FilePreview
-                          file={file}
-                          onRemove={removeAvatar}
-                          attachmentCompanyId={companyId ?? undefined}
-                        />
-                      ) : null}
+                      {file ? <FilePreview file={file} onRemove={removeAvatar} /> : null}
                       {!file ? (
                         <FormControl>
                           <AttachmentHoldPasteSurface
@@ -829,7 +817,6 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                           file={slot}
                           onRemove={() => removeDocAt(idx)}
                           size={96}
-                          attachmentCompanyId={companyId ?? undefined}
                         />
                       ))}
                       {docSlots.length < 5 ? (

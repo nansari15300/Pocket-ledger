@@ -8,12 +8,67 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { storage } from "@/lib/firebase";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
-import { generateLocalFileId, LOCAL_FILE_PREFIX, putPendingFile } from "@/lib/localPendingFiles";
+import { generateLocalFileId, LOCAL_FILE_PREFIX, putPendingFile, removePendingFile } from "@/lib/localPendingFiles";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 import {
   isEligibleLocalDriveSyncCompanyRow,
   shouldUseLocalCloudSync,
 } from "@/lib/localCloudSync/companyConfig";
+import { uploadPendingAttachmentPayloadToDrive } from "@/lib/localCloudSync/driveCloudSyncClient";
+import { compressVoucherAttachment, DRIVE_ATTACHMENT_MAX_BYTES } from "@/lib/compression";
+
+async function compressEntityProfileFileForPending(file: File): Promise<{
+  blob: Blob;
+  contentType: string;
+  fileName: string;
+}> {
+  const compressed = await compressVoucherAttachment(file, DRIVE_ATTACHMENT_MAX_BYTES);
+  return {
+    blob: compressed,
+    contentType: compressed.type || file.type || "application/octet-stream",
+    fileName: compressed.name || file.name,
+  };
+}
+
+/** Drive sync ON: save ke turant baad avatar/doc upload — `local:` stale na rahe, shared users `drive:` se load karein. */
+async function tryImmediateDriveUploadForStagedEntityFile(params: {
+  companyId: string;
+  collectionSeg: EntityProfileCollection | "items";
+  entityId: string;
+  field: string;
+  localId: string;
+  blob: Blob;
+  contentType: string;
+  fileName: string;
+}): Promise<string | null> {
+  const cid = String(params.companyId || "").trim();
+  if (!cid || !(await shouldUseLocalCloudSync(cid))) return null;
+  try {
+    const reg = await getLocalCompanyById(cid, { includeDeleted: true });
+    const driveRef = await uploadPendingAttachmentPayloadToDrive({
+      companyId: cid,
+      companyName: typeof reg?.name === "string" ? reg.name : undefined,
+      company: (reg ?? null) as Record<string, unknown> | null,
+      collection: params.collectionSeg,
+      docId: params.entityId,
+      field: params.field,
+      blob: params.blob,
+      contentType: params.contentType,
+      fileName: params.fileName,
+    });
+    if (driveRef?.trim()) {
+      try {
+        await removePendingFile(params.localId);
+      } catch {
+        /* pending cleanup best-effort */
+      }
+      return driveRef.trim();
+    }
+  } catch (e) {
+    console.warn("[entityProfile] immediate Drive upload failed — keeping local: pending ref", e);
+  }
+  return null;
+}
 
 /** Local company — avatar/docs Firebase Storage par nahi; `local:` + Google Drive sync. */
 export async function shouldStageEntityProfileFilesLocally(
@@ -80,32 +135,54 @@ export async function stageEntityAvatarAndDocuments(params: {
   let fileUrl: string | null = null;
   if (avatarFile && isProfileAvatarImageFile(avatarFile)) {
     const id = generateLocalFileId();
+    const staged = await compressEntityProfileFileForPending(avatarFile);
     await putPendingFile({
       id,
-      blob: avatarFile,
-      contentType: avatarFile.type || "image/jpeg",
+      blob: staged.blob,
+      contentType: staged.contentType,
       docPath: basePath,
       field: "fileUrl",
       storagePathPrefix: `${prefix}/avatar`,
-      fileName: avatarFile.name,
+      fileName: staged.fileName,
     });
-    fileUrl = `${LOCAL_FILE_PREFIX}${id}`;
+    const driveRef = await tryImmediateDriveUploadForStagedEntityFile({
+      companyId,
+      collectionSeg,
+      entityId,
+      field: "fileUrl",
+      localId: id,
+      blob: staged.blob,
+      contentType: staged.contentType,
+      fileName: staged.fileName,
+    });
+    fileUrl = driveRef ?? `${LOCAL_FILE_PREFIX}${id}`;
   }
 
   for (const f of documentFiles) {
     if (documentFileUrls.length >= maxDocuments) break;
     if (!isProfileDocumentFile(f)) continue;
     const id = generateLocalFileId();
+    const staged = await compressEntityProfileFileForPending(f);
     await putPendingFile({
       id,
-      blob: f,
-      contentType: f.type || "application/octet-stream",
+      blob: staged.blob,
+      contentType: staged.contentType,
       docPath: basePath,
       field: "documentFileUrls",
       storagePathPrefix: `${prefix}/documents`,
-      fileName: f.name,
+      fileName: staged.fileName,
     });
-    documentFileUrls.push(`${LOCAL_FILE_PREFIX}${id}`);
+    const driveRef = await tryImmediateDriveUploadForStagedEntityFile({
+      companyId,
+      collectionSeg,
+      entityId,
+      field: "documentFileUrls",
+      localId: id,
+      blob: staged.blob,
+      contentType: staged.contentType,
+      fileName: staged.fileName,
+    });
+    documentFileUrls.push(driveRef ?? `${LOCAL_FILE_PREFIX}${id}`);
   }
   return { fileUrl, documentFileUrls };
 }
@@ -163,16 +240,27 @@ export async function stageItemAvatarAndAttachments(params: {
   let avatarUrl: string | null = null;
   if (avatarFile && isProfileAvatarImageFile(avatarFile)) {
     const id = generateLocalFileId();
+    const staged = await compressEntityProfileFileForPending(avatarFile);
     await putPendingFile({
       id,
-      blob: avatarFile,
-      contentType: avatarFile.type || "image/jpeg",
+      blob: staged.blob,
+      contentType: staged.contentType,
       docPath: basePath,
       field: "avatarUrl",
       storagePathPrefix: `${prefix}/avatar`,
-      fileName: avatarFile.name,
+      fileName: staged.fileName,
     });
-    avatarUrl = `${LOCAL_FILE_PREFIX}${id}`;
+    const driveRef = await tryImmediateDriveUploadForStagedEntityFile({
+      companyId,
+      collectionSeg: "items",
+      entityId: itemId,
+      field: "avatarUrl",
+      localId: id,
+      blob: staged.blob,
+      contentType: staged.contentType,
+      fileName: staged.fileName,
+    });
+    avatarUrl = driveRef ?? `${LOCAL_FILE_PREFIX}${id}`;
   }
 
   const newAttachmentUrls: string[] = [];
@@ -180,16 +268,27 @@ export async function stageItemAvatarAndAttachments(params: {
     if (newAttachmentUrls.length >= params.maxAttachments) break;
     if (!isProfileDocumentFile(f)) continue;
     const id = generateLocalFileId();
+    const staged = await compressEntityProfileFileForPending(f);
     await putPendingFile({
       id,
-      blob: f,
-      contentType: f.type || "application/octet-stream",
+      blob: staged.blob,
+      contentType: staged.contentType,
       docPath: basePath,
       field: "fileUrls",
       storagePathPrefix: `${prefix}/attachments`,
-      fileName: f.name,
+      fileName: staged.fileName,
     });
-    newAttachmentUrls.push(`${LOCAL_FILE_PREFIX}${id}`);
+    const driveRef = await tryImmediateDriveUploadForStagedEntityFile({
+      companyId,
+      collectionSeg: "items",
+      entityId: itemId,
+      field: "fileUrls",
+      localId: id,
+      blob: staged.blob,
+      contentType: staged.contentType,
+      fileName: staged.fileName,
+    });
+    newAttachmentUrls.push(driveRef ?? `${LOCAL_FILE_PREFIX}${id}`);
   }
   return { avatarUrl, newAttachmentUrls };
 }
@@ -226,14 +325,18 @@ export async function uploadItemAvatarAndAttachmentsRemote(params: {
   return { avatarUrl, newAttachmentUrls };
 }
 
-/** Save ke baad attachments upload — web / static / APK / EXE same path. */
-export async function syncEntityAttachmentsAfterSave(companyId: string): Promise<void> {
+/** Save ke baad attachments + Drive delta — UI block mat karo (SQLite save pehle ho chuka hota hai). */
+export function syncEntityAttachmentsAfterSave(companyId: string): void {
+  void syncEntityAttachmentsAfterSaveAsync(companyId);
+}
+
+async function syncEntityAttachmentsAfterSaveAsync(companyId: string): Promise<void> {
   const cid = String(companyId || "").trim();
   if (!cid) return;
   try {
     if (await shouldUseLocalCloudSync(cid)) {
-      const { runLocalCloudSyncCycle } = await import("@/lib/localCloudSync/engine");
-      await runLocalCloudSyncCycle(cid, { force: true });
+      const { scheduleLocalCloudSyncInBackground } = await import("@/lib/localCloudSync/engine");
+      scheduleLocalCloudSyncInBackground(cid, { force: true });
       return;
     }
     const { syncPendingFiles } = await import("@/lib/localPendingFiles");

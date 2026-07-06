@@ -37,6 +37,7 @@ import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDeta
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
+import { bankAccountDisplayName } from "@/lib/bankAccountDisplayName";
 import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
@@ -330,7 +331,8 @@ function BankCashPageContent() {
     const canViewSpecialAccount = can("view_special_bank_accounts");
     return accountsForAccountList.filter((account) => {
       if (account.isSpecial && !canViewSpecialAccount) return false;
-      return !!(account.accountName && account.accountName.toLowerCase().includes(searchLower));
+      const label = bankAccountDisplayName(account);
+      return !!(label && label.toLowerCase().includes(searchLower));
     }).length;
   }, [accountsForAccountList, searchTerm, can]);
   const filteredClearingAccountListCount = useMemo(() => {
@@ -338,7 +340,8 @@ function BankCashPageContent() {
     const canViewSpecialAccount = can("view_special_bank_accounts");
     return clearingAccountsForList.filter((account) => {
       if (account.isSpecial && !canViewSpecialAccount) return false;
-      return !!(account.accountName && account.accountName.toLowerCase().includes(searchLower));
+      const label = bankAccountDisplayName(account);
+      return !!(label && label.toLowerCase().includes(searchLower));
     }).length;
   }, [clearingAccountsForList, searchTerm, can]);
 

@@ -56,10 +56,8 @@ export const OFFLINE_ATTACHMENT_MAX_CACHED_BYTES = 96 * 1024 * 1024;
 /** SHA-256 hex — stable IndexedDB primary key */
 export async function offlineAttachmentStoreId(urlStr: string): Promise<string> {
   const trimmed = urlStr.trim();
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(trimmed));
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const { computeSha256HexFromStringUtf8 } = await import("@/lib/security/sha256Hex");
+  return computeSha256HexFromStringUtf8(trimmed);
 }
 
 /** Firebase signed URL token बदलने पर भी same file hit रहे: stable object-path आधारित alternate cache key. */
@@ -227,7 +225,8 @@ export async function getAttachmentBlobForBackupEmbed(
 /** UI click/hover: cache miss par download + disk/IDB write, phir native display URL ya blob. */
 export async function ensureOfflineCachedAttachmentDisplay(
   urlStr: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: { companyId?: string; galleryUrls?: readonly string[] }
 ): Promise<{
   displayUrl: string | null;
   blob: Blob | null;
@@ -235,6 +234,8 @@ export async function ensureOfflineCachedAttachmentDisplay(
 }> {
   const trimmed = String(urlStr || "").trim();
   if (!trimmed) return { displayUrl: null, blob: null, contentType: null };
+  const { readActiveAttachmentCompanyId } = await import("@/lib/firestorePermissionSuppress");
+  const companyId = options?.companyId ?? readActiveAttachmentCompanyId() ?? undefined;
 
   if (isLocalFileRef(trimmed)) {
     if (usesEmbeddedNativeAttachmentStorage()) {
@@ -243,7 +244,7 @@ export async function ensureOfflineCachedAttachmentDisplay(
         return { displayUrl: meta.displayUrl, blob: null, contentType: meta.contentType ?? null };
       }
     }
-    const blob = await getBlobFromLocalFileRef(trimmed);
+    const blob = await getBlobFromLocalFileRef(trimmed, { companyId });
     return { displayUrl: null, blob, contentType: blob?.type ?? null };
   }
 
@@ -259,6 +260,8 @@ export async function ensureOfflineCachedAttachmentDisplay(
 
   const blob = await getRemoteAttachmentBlobPreferOfflineCache(trimmed, signal, {
     awaitDiskWrite: false,
+    companyId,
+    galleryUrls: options?.galleryUrls,
   });
   if (blob && blob.size > 0) {
     void putCachedBlob(trimmed, blob);
@@ -787,7 +790,11 @@ async function putCachedBlob(urlStr: string, blob: Blob): Promise<boolean> {
         });
       }
       // Disk IPC fail: IndexedDB fallback taaki preview / offline reuse chale.
-      return writeOfflineCacheBlobToIndexedDb(ids, urlStr, blob);
+      const fbOk = await writeOfflineCacheBlobToIndexedDb(ids, urlStr, blob);
+      if (fbOk) {
+        void import("@/lib/attachmentLoadReady").then((m) => m.markAttachmentUrlReady(urlStr));
+      }
+      return fbOk;
     }
     const meta: OfflineCacheMeta = { url: urlStr.trim(), cachedAtMs: Date.now() };
     // Warm path: SHA-256 mat block karo — preview sirf disk bytes use karta hai.
@@ -803,9 +810,14 @@ async function putCachedBlob(urlStr: string, blob: Blob): Promise<boolean> {
         sha256Hex: null,
       });
     }
+    void import("@/lib/attachmentLoadReady").then((m) => m.markAttachmentUrlReady(urlStr));
     return true;
   }
-  return writeOfflineCacheBlobToIndexedDb(ids, urlStr, blob);
+  const ok = await writeOfflineCacheBlobToIndexedDb(ids, urlStr, blob);
+  if (ok) {
+    void import("@/lib/attachmentLoadReady").then((m) => m.markAttachmentUrlReady(urlStr));
+  }
+  return ok;
 }
 
 /**
@@ -966,6 +978,8 @@ export async function prefetchHttpsAttachmentUrls(
     onItemLog?: (event: PrefetchItemLogEvent) => void;
     /** Second warm pass: 0/total report se header % reset mat karo. */
     skipLeadingZeroReport?: boolean;
+    /** `drive:` / cross-device `local:` resolve — active SQLite company id. */
+    mirrorCompanyId?: string;
   }
 ): Promise<PrefetchAttachmentsProgress> {
   const uniq = [
@@ -1084,10 +1098,14 @@ export async function prefetchHttpsAttachmentUrls(
           let prefetchRetryable = false;
           let prefetchNote = "cached_new";
           if (isLocalFileRef(u) || isDriveFileRef(u)) {
-            blob = await fetchAttachmentRefBlob(u, { signal: options?.signal });
+            blob = await fetchAttachmentRefBlob(u, {
+              signal: options?.signal,
+              companyId: options?.mirrorCompanyId,
+            });
             if (!blob?.size) {
               prefetchStatus = null;
-              prefetchRetryable = true;
+              // Stale `local:` refs (source device) — retry se fayda nahi.
+              prefetchRetryable = isDriveFileRef(u);
               prefetchNote = "device_ref_fetch_failed";
             }
           } else {

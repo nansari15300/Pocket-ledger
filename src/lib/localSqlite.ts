@@ -22,7 +22,12 @@ export function getBrowserIndexedDbHostScope(): string {
   if (isCapacitorNativeApp()) return "capacitor_native_embedded";
   // Electron packaged localhost: runtime port drift se DB split avoid.
   const ua = (typeof navigator !== "undefined" ? navigator.userAgent : "").toLowerCase();
-  if (ua.includes("electron") && window.location.hostname === "localhost") return "electron_embedded";
+  // Electron loopback: same scope for localhost / 127.0.0.1 so stray tabs stay name-aligned (origin still must match).
+  const loopbackHost =
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1" ||
+    window.location.hostname === "[::1]";
+  if (ua.includes("electron") && loopbackHost) return "electron_embedded";
   // Host-based DB scope: localhost vs production domain ko अलग rakhkar data conflict avoid kare.
   const rawHost = window.location.hostname || "unknown";
   const hostForScope = rawHost === "127.0.0.1" ? "localhost" : rawHost;
@@ -433,9 +438,13 @@ export async function flushPendingBrowserDbSave(): Promise<void> {
   }
   if (pendingSaveFn) {
     await pendingSaveFn();
+    const { plPhase1bVerifyHook } = await import("@/lib/phase1bVerifyCapture");
+    plPhase1bVerifyHook("onFlush");
     return;
   }
   await flushBrowserDbToIndexedDB();
+  const { plPhase1bVerifyHook } = await import("@/lib/phase1bVerifyCapture");
+  plPhase1bVerifyHook("onFlush");
 }
 
 /** Restore / bulk write ke baad `reload` se pehle — `scheduleSave` async hai warna IndexedDB pura flush nahi hota */

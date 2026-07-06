@@ -385,6 +385,25 @@ export async function compressPdfForAttachment(file: File, maxBytes: number): Pr
   });
 }
 
+/** Drive attachment upload ceiling — voucher forms ke 0.5MB check par align. */
+export const DRIVE_ATTACHMENT_MAX_BYTES = 512 * 1024;
+
+/** Blob → File → voucher-grade compress; masters / items / vouchers sab Drive par same size band. */
+export async function compressAttachmentBlobForDriveUpload(
+  blob: Blob,
+  opts?: { fileName?: string; contentType?: string; maxBytes?: number }
+): Promise<Blob> {
+  const maxBytes = opts?.maxBytes ?? DRIVE_ATTACHMENT_MAX_BYTES;
+  const contentType = opts?.contentType || blob.type || "";
+  const t = contentType.toLowerCase();
+  const fileName = opts?.fileName || "file";
+  const isPdf = t === "application/pdf" || fileName.toLowerCase().endsWith(".pdf");
+  const isImage = t.startsWith("image/");
+  if (!isPdf && !isImage) return blob;
+  const file = new File([blob], fileName, { type: contentType || "application/octet-stream" });
+  return compressVoucherAttachment(file, maxBytes);
+}
+
 /** Payment / voucher attachments: image → compressFile; PDF → compressPdfForAttachment; baaki as-is. */
 export async function compressVoucherAttachment(file: File, maxBytes: number): Promise<File> {
   const t = (file.type || "").toLowerCase();

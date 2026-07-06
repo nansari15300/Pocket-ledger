@@ -29,6 +29,7 @@ import {
   maybeQueuePlServerMirrorAfterDocWrite,
 } from "@/lib/plServerClientMirrorPush";
 import { mirrorMergeSkipLog, serverTimestampTraceLog } from "@/lib/plServerLivePullDevLog";
+import { plPhase1bVerifyHook } from "@/lib/phase1bVerifyCapture";
 
 /** Notify UI/listeners that local `company_docs` changed (static / APK / Electron). */
 export const BROWSER_DB_COLLECTION_BUMP = "pocket-ledger-browser-db-bump";
@@ -82,15 +83,25 @@ async function canReadCompanyDocsFromBrowserDb(
   return shouldPersistCompanyDocToBrowserDb(companyId);
 }
 
-/** Cloud sync removed — no-op (signature kept for mirror write callers). */
-async function enqueueCloudSyncDeltaAfterMirrorWrite(_input: {
+/** Local write ke baad Drive delta queue — `cloud_sync_outbox` (Firestore outbox alag). */
+async function enqueueCloudSyncDeltaAfterMirrorWrite(input: {
   companyId: string;
   collectionName: string;
   docId: string;
   data: Record<string, unknown>;
   skipCloudSyncEnqueue?: boolean;
 }): Promise<void> {
-  return;
+  if (input.skipCloudSyncEnqueue) return;
+  const { maybeEnqueueLocalCloudSyncFromWrite } = await import("@/lib/localCloudSync/enqueueFromWrite");
+  await maybeEnqueueLocalCloudSyncFromWrite({
+    companyId: input.companyId,
+    collectionName: input.collectionName,
+    docId: input.docId,
+    data: input.data,
+  });
+  const { scheduleLocalCloudSyncInBackground } = await import("@/lib/localCloudSync/engine");
+  scheduleLocalCloudSyncInBackground(input.companyId, { force: true });
+  plPhase1bVerifyHook("onCloudEnqueue");
 }
 
 const MIRROR_SQLITE_ERROR_WINDOW_MS = 30_000;
@@ -310,8 +321,9 @@ export async function listVoucherSummaryProjectionFromBrowserDb(
 
 /**
  * Serialize Firestore snapshot values into JSON-stable form (Timestamps → portable objects).
+ * Cloud sync outbox + SQLite mirror dono isi format ko share karte hain.
  */
-function serializeForLocalDb(value: unknown): unknown {
+export function serializeCompanyDocForLocalDb(value: unknown): unknown {
   if (value === null || value === undefined) return value;
   // Files/Blobs are not stored in the SQLite JSON column — omit (parent skips keys when undefined).
   if (typeof File !== "undefined" && value instanceof File) return undefined;
@@ -327,17 +339,22 @@ function serializeForLocalDb(value: unknown): unknown {
   if (value instanceof Date) {
     return { __fsTs: true, seconds: Math.floor(value.getTime() / 1000), nanoseconds: 0 };
   }
-  if (Array.isArray(value)) return (value as unknown[]).map(serializeForLocalDb).filter((v) => v !== undefined);
+  if (Array.isArray(value)) return (value as unknown[]).map(serializeCompanyDocForLocalDb).filter((v) => v !== undefined);
   if (typeof value === "object") {
     const obj = value as Record<string, unknown>;
     const out: Record<string, unknown> = {};
     for (const k of Object.keys(obj)) {
-      const v = serializeForLocalDb(obj[k]);
+      const v = serializeCompanyDocForLocalDb(obj[k]);
       if (v !== undefined) out[k] = v;
     }
     return out;
   }
   return value;
+}
+
+/** @deprecated internal alias */
+function serializeForLocalDb(value: unknown): unknown {
+  return serializeCompanyDocForLocalDb(value);
 }
 
 /** Normalize voucher `date` from Timestamp/Date/string/epoch into sortable epoch ms. */
@@ -507,6 +524,190 @@ export async function deleteCompanyDocFromBrowserDb(
   }
 }
 
+export type PerformCompanyDocUpsertResult = {
+  written: boolean;
+  stampedData: Record<string, unknown>;
+  existingParsed: Record<string, unknown> | null;
+};
+
+async function runCompanyDocSqliteUpsertAndProjection(
+  db: NonNullable<Awaited<ReturnType<typeof getBrowserDb>>>,
+  companyId: string,
+  collectionName: string,
+  docId: string,
+  stampedData: Record<string, unknown>
+): Promise<void> {
+  const json = JSON.stringify(serializeForLocalDb(stampedData));
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO company_docs(company_id, collection, id, data, updatedAt)
+     VALUES(?,?,?,?,?)
+     ON CONFLICT(company_id, collection, id) DO UPDATE SET
+       data = excluded.data,
+       updatedAt = excluded.updatedAt`
+  ).run(companyId, collectionName, docId, json, now);
+  const sqliteRow = db
+    .prepare(
+      "SELECT data, updatedAt AS sqliteColumnUpdatedAt FROM company_docs WHERE company_id = ? AND collection = ? AND id = ?"
+    )
+    .get(companyId, collectionName, docId) as { data?: string; sqliteColumnUpdatedAt?: number } | undefined;
+  let readBack: Record<string, unknown> | null = null;
+  if (sqliteRow?.data) {
+    try {
+      const parsed = JSON.parse(sqliteRow.data) as Record<string, unknown>;
+      readBack = deserializeLocalDbValue(parsed) as Record<string, unknown>;
+    } catch {
+      readBack = null;
+    }
+  }
+  traceServerDocTimestampLifecycle("after_sqlite_write", companyId, collectionName, docId, readBack, {
+    sqliteColumnUpdatedAt: sqliteRow?.sqliteColumnUpdatedAt ?? null,
+  });
+  await upsertVoucherProjection(companyId, collectionName, docId, stampedData);
+}
+
+/** SQLite mutation only: stamp, existing-row lookup, serialize, UPSERT, projection, retry UPSERT. */
+export async function performCompanyDocUpsert(
+  companyId: string,
+  collectionName: string,
+  docId: string,
+  data: Record<string, unknown>,
+  options?: { shouldNotify?: boolean }
+): Promise<PerformCompanyDocUpsertResult> {
+  const shouldNotify = options?.shouldNotify !== false;
+  const db = await getBrowserDb();
+  if (!db) return { written: false, stampedData: data, existingParsed: null };
+
+  let hasExistingRow = false;
+  try {
+    const existingRow = db
+      .prepare("SELECT 1 AS ok FROM company_docs WHERE company_id = ? AND collection = ? AND id = ?")
+      .get(companyId, collectionName, docId) as { ok?: number } | undefined;
+    hasExistingRow = existingRow?.ok === 1;
+  } catch {
+    /* optional */
+  }
+
+  const stampedData = stampUserOriginCompanyDocData(data, { shouldNotify, hasExistingRow });
+  traceServerDocTimestampLifecycle("before_upsert", companyId, collectionName, docId, stampedData);
+  const json = JSON.stringify(serializeForLocalDb(stampedData));
+  let existingParsed: Record<string, unknown> | null = null;
+  try {
+    const existing = db
+      .prepare("SELECT data FROM company_docs WHERE company_id = ? AND collection = ? AND id = ?")
+      .get(companyId, collectionName, docId) as { data?: string } | undefined;
+    if (existing?.data === json) {
+      return { written: false, stampedData, existingParsed: null };
+    }
+    if (existing?.data) {
+      try {
+        const parsed = JSON.parse(existing.data) as Record<string, unknown>;
+        existingParsed = deserializeLocalDbValue(parsed) as Record<string, unknown>;
+      } catch {
+        existingParsed = null;
+      }
+    }
+  } catch {
+    /* compare optional */
+  }
+
+  try {
+    await runCompanyDocSqliteUpsertAndProjection(db, companyId, collectionName, docId, stampedData);
+    plPhase1bVerifyHook("onCompanyDocUpsert");
+    return { written: true, stampedData, existingParsed };
+  } catch (e) {
+    if (!isSqliteBadParamError(e)) throw e;
+    clearBrowserDbCache();
+    const retryDb = await getBrowserDb();
+    if (!retryDb) {
+      markMirrorSqliteErrorAndMaybePauseWrites(e);
+      throw e;
+    }
+    try {
+      await runCompanyDocSqliteUpsertAndProjection(retryDb, companyId, collectionName, docId, stampedData);
+      plPhase1bVerifyHook("onCompanyDocUpsert");
+      return { written: true, stampedData, existingParsed };
+    } catch (retryError) {
+      markMirrorSqliteErrorAndMaybePauseWrites(retryError);
+      throw retryError;
+    }
+  }
+}
+
+type CommitCompanyDocSideEffectOpts = {
+  /** Host bridge path: main process broadcasts UI bump instead of renderer notify. */
+  skipNotify?: boolean;
+};
+
+async function commitCompanyDocOnRenderer(
+  companyId: string,
+  collectionName: string,
+  docId: string,
+  data: Record<string, unknown>,
+  options?: UpsertCompanyBrowserOptions,
+  sideEffectOpts?: CommitCompanyDocSideEffectOpts
+): Promise<{ written: boolean }> {
+  const shouldNotify = options?.notify !== false;
+  const mutation = await performCompanyDocUpsert(companyId, collectionName, docId, data, { shouldNotify });
+  if (!mutation.written) return { written: false };
+
+  const { stampedData, existingParsed } = mutation;
+
+  if (existingParsed && shouldNotify && options?.skipCloudSyncEnqueue !== true) {
+    try {
+      const { purgeRemovedDriveAttachmentRefsForDocSave } = await import(
+        "@/lib/localCloudSync/driveAttachmentDelete"
+      );
+      await purgeRemovedDriveAttachmentRefsForDocSave({
+        companyId,
+        before: existingParsed,
+        after: stampedData,
+      });
+    } catch (e) {
+      console.warn("[localCompanyDocMirror] Drive attachment purge skipped", e);
+    }
+  }
+
+  await enqueueCloudSyncDeltaAfterMirrorWrite({
+    companyId,
+    collectionName,
+    docId,
+    data: stampedData,
+    skipCloudSyncEnqueue: options?.skipCloudSyncEnqueue,
+  });
+
+  if (shouldNotify) {
+    if (!sideEffectOpts?.skipNotify) {
+      notifyBrowserDbCollectionUpdated(companyId, collectionName);
+    }
+    void maybeQueuePlServerMirrorAfterDocWrite(companyId, collectionName, docId, stampedData);
+    plPhase1bVerifyHook("onMirrorQueue");
+  }
+
+  const { flushPendingBrowserDbSave } = await import("@/lib/localSqlite");
+  await flushPendingBrowserDbSave();
+
+  return { written: true };
+}
+
+/** Hidden bridge renderer: canonical SQLite commit without UI notify (main broadcasts bump). */
+export async function hostBridgeCommitCompanyDoc(
+  companyId: string,
+  collectionName: string,
+  docId: string,
+  data: Record<string, unknown>,
+  options?: UpsertCompanyBrowserOptions
+): Promise<{ ok: boolean; written?: boolean; error?: string }> {
+  try {
+    const out = await commitCompanyDocOnRenderer(companyId, collectionName, docId, data, options, {
+      skipNotify: true,
+    });
+    return { ok: true, written: out.written };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "commit_failed" };
+  }
+}
+
 /**
  * Generic upsert into `company_docs`; swallow errors so the main Firestore flow never fails because of SQLite.
  */
@@ -520,118 +721,20 @@ export async function upsertCompanyDocInBrowserDb(
   if (!companyId || !collectionName || !docId) return;
   if (!(await shouldPersistCompanyDocToBrowserDb(companyId, options))) return;
   if (shouldSkipMirrorWritesNow()) return;
-  const shouldNotify = options?.notify !== false;
-  let hasExistingRow = false;
-  let stampedData: Record<string, unknown> = data;
   try {
     // User-origin voucher SQLite writes: expired paid / strict JWT gate — mirror/restore paths `skipPlanMutationGate`.
     if (collectionName === "vouchers" && options?.skipPlanMutationGate !== true) {
       await assertCompanyAllowsLedgerMutations(companyId);
     }
-    const db = await getBrowserDb();
-    if (!db) return;
-    let hasExistingRowInner = false;
-    try {
-      const existingRow = db
-        .prepare("SELECT 1 AS ok FROM company_docs WHERE company_id = ? AND collection = ? AND id = ?")
-        .get(companyId, collectionName, docId) as { ok?: number } | undefined;
-      hasExistingRowInner = existingRow?.ok === 1;
-    } catch {
-      /* optional */
+
+    const { shouldCommitOnHostBridge, invokeHostBridgeCompanyDocUpsert } = await import("@/lib/hostBridgeWrite");
+    if (await shouldCommitOnHostBridge(companyId, options)) {
+      await invokeHostBridgeCompanyDocUpsert(companyId, collectionName, docId, data, options);
+      return;
     }
-    hasExistingRow = hasExistingRowInner;
-    stampedData = stampUserOriginCompanyDocData(data, { shouldNotify, hasExistingRow });
-    traceServerDocTimestampLifecycle("before_upsert", companyId, collectionName, docId, stampedData);
-    const json = JSON.stringify(serializeForLocalDb(stampedData));
-    try {
-      const existing = db
-        .prepare("SELECT data FROM company_docs WHERE company_id = ? AND collection = ? AND id = ?")
-        .get(companyId, collectionName, docId) as { data?: string } | undefined;
-      if (existing?.data === json) {
-        return;
-      }
-    } catch {
-      /* compare optional */
-    }
-    const now = Date.now();
-    // SQLite UPSERT: static build single write path
-    db.prepare(
-      `INSERT INTO company_docs(company_id, collection, id, data, updatedAt)
-       VALUES(?,?,?,?,?)
-       ON CONFLICT(company_id, collection, id) DO UPDATE SET
-         data = excluded.data,
-         updatedAt = excluded.updatedAt`
-    ).run(companyId, collectionName, docId, json, now);
-    const sqliteRow = db
-      .prepare(
-        "SELECT data, updatedAt AS sqliteColumnUpdatedAt FROM company_docs WHERE company_id = ? AND collection = ? AND id = ?"
-      )
-      .get(companyId, collectionName, docId) as { data?: string; sqliteColumnUpdatedAt?: number } | undefined;
-    let readBack: Record<string, unknown> | null = null;
-    if (sqliteRow?.data) {
-      try {
-        const parsed = JSON.parse(sqliteRow.data) as Record<string, unknown>;
-        readBack = deserializeLocalDbValue(parsed) as Record<string, unknown>;
-      } catch {
-        readBack = null;
-      }
-    }
-    traceServerDocTimestampLifecycle("after_sqlite_write", companyId, collectionName, docId, readBack, {
-      sqliteColumnUpdatedAt: sqliteRow?.sqliteColumnUpdatedAt ?? null,
-    });
-    await upsertVoucherProjection(companyId, collectionName, docId, stampedData);
-    // Local-company Google Drive delta queue (Firestore `sync_outbox` se alag)
-    await enqueueCloudSyncDeltaAfterMirrorWrite({
-      companyId,
-      collectionName,
-      docId,
-      data: stampedData,
-      skipCloudSyncEnqueue: options?.skipCloudSyncEnqueue,
-    });
-    // Single-write paths: bump UI; Firestore snapshot batches pass notify false (React already has fresh state).
-    if (shouldNotify) {
-      notifyBrowserDbCollectionUpdated(companyId, collectionName);
-      void maybeQueuePlServerMirrorAfterDocWrite(companyId, collectionName, docId, stampedData);
-    }
+
+    await commitCompanyDocOnRenderer(companyId, collectionName, docId, data, options);
   } catch (e) {
-    if (isSqliteBadParamError(e)) {
-      try {
-        // sql.js stale handle race: one-time cache reset + retry for self-heal.
-        clearBrowserDbCache();
-        const retryDb = await getBrowserDb();
-        if (retryDb) {
-          const retryJson = JSON.stringify(serializeForLocalDb(stampedData));
-          const now = Date.now();
-          retryDb
-            .prepare(
-              `INSERT INTO company_docs(company_id, collection, id, data, updatedAt)
-               VALUES(?,?,?,?,?)
-               ON CONFLICT(company_id, collection, id) DO UPDATE SET
-                 data = excluded.data,
-                 updatedAt = excluded.updatedAt`
-            )
-            .run(companyId, collectionName, docId, retryJson, now);
-          await upsertVoucherProjection(companyId, collectionName, docId, stampedData);
-          await enqueueCloudSyncDeltaAfterMirrorWrite({
-            companyId,
-            collectionName,
-            docId,
-            data: stampedData,
-            skipCloudSyncEnqueue: options?.skipCloudSyncEnqueue,
-          });
-          if (shouldNotify) {
-            notifyBrowserDbCollectionUpdated(companyId, collectionName);
-            void maybeQueuePlServerMirrorAfterDocWrite(companyId, collectionName, docId, stampedData);
-          }
-          return;
-        }
-      } catch (retryError) {
-        markMirrorSqliteErrorAndMaybePauseWrites(retryError);
-        console.warn("[localCompanyDocMirror] upsert retry failed", collectionName, docId, retryError);
-        return;
-      }
-      markMirrorSqliteErrorAndMaybePauseWrites(e);
-    }
     console.warn("[localCompanyDocMirror] upsert failed", collectionName, docId, e);
   }
 }

@@ -3,6 +3,7 @@
 import {
   getCompanyDocFromBrowserDb,
   upsertCompanyDocInBrowserDb,
+  notifyBrowserDbCollectionUpdated,
 } from "@/lib/localCompanyDocMirror";
 import {
   buildCloudSyncManifestFromCompany,
@@ -32,8 +33,20 @@ import {
   isCloudSyncEncryptionReady,
   readCloudSyncDriveEncryptionFromCompany,
 } from "@/lib/localCloudSync/driveEncryption";
-import { uploadOpeningSnapshotToDrive, downloadAndMergeOpeningUsersFromDrive } from "@/lib/localCloudSync/openingDriveSnapshot";
+import {
+  uploadOpeningSnapshotToDrive,
+  downloadAndMergeOpeningUsersFromDrive,
+  downloadAndMergeOpeningMastersFromDrive,
+} from "@/lib/localCloudSync/openingDriveSnapshot";
 import { forceReencryptDriveIfNeeded } from "@/lib/localCloudSync/forceReencryptDrive";
+
+export type RunLocalCloudSyncCycleOptions = {
+  force?: boolean;
+  /** Drive restore/join: pehle masters + voucher ops; attachment bytes baad me background. */
+  ledgerOnly?: boolean;
+  /** Background phase after ledgerOnly — pending attachment upload + opening snapshot. */
+  attachmentsOnly?: boolean;
+};
 import { syncPendingFilesForCompany, listPendingFilesForCompany } from "@/lib/localPendingFiles";
 import {
   countPendingLocalCloudSyncOps,
@@ -41,30 +54,120 @@ import {
   listPendingLocalCloudSyncOps,
   markLocalCloudSyncOpsSynced,
   markLocalCloudSyncOpSynced,
+  protectedLocalCloudSyncRowKeySet,
   setCloudSyncCursor,
 } from "@/lib/localCloudSync/queue";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import {
   countNewCloudSyncFileRefs,
+  countUniqueCloudSyncFileRefsInOps,
+  voucherIdentityKeyFromOp,
 } from "@/lib/localCloudSync/syncSummaryAttachments";
 import type { CloudSyncCompanyRef, CloudSyncLastSyncSummary } from "@/lib/localCloudSync/types";
-import { appendCloudSyncSummaryHistory, emptyCloudSyncLastSyncSummary } from "@/lib/localCloudSync/syncSummaryHistory";
+import { appendCloudSyncSummaryHistory } from "@/lib/localCloudSync/syncSummaryHistory";
 import type { CloudSyncSummaryHistoryEntry } from "@/lib/localCloudSync/syncSummaryHistory";
 import { prepareDriveFullReuploadFromLocal, ensureFreshDriveSyncWhenDriveFolderMissing, rehydrateLocalAttachmentRefsForDrive } from "@/lib/localCloudSync/driveFullReupload";
+import { notifyDriveCloudSyncStatus } from "@/lib/localCloudSync/driveCloudSyncUiEvents";
+import type { CloudSyncRunStatus, LocalCloudSyncOperation } from "@/lib/localCloudSync/types";
+import { getOrCreateClientDeviceId } from "@/lib/security/deviceIdentity";
 
 const VOUCHER_SYNC_TABLE = "vouchers";
 
 const syncLocks = new Set<string>();
 
+/** Header sync spinner — active Drive company cycle chal raha ho. */
+export function isLocalCloudSyncCycleRunning(companyId: string): boolean {
+  return syncLocks.has(String(companyId || "").trim());
+}
+
+async function patchCloudSyncRunStatus(companyId: string, status: CloudSyncRunStatus, lastError?: string | null): Promise<void> {
+  await patchLocalCompanyCloudSyncFields(companyId, {
+    cloudSyncStatus: status,
+    ...(lastError !== undefined ? { cloudSyncLastError: lastError } : {}),
+  });
+  notifyDriveCloudSyncStatus(companyId, status);
+}
+
+type CycleSummaryDraft = {
+  skipBulkReuploadCounts: boolean;
+  attachSynced: number;
+  bulkReuploadRefs: number;
+  openingAttachmentFiles: number;
+  addedFiles: number;
+  addedVouchers: number;
+  uploadedVouchers: number;
+  downloadedFiles: number;
+  downloadedVouchers: number;
+};
+
+function buildUploadedFilesFromCycleDraft(draft: CycleSummaryDraft): number {
+  const fresh = draft.attachSynced + draft.openingAttachmentFiles;
+  if (draft.skipBulkReuploadCounts) return fresh;
+  return fresh + draft.bulkReuploadRefs;
+}
+
+function cycleSummaryHasActivity(draft: CycleSummaryDraft): boolean {
+  return (
+    buildUploadedFilesFromCycleDraft(draft) > 0 ||
+    draft.uploadedVouchers > 0 ||
+    draft.addedFiles > 0 ||
+    draft.addedVouchers > 0 ||
+    draft.downloadedFiles > 0 ||
+    draft.downloadedVouchers > 0
+  );
+}
+
+async function persistCloudSyncCycleSummary(
+  companyId: string,
+  draft: CycleSummaryDraft,
+  options?: { resetHistory?: boolean; at?: number }
+): Promise<CloudSyncLastSyncSummary> {
+  const uploadedFiles = buildUploadedFilesFromCycleDraft(draft);
+  const lastSyncSummary: CloudSyncLastSyncSummary = {
+    addedFiles: draft.addedFiles,
+    addedVouchers: draft.addedVouchers,
+    uploadedFiles,
+    uploadedVouchers: draft.uploadedVouchers,
+    downloadedFiles: draft.downloadedFiles,
+    downloadedVouchers: draft.downloadedVouchers,
+  };
+  const now = options?.at ?? Date.now();
+  const regForHistory = await getLocalCompanyById(companyId, { includeDeleted: true });
+  const cfgForHistory = readCloudSyncConfigFromCompany(regForHistory);
+
+  if (options?.resetHistory) {
+    const entry: CloudSyncSummaryHistoryEntry = { ...lastSyncSummary, at: now };
+    await patchLocalCompanyCloudSyncFields(companyId, {
+      cloudSyncLastSyncSummary: lastSyncSummary,
+      cloudSyncSummaryHistory: cycleSummaryHasActivity(draft) ? [entry] : [],
+      cloudSyncSummaryResetAt: now,
+    });
+    return lastSyncSummary;
+  }
+
+  const summaryHistory = appendCloudSyncSummaryHistory(cfgForHistory.cloudSyncSummaryHistory, {
+    ...lastSyncSummary,
+    at: now,
+  });
+  await patchLocalCompanyCloudSyncFields(companyId, {
+    cloudSyncLastSyncSummary: lastSyncSummary,
+    cloudSyncSummaryHistory: summaryHistory,
+  });
+  return lastSyncSummary;
+}
+
 /** Sync cycle ke dauran user ne OFF kiya ho to upload/manifest/share abort — folder recreate na ho. */
 async function abortIfCloudSyncTurnedOff(companyId: string): Promise<boolean> {
   if (await shouldUseLocalCloudSync(companyId)) return false;
-  await patchLocalCompanyCloudSyncFields(companyId, { cloudSyncStatus: "idle", cloudSyncLastError: null });
+  await patchCloudSyncRunStatus(companyId, "idle", null);
   await setCloudSyncCursor(companyId, { syncStatus: "idle", lastError: null });
   return true;
 }
 
-export async function runLocalCloudSyncCycle(companyId: string, options?: { force?: boolean }): Promise<{
+export async function runLocalCloudSyncCycle(
+  companyId: string,
+  options?: RunLocalCloudSyncCycleOptions
+): Promise<{
   ok: boolean;
   error?: string;
   uploaded: number;
@@ -72,6 +175,9 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
 }> {
   const cid = String(companyId || "").trim();
   if (!cid) return { ok: false, error: "missing companyId", uploaded: 0, downloaded: 0 };
+
+  const ledgerOnly = options?.ledgerOnly === true;
+  const attachmentsOnly = options?.attachmentsOnly === true;
 
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     return { ok: false, error: "offline", uploaded: 0, downloaded: 0 };
@@ -115,11 +221,29 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
   }
 
   syncLocks.add(cid);
-  await patchLocalCompanyCloudSyncFields(cid, { cloudSyncStatus: "syncing", cloudSyncLastError: null });
+  await patchCloudSyncRunStatus(cid, "syncing", null);
   await setCloudSyncCursor(cid, { syncStatus: "syncing", lastError: null });
 
   let uploaded = 0;
   let downloaded = 0;
+  let summaryDraft: CycleSummaryDraft = {
+    skipBulkReuploadCounts: false,
+    attachSynced: 0,
+    bulkReuploadRefs: 0,
+    openingAttachmentFiles: 0,
+    addedFiles: 0,
+    addedVouchers: 0,
+    uploadedVouchers: 0,
+    downloadedFiles: 0,
+    downloadedVouchers: 0,
+  };
+  let summaryPersisted = false;
+
+  const flushPartialSummaryIfNeeded = async () => {
+    if (summaryPersisted || !cycleSummaryHasActivity(summaryDraft)) return;
+    await persistCloudSyncCycleSummary(cid, summaryDraft);
+    summaryPersisted = true;
+  };
 
   try {
     const provider = getSyncProviderForCompany();
@@ -135,7 +259,7 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     };
 
     let cursor = await getCloudSyncCursor(cid);
-    const manifest = await provider.getManifest(syncRef);
+    let manifest = await provider.getManifest(syncRef);
     const remoteOpsProbe = await provider.downloadOperations(syncRef, 0);
     const regForPrep = regAfterFresh;
     let prep = await prepareDriveFullReuploadFromLocal(cid, {
@@ -145,9 +269,10 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
       historicalBackfillDone:
         (regForPrep as { cloudSyncHistoricalBackfillDone?: boolean }).cloudSyncHistoricalBackfillDone === true,
     });
-    let extraReuploadedDriveRefs = 0;
     if (prep.prepared) {
       cursor = await getCloudSyncCursor(cid);
+      summaryDraft.skipBulkReuploadCounts = true;
+      summaryDraft.bulkReuploadRefs += prep.reuploadedDriveRefs;
     }
 
     // Pending attach queue khali + Drive par file missing — local bytes se dubara upload.
@@ -156,12 +281,14 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
       Number((regAfterFresh as { cloudSyncLastAttachmentRehydrateAt?: number }).cloudSyncLastAttachmentRehydrateAt) ||
       0;
     if (
+      !ledgerOnly &&
+      !attachmentsOnly &&
       pendingAttachBefore.length === 0 &&
       !prep.prepared &&
       Date.now() - lastAttachRehyd > 60_000
     ) {
       const rehyd = await rehydrateLocalAttachmentRefsForDrive(cid);
-      extraReuploadedDriveRefs += rehyd.reuploadedDriveRefs;
+      summaryDraft.bulkReuploadRefs += rehyd.reuploadedDriveRefs;
       await upsertLocalCompany({
         ...regAfterFresh,
         cloudSyncLastAttachmentRehydrateAt: Date.now(),
@@ -170,143 +297,256 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     }
 
     if (await abortIfCloudSyncTurnedOff(cid)) {
+      await flushPartialSummaryIfNeeded();
       return { ok: false, error: "cloud sync disabled", uploaded, downloaded };
     }
 
     // Pehle attachment bytes → Drive, phir ops enqueue (payload me `drive:` refs sahi hon).
     let attachSync = { synced: 0, failed: 0, lastError: undefined as string | undefined };
-    for (let attachRound = 0; attachRound < 24; attachRound++) {
-      const round = await syncPendingFilesForCompany(cid);
-      attachSync.synced += round.synced;
-      attachSync.failed += round.failed;
-      if (round.lastError) attachSync.lastError = round.lastError;
-      if (round.synced === 0 && round.failed === 0) break;
-      if ((await listPendingFilesForCompany(cid)).length === 0) break;
+    if (!ledgerOnly) {
+      for (let attachRound = 0; attachRound < 24; attachRound++) {
+        const round = await syncPendingFilesForCompany(cid);
+        attachSync.synced += round.synced;
+        attachSync.failed += round.failed;
+        if (round.lastError) attachSync.lastError = round.lastError;
+        if (round.synced === 0 && round.failed === 0) break;
+        if ((await listPendingFilesForCompany(cid)).length === 0) break;
+      }
     }
-    if (attachSync.synced > 0) {
-      logLocalCloudSync("attachments uploaded to Drive", { companyId: cid, ...attachSync });
+    summaryDraft.attachSynced = attachSync.synced;
+    if (!ledgerOnly) {
+      const { uploadLocalMasterAttachmentRefsToDrive } = await import(
+        "@/lib/localCloudSync/openingDriveSnapshot"
+      );
+      const masterAttachUploaded = await uploadLocalMasterAttachmentRefsToDrive(cid);
+      if (masterAttachUploaded > 0) {
+        summaryDraft.attachSynced += masterAttachUploaded;
+        logLocalCloudSync("master attachments uploaded before ops", {
+          companyId: cid,
+          count: masterAttachUploaded,
+        });
+      }
+    }
+    if (summaryDraft.attachSynced > 0) {
+      if (attachSync.synced > 0) {
+        logLocalCloudSync("attachments uploaded to Drive", { companyId: cid, ...attachSync });
+      }
+      const { refreshPendingCloudSyncOpsFromMirrorAfterAttachments } = await import(
+        "@/lib/localCloudSync/enqueueFromWrite"
+      );
+      await refreshPendingCloudSyncOpsFromMirrorAfterAttachments(cid);
     }
 
-    if (prep.prepared || !historicalBackfillDone) {
+    if (!ledgerOnly && !attachmentsOnly && (prep.prepared || !historicalBackfillDone)) {
       await backfillLocalDocsToCloudSyncOutbox(cid, { force: prep.prepared });
     }
 
     if (await abortIfCloudSyncTurnedOff(cid)) {
+      await flushPartialSummaryIfNeeded();
       return { ok: false, error: "cloud sync disabled", uploaded, downloaded };
     }
 
-    const pending = await listPendingLocalCloudSyncOps(cid);
-    let maxUploadedSeq = cursor.lastSyncedOp;
-    let uploadedVouchers = 0;
-    for (const op of pending) {
-      await provider.uploadOperation(syncRef, op);
-      await markLocalCloudSyncOpSynced(cid, op.opSeq);
-      uploaded += 1;
-      if (op.table === VOUCHER_SYNC_TABLE) uploadedVouchers += 1;
-      if (op.opSeq > maxUploadedSeq) maxUploadedSeq = op.opSeq;
+    let uploadedThisCycleRowKeys = new Set<string>();
+
+    if (!ledgerOnly && !attachmentsOnly) {
+      const pending = await listPendingLocalCloudSyncOps(cid);
+      const uploadManifest = await provider.getManifest(syncRef);
+      let nextGlobalOp = Math.max(Number(uploadManifest.latestOp) || 0, cursor.lastSyncedOp);
+      let maxUploadedSeq = cursor.lastSyncedOp;
+      const uploadedVoucherKeys = new Set<string>();
+      const addedVoucherKeysFromUpload = new Set<string>();
+      for (const op of pending) {
+        nextGlobalOp += 1;
+        const driveOp: LocalCloudSyncOperation = { ...op, opSeq: nextGlobalOp };
+        await provider.uploadOperation(syncRef, driveOp);
+        uploadedThisCycleRowKeys.add(`${op.table}:${op.rowId}`);
+        await markLocalCloudSyncOpSynced(cid, op.opSeq);
+        uploaded += 1;
+        if (op.table === VOUCHER_SYNC_TABLE) {
+          uploadedVoucherKeys.add(voucherIdentityKeyFromOp(op));
+          if (op.action === "create") addedVoucherKeysFromUpload.add(voucherIdentityKeyFromOp(op));
+        }
+        maxUploadedSeq = nextGlobalOp;
+      }
+      summaryDraft.uploadedVouchers = uploadedVoucherKeys.size;
+      summaryDraft.addedVouchers = addedVoucherKeysFromUpload.size;
+      if (pending.length > 0) {
+        summaryDraft.addedFiles = countUniqueCloudSyncFileRefsInOps(pending);
+        logLocalCloudSync("uploaded ops with global seq", {
+          companyId: cid,
+          count: pending.length,
+          throughOp: maxUploadedSeq,
+        });
+      }
+      if (pending.length > 0 && maxUploadedSeq > cursor.lastSyncedOp) {
+        await markLocalCloudSyncOpsSynced(cid, maxUploadedSeq);
+      }
+      cursor = await getCloudSyncCursor(cid);
+      if (maxUploadedSeq > uploadManifest.latestOp) {
+        manifest = { ...uploadManifest, latestOp: maxUploadedSeq, updatedAt: Date.now() };
+      }
     }
-    if (pending.length > 0 && maxUploadedSeq > cursor.lastSyncedOp) {
-      await markLocalCloudSyncOpsSynced(cid, maxUploadedSeq);
-    }
+
+    const maxUploadedSeqForCycle = cursor.lastSyncedOp;
 
     if (await abortIfCloudSyncTurnedOff(cid)) {
+      await flushPartialSummaryIfNeeded();
       return { ok: false, error: "cloud sync disabled", uploaded, downloaded };
     }
-
-    // Manifest → local registry (share list + encryption salt) decrypt/download se pehle.
     const regForShare = (await mergeRemoteCloudSyncManifestIntoLocalCompany(cid, manifest)) ?? regAfterFresh;
 
-    try {
-      await downloadAndMergeOpeningUsersFromDrive(cid, syncRef);
-    } catch (e) {
-      warnLocalCloudSync("opening users download skipped", {
-        companyId: cid,
-        msg: e instanceof Error ? e.message : String(e),
-      });
-    }
+    let cycleNow = Date.now();
+    let newLastSyncedOp = cursor.lastSyncedOp;
+    let latestOpForManifest = manifest.latestOp;
 
-    const remoteOps = await provider.downloadOperations(syncRef, cursor.lastSyncedOp);
-    let maxRemoteSeq = cursor.lastSyncedOp;
-    let addedVouchers = 0;
-    let addedFiles = 0;
-    // Drive se download apply — summary card "Downloaded from Drive" row.
-    let downloadedVouchers = 0;
-    let downloadedFiles = 0;
+    if (!attachmentsOnly) {
+      const pendingRowKeys = await protectedLocalCloudSyncRowKeySet(cid);
+      for (const key of uploadedThisCycleRowKeys) pendingRowKeys.add(key);
 
-    await runWithRemoteCloudSyncApply(async () => {
-      for (const op of remoteOps) {
-        const local = (await getCompanyDocFromBrowserDb(cid, op.table, op.rowId)) as Record<string, unknown> | null;
-        // Isi cycle me upload hue ops ko dubara download count mat karo (echo inflation fix).
-        if (local && op.opSeq <= maxUploadedSeq) {
-          if (op.opSeq > maxRemoteSeq) maxRemoteSeq = op.opSeq;
-          continue;
-        }
-        if (!shouldApplyRemoteCloudSyncOp(local, op)) continue;
-        const merged = mergeRemotePayloadIntoLocal(local, op);
-        await upsertCompanyDocInBrowserDb(cid, op.table, op.rowId, merged, {
-          notify: false,
-          skipCloudSyncEnqueue: true,
-          force: true,
+      try {
+        await downloadAndMergeOpeningUsersFromDrive(cid, syncRef);
+      } catch (e) {
+        warnLocalCloudSync("opening users download skipped", {
+          companyId: cid,
+          msg: e instanceof Error ? e.message : String(e),
         });
-        downloaded += 1;
-        if (op.table === VOUCHER_SYNC_TABLE) {
-          addedVouchers += 1;
-          downloadedVouchers += 1;
-        }
-        // Nayi drive:/local: refs — table name se guess na karo (FILE_ENTITY_SYNC_TABLES bug fix).
-        const newFileRefs = countNewCloudSyncFileRefs(local, merged);
-        if (newFileRefs > 0) {
-          addedFiles += newFileRefs;
-          downloadedFiles += newFileRefs;
-        }
-        if (op.opSeq > maxRemoteSeq) maxRemoteSeq = op.opSeq;
       }
-    });
 
-    // Cursor sirf actually upload/download hue ops par advance — manifest.latestOp se mat badhao.
-    // Pehle: khali download par bhi cursor manifest par chala jata tha → doosre device par data kabhi dubara download nahi hota.
-    const newLastSyncedOp = Math.max(cursor.lastSyncedOp, maxUploadedSeq, maxRemoteSeq);
-    if (
-      remoteOps.length === 0 &&
-      manifest.latestOp > cursor.lastSyncedOp &&
-      newLastSyncedOp < manifest.latestOp
-    ) {
-      warnLocalCloudSync("download cursor behind manifest — Drive par ops missing ya read fail", {
-        companyId: cid,
-        cursor: cursor.lastSyncedOp,
-        manifestLatest: manifest.latestOp,
+      try {
+        await downloadAndMergeOpeningMastersFromDrive(cid, syncRef, { skipRowKeys: pendingRowKeys });
+      } catch (e) {
+        warnLocalCloudSync("opening masters download skipped", {
+          companyId: cid,
+          msg: e instanceof Error ? e.message : String(e),
+        });
+      }
+
+      const localDeviceId = getOrCreateClientDeviceId();
+      const allRemoteOps = await provider.downloadOperations(syncRef, 0);
+      allRemoteOps.sort((a, b) => a.opSeq - b.opSeq);
+      let maxRemoteSeq = cursor.lastSyncedOp;
+      const downloadedVoucherKeys = new Set<string>();
+      let downloadedFiles = 0;
+      const touchedLedgerCollections = new Set<string>();
+
+      await runWithRemoteCloudSyncApply(async () => {
+        for (const op of allRemoteOps) {
+          const rowKey = `${op.table}:${op.rowId}`;
+          if (pendingRowKeys.has(rowKey)) continue;
+
+          // Isi cycle me upload hue ops — echo skip
+          if (op.opSeq <= maxUploadedSeqForCycle && op.deviceId === localDeviceId) {
+            if (op.opSeq > maxRemoteSeq) maxRemoteSeq = op.opSeq;
+            continue;
+          }
+
+          // Pehle sync ho chuki apni purani ops (local seq) — dubara mat lagao
+          if (op.opSeq <= cursor.lastSyncedOp && op.deviceId === localDeviceId) {
+            if (op.opSeq > maxRemoteSeq) maxRemoteSeq = op.opSeq;
+            continue;
+          }
+
+          const local = (await getCompanyDocFromBrowserDb(cid, op.table, op.rowId)) as Record<string, unknown> | null;
+          if (!shouldApplyRemoteCloudSyncOp(local, op, { pendingLocalRow: pendingRowKeys.has(rowKey) })) {
+            if (op.opSeq > maxRemoteSeq) maxRemoteSeq = op.opSeq;
+            continue;
+          }
+          const merged = mergeRemotePayloadIntoLocal(local, op);
+          await upsertCompanyDocInBrowserDb(cid, op.table, op.rowId, merged, {
+            notify: false,
+            skipCloudSyncEnqueue: true,
+            force: true,
+          });
+          downloaded += 1;
+          touchedLedgerCollections.add(op.table);
+          if (op.table === VOUCHER_SYNC_TABLE) {
+            downloadedVoucherKeys.add(voucherIdentityKeyFromOp(op));
+          }
+          const newFileRefs = countNewCloudSyncFileRefs(local, merged);
+          if (newFileRefs > 0) downloadedFiles += newFileRefs;
+          if (op.opSeq > maxRemoteSeq) maxRemoteSeq = op.opSeq;
+        }
       });
-    }
-    const latestOpForManifest = Math.max(manifest.latestOp, maxUploadedSeq, maxRemoteSeq);
-    if (await abortIfCloudSyncTurnedOff(cid)) {
-      return { ok: false, error: "cloud sync disabled", uploaded, downloaded };
-    }
-    await provider.updateManifest(
-      syncRef,
-      buildCloudSyncManifestFromCompany(regForShare as Record<string, unknown>, {
-        latestOp: latestOpForManifest,
-        updatedAt: Date.now(),
-        companyId: cid,
-        driveShareUsers: readCloudSyncDriveShareUsers(regForShare as Record<string, unknown>),
-      })
-    );
+      for (const table of touchedLedgerCollections) {
+        notifyBrowserDbCollectionUpdated(cid, table);
+      }
+      summaryDraft.downloadedFiles = downloadedFiles;
+      summaryDraft.downloadedVouchers = downloadedVoucherKeys.size;
 
-    const now = Date.now();
-    await setCloudSyncCursor(cid, {
-      lastSyncedOp: newLastSyncedOp,
-      lastSyncAt: now,
-      syncStatus: "idle",
-      lastError: null,
-    });
-    await patchLocalCompanyCloudSyncFields(cid, {
-      cloudSyncLastSyncAt: now,
-      cloudSyncStatus: "idle",
-      cloudSyncLastError: null,
-    });
+      // Cursor sirf actually upload/download hue ops par advance — manifest.latestOp se mat badhao.
+      newLastSyncedOp = Math.max(cursor.lastSyncedOp, maxUploadedSeqForCycle, maxRemoteSeq);
+      if (
+        allRemoteOps.length === 0 &&
+        manifest.latestOp > cursor.lastSyncedOp &&
+        newLastSyncedOp < manifest.latestOp
+      ) {
+        warnLocalCloudSync("download cursor behind manifest — Drive par ops missing ya read fail", {
+          companyId: cid,
+          cursor: cursor.lastSyncedOp,
+          manifestLatest: manifest.latestOp,
+        });
+      }
+      latestOpForManifest = Math.max(manifest.latestOp, maxUploadedSeqForCycle, maxRemoteSeq);
+      if (await abortIfCloudSyncTurnedOff(cid)) {
+        await flushPartialSummaryIfNeeded();
+        return { ok: false, error: "cloud sync disabled", uploaded, downloaded };
+      }
+      await provider.updateManifest(
+        syncRef,
+        buildCloudSyncManifestFromCompany(regForShare as Record<string, unknown>, {
+          latestOp: latestOpForManifest,
+          updatedAt: Date.now(),
+          companyId: cid,
+          driveShareUsers: readCloudSyncDriveShareUsers(regForShare as Record<string, unknown>),
+        })
+      ).catch((e) => {
+        warnLocalCloudSync("manifest update skipped — ops uploaded", {
+          companyId: cid,
+          msg: e instanceof Error ? e.message : String(e),
+        });
+      });
+
+      cycleNow = Date.now();
+      await setCloudSyncCursor(cid, {
+        lastSyncedOp: newLastSyncedOp,
+        lastSyncAt: cycleNow,
+        syncStatus: ledgerOnly ? "syncing" : "idle",
+        lastError: null,
+      });
+      await patchLocalCompanyCloudSyncFields(cid, {
+        cloudSyncLastSyncAt: cycleNow,
+        cloudSyncStatus: ledgerOnly ? "syncing" : "idle",
+        cloudSyncLastError: null,
+      });
+      notifyDriveCloudSyncStatus(cid, ledgerOnly ? "syncing" : "idle");
+
+      if (ledgerOnly) {
+        const regMark = await getLocalCompanyById(cid, { includeDeleted: true });
+        if (regMark) {
+          await upsertLocalCompany({
+            ...regMark,
+            cloudSyncHistoricalBackfillDone: true,
+            updatedAt: Date.now(),
+          });
+        }
+        const lastSyncSummary = await persistCloudSyncCycleSummary(cid, summaryDraft, { at: cycleNow });
+        summaryPersisted = true;
+        logLocalCloudSync("ledger restore phase ok", {
+          companyId: cid,
+          downloaded,
+          lastSyncedOp: newLastSyncedOp,
+          lastSyncSummary,
+        });
+        return { ok: true, uploaded, downloaded };
+      }
+    } else {
+      cycleNow = Date.now();
+    }
 
     const sharedUsers = readCloudSyncDriveShareUsers(regForShare as Record<string, unknown>);
     if (sharedUsers.length > 0) {
       if (await abortIfCloudSyncTurnedOff(cid)) {
+        await flushPartialSummaryIfNeeded();
         return { ok: false, error: "cloud sync disabled", uploaded, downloaded };
       }
       await maybeShareDriveCompanyFolder({
@@ -317,49 +557,22 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     }
 
     if (await abortIfCloudSyncTurnedOff(cid)) {
+      await flushPartialSummaryIfNeeded();
       return { ok: false, error: "cloud sync disabled", uploaded, downloaded };
     }
     const openingUpload = await uploadOpeningSnapshotToDrive(cid);
+    summaryDraft.openingAttachmentFiles = openingUpload.attachmentFiles;
 
-    // Drive folder wipe / full re-upload — purane bulk counts summary me mat dikhao.
-    const skipSummaryCounts = prep.prepared;
-
-    // Sirf is cycle me naye upload hue attachment bytes — pending queue + opening avatars + Drive wipe rehydrate.
-    const uploadedFiles = skipSummaryCounts
-      ? 0
-      : attachSync.synced + prep.reuploadedDriveRefs + extraReuploadedDriveRefs + openingUpload.attachmentFiles;
-
-    const lastSyncSummary: CloudSyncLastSyncSummary = skipSummaryCounts
-      ? emptyCloudSyncLastSyncSummary()
-      : {
-          addedFiles,
-          addedVouchers,
-          uploadedFiles,
-          uploadedVouchers,
-          downloadedFiles,
-          downloadedVouchers,
-        };
-
-    const regForHistory = await getLocalCompanyById(cid, { includeDeleted: true });
-    const cfgForHistory = readCloudSyncConfigFromCompany(regForHistory);
-
-    if (skipSummaryCounts) {
-      await patchLocalCompanyCloudSyncFields(cid, {
-        cloudSyncLastSyncSummary: lastSyncSummary,
-        cloudSyncSummaryHistory: [],
-        cloudSyncSummaryResetAt: now,
-      });
-    } else {
-      const summaryHistory = appendCloudSyncSummaryHistory(cfgForHistory.cloudSyncSummaryHistory, {
-        ...lastSyncSummary,
-        at: now,
-      });
-
-      await patchLocalCompanyCloudSyncFields(cid, {
-        cloudSyncLastSyncSummary: lastSyncSummary,
-        cloudSyncSummaryHistory: summaryHistory,
-      });
+    if (attachmentsOnly || !ledgerOnly) {
+      await setCloudSyncCursor(cid, { syncStatus: "idle", lastError: null });
+      await patchCloudSyncRunStatus(cid, "idle", null);
     }
+
+    const lastSyncSummary = await persistCloudSyncCycleSummary(cid, summaryDraft, {
+      resetHistory: summaryDraft.skipBulkReuploadCounts,
+      at: cycleNow,
+    });
+    summaryPersisted = true;
 
     logLocalCloudSync("cycle ok", {
       companyId: cid,
@@ -373,6 +586,7 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     return { ok: true, uploaded, downloaded };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    await flushPartialSummaryIfNeeded();
     // Auth abhi ready nahi — permanent error state mat chipkao (background retry karega).
     if (isDriveAuthRequiredError(e)) {
       warnLocalCloudSync("cycle skipped — auth required", { companyId: cid, msg });
@@ -380,11 +594,38 @@ export async function runLocalCloudSyncCycle(companyId: string, options?: { forc
     }
     warnLocalCloudSync("cycle failed", { companyId: cid, msg });
     await setCloudSyncCursor(cid, { syncStatus: "error", lastError: msg });
-    await patchLocalCompanyCloudSyncFields(cid, { cloudSyncStatus: "error", cloudSyncLastError: msg });
+    await patchCloudSyncRunStatus(cid, "error", msg);
     return { ok: false, error: msg, uploaded, downloaded };
   } finally {
     syncLocks.delete(cid);
   }
+}
+
+/** Drive restore/join ke baad — attachment bytes + opening snapshot background me (UI pehle dikhe). */
+export function scheduleDriveAttachmentSyncAfterRestore(companyId: string): void {
+  const cid = String(companyId || "").trim();
+  if (!cid) return;
+  void runLocalCloudSyncCycle(cid, { force: true, attachmentsOnly: true }).catch((e) => {
+    warnLocalCloudSync("background attachment sync failed", {
+      companyId: cid,
+      msg: e instanceof Error ? e.message : String(e),
+    });
+  });
+}
+
+/** Master/voucher save ke baad — poora Drive cycle background (SQLite pehle sync ho chuka). */
+export function scheduleLocalCloudSyncInBackground(
+  companyId: string,
+  options?: { force?: boolean }
+): void {
+  const cid = String(companyId || "").trim();
+  if (!cid) return;
+  void runLocalCloudSyncCycle(cid, { force: options?.force === true }).catch((e) => {
+    warnLocalCloudSync("background cloud sync failed", {
+      companyId: cid,
+      msg: e instanceof Error ? e.message : String(e),
+    });
+  });
 }
 
 export async function getLocalCloudSyncStatus(companyId: string): Promise<{

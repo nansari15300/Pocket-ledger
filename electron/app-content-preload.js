@@ -63,6 +63,12 @@ contextBridge.exposeInMainWorld("plElectronGate", {
   },
 });
 
+/** Host UI → hidden bridge: authoritative Local Company SQLite writes when sharing is on. */
+contextBridge.exposeInMainWorld("plElectronBridge", {
+  authoritativeCompanyDocUpsert: (payload) =>
+    ipcRenderer.invoke("pl-bridge-authoritative-company-doc-upsert", payload),
+});
+
 /** EXE / Linux desktop: local static server — settings → Server */
 contextBridge.exposeInMainWorld("plElectronLocalServer", {
   getStatus: () => ipcRenderer.invoke("pl-local-server-get-status"),

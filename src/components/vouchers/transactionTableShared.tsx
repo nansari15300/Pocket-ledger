@@ -5,6 +5,7 @@ import { TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MoreVertical, Pencil, History, CheckCircle, Printer, MousePointerClick } from "lucide-react";
+import { VoucherAttachmentFileIndicator } from "@/components/vouchers/VoucherAttachmentFileIndicator";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -140,9 +141,7 @@ export function OpeningBalanceFileCellContent({
         </div>
       }
     >
-      <span className="inline-flex cursor-pointer" aria-label="Has attachment">
-        <CheckCircle className="h-4 w-4 text-green-600" />
-      </span>
+      <VoucherAttachmentFileIndicator urls={urls} aria-label="Has attachment" />
     </AttachmentHoverPortal>
   );
 }
@@ -1206,9 +1205,7 @@ export const TransactionRow = React.memo(
                     </div>
                   }
                 >
-                  <span className="inline-flex cursor-pointer" aria-label="Has attachment">
-                    <CheckCircle className="h-4 w-4 text-green-600" />
-                  </span>
+                  <VoucherAttachmentFileIndicator urls={rowUrls} aria-label="Has attachment" />
                 </AttachmentHoverPortal>
               );
             })()}

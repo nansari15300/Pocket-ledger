@@ -14,6 +14,10 @@ import { getStorage } from 'firebase/storage';
 import { setLogLevel } from 'firebase/app';
 import { detachCompanyPickerFirestoreListenersIfAny } from '@/lib/companyPickerFirestoreDetach';
 import { computeIsLocalOnlyMode } from '@/lib/dataSourceModeDefaults';
+import {
+  isExpectedFirestoreSnapshotPermissionDenial,
+  shouldSuppressFirestorePermissionConsole,
+} from '@/lib/firestorePermissionSuppress';
 import { isEmbeddedOfflinePreloadClient } from '@/lib/isEmbeddedOfflinePreloadClient';
 import { isClientNavigatorOffline } from '@/lib/apkOnlineFirestoreWritePolicy';
 import { clearEmbeddedWarmBootstrapFlags } from '@/lib/embeddedWarmBootstrapFlags';
@@ -75,6 +79,13 @@ if (typeof window !== 'undefined') {
     ) {
       return;
     }
+    // Single-tab persistence + doosra browser tab / stale lease — recoverable; multi-tab manager se fix hota hai.
+    if (
+      errorMessage.includes('Failed to obtain exclusive access to the persistence layer') ||
+      errorMessage.includes('multi-tab synchronization has to be enabled')
+    ) {
+      return;
+    }
     // Firestore 12.12: signOut + snapshot teardown → ca9; AsyncQueue sometimes wraps it as b815 (SDK bug).
     if (
       shouldSuppressFirestoreWatchAssertionNow() &&
@@ -103,13 +114,17 @@ if (typeof window !== 'undefined') {
     ) {
       return;
     }
-    // Track other PERMISSION_DENIED with extra context when user is logged in (real auth issue)
+    // PERMISSION_DENIED: local / Drive-shared SQLite — Firestore listeners expected fail; Next overlay mat dikhao.
     if (
       errorMessage.includes('permission-denied') ||
       errorMessage.includes('PERMISSION_DENIED') ||
       errorMessage.includes('Missing or insufficient permissions')
     ) {
-      if (isLocalFirstEnabled()) {
+      if (
+        isLocalFirstEnabled() ||
+        shouldSuppressFirestorePermissionConsole() ||
+        isExpectedFirestoreSnapshotPermissionDenial(errorMessage)
+      ) {
         return;
       }
       const err = args.find((a) => a && typeof a === 'object' && 'code' in a) as { code?: string; message?: string; path?: string } | undefined;
@@ -174,15 +189,13 @@ function initFirestoreInstance() {
     return getFirestore(app);
   }
   const forceLongPolling = process.env.NEXT_PUBLIC_FIRESTORE_FORCE_LONG_POLLING === '1';
-  // Dev HMR + multi-tab manager = IndexedDB primary-lease noise; embed/APK already single-tab.
-  const useSingleTabPersistence =
-    isEmbeddedOfflinePreloadClient() || process.env.NODE_ENV === 'development';
+  // Sirf embedded WebView single-tab — browser dev/prod me multi-tab taaki 2+ tabs same company khol saken.
+  const useSingleTabPersistence = isEmbeddedOfflinePreloadClient();
   try {
     return initializeFirestore(app, {
-      /** Hosted web par multi-tab cache share; static embed par single-tab manager se watch-state assertions kam. */
+      /** Hosted web + dev: multi-tab IndexedDB share; APK/static embed: single WebView tab. */
       localCache: persistentLocalCache({
         tabManager: useSingleTabPersistence
-          // Firebase 12.8 API: single-tab manager settings object required (empty default config).
           ? persistentSingleTabManager({})
           : persistentMultipleTabManager(),
       }),

@@ -12,6 +12,7 @@ import usePermissions from "./usePermissions";
 import type { Party, Group } from "@/components/party/types";
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
+import { normalizeBankAccountRow } from "@/lib/bankAccountDisplayName";
 import type { Tax, TaxGroup } from "@/components/tax/types";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import type { Item, ItemGroup } from "@/components/items/types";
@@ -975,7 +976,10 @@ export const VoucherProvider = ({
     ) => {
       if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return;
       const next = sqliteCachedRowsForSetter(cached as any[], orderByField) as T[];
-      commitEntityListSetter(setter, next);
+      // Purani SQLite read save ke baad complete ho to poori list replace na kare — bump handler jaisa merge.
+      setter((prev) =>
+        mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), next as any[], orderByField)
+      );
     };
 
     if (isExplicitLocalRegistryRow) {
@@ -1477,7 +1481,12 @@ export const VoucherProvider = ({
               setStaff((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached));
               break;
             case "bank_accounts":
-              setAccounts((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached));
+              setAccounts((prev) =>
+                mergeEntityListsByIdOrKeepPrev(
+                  prev.filter(isAliveDoc),
+                  aliveCached.map((row) => normalizeBankAccountRow(row as Record<string, unknown>))
+                )
+              );
               break;
             case "taxes":
               setTaxes((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached));
@@ -2124,13 +2133,14 @@ export const VoucherProvider = ({
   }, [staff, voucherAggregates.staffMap]);
 
   const processedAccounts: ProcessedAccount[] = useMemo(() => {
-    return accounts.map(a => {
-        const stats = voucherAggregates.accountMap.get(a.id) || { debit: 0, credit: 0 };
+    return accounts.map((a) => {
+        const row = normalizeBankAccountRow(a as Record<string, unknown>) as Account;
+        const stats = voucherAggregates.accountMap.get(row.id) || { debit: 0, credit: 0 };
         return {
-            ...a,
+            ...row,
             debit: stats.debit,
             credit: stats.credit,
-            balance: (Number(a.openingBalance) || 0) + stats.debit - stats.credit
+            balance: (Number(row.openingBalance) || 0) + stats.debit - stats.credit
         };
     }).filter(a => !a.isDeleted);
   }, [accounts, voucherAggregates.accountMap]);

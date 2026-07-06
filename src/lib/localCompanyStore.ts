@@ -6,6 +6,7 @@
  */
 
 import { getBrowserDb } from "@/lib/localSqlite";
+import { mergePersistedLocalCloudSyncUserSettings } from "@/lib/localCloudSync/persistRegistryUserSettings";
 import { clearLocalAuth } from "@/lib/localApiClient";
 import { clearCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
 import { clearCloudCompanyPasswordUnlockSession } from "@/lib/cloudCompanyPasswordUnlockRemember";
@@ -55,12 +56,17 @@ export async function upsertLocalCompany(company: LocalCompanyDoc): Promise<void
   const db = await getBrowserDb();
   if (!db || !company?.id) return;
   const now = Date.now();
+  const existingRow = db.prepare(`SELECT data FROM companies WHERE id = ?`).get(company.id) as
+    | { data?: string }
+    | undefined;
+  const existing = existingRow?.data ? safeParseCompany(existingRow.data) : null;
+  const merged = mergePersistedLocalCloudSyncUserSettings(existing, company);
   // companies table keeps root company docs for local-only selector/context.
   db.prepare(
     `INSERT INTO companies(id, data, updatedAt)
      VALUES(?,?,?)
      ON CONFLICT(id) DO UPDATE SET data = excluded.data, updatedAt = excluded.updatedAt`
-  ).run(company.id, JSON.stringify(company), now);
+  ).run(merged.id, JSON.stringify(merged), now);
 }
 
 export async function getLocalCompanyById(

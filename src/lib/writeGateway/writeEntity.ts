@@ -18,7 +18,6 @@ import {
   type UpsertCompanyBrowserOptions,
 } from "@/lib/localCompanyDocMirror";
 import { canSyncCompanyToServer, enqueueCompanyDocOutbox, type VoucherOutboxOp } from "@/lib/localVoucherOutbox";
-import { maybeQueuePlServerMirrorAfterDocWrite } from "@/lib/plServerClientMirrorPush";
 import { assertCompanyAllowsLedgerMutations } from "@/lib/security/offlinePlanWriteGate";
 import { isStaticApkLedgerTransportMode } from "@/lib/staticApkLedgerArchitecture";
 import { buildLedgerTombstoneFields } from "@/lib/ledgerTombstone";
@@ -138,7 +137,6 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
         } catch (e) {
           return { ok: false, error: e instanceof Error ? e.message : "outbox delete enqueue failed" };
         }
-        void maybeQueuePlServerMirrorAfterDocWrite(companyId, collectionName, effectiveDocId, merged);
         return { ok: true, docId: effectiveDocId };
       }
       const canFlush = await canSyncCompanyToServer(companyId);
@@ -179,7 +177,6 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : "outbox enqueue failed" };
     }
-    void maybeQueuePlServerMirrorAfterDocWrite(companyId, collectionName, effectiveDocId, merged);
     void notifyRecycleBinAlertAfterWrite(fsCompanyId, companyId, collectionName, effectiveDocId, merged);
     return { ok: true, docId: effectiveDocId };
   }

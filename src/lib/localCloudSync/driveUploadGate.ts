@@ -7,6 +7,7 @@ const DRIVE_MUTATION_PATHS = new Set([
   "/api/local-cloud-sync/drive/upload-json",
   "/api/local-cloud-sync/drive/upload-backup",
   "/api/local-cloud-sync/drive/share-folder",
+  "/api/local-cloud-sync/drive/delete-file",
 ]);
 
 function companyIdFromDriveBody(body: unknown): string {

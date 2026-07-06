@@ -9,6 +9,8 @@
  * String in/out only (no import from `localVoucherOutbox`) — avoids circular deps; caller uses `outboxJsonStringify` / `outboxJsonParse`.
  */
 
+import { computeSha256HexFromStringUtf8 } from "@/lib/security/sha256Hex";
+
 /** Firestore marker + payload fields (same doc id / path as plaintext). */
 export const PL_ENCRYPTED_V1_FIELD = "plEncryptedV1";
 export const PL_ENCRYPTED_IV_FIELD = "plEncryptedIv";
@@ -31,16 +33,13 @@ export async function setBackupEncryptionSessionFromLogin(
   password: string
 ): Promise<void> {
   if (typeof window === "undefined" || !companyId) return;
-  const enc = new TextEncoder();
-  const raw = enc.encode(`${companyId}|${username.trim().toLowerCase()}|${password}`);
-  const buf = await crypto.subtle.digest("SHA-256", raw);
-  const hex = Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
   try {
+    const hex = await computeSha256HexFromStringUtf8(
+      `${companyId}|${username.trim().toLowerCase()}|${password}`
+    );
     sessionStorage.setItem(backupSessionKey(companyId), hex);
   } catch {
-    /* private mode */
+    /* private mode / crypto unavailable — login must not fail */
   }
 }
 

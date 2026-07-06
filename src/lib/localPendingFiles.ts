@@ -29,6 +29,7 @@ import { getLocalCompanyById, listLocalCompanies } from "@/lib/localCompanyStore
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { isPureLocalLedgerCompany } from "@/lib/companyStorageKind";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { shouldReadLedgerFromSqliteOnly } from "@/lib/companyStorageKind";
 import { shouldUseLocalCloudSync, isEligibleLocalDriveSyncCompanyRow } from "@/lib/localCloudSync/companyConfig";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
@@ -191,7 +192,9 @@ async function readCompanyDocForPendingSync(
     const [, cid, coll, did] = parts;
     const reg = await getLocalCompanyById(cid!, { includeDeleted: true });
     const readSqliteMirror =
-      (reg && isOfflineCompanyStorage(reg as { storageOption?: string })) ||
+      (reg &&
+        (isOfflineCompanyStorage(reg as { storageOption?: string }) ||
+          shouldReadLedgerFromSqliteOnly(reg as Parameters<typeof shouldReadLedgerFromSqliteOnly>[0]))) ||
       apkEmbeddedSqliteFirstWritesPreferred();
     if (readSqliteMirror) {
       const row = (await getCompanyDocFromBrowserDb(cid!, coll!, did!, {

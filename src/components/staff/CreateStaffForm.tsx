@@ -9,6 +9,7 @@ import { z } from "zod";
 import { doc, setDoc, collection, serverTimestamp, query, onSnapshot, Timestamp } from "firebase/firestore";
 import {
   stageEntityAvatarAndDocuments,
+  syncEntityAttachmentsAfterSave,
   uploadEntityAvatarAndDocumentsRemote,
   isProfileAvatarImageFile,
   isProfileDocumentFile,
@@ -510,6 +511,7 @@ export function CreateStaffForm({
         };
         await upsertCompanyDocInBrowserDb(companyId, "staff", localId, payload);
         await enqueueCompanyDocOutbox(companyId, "staff", "create", localId, payload);
+        syncEntityAttachmentsAfterSave(companyId);
         const showSyncHint = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1" && user.uid !== "local_guest_user";
         sonnerToast.success(showSyncHint ? "Saved. Will sync when online." : "Saved.", {
           id: toastId,
@@ -683,6 +685,7 @@ export function CreateStaffForm({
           };
           await upsertCompanyDocInBrowserDb(companyId, "staff", localId, payload as any);
           await enqueueCompanyDocOutbox(companyId, "staff", "create", localId, payload as any);
+          syncEntityAttachmentsAfterSave(companyId);
           sonnerToast.success("Saved. Will sync when online.", {
             id: toastId,
             description: `"${values.name}" was saved locally (offline).`,

@@ -25,6 +25,7 @@ import { StaticFastResumeSyncManager } from "@/components/StaticFastResumeSyncMa
 import { OnlineResumeRouteShield } from "@/components/OnlineResumeRouteShield";
 import { OfflineWarmSyncManager } from "@/components/OfflineWarmSyncManager";
 import { CompanyAttachmentOfflineBackfillManager } from "@/components/CompanyAttachmentOfflineBackfillManager";
+import { LocalCompanySqliteWarmBootstrap } from "@/components/LocalCompanySqliteWarmBootstrap";
 import { LiveMirrorFolderMissingDialog } from "@/components/LiveMirrorFolderMissingDialog";
 import { FirstDeviceCompanyHydrationOverlay } from "@/components/FirstDeviceCompanyHydrationOverlay";
 import { EmbeddedDeviceLockGate } from "@/components/EmbeddedDeviceLockGate";
@@ -52,6 +53,7 @@ import { PlMirrorExportDevBridge } from "@/components/settings/PlMirrorExportDev
 import { PlServerGateRefreshBootstrap } from "@/components/settings/PlServerGateRefreshBootstrap";
 import { primeLocalFileRefMetaRuntimeCache } from "@/lib/localPendingFiles";
 import { isPerfDebugEnabled } from "@/lib/perfDebug";
+import { ensureClientRandomUUIDPolyfill } from "@/lib/clientRandomUUID";
 
 function PresenceManager() {
     usePresence();
@@ -60,6 +62,7 @@ function PresenceManager() {
 
 export function Providers({ children }: { children: React.ReactNode }) {
     useEffect(() => {
+      ensureClientRandomUUIDPolyfill();
       if (process.env.NODE_ENV !== "production") {
         // Root client mount — agar har navigation par dubara dikhe to remount/root cause alag.
         console.log("[APP_BOOTSTRAP]", "Providers mount (client)");
@@ -118,6 +121,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 <OfflineWarmSyncManager />
                 {/* Online: mirror ki saari attachment URLs IndexedDB/native — offline par open jaisa online */}
                 <CompanyAttachmentOfflineBackfillManager />
+                <LocalCompanySqliteWarmBootstrap />
                 <LiveMirrorFolderMissingDialog />
                 <PresenceManager />
                 <PrintLogoPreloader />

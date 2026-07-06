@@ -5,7 +5,7 @@ import { firestore } from "@/lib/firebase";
 import { getFirebaseAuthUserForApi } from "@/lib/firebaseAuthForApi";
 import { postDriveJsonViaClient } from "@/lib/localCloudSync/driveApiClient";
 import { getLocalCompanyById, listLocalCompanies, upsertLocalCompany } from "@/lib/localCompanyStore";
-import { runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
+import { runLocalCloudSyncCycle, scheduleDriveAttachmentSyncAfterRestore } from "@/lib/localCloudSync/engine";
 import { mergeRemoteCloudSyncManifestIntoLocalCompany } from "@/lib/localCloudSync/companyConfig";
 import {
   CLOUD_SYNC_ENCRYPTION_KEY_REQUIRED_MSG,
@@ -13,8 +13,12 @@ import {
 } from "@/lib/localCloudSync/driveEncryption";
 import { setCloudSyncCursor } from "@/lib/localCloudSync/queue";
 import type { CloudSyncManifest, DriveSharedCompanyListItem } from "@/lib/localCloudSync/types";
+import { markDriveRestoreSelectionGrace } from "@/lib/driveRestoredLocalCompany";
+import { downloadAndMergeOpeningUsersFromDrive } from "@/lib/localCloudSync/openingDriveSnapshot";
 
 export type DriveSharedCompanyInvite = DriveSharedCompanyListItem;
+
+export type DriveSharedJoinCompleteSource = "select" | "join" | "resync";
 
 /** Owner uid lookup — selector me "Shared by" email ke saath. */
 async function resolveOwnerUidByEmail(email: string): Promise<string | null> {
@@ -184,6 +188,7 @@ export async function joinDriveSharedLocalCompany(
       ? { cloudSyncDriveDateFolderMode: manifest.cloudSyncDriveDateFolderMode }
       : {}),
     ...(companyPassword ? { password: companyPassword } : {}),
+    localRestoredFromDriveAt: Date.now(),
     updatedAt: Date.now(),
   });
 
@@ -202,10 +207,12 @@ export async function joinDriveSharedLocalCompany(
     lastError: null,
   });
 
-  const res = await runLocalCloudSyncCycle(canonicalCompanyId, { force: true });
+  const res = await runLocalCloudSyncCycle(canonicalCompanyId, { force: true, ledgerOnly: true });
   if (!res.ok) {
     throw new Error(res.error || "Sync failed after join");
   }
+  scheduleDriveAttachmentSyncAfterRestore(canonicalCompanyId);
+  markDriveRestoreSelectionGrace(canonicalCompanyId);
   return canonicalCompanyId;
 }
 
@@ -257,6 +264,7 @@ export async function resyncDriveLocalCompanyFromInvite(
       ? { cloudSyncDriveDateFolderMode: manifest.cloudSyncDriveDateFolderMode }
       : {}),
     ...(companyPassword ? { password: companyPassword } : {}),
+    localRestoredFromDriveAt: Date.now(),
     updatedAt: Date.now(),
   });
 
@@ -275,9 +283,34 @@ export async function resyncDriveLocalCompanyFromInvite(
     lastError: null,
   });
 
-  const res = await runLocalCloudSyncCycle(companyId, { force: true });
+  const res = await runLocalCloudSyncCycle(companyId, { force: true, ledgerOnly: true });
   if (!res.ok) {
     throw new Error(res.error || "Sync from Drive failed");
+  }
+  scheduleDriveAttachmentSyncAfterRestore(companyId);
+  markDriveRestoreSelectionGrace(companyId);
+  return companyId;
+}
+
+/** Connected Drive row — Select se pehle `opening/users.json` se login users device par lao. */
+export async function preloadDriveSharedCompanyLoginFromInvite(
+  invite: DriveSharedCompanyInvite
+): Promise<string> {
+  const locals = await listLocalCompanies({ includeDeleted: true });
+  const joined = findJoinedLocalCompanyForDriveInvite(invite, locals);
+  if (!joined?.id) {
+    throw new Error("Company not on this device yet. Use Join or Sync from Drive first.");
+  }
+  const companyId = String(joined.id).trim();
+  const syncRef = {
+    companyId,
+    companyName: invite.companyName,
+    driveSharedFolderId: invite.driveFolderId,
+  };
+  try {
+    await downloadAndMergeOpeningUsersFromDrive(companyId, syncRef);
+  } catch {
+    /* login users optional — company password / admin fallback ho sakta hai */
   }
   return companyId;
 }

@@ -2,6 +2,15 @@
 
 import { FirestorePermissionError } from "@/firebase/errors";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import {
+  markSuppressFirestorePermissionForCompany,
+  shouldSuppressFirestorePermissionConsole,
+} from "@/lib/firestorePermissionSuppress";
+
+export {
+  isExpectedFirestoreSnapshotPermissionDenial,
+  markSuppressFirestorePermissionForCompany,
+} from "@/lib/firestorePermissionSuppress";
 
 /** Firestore / Firebase permission error — runtime overlay ke bajay popup dikhane ke liye. */
 export function isFirestorePermissionLikeError(reason: unknown): boolean {
@@ -19,9 +28,10 @@ export function isFirestorePermissionLikeError(reason: unknown): boolean {
 
 /**
  * Local-only mode: Firestore deny expected (data SQLite se) — red error overlay / popup spam mat karo.
+ * Drive-shared local company: Firestore me row nahi — listener deny bhi expected.
  */
 export function shouldSuppressFirestorePermissionPopup(): boolean {
-  return isLocalOnlyMode();
+  return shouldSuppressFirestorePermissionConsole() || isLocalOnlyMode();
 }
 
 export const FIRESTORE_NO_PERMISSION_TITLE = "No permission";

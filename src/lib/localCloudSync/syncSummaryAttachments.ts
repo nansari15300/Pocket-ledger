@@ -53,3 +53,34 @@ export function countUniqueCloudSyncFileRefsInOps(ops: LocalCloudSyncOperation[]
   }
   return refs.size;
 }
+
+const VOUCHER_SYNC_TABLE = "vouchers";
+
+/**
+ * Sync summary — ek voucher = ek count (DR/CR legs ya create+update duplicate ops nahi).
+ * Pehle voucherNumber+type (RCPT-001 jaisa), phir stable doc id.
+ */
+export function voucherIdentityKeyFromOp(op: LocalCloudSyncOperation): string {
+  const p = op.payload ?? {};
+  const voucherNumber = String(p.voucherNumber ?? p.voucherNo ?? "").trim();
+  const type = String(p.type ?? p.voucherType ?? "").trim().toLowerCase();
+  if (voucherNumber) return `vn:${type}:${voucherNumber}`;
+  const docId = String(p.id ?? op.rowId ?? "").trim();
+  if (docId) return `id:${docId}`;
+  return `row:${String(op.rowId || "").trim()}`;
+}
+
+/** Sirf `vouchers` table ops — unique voucher identity keys. */
+export function collectUniqueVoucherIdentityKeysFromOps(ops: readonly LocalCloudSyncOperation[]): Set<string> {
+  const keys = new Set<string>();
+  for (const op of ops) {
+    if (op.table !== VOUCHER_SYNC_TABLE) continue;
+    const key = voucherIdentityKeyFromOp(op);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
+export function countUniqueVoucherOps(ops: readonly LocalCloudSyncOperation[]): number {
+  return collectUniqueVoucherIdentityKeysFromOps(ops).size;
+}

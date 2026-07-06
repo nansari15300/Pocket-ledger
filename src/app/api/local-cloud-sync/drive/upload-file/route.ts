@@ -14,6 +14,7 @@ export async function POST(req: NextRequest) {
   const body = (await req.json()) as {
     companyId?: string;
     companyName?: string;
+    driveSharedFolderId?: string;
     fileId?: string;
     remotePath?: string;
     sha256Hex?: string;
@@ -22,6 +23,8 @@ export async function POST(req: NextRequest) {
   };
   const companyId = String(body.companyId || "").trim();
   const companyName = typeof body.companyName === "string" ? body.companyName.trim() : undefined;
+  const driveSharedFolderId =
+    typeof body.driveSharedFolderId === "string" ? body.driveSharedFolderId.trim() : undefined;
   const fileId = String(body.fileId || "").trim();
   const base64 = String(body.base64 || "");
   if (!companyId || !base64) {
@@ -36,7 +39,8 @@ export async function POST(req: NextRequest) {
       remotePath,
       base64,
       body.contentType,
-      body.sha256Hex
+      body.sha256Hex,
+      { companyId, companyName, driveSharedFolderId }
     );
     return NextResponse.json({ ok: true, remotePath: res.remotePath, deduped: res.deduped ?? false });
   } catch (e) {

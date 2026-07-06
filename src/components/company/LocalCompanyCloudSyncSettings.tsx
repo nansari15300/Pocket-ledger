@@ -337,7 +337,8 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
 
   const onSyncIntervalChange = async (sec: CloudSyncIntervalSec) => {
     setSyncIntervalSec(sec);
-    await saveConfig({ cloudSyncIntervalSec: sec });
+    await patchLocalCompanyCloudSyncFields(companyId, { cloudSyncIntervalSec: sec });
+    reloadLocalCompanyRegistry();
   };
 
   const saveEncryptionFlags = async (data: boolean, files: boolean, forceReencrypt: boolean) => {

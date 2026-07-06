@@ -1,5 +1,7 @@
 "use client";
 
+import { clientRandomUUID } from "@/lib/clientRandomUUID";
+
 /**
  * Offline local companies: company users sirf browser SQLite company row me (localCompanyUsers).
  * Local Node API (127.0.0.1:3001) optional — baad me sync add ho sakta hai.
@@ -196,7 +198,7 @@ export function upsertUserInList(
 ): LocalCompanyUserRecord[] {
   const u = entry.username.trim().toLowerCase();
   const idx = list.findIndex((x) => x.username.toLowerCase() === u);
-  const id = idx >= 0 ? list[idx].id : `lcu_${crypto.randomUUID()}`;
+  const id = idx >= 0 ? list[idx].id : `lcu_${clientRandomUUID()}`;
   const row: LocalCompanyUserRecord = {
     id,
     username: entry.username.trim(),

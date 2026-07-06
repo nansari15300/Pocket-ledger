@@ -66,13 +66,20 @@ export function offlineCompanyHasLocalLoginUsers(company: unknown): boolean {
   return parseLocalCompanyUserRows((company as { localCompanyUsers?: unknown }).localCompanyUsers).length > 0;
 }
 
+/** Drive se shared join — Select / login se pehle company unlock check. */
+export function isDriveSharedLocalJoinRow(row: unknown): boolean {
+  if (!row || typeof row !== "object") return false;
+  return (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;
+}
+
 /** SQLite / list row: koi bhi unlock (password, local users, shared user password) zaroori hai? */
 export function companyDocRequiresUnlock(
   doc: unknown,
   userEmail?: string | null
 ): boolean {
   if (!doc || typeof doc !== "object") return false;
-  const row = doc as CompanyUnlockRow & { localCompanyUsers?: unknown };
+  const row = doc as CompanyUnlockRow & { localCompanyUsers?: unknown; driveSharedJoin?: unknown };
+  if (isDriveSharedLocalJoinRow(row)) return true;
   if (String(row.password ?? "").trim()) return true;
   if (offlineCompanyHasLocalLoginUsers(row)) return true;
   const se = getShareEntryForEmail(row, userEmail);
@@ -88,6 +95,7 @@ export function shouldPromptCompanyUnlock(company: CompanyUnlockRow, userEmail?:
     return !!company.password || onlineSharedHasPerUserPassword(company, userEmail);
   }
   if (isOfflineCompanyStorage(company)) {
+    if (isDriveSharedLocalJoinRow(company)) return true;
     if (company.password) return true;
     if (offlineCompanyHasLocalLoginUsers(company)) return true;
     const se = getShareEntryForEmail(company, userEmail || undefined);
@@ -101,10 +109,12 @@ export function shouldPromptCompanyUnlock(company: CompanyUnlockRow, userEmail?:
 export async function shouldPromptCompanyUnlockAsync(
   company: CompanyUnlockRow,
   userEmail?: string | null,
-  firebaseUid?: string
+  firebaseUid?: string,
+  /** Drive shared panel Select — remembered session ignore karke hamesha dialog. */
+  forcePrompt?: boolean
 ): Promise<boolean> {
   const id = String(company.id || "").trim();
-  if (id) {
+  if (!forcePrompt && id) {
     if (hasValidStoredOfflineUnlockSession(firebaseUid, id, userEmail)) return false;
     if (!isOfflineCompanyStorage(company) && readCloudCompanyPasswordUnlockSession(firebaseUid, id, userEmail)) {
       return false;

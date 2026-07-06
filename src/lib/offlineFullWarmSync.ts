@@ -49,7 +49,7 @@ import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { auth } from "@/lib/firebase";
 import { markEmbeddedFullWarmSucceeded } from "@/lib/embeddedWarmBootstrapFlags";
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
-import { isServerGateCompany } from "@/lib/companyStorageKind";
+import { isDeviceLocalCompany, isServerGateCompany, shouldReadLedgerFromSqliteOnly } from "@/lib/companyStorageKind";
 
 /** `_firestore_company_root` SQLite row — authoritative company snapshot for offline dashboards */
 export const COMPANY_ROOT_MIRROR_COLLECTION = "_firestore_company_root";
@@ -73,7 +73,10 @@ export function isCloudBackedCompanyShape(c: Company | null): boolean {
 export function shouldPrefetchAttachmentsForCompany(c: Company | null): boolean {
   if (!c) return false;
   if (isCloudBackedCompanyShape(c)) return true;
-  return isServerGateCompany(c);
+  if (isServerGateCompany(c)) return true;
+  // Device-local / Drive-sync SQLite ledger — web + static dono par attachment warm.
+  if (shouldReadLedgerFromSqliteOnly(c) || isDeviceLocalCompany(c)) return true;
+  return false;
 }
 
 const SCRAPE_SKIP_KEYS = new Set([
@@ -544,6 +547,7 @@ export async function runEmbeddedAttachmentPrefetchPhase(args: {
     maxUrls: prefetchOverrides?.maxUrls ?? defaultMaxUrls,
     prioritizeUrls: peekAttachmentPrefetchPrioritySnapshot(),
     signal,
+    mirrorCompanyId: trim,
     skipLeadingZeroReport: continueProgress === true,
     onItemDone: (done, total) => {
       const pct = total <= 0 ? 100 : Math.min(100, Math.round((done / Math.max(1, total)) * 100));

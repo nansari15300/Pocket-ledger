@@ -43,6 +43,15 @@ export function isLocalAppServerDevPreview(): boolean {
   return isLocalhostDevPreview();
 }
 
+/** Settings → Server nav (EXE / APK / loopback / `npm run dev`). */
+export function isLocalAppServerSettingsNavVisible(): boolean {
+  if (typeof window === "undefined") return process.env.NODE_ENV === "development";
+  if (process.env.NODE_ENV === "development") return true;
+  if (getEmbeddedLockShellKind() === "exe" || getEmbeddedLockShellKind() === "apk") return true;
+  if (isElectronPackagedShell()) return true;
+  return isLocalAppServerHost();
+}
+
 export function isAdminPanelDevPreview(): boolean {
   return isLocalhostDevPreview();
 }

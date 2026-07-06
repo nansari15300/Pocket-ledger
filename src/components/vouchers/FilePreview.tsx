@@ -1066,10 +1066,13 @@ export function FilePreview({
         // Drive ref: blob download karke preview type detect karo, taaki second device par bhi attachment dikh sake.
         if (isDriveFileRef(file)) {
           try {
+            const driveCompanyId =
+              String(pathCompanyId || voucherAttachmentFb?.companyId || "").trim() || undefined;
             // Offline preload cache → pending `local:` → Drive (turant preview / edit jaisa).
             const b =
-              (await getRemoteAttachmentBlobPreferOfflineCache(file, controller.signal)) ||
-              (await getBlobFromLocalFileRef(file));
+              (await getRemoteAttachmentBlobPreferOfflineCache(file, controller.signal, {
+                companyId: driveCompanyId,
+              })) || (await getBlobFromLocalFileRef(file, { companyId: driveCompanyId }));
             if (b && b.size > 0) {
               const kind = await sniffBlobKindForPreview(b);
               if (kind === "pdf") resolvedType = "pdf";

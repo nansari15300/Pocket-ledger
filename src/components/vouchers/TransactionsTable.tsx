@@ -1004,10 +1004,19 @@ export function TransactionsTable({
     let idleHandle: number | null = null;
     let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
     const runWarm = () => {
+      const warmCompanyId = companyId?.trim() || undefined;
       // Idle-time warm keeps row mount responsive while making first hover near-instant.
-      void prewarmHoverPreviewHttpsUrls(visibleAttachmentUrls, { signal: ac.signal, maxUrls: 220 });
+      void prewarmHoverPreviewHttpsUrls(visibleAttachmentUrls, {
+        signal: ac.signal,
+        maxUrls: 220,
+        companyId: warmCompanyId,
+      });
       // Tick-click open ko production-jaisa banane ke liye visible row files pehle se instant-open cache me bhejo.
-      void prewarmVisibleAttachmentRefsForInstantOpen(visibleAttachmentUrls, { signal: ac.signal, maxUrls: 220 });
+      void prewarmVisibleAttachmentRefsForInstantOpen(visibleAttachmentUrls, {
+        signal: ac.signal,
+        maxUrls: 220,
+        companyId: warmCompanyId,
+      });
     };
     if (typeof browserWindow.requestIdleCallback === "function") {
       idleHandle = browserWindow.requestIdleCallback(runWarm, { timeout: 450 });
@@ -1025,7 +1034,7 @@ export function TransactionsTable({
       }
       if (timeoutHandle != null) globalThis.clearTimeout(timeoutHandle);
     };
-  }, [visibleAttachmentUrls]);
+  }, [visibleAttachmentUrls, companyId]);
   const dateCols = dateSystem === "Both" ? 2 : 1;
   const userCol = context === 'note' ? 0 : 1;
   const fileCol = showFileBySelection ? 1 : 0;

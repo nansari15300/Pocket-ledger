@@ -11,6 +11,8 @@ import {
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { getRemoteAttachmentBlobPreferOfflineCache } from "@/lib/offlineAttachmentUrlCache";
 import { sniffBlobKindForPreview } from "@/lib/attachmentFormatLabel";
+import { useCompany } from "@/hooks/useCompany";
+import { readActiveAttachmentCompanyId } from "@/lib/firestorePermissionSuppress";
 
 type Props = {
   src?: string | null;
@@ -21,6 +23,8 @@ type Props = {
   className?: string;
   /** Initials fallback — e.g. Inter Company sky pill */
   fallbackClassName?: string;
+  /** Drive `opening/avatars` — shared folder download ke liye */
+  companyId?: string;
 };
 
 /**
@@ -34,7 +38,12 @@ export function ResolvedEntityAvatar({
   fallbackSlot,
   className,
   fallbackClassName,
+  companyId: companyIdProp,
 }: Props) {
+  const { companyId: shellCompanyId } = useCompany();
+  const attachmentCompanyId =
+    companyIdProp ?? shellCompanyId ?? readActiveAttachmentCompanyId() ?? undefined;
+
   const [localBlobUrl, setLocalBlobUrl] = React.useState<string | null>(null);
   const blobUrlRef = React.useRef<string | null>(null);
   /** Remote HTTPS / `voucher-files/…` — sirf yahan banaya `blob:` revoke (local Capacitor displayUrl nahi). */
@@ -67,6 +76,7 @@ export function ResolvedEntityAvatar({
       const blob = await getBlobFromLocalFileRef(src, {
         allowNativeRead: false,
         context: "ResolvedEntityAvatar",
+        companyId: attachmentCompanyId,
       });
       if (cancelled) return;
       if (blobUrlRef.current) {
@@ -88,7 +98,7 @@ export function ResolvedEntityAvatar({
         blobUrlRef.current = null;
       }
     };
-  }, [src]);
+  }, [src, attachmentCompanyId]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -115,7 +125,9 @@ export function ResolvedEntityAvatar({
 
     void (async () => {
       try {
-        const blob = await getRemoteAttachmentBlobPreferOfflineCache(trimmed);
+        const blob = await getRemoteAttachmentBlobPreferOfflineCache(trimmed, undefined, {
+          companyId: attachmentCompanyId,
+        });
         if (cancelled) return;
         if (blob && blob.size > 0) {
           const kind = await sniffBlobKindForPreview(blob);
@@ -144,7 +156,7 @@ export function ResolvedEntityAvatar({
       cancelled = true;
       revokeRemote();
     };
-  }, [src]);
+  }, [src, attachmentCompanyId]);
 
   const imageSrc = !src?.trim()
     ? undefined

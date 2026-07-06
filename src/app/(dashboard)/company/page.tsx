@@ -12,12 +12,13 @@ import { auth, firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { useOnlineStatus } from "@/hooks/use-online-status";
-import { getLocalCompanyById } from "@/lib/localCompanyStore";
-import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { getLocalCompanyById, listLocalCompanies, localCompanyRowIsDeleted } from "@/lib/localCompanyStore";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
 import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 import { activateOnlineGateForCompanyPicker } from "@/lib/gates/gateClientDefaults";
+import { isLocalSelectorCompanyRow } from "@/lib/companyStorageKind";
+import { normalizeRowForLocalDriveSyncUi } from "@/lib/localCloudSync/companyConfig";
 
 /** Device-local SQLite rows — online Firestore picker list me merge (Drive restore / join ke baad). */
 function mergeDeviceLocalCompaniesIntoMap(
@@ -32,12 +33,19 @@ function mergeDeviceLocalCompaniesIntoMap(
       c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
   for (const c of localRows) {
     if (!isCompanyVisibleInCompanyPage(c)) continue;
-    if (!isOfflineCompanyStorage(c)) continue;
+    if (localCompanyRowIsDeleted(c as { isDeleted?: unknown })) continue;
+    if (!isLocalSelectorCompanyRow(c)) continue;
     const driveSharedJoin =
       (c as Company & { driveSharedJoin?: boolean }).driveSharedJoin === true;
-    companyMap.set(c.id, {
+    const normalized = normalizeRowForLocalDriveSyncUi({
       ...c,
+      id: c.id,
+      name: typeof c.name === "string" ? c.name : c.id,
+    });
+    companyMap.set(c.id, {
+      ...normalized,
       storageOption: "local",
+      syncedFromCloud: false,
       isOwned: driveSharedJoin ? false : isOwnedByUser(c),
     });
   }
@@ -78,8 +86,34 @@ function SelectCompanyPageContent() {
     loading: companyContextLoading,
     reloadLocalCompanyRegistry,
     triggerSync,
+    localCompanyRegistryEpoch,
   } = useCompany();
   const [newlyCreatedCompany, setNewlyCreatedCompany] = useState<Company | null>(null);
+  const [sqliteLocalRows, setSqliteLocalRows] = useState<Company[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const rows = await listLocalCompanies();
+        if (cancelled) return;
+        setSqliteLocalRows(
+          rows
+            .filter((r) => !localCompanyRowIsDeleted(r))
+            .map((r) => ({
+              ...(r as Company),
+              id: r.id,
+              name: typeof r.name === "string" ? r.name : r.id,
+            }))
+        );
+      } catch {
+        if (!cancelled) setSqliteLocalRows([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [localCompanyRegistryEpoch]);
 
   useEffect(() => {
     activateOnlineGateForCompanyPicker();
@@ -142,14 +176,14 @@ function SelectCompanyPageContent() {
     if (newlyCreatedCompany && !companyMap.has(newlyCreatedCompany.id)) {
       companyMap.set(newlyCreatedCompany.id, newlyCreatedCompany);
     }
-    mergeDeviceLocalCompaniesIntoMap(companyMap, registryRows as Company[], user);
+    mergeDeviceLocalCompaniesIntoMap(companyMap, sqliteLocalRows, user);
     return filterSharedOnlyCompaniesForSuperAdminInMainApp(
       Array.from(companyMap.values()),
       user ? { uid: user.uid, email: user.email } : null,
       isSuperAdminUser,
       "/company"
     );
-}, [user, newlyCreatedCompany, allCompaniesRegistry, contextCompanies, isSuperAdminUser]);
+}, [user, newlyCreatedCompany, allCompaniesRegistry, contextCompanies, isSuperAdminUser, sqliteLocalRows]);
 
   if (authLoading || companyContextLoading) {
     return (

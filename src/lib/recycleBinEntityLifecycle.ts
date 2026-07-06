@@ -21,6 +21,8 @@ import { isLocalFileRef, removePendingFile } from "@/lib/localPendingFiles";
 import { writeEntity, type WriteEntityResult } from "@/lib/writeGateway";
 import { patchVoucherFields, softDeleteVoucherMoveToRecycleBin } from "@/lib/writeGateway/voucherActionsClient";
 import { purgeInterCompanyCounterpartyPartyIfUnused } from "@/lib/interCompany/cleanupInterCompanyCounterpartyParty";
+import { collectDriveAttachmentRefsFromDoc, deleteDriveAttachmentRef } from "@/lib/localCloudSync/driveAttachmentDelete";
+import { shouldUseLocalCloudSync } from "@/lib/localCloudSync/companyConfig";
 
 /** Drive/cloud_sync permanent delete marker — remote device SQLite row hard-remove kare. */
 export const PL_PERMANENT_PURGE_KEY = "plPermanentlyPurged";
@@ -242,9 +244,18 @@ function collectAttachmentFileRefsFromValue(value: unknown, bucket: Set<string>)
   }
 }
 
-/** Cloud sync removed — legacy drive refs are not deleted remotely. */
-export async function deleteDriveAttachmentRefsForDoc(_companyId: string, _data: Record<string, unknown>): Promise<void> {
-  return;
+/** Permanent delete — Drive attachment refs remote se hatao. */
+export async function deleteDriveAttachmentRefsForDoc(companyId: string, data: Record<string, unknown>): Promise<void> {
+  const cid = String(companyId || "").trim();
+  if (!cid || !(await shouldUseLocalCloudSync(cid))) return;
+  const refs = collectDriveAttachmentRefsFromDoc(data);
+  for (const ref of refs) {
+    try {
+      await deleteDriveAttachmentRef(cid, ref);
+    } catch {
+      /* best effort */
+    }
+  }
 }
 
 /** Pending `local:` attachment bytes — permanent delete par cleanup. */

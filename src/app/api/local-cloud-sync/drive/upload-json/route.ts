@@ -11,10 +11,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
   const body = (await req.json()) as {
+    companyId?: string;
+    companyName?: string;
+    driveSharedFolderId?: string;
     relativePath?: string;
     body?: string;
     contentType?: string;
   };
+  const companyId = String(body.companyId || "").trim();
+  const companyName = typeof body.companyName === "string" ? body.companyName.trim() : undefined;
+  const driveSharedFolderId =
+    typeof body.driveSharedFolderId === "string" ? body.driveSharedFolderId.trim() : undefined;
   const relativePath = String(body.relativePath || "").trim();
   const payload = String(body.body ?? "");
   if (!relativePath || !payload) {
@@ -25,7 +32,8 @@ export async function POST(req: NextRequest) {
       auth.uid,
       relativePath,
       payload,
-      body.contentType || "application/json"
+      body.contentType || "application/json",
+      companyId ? { companyId, companyName, driveSharedFolderId } : undefined
     );
     return NextResponse.json({ ok: true, remotePath: res.remotePath });
   } catch (e) {

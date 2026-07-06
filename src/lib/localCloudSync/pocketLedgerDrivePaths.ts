@@ -254,3 +254,14 @@ export function companyIdFromPocketLedgerDriveRemotePath(remotePath: string): st
   if (idx < 0) return null;
   return seg.slice(idx + 2) || null;
 }
+
+/** `Pocket Ledger/{companySeg}/attachments/...` → `attachments/...` (shared join download API). */
+export function branchRelativePathFromPocketLedgerRemotePath(remotePath: string): string | null {
+  const parts = String(remotePath || "")
+    .split("/")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length < 4 || parts[0] !== POCKET_LEDGER_DRIVE_ROOT) return null;
+  const branchRel = parts.slice(2).join("/");
+  return branchRel || null;
+}

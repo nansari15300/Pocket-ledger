@@ -21,6 +21,7 @@ import {
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { normalizeAttachmentUrlForDevicePreview } from "@/lib/attachmentHoldClipboard";
+import { peekHoverCachedBlobUrl, rememberHoverBlobUrl } from "@/lib/attachmentHoverBlobCache";
 import { getBlobFromAttachmentRefPreferLocalFirst } from "@/lib/attachmentPreviewResolve";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { useCompany } from "@/hooks/useCompany";
@@ -30,76 +31,30 @@ import {
   resolveStaticAttachmentDisplay,
 } from "@/lib/staticAttachmentDisplayUrl";
 
-/** Dubara hover par turant — blob URL session `Map` (static/APK me repeat IndexedDB + decode kam) */
-const HOVER_HTTPS_UI_CACHE_MAX = 80;
-const hoverHttpsBlobUrlByKey = new Map<string, string>();
-const hoverHttpsBlobUrlLru: string[] = [];
-
-/** Same attachment ke signed URL/token different hone par bhi ek hi cache key use ho. */
-function hoverPreviewBlobCacheKey(urlKey: string): string {
-  return normalizeAttachmentUrlForDevicePreview(String(urlKey || "").trim());
-}
-
-function peekHoverCachedBlobUrl(urlKey: string): string | undefined {
-  // Stable normalized key se repeat hover/click par cache miss avoid hota hai.
-  const k = hoverPreviewBlobCacheKey(urlKey);
-  const ou = hoverHttpsBlobUrlByKey.get(k);
-  if (!ou) return undefined;
-  const i = hoverHttpsBlobUrlLru.indexOf(k);
-  if (i >= 0) {
-    hoverHttpsBlobUrlLru.splice(i, 1);
-    hoverHttpsBlobUrlLru.push(k);
-  }
-  return ou;
-}
-
-function rememberHoverBlobUrl(urlKey: string, objectUrl: string): void {
-  // Stable normalized key ke saath blob URL persist karo taaki same file re-fetch na ho.
-  const k = hoverPreviewBlobCacheKey(urlKey);
-  const existing = hoverHttpsBlobUrlByKey.get(k);
-  if (existing && existing !== objectUrl) {
-    try {
-      URL.revokeObjectURL(existing);
-    } catch {
-      /* ignore */
-    }
-  }
-  hoverHttpsBlobUrlByKey.set(k, objectUrl);
-  const idx = hoverHttpsBlobUrlLru.indexOf(k);
-  if (idx >= 0) hoverHttpsBlobUrlLru.splice(idx, 1);
-  hoverHttpsBlobUrlLru.push(k);
-  while (hoverHttpsBlobUrlLru.length > HOVER_HTTPS_UI_CACHE_MAX) {
-    const drop = hoverHttpsBlobUrlLru.shift();
-    if (!drop) break;
-    const ou = hoverHttpsBlobUrlByKey.get(drop);
-    hoverHttpsBlobUrlByKey.delete(drop);
-    if (ou) {
-      try {
-        URL.revokeObjectURL(ou);
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-}
-
 export async function prewarmHoverPreviewHttpsUrls(
   urls: readonly string[],
-  options?: { signal?: AbortSignal; maxUrls?: number }
+  options?: { signal?: AbortSignal; maxUrls?: number; companyId?: string }
 ): Promise<void> {
   // Idle path: visible rows ke liye LRU + `getRemoteAttachmentBlobPreferOfflineCache` — hover turant; app-start par global preload nahi.
   // Poori company bytes background: `CompanyAttachmentOfflineBackfillManager` / `runEmbeddedAttachmentPrefetchPhase` + ab wahan `prioritizeUrls` bhi.
-  // HTTPS signed URLs + raw Storage object-path — offline avatar / hover dono IndexedDB se hit.
+  // HTTPS signed URLs + raw Storage object-path + `local:`/`drive:` device refs — offline avatar / hover dono IndexedDB se hit.
   const maxUrls = Math.max(1, Math.min(400, options?.maxUrls ?? 200));
+  const { readActiveAttachmentCompanyId } = await import("@/lib/firestorePermissionSuppress");
+  const companyId = options?.companyId ?? readActiveAttachmentCompanyId() ?? undefined;
   const unique = [...new Set(urls.map((u) => String(u || "").trim()).filter((u) => {
-    // Transaction table visible rows: HTTPS + raw Storage path dono warm — gallery / avatar hover offline hit.
-    return /^https?:\/\//i.test(u) || looksLikeFirebaseStorageObjectPath(u);
+    // Transaction table visible rows: HTTPS + raw Storage path + Drive/local refs warm.
+    return (
+      /^https?:\/\//i.test(u) ||
+      looksLikeFirebaseStorageObjectPath(u) ||
+      isLocalFileRef(u) ||
+      isDriveFileRef(u)
+    );
   }))].slice(0, maxUrls);
   for (const url of unique) {
     if (options?.signal?.aborted) break;
     if (peekHoverCachedBlobUrl(url)) continue;
     try {
-      const blob = await getRemoteAttachmentBlobPreferOfflineCache(url, options?.signal);
+      const blob = await getRemoteAttachmentBlobPreferOfflineCache(url, options?.signal, { companyId });
       if (!blob || blob.size === 0) continue;
       const objectUrl = URL.createObjectURL(blob);
       rememberHoverBlobUrl(url, objectUrl);
@@ -111,7 +66,7 @@ export async function prewarmHoverPreviewHttpsUrls(
 
 export async function prewarmVisibleAttachmentRefsForInstantOpen(
   urls: readonly string[],
-  options?: { signal?: AbortSignal; maxUrls?: number }
+  options?: { signal?: AbortSignal; maxUrls?: number; companyId?: string }
 ): Promise<void> {
   // Instant-open behavior: visible rows ke attachments ko same prewarm pipeline se pehle hydrate karo.
   await prewarmHoverPreviewHttpsUrls(urls, options);
@@ -205,7 +160,7 @@ function HoverPreviewHttpsAwareImage(props: {
         cancelled = true;
         if (timeoutId !== undefined) window.clearTimeout(timeoutId);
         ac.abort();
-        if (blobUrlToRevoke && hoverHttpsBlobUrlByKey.get(hoverPreviewBlobCacheKey(u)) !== blobUrlToRevoke) {
+        if (blobUrlToRevoke && peekHoverCachedBlobUrl(u) !== blobUrlToRevoke) {
           try {
             URL.revokeObjectURL(blobUrlToRevoke);
           } catch {
@@ -257,7 +212,7 @@ function HoverPreviewHttpsAwareImage(props: {
       cancelled = true;
       if (timeoutId !== undefined) window.clearTimeout(timeoutId);
       ac.abort();
-      if (blobUrlToRevoke && hoverHttpsBlobUrlByKey.get(hoverPreviewBlobCacheKey(u)) !== blobUrlToRevoke) {
+      if (blobUrlToRevoke && peekHoverCachedBlobUrl(u) !== blobUrlToRevoke) {
         try {
           URL.revokeObjectURL(blobUrlToRevoke);
         } catch {

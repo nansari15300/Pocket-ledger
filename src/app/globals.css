@@ -59,9 +59,9 @@ html[data-pl-app-ui-zoom-shell="android-zoom"] .min-h-dvh {
     padding-right: 2px !important;
   }
 
-  /* Master–detail list scroll: rows ke beech 3px gap; dono taraf 2px inset (mobile APK jaisa full width) */
+  /* Master–detail list scroll: rows ke beech 3px gap; label ke neeche bhi 3px; dono taraf 2px inset */
   .pl-master-list-ul {
-    @apply flex flex-col gap-[3px] px-[2px] pb-2 pt-0;
+    @apply flex flex-col gap-[3px] px-[2px] pb-2 pt-[3px];
   }
   /* List row: unselected halka border — globals.css theme hover/selected se control */
   .pl-master-list-item {

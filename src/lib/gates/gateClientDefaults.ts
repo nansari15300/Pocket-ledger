@@ -3,7 +3,7 @@
 import { BUILTIN_ONLINE_GATE_ID } from "@/lib/gates/gateTypes";
 import { activateGate } from "@/lib/gates/gateRuntime";
 import { defaultBuiltinGateId } from "@/lib/gates/gateClientKind";
-import { getActiveGate, readActiveGateId } from "@/lib/gates/gateStore";
+import { readActiveGateId } from "@/lib/gates/gateStore";
 
 export { isBundledEmbeddedGateClient, defaultBuiltinGateId } from "@/lib/gates/gateClientKind";
 
@@ -18,10 +18,8 @@ export function ensureWebDefaultOnlineGate(): void {
   activateGate(defaultBuiltinGateId());
 }
 
-/** Company picker: local_server gate mat hatao — server tab companies dikhein. */
+/** Company picker: hamesha Online gate — local/server gate se online companies hide na hon. */
 export function activateOnlineGateForCompanyPicker(): void {
   if (typeof window === "undefined") return;
-  const active = getActiveGate();
-  if (active.type === "local_server") return;
   activateGate(BUILTIN_ONLINE_GATE_ID);
 }

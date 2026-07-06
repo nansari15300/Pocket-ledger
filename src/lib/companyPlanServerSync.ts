@@ -12,6 +12,7 @@ import { hostedApiFetch } from "@/lib/hostedApiFetch";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { bumpLocalCompanyRegistry } from "@/lib/applyStripePlanToLocalCompany";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
+import { isDriveCloudSyncLocalRegistryRow } from "@/lib/driveRestoredLocalCompany";
 import { clearCompanyPlanLocalCache, readCompanyPlanLocalCache, writeCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
 import { normalizePlanIdForClient, planTierIndex } from "@/config/plans";
 import { highestPlanIdAmongOwnedCompanies } from "@/lib/accountPlanForOwner";
@@ -125,6 +126,7 @@ async function applyAuthoritativePlanPayloadToLocal(opts: {
 
   const storageLower = String((local as { storageOption?: string }).storageOption || "").toLowerCase();
   const isDeviceLocalCompany = storageLower === "local";
+  const isDriveLocalRegistry = isDriveCloudSyncLocalRegistryRow(local as Record<string, unknown>);
 
   const offlineUntil =
     typeof data.offlineLicenseValidUntilMs === "number" && Number.isFinite(data.offlineLicenseValidUntilMs)
@@ -138,7 +140,9 @@ async function applyAuthoritativePlanPayloadToLocal(opts: {
     authoritativeCompanyId: firebaseCompanyId,
     ...(!isDeviceLocalCompany
       ? { syncedFromCloud: true, syncPolicy: "online", storageOption: "firebase" }
-      : { syncedFromCloud: true }),
+      : isDriveLocalRegistry
+        ? { syncedFromCloud: false, syncPolicy: "offline", storageOption: "local" }
+        : { syncedFromCloud: true }),
     ...(offlineUntil != null ? { offlineLicenseValidUntilMs: offlineUntil } : {}),
     ...(data.stripeCustomerId != null && data.stripeCustomerId !== ""
       ? { stripeCustomerId: data.stripeCustomerId }

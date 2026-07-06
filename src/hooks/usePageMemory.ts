@@ -3,6 +3,15 @@
 import { useEffect, useRef } from "react";
 import { useIsMobileLayoutResolved } from "@/hooks/use-mobile";
 
+/** Desktop master-detail: click par `replaceState` turant location update — `useSearchParams` stale reh sakta hai. */
+function effectiveUrlSelectedId(fallback: string | null | undefined): string | null {
+  if (typeof window !== "undefined") {
+    const loc = new URLSearchParams(window.location.search);
+    if (loc.has("selected")) return loc.get("selected");
+  }
+  return fallback ?? null;
+}
+
 export function usePageMemory<T extends { id: string }>(
   storageKey: string,
   activeView: string,
@@ -88,8 +97,9 @@ export function usePageMemory<T extends { id: string }>(
 
     // URL has selected param: valid ho to usi ko restore karo.
     // Invalid/stale id (e.g. deleted row / different company) ho to fallback auto-select chalao.
-    if (urlSelectedId) {
-      const urlItem = currentItems.find((i) => i.id === urlSelectedId);
+    const urlSelected = effectiveUrlSelectedId(urlSelectedId);
+    if (urlSelected) {
+      const urlItem = currentItems.find((i) => i.id === urlSelected);
       if (urlItem) {
         if (urlItem.id !== selected?.id) {
           setSelected(urlItem);

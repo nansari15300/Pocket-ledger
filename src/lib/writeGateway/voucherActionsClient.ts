@@ -82,7 +82,6 @@ import { normalizeFileUrlsField, dedupeVoucherAttachmentUrlList } from "@/lib/vo
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
-import { maybeQueuePlServerMirrorAfterDocWrite } from "@/lib/plServerClientMirrorPush";
 
 /** Edit save: transient `blob:` preview URLs ya khali `fileUrls` se `local:` / Drive refs mat hatao. */
 function persistableVoucherAttachmentUrls(raw: unknown): string[] {
@@ -664,7 +663,6 @@ export async function patchVoucherFields(
     }
 
     await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
-    void maybeQueuePlServerMirrorAfterDocWrite(companyId, "vouchers", voucherId, payload);
     return;
   }
   try {
@@ -1021,7 +1019,6 @@ async function saveVoucherOfflineLocalCreate(
   await upsertCompanyDocInBrowserDb(companyId, "vouchers", newId, payload);
   await enqueueVoucherOutbox(companyId, "create", newId, payload);
   dispatchSavedVoucherAttachmentUrls(companyId, newId, payload);
-  void maybeQueuePlServerMirrorAfterDocWrite(companyId, "vouchers", newId, payload);
   return { id: newId };
 }
 
@@ -1325,7 +1322,6 @@ export async function saveVoucher(
     await upsertCompanyDocInBrowserDb(writeCompanyIdLocal, "vouchers", voucherId!, mergedLocal);
     await enqueueVoucherOutbox(writeCompanyIdLocal, "update", voucherId!, mergedLocal);
     dispatchSavedVoucherAttachmentUrls(writeCompanyIdLocal, voucherId!, mergedLocal);
-    void maybeQueuePlServerMirrorAfterDocWrite(writeCompanyIdLocal, "vouchers", voucherId!, mergedLocal);
     return { id: voucherId! };
   }
 

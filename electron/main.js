@@ -40,6 +40,12 @@ if (process.platform === "win32") {
 
 // Do EXE instances = do `localhost` ports = Firebase Auth / IndexedDB alag origin ("login delete") — doosra instance band + pehla focus.
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
+const IS_PHASE1B_RUNTIME_VERIFY = process.env.PL_PHASE1B_RUNTIME_VERIFY === "1";
+const phase1bVerifyStats = { bridgeIpc: 0, broadcast: 0, mirrorPushBroadcast: 0 };
+
+if (IS_PHASE1B_RUNTIME_VERIFY && process.env.PL_PHASE1B_VERIFY_USER_DATA) {
+  app.setPath("userData", process.env.PL_PHASE1B_VERIFY_USER_DATA);
+}
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {
@@ -302,12 +308,12 @@ async function waitForWindowBridgeFn(wc, fnName, timeoutMs = 25000) {
 
 /** Hidden localhost tab — sharing on par company list + login bridge (tray-only server ke liye). */
 async function ensureServerDataBridgeWindow() {
-  if (!app.isPackaged) return null;
+  if (!app.isPackaged && !IS_PHASE1B_RUNTIME_VERIFY) return null;
   const cfg = localAppServer.loadConfig(userDataPath());
   if (!localAppServer.shouldHostLocalServer(cfg) || !cfg.userWantsRunning) return null;
   const port = localAppServer.getAppUiServerPort();
   if (!port) return null;
-  const bridgeUrl = `http://127.0.0.1:${port}/`;
+  const bridgeUrl = `http://localhost:${port}/?pl_server_data_bridge=1`;
   if (!serverDataBridgeWindow || serverDataBridgeWindow.isDestroyed()) {
     serverDataBridgeWindow = new BrowserWindow({
       show: false,
@@ -327,7 +333,9 @@ async function ensureServerDataBridgeWindow() {
   }
   const wc = serverDataBridgeWindow.webContents;
   const current = wc.getURL() || "";
-  if (!current.includes(`127.0.0.1:${port}`) && !current.includes(`localhost:${port}`)) {
+  const onCanonicalBridgeOrigin =
+    current.includes(`localhost:${port}`) && current.includes("pl_server_data_bridge=1");
+  if (!onCanonicalBridgeOrigin) {
     await wc.loadURL(bridgeUrl);
   }
   await waitForWindowBridgeFn(wc, "__plListShareableLocalCompanies");
@@ -336,6 +344,7 @@ async function ensureServerDataBridgeWindow() {
 
 /** P2P client push ke baad saari app tabs ko SQLite bump — hidden bridge window alag process me likhta hai. */
 async function broadcastBrowserDbCollectionBump(companyId, collection) {
+  if (IS_PHASE1B_RUNTIME_VERIFY) phase1bVerifyStats.broadcast += 1;
   const script = `(function(){
     try {
       if (typeof window.__plInvalidateBrowserDbCache === "function") window.__plInvalidateBrowserDbCache();
@@ -359,39 +368,21 @@ async function broadcastBrowserDbCollectionBump(companyId, collection) {
   );
 }
 
+/** Local Server SQLite/export/push — canonical hidden bridge only (visible tabs are UI). */
 async function runInServerAppRenderer(script, opts = {}) {
   const requireFn = opts.requireFn || "";
   const accept = opts.accept;
-  const contentsList = getAppTabWebContentsList();
-  for (const wc of contentsList) {
-    try {
-      const url = wc.getURL();
-      if (!url || url.startsWith("devtools://")) continue;
-      if (requireFn) {
-        const ready = await wc.executeJavaScript(
-          `typeof window[${JSON.stringify(requireFn)}] === "function"`,
-          true
-        );
-        if (!ready) continue;
-      }
-      const result = await wc.executeJavaScript(script, true);
-      if (typeof accept === "function" ? accept(result) : result != null) return result;
-    } catch (_) {
-      /* next tab */
-    }
-  }
   const bridge = await ensureServerDataBridgeWindow();
-  if (bridge && !bridge.isDestroyed()) {
-    if (requireFn) await waitForWindowBridgeFn(bridge, requireFn);
-    try {
-      const result = await bridge.executeJavaScript(script, true);
-      if (typeof accept === "function" ? accept(result) : result != null) return result;
-    } catch (_) {}
-  }
+  if (!bridge || bridge.isDestroyed()) return null;
+  if (requireFn) await waitForWindowBridgeFn(bridge, requireFn);
+  try {
+    const result = await bridge.executeJavaScript(script, true);
+    if (typeof accept === "function" ? accept(result) : result != null) return result;
+  } catch (_) {}
   return null;
 }
 
-/** Collection mirror export — saare renderers try karo; stale empty vouchers skip karke best score lo. */
+/** Collection mirror export — canonical server-data bridge only. */
 async function runMirrorCollectionExportWithMeta(companyId, collection) {
   const exportStartedMs = Date.now();
   const cid = String(companyId || "").trim();
@@ -419,89 +410,61 @@ async function runMirrorCollectionExportWithMeta(companyId, collection) {
   })()`
       : null;
 
+  const bridge = await ensureServerDataBridgeWindow();
+  if (!bridge || bridge.isDestroyed()) {
+    return { docs: null, meta: null };
+  }
+  await waitForWindowBridgeFn(bridge, "__plExportCompanyMirrorCollection");
+
+  const rendererStartedMs = Date.now();
+  const label = mirrorRendererLabel(bridge);
+  let sawSuspiciousEmptyVouchers = false;
   let bestRows = null;
   let bestScore = -1;
-  let bestRenderer = null;
-  let bestWc = null;
-  let sawSuspiciousEmptyVouchers = false;
-  const seenWc = new Set();
 
-  async function tryRenderer(wc) {
-    const rendererStartedMs = Date.now();
-    if (!wc || wc.isDestroyed()) return;
-    if (seenWc.has(wc.id)) return;
-    seenWc.add(wc.id);
-    const label = mirrorRendererLabel(wc);
-    const url = wc.getURL();
-    if (!url || url.startsWith("devtools://")) return;
-    const ready = await wc.executeJavaScript(
-      `typeof window.__plExportCompanyMirrorCollection === "function"`,
-      true
-    );
-    if (!ready) return;
-    const result = await wc.executeJavaScript(exportScript, true);
+  try {
+    const result = await bridge.executeJavaScript(exportScript, true);
     const rendererDurationMs = Date.now() - rendererStartedMs;
-    if (!Array.isArray(result)) return;
-
-    if (col === "vouchers" && result.length === 0 && partiesScript) {
-      try {
-        const parties = await wc.executeJavaScript(partiesScript, true);
-        if (Array.isArray(parties) && parties.length > 0) {
-          sawSuspiciousEmptyVouchers = true;
-          logMirrorExportDev("renderer_skipped", {
-            renderer: label,
-            collection: col,
-            reason: "suspicious_empty_vouchers",
-            partiesCount: parties.length,
-            mirror_export_duration_ms: rendererDurationMs,
-          });
-          return;
+    if (Array.isArray(result)) {
+      if (col === "vouchers" && result.length === 0 && partiesScript) {
+        try {
+          const parties = await bridge.executeJavaScript(partiesScript, true);
+          if (Array.isArray(parties) && parties.length > 0) {
+            sawSuspiciousEmptyVouchers = true;
+            logMirrorExportDev("renderer_skipped", {
+              renderer: label,
+              collection: col,
+              reason: "suspicious_empty_vouchers",
+              partiesCount: parties.length,
+              mirror_export_duration_ms: rendererDurationMs,
+            });
+          }
+        } catch (_) {
+          /* fall through — treat as authoritative empty */
         }
-      } catch (_) {
-        /* fall through — treat as authoritative empty */
+      }
+      if (!sawSuspiciousEmptyVouchers) {
+        bestScore = mirrorExportRendererScore(result, label);
+        bestRows = result;
+        logMirrorExportDev("renderer_result", {
+          renderer: label,
+          collection: col,
+          count: result.length,
+          cacheReload: true,
+          score: bestScore,
+          fingerprint: mirrorDatasetFingerprintHex(result),
+          mirror_export_duration_ms: rendererDurationMs,
+        });
       }
     }
-
-    const score = mirrorExportRendererScore(result, label);
-    const fingerprint = mirrorDatasetFingerprintHex(result);
-    logMirrorExportDev("renderer_result", {
-      renderer: label,
-      collection: col,
-      count: result.length,
-      cacheReload: true,
-      score,
-      fingerprint,
-      mirror_export_duration_ms: rendererDurationMs,
-    });
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestRows = result;
-      bestRenderer = label;
-      bestWc = wc;
-    }
-  }
-
-  for (const wc of getAppTabWebContentsList()) {
-    try {
-      await tryRenderer(wc);
-    } catch (_) {
-      /* next tab */
-    }
-  }
-
-  const bridge = await ensureServerDataBridgeWindow();
-  if (bridge && !bridge.isDestroyed()) {
-    await waitForWindowBridgeFn(bridge, "__plExportCompanyMirrorCollection");
-    try {
-      await tryRenderer(bridge);
-    } catch (_) {}
+  } catch (_) {
+    /* bridge export failed */
   }
 
   if (Array.isArray(bestRows)) {
     const mirrorExportDurationMs = Date.now() - exportStartedMs;
     logMirrorExportDev("export_selected", {
-      renderer: bestRenderer,
+      renderer: label,
       collection: col,
       count: bestRows.length,
       score: bestScore,
@@ -511,12 +474,12 @@ async function runMirrorCollectionExportWithMeta(companyId, collection) {
     return {
       docs: bestRows,
       meta: {
-        renderer: bestRenderer,
+        renderer: label,
         fingerprint: mirrorDatasetFingerprintHex(bestRows),
         score: bestScore,
         exportMs: mirrorExportDurationMs,
         voucherCount: bestRows.length,
-        bestWc,
+        bestWc: bridge,
       },
     };
   }
@@ -602,36 +565,22 @@ localAppServer.setLocalCompanyAuthProvider(async (companyId, username, password)
       }
     })()`;
   let lastError = "Invalid username or password";
-  const contentsList = getAppTabWebContentsList();
-  for (const wc of contentsList) {
-    try {
-      const url = wc.getURL();
-      if (!url || url.startsWith("devtools://")) continue;
-      const ready = await wc.executeJavaScript(
-        `typeof window.__plValidateLocalCompanyLogin === "function"`,
-        true
-      );
-      if (!ready) continue;
-      const result = await wc.executeJavaScript(script, true);
-      if (result && typeof result === "object" && result.ok === true) return result;
-      if (result && typeof result === "object" && result.error) {
-        lastError = String(result.error);
-      }
-    } catch (_) {
-      /* next tab */
-    }
-  }
   const bridge = await ensureServerDataBridgeWindow();
-  if (bridge && !bridge.isDestroyed()) {
-    await waitForWindowBridgeFn(bridge, "__plValidateLocalCompanyLogin");
-    try {
-      const result = await bridge.executeJavaScript(script, true);
-      if (result && typeof result === "object" && result.ok === true) return result;
-      if (result && typeof result === "object" && result.error) {
-        lastError = String(result.error);
-      }
-    } catch (_) {}
+  if (!bridge || bridge.isDestroyed()) {
+    return {
+      ok: false,
+      error:
+        "Server data bridge is not ready. On the server PC keep Pocket Ledger open (or wait ~10s after starting sharing), then try again.",
+    };
   }
+  await waitForWindowBridgeFn(bridge, "__plValidateLocalCompanyLogin");
+  try {
+    const result = await bridge.executeJavaScript(script, true);
+    if (result && typeof result === "object" && result.ok === true) return result;
+    if (result && typeof result === "object" && result.error) {
+      lastError = String(result.error);
+    }
+  } catch (_) {}
   if (lastError === "bridge_missing") {
     return {
       ok: false,
@@ -752,6 +701,7 @@ localAppServer.setCompanyMirrorPushProvider(async (companyId, collection, docs) 
   const out = result && typeof result === "object" ? result : { ok: false, error: "push_failed" };
   if (out.ok) {
     noteMirrorPushSuccess(companyId);
+    if (IS_PHASE1B_RUNTIME_VERIFY) phase1bVerifyStats.mirrorPushBroadcast += 1;
     await broadcastBrowserDbCollectionBump(companyId, collection);
   }
   return {
@@ -1421,7 +1371,7 @@ async function reloadAllAppBrowserViews() {
 
 /** After port change: keep the same route (e.g. /dashboard) instead of sending users back to login "/". */
 async function reloadAllAppBrowserViewsPreservePath(port) {
-  const newBase = `http://127.0.0.1:${port}`;
+  const newBase = `http://localhost:${port}`;
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     const state = windowTabs.get(win.id);
@@ -1810,6 +1760,28 @@ if (gotSingleInstanceLock) {
     return googleAuthExternal.signInWithGoogleExternal(shell, options || {});
   });
 
+  ipcMain.handle("pl-bridge-authoritative-company-doc-upsert", async (_event, payload) => {
+    if (IS_PHASE1B_RUNTIME_VERIFY) phase1bVerifyStats.bridgeIpc += 1;
+    const cid = String(payload?.companyId || "").trim();
+    const col = String(payload?.collectionName || "").trim();
+    const result = await runInServerAppRenderer(
+      `(async () => {
+        try {
+          if (typeof window.__plHostBridgeCompanyDocUpsert !== "function") return { ok: false, error: "bridge_missing" };
+          return await window.__plHostBridgeCompanyDocUpsert(${JSON.stringify(payload)});
+        } catch (e) {
+          return { ok: false, error: e && e.message ? e.message : "bridge_upsert_failed" };
+        }
+      })()`,
+      { requireFn: "__plHostBridgeCompanyDocUpsert" }
+    );
+    const out = result && typeof result === "object" ? result : { ok: false, error: "bridge_upsert_failed" };
+    if (out.ok && out.written !== false && payload?.notify !== false && cid && col) {
+      await broadcastBrowserDbCollectionBump(cid, col);
+    }
+    return out;
+  });
+
   ipcMain.handle("pl-local-server-get-status", async () => {
     return localAppServer.getStatus(userDataPath());
   });
@@ -2177,6 +2149,49 @@ if (gotSingleInstanceLock) {
   });
 
   buildAppMenu();
+
+  if (IS_PHASE1B_RUNTIME_VERIFY) {
+    const {
+      runPhase1bRuntimeVerify,
+      runPhase1bRuntimeVerifyRestartPhase,
+    } = require("./phase1bRuntimeVerify");
+    const verifyPhase = String(process.env.PL_PHASE1B_VERIFY_PHASE || "all").trim();
+    const verifyDeps = {
+      app,
+      appRoot: __dirname,
+      preloadPath: path.join(__dirname, "app-content-preload.js"),
+      userDataPath: userDataPath(),
+      localAppServer,
+      rewriteReconciliationDocumentUrl,
+      isAllowedFirebaseProxyTarget,
+      startSharedLocalServer,
+      stopSharingOnly: async () => {
+        await localAppServer.stopSharingServer();
+      },
+      ensureServerDataBridgeWindow,
+      runInServerAppRenderer,
+      runMirrorCollectionExportWithMeta,
+      getVerifyStats: () => ({ ...phase1bVerifyStats }),
+      resetVerifyStats: () => {
+        phase1bVerifyStats.bridgeIpc = 0;
+        phase1bVerifyStats.broadcast = 0;
+        phase1bVerifyStats.mirrorPushBroadcast = 0;
+      },
+    };
+    try {
+      const report =
+        verifyPhase === "restart-b"
+          ? await runPhase1bRuntimeVerifyRestartPhase(verifyDeps)
+          : await runPhase1bRuntimeVerify(verifyDeps);
+      process.stdout.write(`\n__PL_PHASE1B_VERIFY_REPORT__\n${JSON.stringify(report, null, 2)}\n`);
+      app.exit(report.allPassed ? 0 : 1);
+    } catch (e) {
+      process.stderr.write(String(e?.stack || e?.message || e));
+      app.exit(1);
+    }
+    return;
+  }
+
   await createWindow();
   syncLocalServerTray();
   app.on("activate", () => {

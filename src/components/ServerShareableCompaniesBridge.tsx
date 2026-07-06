@@ -54,6 +54,17 @@ declare global {
       companyId: string,
       collection?: string
     ) => Promise<{ ok: boolean; first: unknown; second: unknown }>;
+    __plHostBridgeCompanyDocUpsert?: (payload: {
+      companyId: string;
+      collectionName: string;
+      docId: string;
+      data: unknown;
+      notify?: boolean;
+      skipCloudSyncEnqueue?: boolean;
+      skipPlanMutationGate?: boolean;
+      force?: boolean;
+    }) => Promise<{ ok: boolean; written?: boolean; error?: string }>;
+    __plIsCanonicalServerBridge?: boolean;
   }
 }
 
@@ -62,6 +73,35 @@ export function ServerShareableCompaniesBridge() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (isPlRemoteServerClientMode()) return;
+
+    try {
+      if (new URLSearchParams(window.location.search).get("pl_server_data_bridge") === "1") {
+        window.__plIsCanonicalServerBridge = true;
+      }
+    } catch {
+      /* ignore */
+    }
+
+    window.__plHostBridgeCompanyDocUpsert = async (payload) => {
+      const companyId = String(payload?.companyId || "").trim();
+      const collectionName = String(payload?.collectionName || "").trim();
+      const docId = String(payload?.docId || "").trim();
+      if (!companyId || !collectionName || !docId) {
+        return { ok: false, error: "missing_fields" };
+      }
+      const { hostBridgeCommitCompanyDoc, deserializeLocalDbValue } = await import("@/lib/localCompanyDocMirror");
+      const raw = payload?.data;
+      const data =
+        raw && typeof raw === "object" && !Array.isArray(raw)
+          ? (deserializeLocalDbValue(raw) as Record<string, unknown>)
+          : {};
+      return hostBridgeCommitCompanyDoc(companyId, collectionName, docId, data, {
+        notify: payload?.notify !== false,
+        skipCloudSyncEnqueue: payload?.skipCloudSyncEnqueue,
+        skipPlanMutationGate: payload?.skipPlanMutationGate,
+        force: payload?.force,
+      });
+    };
 
     window.__plListShareableLocalCompanies = async () => {
       const rows = await listLocalCompanies();
@@ -82,8 +122,9 @@ export function ServerShareableCompaniesBridge() {
     };
 
     window.__plExportCompanyMirrorBundle = async (companyId) => {
+      const { flushPendingBrowserDbSave, clearBrowserDbCache, getBrowserDb } = await import("@/lib/localSqlite");
+      await flushPendingBrowserDbSave();
       clearBrowserDbCache();
-      const { getBrowserDb } = await import("@/lib/localSqlite");
       await getBrowserDb();
       const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
       const { listCompanyDocsFromBrowserDb } = await import("@/lib/localCompanyDocMirror");
@@ -99,8 +140,9 @@ export function ServerShareableCompaniesBridge() {
     };
 
     window.__plExportCompanyMirrorCollection = async (companyId, collection) => {
+      const { flushPendingBrowserDbSave, clearBrowserDbCache, getBrowserDb } = await import("@/lib/localSqlite");
+      await flushPendingBrowserDbSave();
       clearBrowserDbCache();
-      const { getBrowserDb } = await import("@/lib/localSqlite");
       await getBrowserDb();
       const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
       const { listCompanyDocsFromBrowserDb } = await import("@/lib/localCompanyDocMirror");
@@ -237,6 +279,8 @@ export function ServerShareableCompaniesBridge() {
     }
 
     return () => {
+      delete window.__plHostBridgeCompanyDocUpsert;
+      delete window.__plIsCanonicalServerBridge;
       delete window.__plListShareableLocalCompanies;
       delete window.__plValidateLocalCompanyLogin;
       delete window.__plExportCompanyMirrorBundle;

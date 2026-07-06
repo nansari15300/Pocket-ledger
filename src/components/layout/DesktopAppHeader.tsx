@@ -77,6 +77,7 @@ import { Badge } from "../ui/badge";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { planSyncFailureUserMessage } from "@/lib/companyPlanServerSync";
 import { cn } from "@/lib/utils";
+import { DriveCloudSyncHeaderIndicator } from "@/components/layout/DriveCloudSyncHeaderIndicator";
 import { usePendingInterCompanySystemJoinCount } from "@/lib/interCompany/usePendingInterCompanySystemJoinCount";
 import { useMasterDetailHeaderIdSnapshot } from "@/hooks/useMasterDetailHeaderIdSnapshot";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
@@ -1552,7 +1553,8 @@ export function DesktopAppHeader() {
                 <AddNewButtonOnReportPage />
               </div>
             </div>
-            <div className="ml-2 flex shrink-0 items-center">
+            <div className="ml-2 flex shrink-0 items-center gap-1">
+              <DriveCloudSyncHeaderIndicator />
               <UserProfileButton />
             </div>
           </div>
@@ -1604,6 +1606,7 @@ export function DesktopAppHeader() {
             <div className="flex min-w-0 flex-shrink-0 items-center gap-2">
               {/* Desktop: pehle Add New (mobile pe stripe me profile ke pehle) — purani daen-cluster order */}
               <AddNewButtonOnReportPage />
+              <DriveCloudSyncHeaderIndicator />
               <UserProfileButton />
               <CopyLedgerHeaderButton />
               <ShareForReconciliationHeaderButton />

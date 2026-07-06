@@ -5,6 +5,7 @@ import { Toaster } from '@/components/ui/toaster';
 import { Providers } from './providers';
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { PocketSerwistProvider } from "@/components/serwist/PocketSerwistProvider";
+import { Phase1bRuntimeVerifyShim } from "@/components/Phase1bRuntimeVerifyShim";
 
 export const metadata: Metadata = {
   applicationName: 'Pocket Ledger',
@@ -63,6 +64,7 @@ export default function RootLayout({
             {children}
           </Providers>
         </PocketSerwistProvider>
+        <Phase1bRuntimeVerifyShim />
         <Toaster />
         <SonnerToaster />
       </body>

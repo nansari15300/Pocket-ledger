@@ -56,6 +56,17 @@ export async function fetchAttachmentRefBlob(
       companyId: options?.companyId,
     });
     if (blob && blob.size > 0) return blob;
+    if (options?.galleryUrls?.length) {
+      for (const g of options.galleryUrls) {
+        const gt = String(g || "").trim();
+        if (!isDriveFileRef(gt)) continue;
+        const driveBlob = await getBlobFromLocalFileRef(gt, {
+          context: "fetchAttachmentRefBlobLocalGalleryDrive",
+          companyId: options?.companyId,
+        });
+        if (driveBlob && driveBlob.size > 0) return driveBlob;
+      }
+    }
     if (options?.companyId) {
       const { fetchPlServerAttachmentBlob } = await import("@/lib/plServerAttachmentFetch");
       const remote = await fetchPlServerAttachmentBlob(options.companyId, u, options?.signal);

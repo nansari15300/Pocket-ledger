@@ -1,4 +1,5 @@
 import type { Company } from "@/hooks/useCompany";
+import { isDriveCloudSyncLocalRegistryRow } from "@/lib/driveRestoredLocalCompany";
 import { isCloudLinkedCompanyStorage, isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 
 type CompanyStorageRow = {
@@ -41,17 +42,41 @@ export function companyRowUsesSqliteLedgerWrites(
   return isOfflineCompanyStorage(c) || isDeviceLocalCompany(c);
 }
 
+/** Company picker Local tab — device-local, Drive folder sync, server gate (Settings drive picker jaisa). */
+export function isLocalSelectorCompanyRow(
+  c: (CompanyStorageRow & {
+    cloudSyncDriveFolderId?: unknown;
+    cloudSyncEnabled?: unknown;
+    cloudSyncProvider?: unknown;
+    driveSharedJoin?: unknown;
+  }) | null | undefined
+): boolean {
+  if (!c) return false;
+  if (isDeviceLocalCompany(c) || isServerGateCompany(c)) return true;
+  if (isDriveCloudSyncLocalRegistryRow(c as Record<string, unknown>)) return true;
+  if (String(c.cloudSyncDriveFolderId ?? "").trim()) return true;
+  if ((c as { driveSharedJoin?: unknown }).driveSharedJoin === true) return true;
+  return false;
+}
+
 /** Handover / Delete dropdown: cloud-synced company (Firestore row as source of truth for handover) */
 export function isOnlineCompanyRow(c: Company): boolean {
-  return !isDeviceLocalCompany(c);
+  return !isLocalSelectorCompanyRow(c);
 }
 
 export function isSharedOnlineCompany(c: CompanyStorageRow | null | undefined): boolean {
   if (!c) return false;
-  return !c.isOwned && !isDeviceLocalCompany(c);
+  return !c.isOwned && !isLocalSelectorCompanyRow(c);
 }
 
-/** LAN / remote server gate se mirrored ya shared company — Local tab se alag Server Gate tab me. */
+/** Shared local / Drive join / server-gate mirror — Local tab me "Shared" section. */
+export function isSharedLocalCompany(c: CompanyStorageRow | null | undefined): boolean {
+  if (!c || c.isOwned) return false;
+  if (isSharedOnlineCompany(c)) return false;
+  return isLocalSelectorCompanyRow(c);
+}
+
+/** LAN / remote server gate se mirrored ya shared company — Local tab me (Server Gate tab removed). */
 export function isServerGateCompany(
   c: (CompanyStorageRow & { plServerShared?: boolean }) | null | undefined
 ): boolean {
@@ -81,18 +106,18 @@ export function shouldReadLedgerFromSqliteOnly(
 ): boolean {
   if (!c) return false;
   if (isServerGateCompany(c)) return true;
+  if (isDriveCloudSyncLocalRegistryRow(c as Record<string, unknown>)) return true;
   if (String(c.syncPolicy ?? "").toLowerCase() === "offline") return true;
   return isPureLocalLedgerCompany(c);
 }
 
-export type CompanyListTab = "local" | "online" | "server";
+export type CompanyListTab = "local" | "online";
 
 export type SelectorCompanyBuckets = {
   localOwnedCompanies: Company[];
   sharedLocalCompanies: Company[];
   cloudOwnedCompanies: Company[];
   sharedCloudCompanies: Company[];
-  serverTabCompanies: Company[];
   localTabCompanies: Company[];
   onlineTabCompanies: Company[];
 };
@@ -109,29 +134,17 @@ function dedupeCompaniesById(companies: Company[]): Company[] {
 export function partitionCompaniesForSelector(companies: Company[]): SelectorCompanyBuckets {
   const rows = dedupeCompaniesById(companies.filter((c): c is Company => c != null && Boolean(c?.id)));
   const owned = rows.filter((c) => c.isOwned);
-  const localOwnedCompanies = owned.filter((c) => isDeviceLocalCompany(c));
-  const cloudOwnedCompanies = owned.filter((c) => !isDeviceLocalCompany(c));
+  const localOwnedCompanies = owned.filter((c) => isLocalSelectorCompanyRow(c));
+  const cloudOwnedCompanies = owned.filter((c) => !isLocalSelectorCompanyRow(c));
   const sharedCloudCompanies = rows.filter((c) => isSharedOnlineCompany(c));
-  const sharedLocalCompanies = rows.filter(
-    (c) =>
-      !c.isOwned &&
-      isDeviceLocalCompany(c) &&
-      !isSharedOnlineCompany(c) &&
-      !isServerGateCompany(c)
-  );
-  const serverTabCompanies = rows.filter((c) => isServerGateCompany(c));
-  const localTabCompanies = dedupeCompaniesById(
-    [...localOwnedCompanies, ...sharedLocalCompanies].filter((c) => !isServerGateCompany(c))
-  );
-  const onlineTabCompanies = dedupeCompaniesById(
-    [...cloudOwnedCompanies, ...sharedCloudCompanies].filter((c) => !isServerGateCompany(c))
-  );
+  const sharedLocalCompanies = rows.filter((c) => isSharedLocalCompany(c));
+  const localTabCompanies = dedupeCompaniesById([...localOwnedCompanies, ...sharedLocalCompanies]);
+  const onlineTabCompanies = dedupeCompaniesById([...cloudOwnedCompanies, ...sharedCloudCompanies]);
   return {
     localOwnedCompanies,
     sharedLocalCompanies,
     cloudOwnedCompanies,
     sharedCloudCompanies,
-    serverTabCompanies,
     localTabCompanies,
     onlineTabCompanies,
   };
@@ -145,9 +158,7 @@ export function defaultSelectorTab(
   if (id) {
     if (buckets.localTabCompanies.some((c) => c.id === id)) return "local";
     if (buckets.onlineTabCompanies.some((c) => c.id === id)) return "online";
-    if (buckets.serverTabCompanies.some((c) => c.id === id)) return "server";
   }
-  if (buckets.serverTabCompanies.length > 0) return "server";
   if (buckets.localTabCompanies.length > 0) return "local";
   return "online";
 }
@@ -163,10 +174,13 @@ export function ensureSelectedInTabList(
   if (!id || list.some((c) => c.id === id)) return list;
   const selected = pool.find((c) => c.id === id);
   if (!selected) return list;
-  const isLocal = isDeviceLocalCompany(selected);
-  if (tab === "server" && isServerGateCompany(selected)) return [selected, ...list];
-  if (tab === "local" && isLocal && !isServerGateCompany(selected)) return [selected, ...list];
-  if (tab === "online" && !isLocal && !isServerGateCompany(selected)) return [selected, ...list];
+  const isLocalTabRow =
+    isDeviceLocalCompany(selected) ||
+    isServerGateCompany(selected) ||
+    isSharedLocalCompany(selected);
+  if (tab === "local" && isLocalTabRow) return [selected, ...list];
+  if (tab === "online" && !isLocalTabRow && !isServerGateCompany(selected)) return [selected, ...list];
+  if (tab === "online" && isSharedOnlineCompany(selected)) return [selected, ...list];
   return list;
 }
 

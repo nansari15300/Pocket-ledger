@@ -10,8 +10,10 @@ import {
   LEGACY_DRIVE_SYNC_ROOT,
   POCKET_LEDGER_DRIVE_BRANCH,
   POCKET_LEDGER_DRIVE_ROOT,
+  branchRelativePathFromPocketLedgerRemotePath,
   buildPocketLedgerDriveRelativePath,
   legacyDriveCompanyFolderSegment,
+  pocketLedgerCompanyFolderSegment,
   pocketLedgerCompanyFolderSegmentCandidates,
   pocketLedgerDriveBackupFileName,
   parsePocketLedgerCompanyFolderSegment,
@@ -510,14 +512,63 @@ export async function driveUploadBinaryAtRemotePath(
   return { remotePath };
 }
 
+export type DriveUploadCompanyContext = {
+  companyId: string;
+  companyName?: string;
+  driveSharedFolderId?: string;
+};
+
+/** Shared join / owner — bytes company folder ke andar (branch-relative), galat Pocket Ledger sibling mat banao. */
+export async function driveUploadBinaryAtCompanyBranchPath(
+  uid: string,
+  ctx: DriveUploadCompanyContext,
+  branchRelativePath: string,
+  base64: string,
+  contentType = "application/octet-stream"
+): Promise<{ remotePath: string }> {
+  const rel = String(branchRelativePath || "")
+    .split("/")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (rel.length < 1) throw new Error("Invalid branch relative path");
+  const ref = toCompanyRef(ctx.companyId, ctx.companyName, ctx.driveSharedFolderId);
+  const tokens = await loadDriveTokens(uid);
+  const auth = oauthClient(tokens);
+  const drive = google.drive({ version: "v3", auth });
+  const companyFolderId = await ensureCompanyRootFolder(drive, ref);
+  const fileName = rel[rel.length - 1]!;
+  let parentId = companyFolderId;
+  for (const seg of rel.slice(0, -1)) {
+    parentId = await ensureFolder(drive, parentId, seg);
+  }
+  const buf = Buffer.from(base64, "base64");
+  await upsertBinaryFileInFolder(drive, parentId, fileName, buf, contentType);
+  const remotePath = [POCKET_LEDGER_DRIVE_ROOT, pocketLedgerCompanyFolderSegment(ref), ...rel].join("/");
+  return { remotePath };
+}
+
 export async function driveUploadAttachmentFile(
   uid: string,
   remotePath: string,
   base64: string,
   contentType?: string,
-  sha256Hex?: string
+  sha256Hex?: string,
+  companyContext?: DriveUploadCompanyContext
 ): Promise<{ remotePath: string; deduped?: boolean }> {
   void sha256Hex;
+  const branchRel = companyContext?.companyId
+    ? branchRelativePathFromPocketLedgerRemotePath(remotePath)
+    : null;
+  if (branchRel && companyContext) {
+    const res = await driveUploadBinaryAtCompanyBranchPath(
+      uid,
+      companyContext,
+      branchRel,
+      base64,
+      contentType || "application/octet-stream"
+    );
+    return { remotePath: res.remotePath };
+  }
   const res = await driveUploadBinaryAtRemotePath(uid, remotePath, base64, contentType || "application/octet-stream");
   return { remotePath: res.remotePath };
 }
@@ -797,13 +848,59 @@ export async function driveListPocketLedgerCompaniesForJoin(
   return merged;
 }
 
+/** JSON / text upsert — company folder ke andar (opening snapshot, encrypted wrappers). */
+export async function driveUploadJsonAtCompanyBranchPath(
+  uid: string,
+  ctx: DriveUploadCompanyContext,
+  branchRelativePath: string,
+  body: string,
+  contentType = "application/json"
+): Promise<{ remotePath: string }> {
+  const rel = String(branchRelativePath || "")
+    .split("/")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (rel.length < 1) throw new Error("Invalid branch relative path");
+  const ref = toCompanyRef(ctx.companyId, ctx.companyName, ctx.driveSharedFolderId);
+  const tokens = await loadDriveTokens(uid);
+  const auth = oauthClient(tokens);
+  const drive = google.drive({ version: "v3", auth });
+  const companyFolderId = await ensureCompanyRootFolder(drive, ref);
+  const fileName = rel[rel.length - 1]!;
+  let parentId = companyFolderId;
+  for (const seg of rel.slice(0, -1)) {
+    parentId = await ensureFolder(drive, parentId, seg);
+  }
+  const media = { mimeType: contentType, body: driveMediaBody(body) };
+  const q = `'${parentId}' in parents and name = '${fileName.replace(/'/g, "\\'")}' and trashed = false`;
+  const list = await drive.files.list({ q, fields: "files(id)", pageSize: 1 });
+  const existingId = list.data.files?.[0]?.id;
+  if (existingId) {
+    await drive.files.update({ fileId: existingId, media });
+  } else {
+    await drive.files.create({
+      requestBody: { name: fileName, parents: [parentId] },
+      media,
+    });
+  }
+  const remotePath = [POCKET_LEDGER_DRIVE_ROOT, pocketLedgerCompanyFolderSegment(ref), ...rel].join("/");
+  return { remotePath };
+}
+
 /** JSON / text file upsert — opening snapshot + encrypted wrappers. */
 export async function driveUploadJsonAtRemotePath(
   uid: string,
   remotePath: string,
   body: string,
-  contentType = "application/json"
+  contentType = "application/json",
+  companyContext?: DriveUploadCompanyContext
 ): Promise<{ remotePath: string }> {
+  const branchRel = companyContext?.companyId
+    ? branchRelativePathFromPocketLedgerRemotePath(remotePath)
+    : null;
+  if (branchRel && companyContext) {
+    return driveUploadJsonAtCompanyBranchPath(uid, companyContext, branchRel, body, contentType);
+  }
   const parts = String(remotePath || "")
     .split("/")
     .map((p) => p.trim())
@@ -834,6 +931,37 @@ export async function driveUploadJsonAtRemotePath(
     });
   }
   return { remotePath };
+}
+
+export async function driveDeleteFileAtCompanyBranchPath(
+  uid: string,
+  ctx: DriveUploadCompanyContext,
+  branchRelativePath: string
+): Promise<boolean> {
+  const rel = String(branchRelativePath || "")
+    .split("/")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (rel.length < 1) return false;
+  const ref = toCompanyRef(ctx.companyId, ctx.companyName, ctx.driveSharedFolderId);
+  const tokens = await loadDriveTokens(uid);
+  const auth = oauthClient(tokens);
+  const drive = google.drive({ version: "v3", auth });
+  const companyFolderId = await resolveCompanyRootFolderId(drive, ref, "find");
+  if (!companyFolderId) return false;
+  const fileName = rel[rel.length - 1]!;
+  let parentId = companyFolderId;
+  for (const seg of rel.slice(0, -1)) {
+    const next = await findChildFolder(drive, parentId, seg);
+    if (!next) return false;
+    parentId = next;
+  }
+  const q = `'${parentId}' in parents and name = '${fileName.replace(/'/g, "\\'")}' and trashed = false`;
+  const list = await drive.files.list({ q, fields: "files(id)", pageSize: 1, supportsAllDrives: true, includeItemsFromAllDrives: true });
+  const fileId = list.data.files?.[0]?.id;
+  if (!fileId) return false;
+  await drive.files.delete({ fileId, supportsAllDrives: true });
+  return true;
 }
 
 export async function driveDeleteFileByRemotePath(uid: string, remotePath: string): Promise<void> {

@@ -99,12 +99,8 @@ export async function resolveCloudSyncEncryptionPassphrase(
   const reg = company ?? (await getLocalCompanyById(cid, { includeDeleted: true }));
   const companyPw = String((reg as { password?: string } | null)?.password ?? "").trim();
   if (companyPw) {
-    const enc = new TextEncoder();
-    const raw = enc.encode(`${cid}|cloud_sync_company|${companyPw}`);
-    const buf = await crypto.subtle.digest("SHA-256", raw);
-    return Array.from(new Uint8Array(buf))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+    const { computeSha256HexFromStringUtf8 } = await import("@/lib/security/sha256Hex");
+    return computeSha256HexFromStringUtf8(`${cid}|cloud_sync_company|${companyPw}`);
   }
   return getBackupEncryptionPassphraseFromSession(cid);
 }

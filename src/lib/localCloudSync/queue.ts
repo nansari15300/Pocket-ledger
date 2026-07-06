@@ -167,6 +167,34 @@ export async function countPendingLocalCloudSyncOps(companyId: string): Promise<
   return Number(row?.c) || 0;
 }
 
+/** Download apply se pehle — abhi upload pending local rows mat overwrite karo. */
+export async function pendingLocalCloudSyncRowKeySet(companyId: string): Promise<Set<string>> {
+  const pending = await listPendingLocalCloudSyncOps(companyId);
+  return new Set(pending.map((op) => `${op.table}:${op.rowId}`));
+}
+
+const RECENT_SYNCED_ROW_PROTECT_MS = 120_000;
+
+/** Pending + isi cycle / haal me upload hue rows — download/opening merge in par overwrite na kare. */
+export async function protectedLocalCloudSyncRowKeySet(companyId: string): Promise<Set<string>> {
+  const keys = await pendingLocalCloudSyncRowKeySet(companyId);
+  const db = await getBrowserDb();
+  if (!db) return keys;
+  const cutoff = Date.now() - RECENT_SYNCED_ROW_PROTECT_MS;
+  try {
+    const recent = db
+      .prepare(
+        `SELECT table_name, row_id FROM cloud_sync_outbox
+         WHERE company_id = ? AND synced_at IS NOT NULL AND synced_at >= ?`
+      )
+      .all(companyId, cutoff) as Array<{ table_name: string; row_id: string }>;
+    for (const r of recent) keys.add(`${r.table_name}:${r.row_id}`);
+  } catch {
+    /* best-effort */
+  }
+  return keys;
+}
+
 export async function getCloudSyncCursor(companyId: string): Promise<{
   lastLocalOpSeq: number;
   lastSyncedOp: number;

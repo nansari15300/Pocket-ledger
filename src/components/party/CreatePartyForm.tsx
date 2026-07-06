@@ -10,6 +10,7 @@ import { z } from "zod";
 import { collection, doc, serverTimestamp, onSnapshot, query, setDoc, Timestamp } from "firebase/firestore";
 import {
   stageEntityAvatarAndDocuments,
+  syncEntityAttachmentsAfterSave,
   uploadEntityAvatarAndDocumentsRemote,
   isProfileAvatarImageFile,
   isProfileDocumentFile,
@@ -517,6 +518,7 @@ export function CreatePartyForm({
         };
         await upsertCompanyDocInBrowserDb(companyId!, "parties", localId, payload);
         await enqueueCompanyDocOutbox(companyId!, "parties", "create", localId, payload);
+        syncEntityAttachmentsAfterSave(companyId!);
         const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
         sonnerToast.success(showSyncHint ? "Saved — will sync" : "Saved", {
           duration: PARTY_TOAST_OK_MS,
@@ -682,6 +684,7 @@ export function CreatePartyForm({
           await upsertCompanyDocInBrowserDb(companyId!, "parties", localId, payload);
           // Reconnect par server sync ke liye outbox row.
           await enqueueCompanyDocOutbox(companyId!, "parties", "create", localId, payload);
+          syncEntityAttachmentsAfterSave(companyId!);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           sonnerToast.success(showSyncHint ? "Saved — will sync" : "Saved", {
             duration: PARTY_TOAST_OK_MS,
