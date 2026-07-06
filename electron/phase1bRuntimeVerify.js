@@ -23,6 +23,9 @@ const VOUCHER_PENDING_13 = "phase1b-v-pending-13";
 const VOUCHER_PENDING_14 = "phase1b-v-pending-14";
 const VOUCHER_PENDING_15 = "phase1b-v-pending-15";
 const VOUCHER_PENDING_16 = "phase1b-v-pending-16";
+const VOUCHER_M4_17 = "phase1b-v-m4-plshared-17";
+const VOUCHER_M4_18 = "phase1b-v-m4-plshared-18";
+const VOUCHER_M4_20 = "phase1b-v-m4-plshared-20";
 const VOUCHER_MIRROR = "phase1b-v-mirror-push";
 const VOUCHER_NOOP = "phase1b-v-noop-save";
 const VOUCHER_RESTART = "phase1b-v-restart-persist";
@@ -173,6 +176,19 @@ async function clearLanClientGateUi(uiWc) {
     `(async () => {
       if (typeof window.__plPhase1bVerifyClearLanClientGate !== "function") return { ok: false };
       return await window.__plPhase1bVerifyClearLanClientGate();
+    })()`,
+    true
+  );
+}
+
+async function seedPlServerSharedClientCompanyUi(uiWc) {
+  return uiWc.executeJavaScript(
+    `(async () => {
+      if (typeof window.__plPhase1bVerifySeedPlServerSharedClientCompany !== "function") return { ok: false };
+      return await window.__plPhase1bVerifySeedPlServerSharedClientCompany(
+        ${JSON.stringify(COMPANY_ID)},
+        "Phase1B Runtime Verify"
+      );
     })()`,
     true
   );
@@ -857,6 +873,95 @@ async function runPhase1bRuntimeVerify(deps) {
       { label: "second bridge sqlite upserts === 0", pass: bridgeCap16Second.sqliteUpserts === 0, actual: bridgeCap16Second.sqliteUpserts },
       { label: "pending queue count === 0", pass: pending16Final === 0, actual: pending16Final },
       { label: "export contains voucher", pass: exportIds16.includes(VOUCHER_PENDING_16), actual: exportIds16 },
+    ])
+  );
+
+  // --- Milestone 4: plServerShared production LAN client routing (17–20) ---
+  await clearAllPendingUi(uiWin.webContents);
+  await installLanClientGateUi(uiWin.webContents, sharingPort, tokenRec.token);
+  await seedPlServerSharedClientCompanyUi(uiWin.webContents);
+  await sleep(200);
+
+  // Scenario 17 — plServerShared client online save → authoritative HTTP
+  deps.resetVerifyStats();
+  await resetCapture(bridge);
+  await resetCapture(uiWin.webContents);
+  const payload17 = voucherPayload(VOUCHER_M4_17, 1717);
+  await lanClientUpsertVoucher(uiWin.webContents, VOUCHER_M4_17, payload17);
+  await sleep(800);
+
+  const uiCap17 = await readCapture(uiWin.webContents);
+  const bridgeCap17 = await readCapture(bridge);
+  const stats17 = deps.getVerifyStats();
+  const exportIds17 = await exportVoucherIds(deps.runMirrorCollectionExportWithMeta);
+
+  report.scenarios.push(
+    assertScenario("Scenario 17 — plServerShared client authoritative online", [
+      { label: "UI sqlite upserts === 0", pass: uiCap17.sqliteUpserts === 0, actual: uiCap17.sqliteUpserts },
+      { label: "authoritative HTTP === 1", pass: stats17.authoritativeHttp === 1, actual: stats17.authoritativeHttp },
+      { label: "mirror queue === 0", pass: uiCap17.mirrorQueues === 0, actual: uiCap17.mirrorQueues },
+      { label: "bridge sqlite upserts >= 1", pass: bridgeCap17.sqliteUpserts >= 1, actual: bridgeCap17.sqliteUpserts },
+      { label: "export contains voucher", pass: exportIds17.includes(VOUCHER_M4_17), actual: exportIds17 },
+    ])
+  );
+
+  // Scenario 18 — plServerShared client offline → pending enqueue
+  await clearAllPendingUi(uiWin.webContents);
+  await deps.stopSharingOnly();
+  deps.resetVerifyStats();
+  await resetCapture(bridge);
+  await resetCapture(uiWin.webContents);
+  const payload18 = voucherPayload(VOUCHER_M4_18, 1818);
+  await lanClientUpsertVoucher(uiWin.webContents, VOUCHER_M4_18, payload18);
+  await sleep(400);
+
+  const pending18 = await countPendingAuthoritativeUi(uiWin.webContents);
+  const uiCap18 = await readCapture(uiWin.webContents);
+  const stats18 = deps.getVerifyStats();
+
+  report.scenarios.push(
+    assertScenario("Scenario 18 — plServerShared client offline pending", [
+      { label: "pending queue count === 1", pass: pending18 === 1, actual: pending18 },
+      { label: "UI sqlite upserts === 0", pass: uiCap18.sqliteUpserts === 0, actual: uiCap18.sqliteUpserts },
+      { label: "mirror queue === 0", pass: uiCap18.mirrorQueues === 0, actual: uiCap18.mirrorQueues },
+      { label: "authoritative HTTP === 0", pass: stats18.authoritativeHttp === 0, actual: stats18.authoritativeHttp },
+    ])
+  );
+
+  // Scenario 19 — plServerShared reconnect → replay succeeds
+  await deps.startSharedLocalServer();
+  deps.resetVerifyStats();
+  await resetCapture(bridge);
+  await drainPendingAuthoritativeUi(uiWin.webContents);
+  await sleep(800);
+
+  const pending19 = await countPendingAuthoritativeUi(uiWin.webContents);
+  const stats19 = deps.getVerifyStats();
+  const exportIds19 = await exportVoucherIds(deps.runMirrorCollectionExportWithMeta);
+
+  report.scenarios.push(
+    assertScenario("Scenario 19 — plServerShared reconnect replay", [
+      { label: "pending queue count === 0", pass: pending19 === 0, actual: pending19 },
+      { label: "authoritative HTTP === 1", pass: stats19.authoritativeHttp === 1, actual: stats19.authoritativeHttp },
+      { label: "export contains voucher", pass: exportIds19.includes(VOUCHER_M4_18), actual: exportIds19 },
+    ])
+  );
+
+  // Scenario 20 — plServerShared: mirror push not primary transport
+  await clearAllPendingUi(uiWin.webContents);
+  deps.resetVerifyStats();
+  await resetCapture(uiWin.webContents);
+  const payload20 = voucherPayload(VOUCHER_M4_20, 2020);
+  await lanClientUpsertVoucher(uiWin.webContents, VOUCHER_M4_20, payload20);
+  await sleep(800);
+
+  const uiCap20 = await readCapture(uiWin.webContents);
+  const stats20 = deps.getVerifyStats();
+
+  report.scenarios.push(
+    assertScenario("Scenario 20 — plServerShared no mirror push on save", [
+      { label: "mirror queue === 0", pass: uiCap20.mirrorQueues === 0, actual: uiCap20.mirrorQueues },
+      { label: "authoritative HTTP === 1", pass: stats20.authoritativeHttp === 1, actual: stats20.authoritativeHttp },
     ])
   );
 

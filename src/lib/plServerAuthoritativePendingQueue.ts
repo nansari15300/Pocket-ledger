@@ -81,7 +81,6 @@ export async function isAuthoritativeLanClientWriteEligible(
   const id = String(companyId || "").trim();
   try {
     const row = await getLocalCompanyById(id, { includeDeleted: true });
-    if (row && isServerGateCompany(row)) return false;
     if (row && isLocalServerShareableCompany(row)) return true;
   } catch {
     /* fall through */

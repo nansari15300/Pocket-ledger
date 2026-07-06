@@ -38,6 +38,10 @@ declare global {
     ) => Promise<string | null>;
     __plPhase1bVerifyClearAllPendingAuthoritativeWrites?: () => Promise<{ removed: number }>;
     __plPhase1bVerifySimulateLanClientAuthoritativeRoute?: boolean;
+    __plPhase1bVerifySeedPlServerSharedClientCompany?: (
+      companyId: string,
+      name: string
+    ) => Promise<{ ok: boolean }>;
   }
 }
 
@@ -138,6 +142,21 @@ export function Phase1bRuntimeVerifyShim() {
       return { removed };
     };
 
+    window.__plPhase1bVerifySeedPlServerSharedClientCompany = async (companyId, name) => {
+      await upsertLocalCompany({
+        id: companyId,
+        name,
+        ownerId: "",
+        storageOption: "local",
+        syncPolicy: "offline",
+        syncedFromCloud: false,
+        isOwned: false,
+        plServerShared: true,
+      });
+      await flushPendingBrowserDbSave();
+      return { ok: true };
+    };
+
     return () => {
       delete window.__plPhase1bVerifySeedCompany;
       delete window.__plPhase1bVerifyUpsertVoucher;
@@ -153,6 +172,7 @@ export function Phase1bRuntimeVerifyShim() {
       delete window.__plPhase1bVerifyGetPendingAuthoritativeState;
       delete window.__plPhase1bVerifyClearAllPendingAuthoritativeWrites;
       delete window.__plPhase1bVerifySimulateLanClientAuthoritativeRoute;
+      delete window.__plPhase1bVerifySeedPlServerSharedClientCompany;
     };
   }, []);
 

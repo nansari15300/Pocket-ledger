@@ -221,7 +221,8 @@ async function shouldPushPlServerMirrorDoc(companyId: string): Promise<boolean> 
   const id = String(companyId || "").trim();
   try {
     const doc = await getLocalCompanyById(id, { includeDeleted: true });
-    if (doc && isServerGateCompany(doc)) return true;
+    // plServerShared: user-origin writes use authoritative HTTP + pending replay (M4).
+    if (doc && isServerGateCompany(doc)) return false;
   } catch {
     /* ignore */
   }
