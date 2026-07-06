@@ -1,6 +1,12 @@
 /** Dev/runtime verify only — no-op unless `window.__plPhase1bVerifyCapture` is installed. */
 export function plPhase1bVerifyHook(
-  field: "onCompanyDocUpsert" | "onFlush" | "onCloudEnqueue" | "onMirrorQueue"
+  field:
+    | "onCompanyDocUpsert"
+    | "onFlush"
+    | "onCloudEnqueue"
+    | "onMirrorQueue"
+    | "onHostPublishQueue"
+    | "onHostPublishSuccess"
 ): void {
   if (typeof window === "undefined") return;
   try {

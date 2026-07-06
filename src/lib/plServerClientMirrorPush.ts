@@ -125,7 +125,7 @@ export function resolvePlServerMirrorTransport(companyId: string): PlServerMirro
   };
 }
 
-function parseMirrorPushResponseOk(
+export function parseMirrorPushResponseOk(
   status: number,
   body: string,
   sentCount: number

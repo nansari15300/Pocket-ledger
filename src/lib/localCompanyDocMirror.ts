@@ -679,13 +679,18 @@ async function commitCompanyDocOnRenderer(
   if (shouldNotify) {
     if (!sideEffectOpts?.skipNotify) {
       notifyBrowserDbCollectionUpdated(companyId, collectionName);
+      void maybeQueuePlServerMirrorAfterDocWrite(companyId, collectionName, docId, stampedData);
+      plPhase1bVerifyHook("onMirrorQueue");
     }
-    void maybeQueuePlServerMirrorAfterDocWrite(companyId, collectionName, docId, stampedData);
-    plPhase1bVerifyHook("onMirrorQueue");
   }
 
   const { flushPendingBrowserDbSave } = await import("@/lib/localSqlite");
   await flushPendingBrowserDbSave();
+
+  if (shouldNotify && sideEffectOpts?.skipNotify) {
+    const { maybePublishHostMirrorAfterBridgeWrite } = await import("@/lib/plServerHostMirrorPublish");
+    void maybePublishHostMirrorAfterBridgeWrite(companyId, collectionName, docId, stampedData);
+  }
 
   return { written: true };
 }
