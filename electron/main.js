@@ -41,7 +41,13 @@ if (process.platform === "win32") {
 // Do EXE instances = do `localhost` ports = Firebase Auth / IndexedDB alag origin ("login delete") — doosra instance band + pehla focus.
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 const IS_PHASE1B_RUNTIME_VERIFY = process.env.PL_PHASE1B_RUNTIME_VERIFY === "1";
-const phase1bVerifyStats = { bridgeIpc: 0, broadcast: 0, mirrorPushBroadcast: 0, hostPublish: 0 };
+const phase1bVerifyStats = {
+  bridgeIpc: 0,
+  broadcast: 0,
+  mirrorPushBroadcast: 0,
+  hostPublish: 0,
+  authoritativeHttp: 0,
+};
 
 if (IS_PHASE1B_RUNTIME_VERIFY && process.env.PL_PHASE1B_VERIFY_USER_DATA) {
   app.setPath("userData", process.env.PL_PHASE1B_VERIFY_USER_DATA);
@@ -366,6 +372,28 @@ async function broadcastBrowserDbCollectionBump(companyId, collection) {
       } catch (_) {}
     })
   );
+}
+
+/** Host-authoritative doc upsert — shared by IPC and HTTP (bridge `__plHostBridgeCompanyDocUpsert` only). */
+async function executeHostBridgeAuthoritativeCompanyDocUpsert(payload) {
+  const cid = String(payload?.companyId || "").trim();
+  const col = String(payload?.collectionName || "").trim();
+  const result = await runInServerAppRenderer(
+    `(async () => {
+      try {
+        if (typeof window.__plHostBridgeCompanyDocUpsert !== "function") return { ok: false, error: "bridge_missing" };
+        return await window.__plHostBridgeCompanyDocUpsert(${JSON.stringify(payload)});
+      } catch (e) {
+        return { ok: false, error: e && e.message ? e.message : "bridge_upsert_failed" };
+      }
+    })()`,
+    { requireFn: "__plHostBridgeCompanyDocUpsert" }
+  );
+  const out = result && typeof result === "object" ? result : { ok: false, error: "bridge_upsert_failed" };
+  if (out.ok && out.written !== false && payload?.notify !== false && cid && col) {
+    await broadcastBrowserDbCollectionBump(cid, col);
+  }
+  return out;
 }
 
 /** Local Server SQLite/export/push — canonical hidden bridge only (visible tabs are UI). */
@@ -722,6 +750,12 @@ localAppServer.setCompanyMirrorPushProvider(async (companyId, collection, docs, 
     mirrorProtocol: PL_MIRROR_PROTOCOL_VERSION,
     serverBuild: getServerBuildLabel(),
   };
+});
+
+localAppServer.setAuthoritativeCompanyDocUpsertProvider(async (payload) => {
+  if (IS_PHASE1B_RUNTIME_VERIFY) phase1bVerifyStats.authoritativeHttp += 1;
+  const out = await executeHostBridgeAuthoritativeCompanyDocUpsert(payload);
+  return out && typeof out === "object" ? out : { ok: false, error: "bridge_upsert_failed" };
 });
 
 function userDataPath() {
@@ -1775,24 +1809,7 @@ if (gotSingleInstanceLock) {
 
   ipcMain.handle("pl-bridge-authoritative-company-doc-upsert", async (_event, payload) => {
     if (IS_PHASE1B_RUNTIME_VERIFY) phase1bVerifyStats.bridgeIpc += 1;
-    const cid = String(payload?.companyId || "").trim();
-    const col = String(payload?.collectionName || "").trim();
-    const result = await runInServerAppRenderer(
-      `(async () => {
-        try {
-          if (typeof window.__plHostBridgeCompanyDocUpsert !== "function") return { ok: false, error: "bridge_missing" };
-          return await window.__plHostBridgeCompanyDocUpsert(${JSON.stringify(payload)});
-        } catch (e) {
-          return { ok: false, error: e && e.message ? e.message : "bridge_upsert_failed" };
-        }
-      })()`,
-      { requireFn: "__plHostBridgeCompanyDocUpsert" }
-    );
-    const out = result && typeof result === "object" ? result : { ok: false, error: "bridge_upsert_failed" };
-    if (out.ok && out.written !== false && payload?.notify !== false && cid && col) {
-      await broadcastBrowserDbCollectionBump(cid, col);
-    }
-    return out;
+    return executeHostBridgeAuthoritativeCompanyDocUpsert(payload);
   });
 
   ipcMain.handle("pl-local-server-get-status", async () => {
@@ -2190,6 +2207,7 @@ if (gotSingleInstanceLock) {
         phase1bVerifyStats.broadcast = 0;
         phase1bVerifyStats.mirrorPushBroadcast = 0;
         phase1bVerifyStats.hostPublish = 0;
+        phase1bVerifyStats.authoritativeHttp = 0;
       },
     };
     try {

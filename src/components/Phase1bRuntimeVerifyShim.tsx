@@ -4,6 +4,9 @@ import { useEffect } from "react";
 import { upsertLocalCompany } from "@/lib/localCompanyStore";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { flushPendingBrowserDbSave } from "@/lib/localSqlite";
+import { addLocalServerGate, writeActiveGateId, listGates, deleteGate } from "@/lib/gates/gateStore";
+import { defaultBuiltinGateId } from "@/lib/gates/gateClientKind";
+import { applyPlServerAccessContextPayload, clearPlServerAccessContext } from "@/lib/plServerAccessContext";
 
 declare global {
   interface Window {
@@ -18,6 +21,13 @@ declare global {
       companyId: string,
       voucherId: string
     ) => Promise<Record<string, unknown> | null>;
+    __plPhase1bVerifyInstallLanClientGate?: (
+      serverUrl: string,
+      accessToken: string,
+      companyId: string
+    ) => Promise<{ ok: boolean; gateId?: string }>;
+    __plPhase1bVerifyClearLanClientGate?: () => Promise<{ ok: boolean }>;
+    __plPhase1bVerifySkipHostBridgeForNextUpsert?: boolean;
   }
 }
 
@@ -48,11 +58,49 @@ export function Phase1bRuntimeVerifyShim() {
       return row && typeof row === "object" ? row : null;
     };
 
+    window.__plPhase1bVerifyInstallLanClientGate = async (serverUrl, accessToken, companyId) => {
+      const gate = addLocalServerGate({
+        label: "Phase1B Verify LAN Client",
+        serverUrl,
+        accessToken,
+      });
+      writeActiveGateId(gate.id);
+      applyPlServerAccessContextPayload(
+        {
+          allowedCompanyIds: [companyId],
+          companies: [
+            {
+              id: companyId,
+              name: "Phase1B Runtime Verify",
+              storageOption: "local",
+              ownerEmail: null,
+            },
+          ],
+        },
+        gate.id
+      );
+      return { ok: true, gateId: gate.id };
+    };
+
+    window.__plPhase1bVerifyClearLanClientGate = async () => {
+      for (const gate of listGates()) {
+        if (gate.type === "local_server" && gate.label === "Phase1B Verify LAN Client") {
+          deleteGate(gate.id);
+        }
+      }
+      writeActiveGateId(defaultBuiltinGateId());
+      clearPlServerAccessContext();
+      return { ok: true };
+    };
+
     return () => {
       delete window.__plPhase1bVerifySeedCompany;
       delete window.__plPhase1bVerifyUpsertVoucher;
       delete window.__plPhase1bVerifyFlushDb;
       delete window.__plPhase1bVerifyGetVoucher;
+      delete window.__plPhase1bVerifyInstallLanClientGate;
+      delete window.__plPhase1bVerifyClearLanClientGate;
+      delete window.__plPhase1bVerifySkipHostBridgeForNextUpsert;
     };
   }, []);
 

@@ -10,6 +10,9 @@ const accessTokens = require("./localAppServerAccessTokens");
 
 const COMPANY_ID = "phase1b-runtime-verify-co";
 const VOUCHER_HOST = "phase1b-v-host-save";
+const VOUCHER_HTTP_AUTH = "phase1b-v-http-auth";
+const VOUCHER_CLIENT_ROUTE = "phase1b-v-client-route";
+const VOUCHER_HOST_REGRESSION = "phase1b-v-host-regression";
 const VOUCHER_MIRROR = "phase1b-v-mirror-push";
 const VOUCHER_NOOP = "phase1b-v-noop-save";
 const VOUCHER_RESTART = "phase1b-v-restart-persist";
@@ -252,7 +255,7 @@ function assertScenario(name, checks) {
  * @param {() => Promise<import('electron').WebContents>} deps.ensureServerDataBridgeWindow
  * @param {Function} deps.runInServerAppRenderer
  * @param {Function} deps.runMirrorCollectionExportWithMeta
- * @param {() => { bridgeIpc: number, broadcast: number, mirrorPushBroadcast: number, hostPublish: number }} deps.getVerifyStats
+ * @param {() => { bridgeIpc: number, broadcast: number, mirrorPushBroadcast: number, hostPublish: number, authoritativeHttp: number }} deps.getVerifyStats
  * @param {() => void} deps.resetVerifyStats
  */
 async function runPhase1bRuntimeVerify(deps) {
@@ -333,6 +336,151 @@ async function runPhase1bRuntimeVerify(deps) {
       { label: "mirror push broadcast === 0", pass: stats1.mirrorPushBroadcast === 0, actual: stats1.mirrorPushBroadcast },
       { label: "UI bump received", pass: bump1 === true, actual: bump1 },
       { label: "export contains voucher", pass: exportIds1.includes(VOUCHER_HOST), actual: exportIds1 },
+    ])
+  );
+
+  // --- Scenario 6 — Authoritative HTTP write (same pipeline as IPC Scenario 1) ---
+  deps.resetVerifyStats();
+  await resetCapture(bridge);
+  await resetCapture(uiWin.webContents);
+  await installBumpListener(uiWin.webContents, COMPANY_ID, "vouchers");
+
+  const payload6 = voucherPayload(VOUCHER_HTTP_AUTH, 150);
+  const authUrl = `http://127.0.0.1:${sharingPort}/__pl_authoritative_company_doc_upsert`;
+  const authRes = await httpPostJson(
+    authUrl,
+    { "x-pocket-ledger-access": tokenRec.token },
+    {
+      companyId: COMPANY_ID,
+      collectionName: "vouchers",
+      docId: VOUCHER_HTTP_AUTH,
+      data: payload6,
+      notify: true,
+    }
+  );
+
+  await sleep(800);
+
+  const bridgeCap6 = await readCapture(bridge);
+  const uiCap6 = await readCapture(uiWin.webContents);
+  const stats6 = deps.getVerifyStats();
+  const exportIds6 = await exportVoucherIds(deps.runMirrorCollectionExportWithMeta);
+  const bump6 = await readBumpReceived(uiWin.webContents);
+
+  report.scenarios.push(
+    assertScenario("Scenario 6 — Authoritative HTTP write", [
+      { label: "HTTP 200", pass: authRes.status === 200, actual: authRes.status },
+      { label: "HTTP body ok", pass: authRes.body?.ok === true, actual: authRes.body },
+      { label: "bridge sqlite upserts === 1", pass: bridgeCap6.sqliteUpserts === 1, actual: bridgeCap6.sqliteUpserts },
+      { label: "UI sqlite upserts === 0", pass: uiCap6.sqliteUpserts === 0, actual: uiCap6.sqliteUpserts },
+      { label: "bridge flush >= 1", pass: bridgeCap6.flushes >= 1, actual: bridgeCap6.flushes },
+      { label: "broadcast === 1", pass: stats6.broadcast === 1, actual: stats6.broadcast },
+      { label: "bridge IPC === 0", pass: stats6.bridgeIpc === 0, actual: stats6.bridgeIpc },
+      { label: "authoritative HTTP === 1", pass: stats6.authoritativeHttp === 1, actual: stats6.authoritativeHttp },
+      { label: "host publish queue === 1", pass: bridgeCap6.hostPublishQueues === 1, actual: bridgeCap6.hostPublishQueues },
+      { label: "host publish success === 1", pass: bridgeCap6.hostPublishSuccesses === 1, actual: bridgeCap6.hostPublishSuccesses },
+      { label: "host publish server ack === 1", pass: stats6.hostPublish === 1, actual: stats6.hostPublish },
+      { label: "mirror push broadcast === 0", pass: stats6.mirrorPushBroadcast === 0, actual: stats6.mirrorPushBroadcast },
+      { label: "UI bump received", pass: bump6 === true, actual: bump6 },
+      { label: "export contains voucher", pass: exportIds6.includes(VOUCHER_HTTP_AUTH), actual: exportIds6 },
+    ])
+  );
+
+  // --- Scenario 7: Client routing (LAN gate → authoritative HTTP, not local commit / IPC) ---
+  deps.resetVerifyStats();
+  await resetCapture(bridge);
+  await resetCapture(uiWin.webContents);
+  await installBumpListener(uiWin.webContents, COMPANY_ID, "vouchers");
+
+  await uiWin.webContents.executeJavaScript(
+    `(async () => {
+      if (typeof window.__plPhase1bVerifyInstallLanClientGate !== "function") return { ok: false, error: "shim_missing" };
+      return await window.__plPhase1bVerifyInstallLanClientGate(
+        ${JSON.stringify(`http://127.0.0.1:${sharingPort}`)},
+        ${JSON.stringify(tokenRec.token)},
+        ${JSON.stringify(COMPANY_ID)}
+      );
+    })()`,
+    true
+  );
+
+  const payload7 = voucherPayload(VOUCHER_CLIENT_ROUTE, 175);
+  await uiWin.webContents.executeJavaScript(
+    `(async () => {
+      window.__plPhase1bVerifySkipHostBridgeForNextUpsert = true;
+      if (typeof window.__plPhase1bVerifyUpsertVoucher !== "function") return { ok: false, error: "shim_missing" };
+      return await window.__plPhase1bVerifyUpsertVoucher(
+        ${JSON.stringify(COMPANY_ID)},
+        ${JSON.stringify(VOUCHER_CLIENT_ROUTE)},
+        ${JSON.stringify(payload7)}
+      );
+    })()`,
+    true
+  );
+  await sleep(800);
+
+  const bridgeCap7 = await readCapture(bridge);
+  const uiCap7 = await readCapture(uiWin.webContents);
+  const stats7 = deps.getVerifyStats();
+  const exportIds7 = await exportVoucherIds(deps.runMirrorCollectionExportWithMeta);
+  const bump7 = await readBumpReceived(uiWin.webContents);
+
+  report.scenarios.push(
+    assertScenario("Scenario 7 — Client authoritative routing", [
+      { label: "UI sqlite upserts === 0", pass: uiCap7.sqliteUpserts === 0, actual: uiCap7.sqliteUpserts },
+      { label: "bridge sqlite upserts >= 1", pass: bridgeCap7.sqliteUpserts >= 1, actual: bridgeCap7.sqliteUpserts },
+      { label: "bridge flush >= 1", pass: bridgeCap7.flushes >= 1, actual: bridgeCap7.flushes },
+      { label: "broadcast === 1", pass: stats7.broadcast === 1, actual: stats7.broadcast },
+      { label: "bridge IPC === 0", pass: stats7.bridgeIpc === 0, actual: stats7.bridgeIpc },
+      { label: "authoritative HTTP === 1", pass: stats7.authoritativeHttp === 1, actual: stats7.authoritativeHttp },
+      { label: "mirror queue === 0", pass: uiCap7.mirrorQueues === 0, actual: uiCap7.mirrorQueues },
+      { label: "host publish queue >= 1", pass: bridgeCap7.hostPublishQueues >= 1, actual: bridgeCap7.hostPublishQueues },
+      { label: "host publish success >= 1", pass: bridgeCap7.hostPublishSuccesses >= 1, actual: bridgeCap7.hostPublishSuccesses },
+      { label: "host publish server ack >= 1", pass: stats7.hostPublish >= 1, actual: stats7.hostPublish },
+      { label: "mirror push broadcast === 0", pass: stats7.mirrorPushBroadcast === 0, actual: stats7.mirrorPushBroadcast },
+      { label: "UI bump received", pass: bump7 === true, actual: bump7 },
+      { label: "export contains voucher", pass: exportIds7.includes(VOUCHER_CLIENT_ROUTE), actual: exportIds7 },
+    ])
+  );
+
+  await uiWin.webContents.executeJavaScript(
+    `(async () => {
+      if (typeof window.__plPhase1bVerifyClearLanClientGate !== "function") return { ok: false };
+      return await window.__plPhase1bVerifyClearLanClientGate();
+    })()`,
+    true
+  );
+
+  // --- Scenario 8: Host save regression (unchanged bridge path after client routing) ---
+  deps.resetVerifyStats();
+  await resetCapture(bridge);
+  await resetCapture(uiWin.webContents);
+  await installBumpListener(uiWin.webContents, COMPANY_ID, "vouchers");
+
+  const payload8 = voucherPayload(VOUCHER_HOST_REGRESSION, 200);
+  await uiUpsertVoucher(uiWin.webContents, VOUCHER_HOST_REGRESSION, payload8);
+  await sleep(800);
+
+  const bridgeCap8 = await readCapture(bridge);
+  const uiCap8 = await readCapture(uiWin.webContents);
+  const stats8 = deps.getVerifyStats();
+  const exportIds8 = await exportVoucherIds(deps.runMirrorCollectionExportWithMeta);
+  const bump8 = await readBumpReceived(uiWin.webContents);
+
+  report.scenarios.push(
+    assertScenario("Scenario 8 — Host save regression", [
+      { label: "bridge sqlite upserts === 1", pass: bridgeCap8.sqliteUpserts === 1, actual: bridgeCap8.sqliteUpserts },
+      { label: "UI sqlite upserts === 0", pass: uiCap8.sqliteUpserts === 0, actual: uiCap8.sqliteUpserts },
+      { label: "bridge flush >= 1", pass: bridgeCap8.flushes >= 1, actual: bridgeCap8.flushes },
+      { label: "broadcast === 1", pass: stats8.broadcast === 1, actual: stats8.broadcast },
+      { label: "bridge IPC === 1", pass: stats8.bridgeIpc === 1, actual: stats8.bridgeIpc },
+      { label: "authoritative HTTP === 0", pass: stats8.authoritativeHttp === 0, actual: stats8.authoritativeHttp },
+      { label: "host publish queue === 1", pass: bridgeCap8.hostPublishQueues === 1, actual: bridgeCap8.hostPublishQueues },
+      { label: "host publish success === 1", pass: bridgeCap8.hostPublishSuccesses === 1, actual: bridgeCap8.hostPublishSuccesses },
+      { label: "host publish server ack === 1", pass: stats8.hostPublish === 1, actual: stats8.hostPublish },
+      { label: "mirror push broadcast === 0", pass: stats8.mirrorPushBroadcast === 0, actual: stats8.mirrorPushBroadcast },
+      { label: "UI bump received", pass: bump8 === true, actual: bump8 },
+      { label: "export contains voucher", pass: exportIds8.includes(VOUCHER_HOST_REGRESSION), actual: exportIds8 },
     ])
   );
 

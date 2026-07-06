@@ -733,13 +733,36 @@ export async function upsertCompanyDocInBrowserDb(
     }
 
     const { shouldCommitOnHostBridge, invokeHostBridgeCompanyDocUpsert } = await import("@/lib/hostBridgeWrite");
-    if (await shouldCommitOnHostBridge(companyId, options)) {
+    const skipHostBridgeVerify =
+      typeof window !== "undefined" &&
+      Boolean(
+        (window as unknown as { __plPhase1bVerifySkipHostBridgeForNextUpsert?: boolean })
+          .__plPhase1bVerifySkipHostBridgeForNextUpsert
+      );
+    if (skipHostBridgeVerify) {
+      delete (window as unknown as { __plPhase1bVerifySkipHostBridgeForNextUpsert?: boolean })
+        .__plPhase1bVerifySkipHostBridgeForNextUpsert;
+    }
+    if (!skipHostBridgeVerify && (await shouldCommitOnHostBridge(companyId, options))) {
       await invokeHostBridgeCompanyDocUpsert(companyId, collectionName, docId, data, options);
+      return;
+    }
+
+    const { shouldRoutePlServerAuthoritativeWrite, invokePlServerAuthoritativeDocUpsert } = await import(
+      "@/lib/plServerClientAuthoritativeWrite"
+    );
+    if (await shouldRoutePlServerAuthoritativeWrite(companyId, options, {
+      simulateLanClient: skipHostBridgeVerify,
+    })) {
+      await invokePlServerAuthoritativeDocUpsert(companyId, collectionName, docId, data, options);
       return;
     }
 
     await commitCompanyDocOnRenderer(companyId, collectionName, docId, data, options);
   } catch (e) {
+    if ((e as { plAuthoritativeWriteFailed?: boolean })?.plAuthoritativeWriteFailed) {
+      throw e;
+    }
     console.warn("[localCompanyDocMirror] upsert failed", collectionName, docId, e);
   }
 }

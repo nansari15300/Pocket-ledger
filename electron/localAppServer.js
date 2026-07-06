@@ -51,6 +51,7 @@ let localCompanyAuthProvider = null;
 let attachmentBlobProvider = null;
 let attachmentBlobWriteProvider = null;
 let companyMirrorPushProvider = null;
+let authoritativeCompanyDocUpsertProvider = null;
 let mirrorHealthProvider = null;
 
 function setMirrorHealthProvider(fn) {
@@ -75,6 +76,10 @@ function setAttachmentBlobWriteProvider(fn) {
 
 function setCompanyMirrorPushProvider(fn) {
   companyMirrorPushProvider = typeof fn === "function" ? fn : null;
+}
+
+function setAuthoritativeCompanyDocUpsertProvider(fn) {
+  authoritativeCompanyDocUpsertProvider = typeof fn === "function" ? fn : null;
 }
 
 function setCompanyMirrorExportProvider(fn) {
@@ -931,6 +936,74 @@ function createRequestHandler(userDataPath) {
         }
         return;
       }
+      if (requestUrl.pathname === "/__pl_authoritative_company_doc_upsert") {
+        applyPlAccessContextCors(request, response);
+        if (request.method === "OPTIONS") {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+        if (request.method !== "POST") {
+          response.statusCode = 405;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "method_not_allowed" }));
+          return;
+        }
+        const accessTok = tokenFromRequest(request);
+        if (!accessTok || !accessTokens.validateAccessToken(userDataPath, accessTok)) {
+          response.statusCode = 403;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "invalid_or_missing_token" }));
+          return;
+        }
+        try {
+          const body = await readJsonBody(request);
+          const companyId = String(body.companyId || "").trim();
+          const collectionName = String(body.collectionName || "").trim();
+          const docId = String(body.docId || "").trim();
+          const data = body.data && typeof body.data === "object" && !Array.isArray(body.data) ? body.data : null;
+          if (!companyId || !collectionName || !docId || !data) {
+            response.statusCode = 400;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "missing_fields" }));
+            return;
+          }
+          const rec = accessTokens.getAccessTokenRecord(userDataPath, accessTok);
+          const allowedIds = accessTokens.normalizeCompanyIds(rec?.allowedCompanyIds);
+          if (allowedIds.length > 0 && !allowedIds.includes(companyId)) {
+            response.statusCode = 403;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "company_not_allowed_for_token" }));
+            return;
+          }
+          if (!authoritativeCompanyDocUpsertProvider) {
+            response.statusCode = 503;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "authoritative_upsert_unavailable" }));
+            return;
+          }
+          const payload = {
+            companyId,
+            collectionName,
+            docId,
+            data,
+            notify: body.notify !== false,
+            skipCloudSyncEnqueue: body.skipCloudSyncEnqueue,
+            skipPlanMutationGate: body.skipPlanMutationGate,
+            force: body.force,
+          };
+          const result = await authoritativeCompanyDocUpsertProvider(payload);
+          response.statusCode = 200;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.setHeader("cache-control", "no-store");
+          response.end(JSON.stringify(result && typeof result === "object" ? result : { ok: true }));
+        } catch (_) {
+          response.statusCode = 500;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "authoritative_upsert_failed" }));
+        }
+        return;
+      }
       if (requestUrl.pathname === "/__pl_company_login") {
         applyPlAccessContextCors(request, response);
         if (request.method === "OPTIONS") {
@@ -1353,6 +1426,7 @@ module.exports = {
   setAttachmentBlobProvider,
   setAttachmentBlobWriteProvider,
   setCompanyMirrorPushProvider,
+  setAuthoritativeCompanyDocUpsertProvider,
   setCompanyMirrorExportProvider,
   setCompanyMirrorCollectionExportProvider,
   setMirrorHealthProvider,
