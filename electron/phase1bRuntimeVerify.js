@@ -21,16 +21,22 @@ const CAPTURE_INSTALL_SCRIPT = `
     flushes: 0,
     cloudEnqueues: 0,
     mirrorQueues: 0,
+    hostPublishQueues: 0,
+    hostPublishSuccesses: 0,
     reset() {
       this.sqliteUpserts = 0;
       this.flushes = 0;
       this.cloudEnqueues = 0;
       this.mirrorQueues = 0;
+      this.hostPublishQueues = 0;
+      this.hostPublishSuccesses = 0;
     },
     onCompanyDocUpsert() { this.sqliteUpserts++; },
     onFlush() { this.flushes++; },
     onCloudEnqueue() { this.cloudEnqueues++; },
     onMirrorQueue() { this.mirrorQueues++; },
+    onHostPublishQueue() { this.hostPublishQueues++; },
+    onHostPublishSuccess() { this.hostPublishSuccesses++; },
   };
   return true;
 })();
@@ -51,6 +57,8 @@ async function readCapture(wc) {
       flushes: window.__plPhase1bVerifyCapture?.flushes ?? 0,
       cloudEnqueues: window.__plPhase1bVerifyCapture?.cloudEnqueues ?? 0,
       mirrorQueues: window.__plPhase1bVerifyCapture?.mirrorQueues ?? 0,
+      hostPublishQueues: window.__plPhase1bVerifyCapture?.hostPublishQueues ?? 0,
+      hostPublishSuccesses: window.__plPhase1bVerifyCapture?.hostPublishSuccesses ?? 0,
     })`,
     true
   );
@@ -244,7 +252,7 @@ function assertScenario(name, checks) {
  * @param {() => Promise<import('electron').WebContents>} deps.ensureServerDataBridgeWindow
  * @param {Function} deps.runInServerAppRenderer
  * @param {Function} deps.runMirrorCollectionExportWithMeta
- * @param {() => { bridgeIpc: number, broadcast: number, mirrorPushBroadcast: number }} deps.getVerifyStats
+ * @param {() => { bridgeIpc: number, broadcast: number, mirrorPushBroadcast: number, hostPublish: number }} deps.getVerifyStats
  * @param {() => void} deps.resetVerifyStats
  */
 async function runPhase1bRuntimeVerify(deps) {
@@ -304,7 +312,7 @@ async function runPhase1bRuntimeVerify(deps) {
 
   const payload1 = voucherPayload(VOUCHER_HOST, 100);
   await uiUpsertVoucher(uiWin.webContents, VOUCHER_HOST, payload1);
-  await sleep(400);
+  await sleep(800);
 
   const bridgeCap1 = await readCapture(bridge);
   const uiCap1 = await readCapture(uiWin.webContents);
@@ -319,6 +327,10 @@ async function runPhase1bRuntimeVerify(deps) {
       { label: "bridge flush >= 1", pass: bridgeCap1.flushes >= 1, actual: bridgeCap1.flushes },
       { label: "broadcast === 1", pass: stats1.broadcast === 1, actual: stats1.broadcast },
       { label: "bridge IPC === 1", pass: stats1.bridgeIpc === 1, actual: stats1.bridgeIpc },
+      { label: "host publish queue === 1", pass: bridgeCap1.hostPublishQueues === 1, actual: bridgeCap1.hostPublishQueues },
+      { label: "host publish success === 1", pass: bridgeCap1.hostPublishSuccesses === 1, actual: bridgeCap1.hostPublishSuccesses },
+      { label: "host publish server ack === 1", pass: stats1.hostPublish === 1, actual: stats1.hostPublish },
+      { label: "mirror push broadcast === 0", pass: stats1.mirrorPushBroadcast === 0, actual: stats1.mirrorPushBroadcast },
       { label: "UI bump received", pass: bump1 === true, actual: bump1 },
       { label: "export contains voucher", pass: exportIds1.includes(VOUCHER_HOST), actual: exportIds1 },
     ])
@@ -393,7 +405,10 @@ async function runPhase1bRuntimeVerify(deps) {
       { label: "UI sqlite upserts === 0", pass: uiCap3.sqliteUpserts === 0, actual: uiCap3.sqliteUpserts },
       { label: "broadcast === 0", pass: stats3.broadcast === 0, actual: stats3.broadcast },
       { label: "bridge IPC === 0", pass: stats3.bridgeIpc === 0, actual: stats3.bridgeIpc },
+      { label: "host publish server ack === 0", pass: stats3.hostPublish === 0, actual: stats3.hostPublish },
       { label: "mirror queue === 0", pass: bridgeCap3.mirrorQueues === 0, actual: bridgeCap3.mirrorQueues },
+      { label: "host publish queue === 0", pass: bridgeCap3.hostPublishQueues === 0, actual: bridgeCap3.hostPublishQueues },
+      { label: "host publish success === 0", pass: bridgeCap3.hostPublishSuccesses === 0, actual: bridgeCap3.hostPublishSuccesses },
       { label: "cloud enqueue === 0", pass: bridgeCap3.cloudEnqueues === 0, actual: bridgeCap3.cloudEnqueues },
     ])
   );

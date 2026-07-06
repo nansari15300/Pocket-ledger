@@ -41,7 +41,7 @@ if (process.platform === "win32") {
 // Do EXE instances = do `localhost` ports = Firebase Auth / IndexedDB alag origin ("login delete") — doosra instance band + pehla focus.
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 const IS_PHASE1B_RUNTIME_VERIFY = process.env.PL_PHASE1B_RUNTIME_VERIFY === "1";
-const phase1bVerifyStats = { bridgeIpc: 0, broadcast: 0, mirrorPushBroadcast: 0 };
+const phase1bVerifyStats = { bridgeIpc: 0, broadcast: 0, mirrorPushBroadcast: 0, hostPublish: 0 };
 
 if (IS_PHASE1B_RUNTIME_VERIFY && process.env.PL_PHASE1B_VERIFY_USER_DATA) {
   app.setPath("userData", process.env.PL_PHASE1B_VERIFY_USER_DATA);
@@ -686,7 +686,20 @@ localAppServer.setAttachmentBlobWriteProvider(async (companyId, body) => {
   return result && typeof result === "object" ? result : { ok: false, error: "write_failed" };
 });
 
-localAppServer.setCompanyMirrorPushProvider(async (companyId, collection, docs) => {
+localAppServer.setCompanyMirrorPushProvider(async (companyId, collection, docs, meta) => {
+  if (meta?.hostSelfPublish) {
+    noteMirrorPushSuccess(companyId);
+    if (IS_PHASE1B_RUNTIME_VERIFY) phase1bVerifyStats.hostPublish += 1;
+    return {
+      ok: true,
+      applied: 0,
+      skipped: Array.isArray(docs) ? docs.length : 0,
+      received: Array.isArray(docs) ? docs.length : 0,
+      hostSelfPublish: true,
+      mirrorProtocol: PL_MIRROR_PROTOCOL_VERSION,
+      serverBuild: getServerBuildLabel(),
+    };
+  }
   const result = await runInServerAppRenderer(
     `(async () => {
       try {
@@ -2176,6 +2189,7 @@ if (gotSingleInstanceLock) {
         phase1bVerifyStats.bridgeIpc = 0;
         phase1bVerifyStats.broadcast = 0;
         phase1bVerifyStats.mirrorPushBroadcast = 0;
+        phase1bVerifyStats.hostPublish = 0;
       },
     };
     try {

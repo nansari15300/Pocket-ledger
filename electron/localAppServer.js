@@ -918,7 +918,8 @@ function createRequestHandler(userDataPath) {
             response.end(JSON.stringify({ ok: false, error: "mirror_push_unavailable" }));
             return;
           }
-          const result = await companyMirrorPushProvider(companyId, collection, docs);
+          const hostSelfPublish = body.hostSelfPublish === true;
+          const result = await companyMirrorPushProvider(companyId, collection, docs, { hostSelfPublish });
           response.statusCode = 200;
           response.setHeader("content-type", "application/json; charset=utf-8");
           response.setHeader("cache-control", "no-store");
