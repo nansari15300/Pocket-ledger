@@ -19,6 +19,7 @@ import { MobileFloatingButton, ReportsMobileReportListFab } from "@/components/l
 import { CompanyDemotedBanner } from "@/components/company/CompanyDemotedBanner";
 import { PlanAuthoritativeSyncBanner } from "@/components/company/PlanAuthoritativeSyncBanner";
 import { PlServerAuthoritativePendingBanner } from "@/components/PlServerAuthoritativePendingBanner";
+import { PlServerReadSyncHealthBanner } from "@/components/PlServerReadSyncHealthBanner";
 import { FileHoverPreviewProvider } from "@/contexts/FileHoverPreviewContext";
 import { ReportPartyViewProvider } from "@/contexts/ReportPartyViewContext";
 import { ReportListProvider } from "@/contexts/ReportListContext";
@@ -907,6 +908,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       <PlanAuthoritativeSyncBanner />
                       <ApkCloudOfflineViewBanner />
                       <PlServerAuthoritativePendingBanner />
+                      <PlServerReadSyncHealthBanner />
                       <ApkCloudOnlineSyncToast />
                       <DashboardMainShell
                         className={cn(

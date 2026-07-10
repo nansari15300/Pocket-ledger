@@ -23,17 +23,40 @@ export function peekHoverCachedBlobUrl(urlKey: string): string | undefined {
   return ou;
 }
 
+function removeHoverBlobUrlLruKey(key: string): void {
+  const idx = hoverHttpsBlobUrlLru.indexOf(key);
+  if (idx >= 0) hoverHttpsBlobUrlLru.splice(idx, 1);
+}
+
+function revokeObjectUrlIfUnreferenced(objectUrl: string): void {
+  if (!objectUrl.startsWith("blob:")) return;
+  for (const value of hoverHttpsBlobUrlByKey.values()) {
+    if (value === objectUrl) return;
+  }
+  try {
+    URL.revokeObjectURL(objectUrl);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function forgetHoverBlobUrl(urlKey: string, expectedObjectUrl?: string): void {
+  const k = hoverPreviewBlobCacheKey(urlKey);
+  const existing = hoverHttpsBlobUrlByKey.get(k);
+  if (!existing) return;
+  if (expectedObjectUrl && existing !== expectedObjectUrl) return;
+  hoverHttpsBlobUrlByKey.delete(k);
+  removeHoverBlobUrlLruKey(k);
+  revokeObjectUrlIfUnreferenced(existing);
+}
+
 export function rememberHoverBlobUrl(urlKey: string, objectUrl: string): void {
   const k = hoverPreviewBlobCacheKey(urlKey);
   const existing = hoverHttpsBlobUrlByKey.get(k);
-  if (existing && existing !== objectUrl) {
-    try {
-      URL.revokeObjectURL(existing);
-    } catch {
-      /* ignore */
-    }
-  }
   hoverHttpsBlobUrlByKey.set(k, objectUrl);
+  if (existing && existing !== objectUrl) {
+    revokeObjectUrlIfUnreferenced(existing);
+  }
   const idx = hoverHttpsBlobUrlLru.indexOf(k);
   if (idx >= 0) hoverHttpsBlobUrlLru.splice(idx, 1);
   hoverHttpsBlobUrlLru.push(k);
@@ -43,11 +66,7 @@ export function rememberHoverBlobUrl(urlKey: string, objectUrl: string): void {
     const ou = hoverHttpsBlobUrlByKey.get(drop);
     hoverHttpsBlobUrlByKey.delete(drop);
     if (ou) {
-      try {
-        URL.revokeObjectURL(ou);
-      } catch {
-        /* ignore */
-      }
+      revokeObjectUrlIfUnreferenced(ou);
     }
   }
   void import("@/lib/attachmentLoadReady").then((m) => m.markAttachmentUrlReady(urlKey));

@@ -21,6 +21,7 @@ import {
   refreshActiveLocalServerGateContext,
   resolveLocalServerGateAccessToken,
   activateLocalServerGateOnBundledClient,
+  activateLocalServerGateOnWebClient,
 } from "@/lib/gates/gateRuntime";
 import { normalizeServerUrl } from "@/lib/gates/gateStore";
 import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
@@ -354,6 +355,18 @@ export function GatePageContent() {
           });
           return;
         }
+        if (!isElectronDesktopApp() && !isCapacitorNativeApp()) {
+          setActiveGateId(gate.id);
+          const activated = await activateLocalServerGateOnWebClient(gate);
+          if (!activated.ok) {
+            toast.error("Could not connect", { description: activated.message });
+            return;
+          }
+          toast.success(`Connected to ${gate.label}`, {
+            description: "Pick a company below to open it on this browser.",
+          });
+          return;
+        }
         setActiveGateId(gate.id);
         connectLocalServerGate(gate.id);
       })();
@@ -467,6 +480,78 @@ export function GatePageContent() {
           setRememberUnlockDays(readOfflineUnlockPreferenceDays(user?.uid, id, user?.email));
           return;
         }
+        if (!isElectronDesktopApp() && !isCapacitorNativeApp()) {
+          setTestingId(gate.id);
+          const test = await testLocalServerGate(gate.id);
+          if (!test.ok) {
+            setTestingId(null);
+            toast.error("Cannot open company", { description: test.message });
+            return;
+          }
+          setActiveGateId(gate.id);
+          const activated = await activateLocalServerGateOnWebClient(gate);
+          setTestingId(null);
+          if (!activated.ok) {
+            toast.error("Could not open company", { description: activated.message });
+            return;
+          }
+          const picked = localServerGateCompanies.find((c) => c.id === id);
+          const companyRow: CompanyData =
+            picked ??
+            ({
+              id,
+              name: id,
+              ownerId: "",
+              storageOption: "local",
+              plServerShared: true,
+              isOwned: false,
+            } as CompanyData);
+          const remembered =
+            readStoredOfflineUnlockSession(user?.uid, id, user?.email) ||
+            readAnyStoredOfflineUnlockSessionForCompany(id);
+          if (remembered) {
+            setLocalAuthToken(id, remembered.token, remembered.user);
+            setCompanyId(id);
+            const { isPlServerThinStaffClient } = await import("@/lib/plServerThinStaffClient");
+            const { preparePlServerStaffCompanyConnect } = await import("@/lib/plServerStaffCompanyConnect");
+            if (isPlServerThinStaffClient()) {
+              void preparePlServerStaffCompanyConnect(id, { pullFullLedger: true, background: true });
+            }
+            router.push(appNavHref("/dashboard"));
+            toast.success("Opened company");
+            return;
+          }
+          const needsUnlock = await shouldPromptCompanyUnlockAsync(
+            companyRow,
+            user?.email,
+            user?.uid
+          );
+          if (!needsUnlock) {
+            grantOpenLocalCompanySession(id, {
+              role: resolveCompanyIsOwnedForUser(companyRow, {
+                uid: user?.uid || "",
+                email: user?.email ?? null,
+              })
+                ? "owner"
+                : "viewer",
+            });
+            setCompanyId(id);
+            const { isPlServerThinStaffClient } = await import("@/lib/plServerThinStaffClient");
+            const { preparePlServerStaffCompanyConnect } = await import("@/lib/plServerStaffCompanyConnect");
+            if (isPlServerThinStaffClient()) {
+              void preparePlServerStaffCompanyConnect(id, { pullFullLedger: true, background: true });
+            }
+            router.push(appNavHref("/dashboard"));
+            toast.success("Opened company");
+            return;
+          }
+          setCompanyToUnlock(companyRow);
+          setUnlockServerGate(gate);
+          setUsernameInput("");
+          setPasswordInput("");
+          setRememberUnlockDays(readOfflineUnlockPreferenceDays(user?.uid, id, user?.email));
+          return;
+        }
         connectLocalServerGate(gate.id, id);
       })();
       return;
@@ -494,6 +579,7 @@ export function GatePageContent() {
       const { token, user: localUser } = await localAuthLoginForCompanyContext(companyToUnlock.id, u, p, {
         plServerGate: unlockGate,
         forcePlServerRemote: Boolean(unlockGate),
+        appUser: { uid: user?.uid, email: user?.email },
       });
       setLocalAuthToken(companyToUnlock.id, token, localUser);
       saveOfflineUnlockSession(
@@ -504,13 +590,23 @@ export function GatePageContent() {
         localUser,
         user?.email
       );
-      setCompanyId(companyToUnlock.id);
+      const openedId = companyToUnlock.id;
+      const openedName = companyToUnlock.name;
+      setCompanyId(openedId);
       setCompanyToUnlock(null);
       setUnlockServerGate(null);
       setUsernameInput("");
       setPasswordInput("");
+      const { isPlServerThinStaffClient } = await import("@/lib/plServerThinStaffClient");
+      const { preparePlServerStaffCompanyConnect } = await import("@/lib/plServerStaffCompanyConnect");
+      if (isPlServerThinStaffClient()) {
+        void preparePlServerStaffCompanyConnect(openedId, {
+          pullFullLedger: true,
+          background: true,
+        });
+      }
       router.push(appNavHref("/dashboard"));
-      toast.success(`Welcome to ${companyToUnlock.name}`);
+      toast.success(`Welcome to ${openedName}`);
     } catch (e) {
       toast.error("Company access", {
         description: e instanceof Error ? e.message : "Login failed.",

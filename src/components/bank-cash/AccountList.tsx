@@ -23,6 +23,8 @@ import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
 } from "@/components/entity/EntityListQuickFilterBar";
+import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
+import { useCompany } from "@/hooks/useCompany";
 
 export function AccountList({
   accounts,
@@ -48,6 +50,7 @@ export function AccountList({
   hideQuickFilterBar?: boolean;
 }) {
   const { formatCurrency } = useDate();
+  const { company } = useCompany();
   const { can } = usePermissions();
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
@@ -90,6 +93,15 @@ export function AccountList({
         });
   }, [accounts, searchTerm, canViewSpecialAccount, quickFilter]);
 
+  const visibleAccountAttachmentUrls = useMemo(
+    () =>
+      filteredAndSortedAccounts
+        .map((a) => trimEntityFileUrlForPreview(a.fileUrl))
+        .filter((u): u is string => Boolean(u)),
+    [filteredAndSortedAccounts]
+  );
+  usePrewarmVisibleAttachments(visibleAccountAttachmentUrls, company?.id);
+
 
   return (
     <div className={masterListShellCn}>
@@ -118,6 +130,7 @@ export function AccountList({
                       >
                         <ResolvedEntityAvatar
                           className="h-8 w-8 text-xs"
+                          companyId={account.companyId}
                           src={attachmentPreviewUrl ?? undefined}
                           alt={displayName}
                           fallbackSlot={

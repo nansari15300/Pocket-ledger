@@ -7,8 +7,10 @@
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { storage } from "@/lib/firebase";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { companyRowUsesSqliteLedgerWrites, isServerGateCompany } from "@/lib/companyStorageKind";
+import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
-import { generateLocalFileId, LOCAL_FILE_PREFIX, putPendingFile, removePendingFile } from "@/lib/localPendingFiles";
+import { generateLocalFileId, LOCAL_FILE_PREFIX, putPendingFile, removePendingFile, isLocalFileRef } from "@/lib/localPendingFiles";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 import {
   isEligibleLocalDriveSyncCompanyRow,
@@ -16,6 +18,31 @@ import {
 } from "@/lib/localCloudSync/companyConfig";
 import { uploadPendingAttachmentPayloadToDrive } from "@/lib/localCloudSync/driveCloudSyncClient";
 import { compressVoucherAttachment, DRIVE_ATTACHMENT_MAX_BYTES } from "@/lib/compression";
+import { convertPdfAttachmentsToJpegIfEnabled } from "@/lib/voucherAttachmentPdfAsImage";
+
+export const MASTER_SAVE_PDF_AS_IMAGE_STORAGE_KEY = "pocket-ledger-master-save-pdf-as-image";
+
+export function readMasterSavePdfAsImagePreference(defaultValue = false): boolean {
+  if (typeof window === "undefined") return defaultValue;
+  try {
+    const raw = window.localStorage.getItem(MASTER_SAVE_PDF_AS_IMAGE_STORAGE_KEY);
+    if (raw === "1" || raw === "true") return true;
+    if (raw === "0" || raw === "false") return false;
+  } catch {
+    /* storage optional */
+  }
+  return defaultValue;
+}
+
+async function maybeConvertMasterDocumentPdfsToImages(
+  files: File[],
+  savePdfAsImage?: boolean
+): Promise<File[]> {
+  const enabled = savePdfAsImage ?? readMasterSavePdfAsImagePreference(false);
+  if (!enabled || files.length === 0) return files;
+  const converted = await convertPdfAttachmentsToJpegIfEnabled(files, true);
+  return converted.filter((item): item is File => item instanceof File);
+}
 
 async function compressEntityProfileFileForPending(file: File): Promise<{
   blob: Blob;
@@ -73,16 +100,64 @@ async function tryImmediateDriveUploadForStagedEntityFile(params: {
 /** Local company — avatar/docs Firebase Storage par nahi; `local:` + Google Drive sync. */
 export async function shouldStageEntityProfileFilesLocally(
   companyId: string,
-  company?: { storageOption?: string } | null
+  company?: { storageOption?: string; plServerShared?: boolean } | null
 ): Promise<boolean> {
   const cid = String(companyId || "").trim();
   if (!cid) return false;
-  if (company && isOfflineCompanyStorage(company)) return true;
+  if (isPlServerThinStaffClient()) return true;
+  if (company && (isOfflineCompanyStorage(company) || isServerGateCompany(company) || companyRowUsesSqliteLedgerWrites(company))) {
+    return true;
+  }
   if (await shouldUseLocalCloudSync(cid)) return true;
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
   if (!reg) return false;
   if (isOfflineCompanyStorage(reg as { storageOption?: string })) return true;
+  if (isServerGateCompany(reg as { plServerShared?: boolean })) return true;
+  if (companyRowUsesSqliteLedgerWrites(reg as { storageOption?: string; plServerShared?: boolean })) return true;
   return isEligibleLocalDriveSyncCompanyRow(reg);
+}
+
+/** Master payload me `local:` avatar/docs — PlServer save se pehle bytes server par push. */
+export function recordContainsLocalPendingEntityFileRef(obj: Record<string, unknown>): boolean {
+  return listLocalAttachmentRefsInEntityRecord(obj).length > 0;
+}
+
+/** Party/bank/staff/item master row se saare `local:` attachment refs. */
+export function listLocalAttachmentRefsInEntityRecord(obj: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const pushRef = (raw: unknown) => {
+    if (typeof raw !== "string") return;
+    const u = raw.trim();
+    if (u && isLocalFileRef(u)) out.push(u);
+  };
+  pushRef(obj.fileUrl);
+  pushRef(obj.avatarUrl);
+  for (const key of ["documentFileUrls", "fileUrls"] as const) {
+    const arr = obj[key];
+    if (!Array.isArray(arr)) continue;
+    for (const u of arr) pushRef(u);
+  }
+  return out;
+}
+
+const PL_SERVER_ENTITY_ATTACHMENT_FLUSH_BUDGET_MS = 20_000;
+
+/** Stage ke baad `/__pl_attachment` upload — host loopback + staff gate. */
+async function flushPlServerAttachmentsAfterEntityStaging(companyId: string): Promise<void> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return;
+  try {
+    const { shouldEnqueuePlServerAttachmentUpload, flushPlServerAttachmentUploadQueueNow } = await import(
+      "@/lib/plServerAttachmentUploadQueue"
+    );
+    if (!(await shouldEnqueuePlServerAttachmentUpload(cid))) return;
+    await Promise.race([
+      flushPlServerAttachmentUploadQueueNow(cid),
+      new Promise<void>((resolve) => setTimeout(resolve, PL_SERVER_ENTITY_ATTACHMENT_FLUSH_BUDGET_MS)),
+    ]);
+  } catch {
+    /* best-effort */
+  }
 }
 
 function safeEntityFileName(name: string | undefined): string {
@@ -104,7 +179,7 @@ export function isProfileAvatarImageFile(file: File): boolean {
   const t = (file.type || "").toLowerCase();
   if (t.startsWith("image/")) return true;
   const n = file.name.toLowerCase();
-  return /\.(jpe?g|png|gif|webp|bmp|svg)$/.test(n);
+  return /\.(jpe?g|png|gif|webp|bmp|svg|heic|heif|avif|tiff?)$/.test(n);
 }
 
 /** Dusra section — image ya PDF. */
@@ -112,7 +187,7 @@ export function isProfileDocumentFile(file: File): boolean {
   const t = (file.type || "").toLowerCase();
   if (t.startsWith("image/") || t === "application/pdf") return true;
   const n = file.name.toLowerCase();
-  return /\.(jpe?g|png|gif|webp|bmp|pdf)$/.test(n);
+  return /\.(jpe?g|png|gif|webp|bmp|svg|heic|heif|avif|tiff?|pdf)$/.test(n);
 }
 
 export async function stageEntityAvatarAndDocuments(params: {
@@ -122,9 +197,11 @@ export async function stageEntityAvatarAndDocuments(params: {
   avatarFile: File | null;
   documentFiles: File[];
   maxDocuments?: number;
+  savePdfAsImage?: boolean;
 }): Promise<{ fileUrl: string | null; documentFileUrls: string[] }> {
   const { companyId, collectionSeg, entityId, avatarFile, documentFiles } = params;
   const maxDocuments = params.maxDocuments ?? DEFAULT_MAX_ENTITY_DOCS;
+  const filesForSave = await maybeConvertMasterDocumentPdfsToImages(documentFiles, params.savePdfAsImage);
   const documentFileUrls: string[] = [];
   const stageLocally = await shouldStageEntityProfileFilesLocally(companyId);
   const fsCompanyId = await resolveAuthoritativeFirestoreCompanyId(companyId);
@@ -158,7 +235,7 @@ export async function stageEntityAvatarAndDocuments(params: {
     fileUrl = driveRef ?? `${LOCAL_FILE_PREFIX}${id}`;
   }
 
-  for (const f of documentFiles) {
+  for (const f of filesForSave) {
     if (documentFileUrls.length >= maxDocuments) break;
     if (!isProfileDocumentFile(f)) continue;
     const id = generateLocalFileId();
@@ -184,6 +261,7 @@ export async function stageEntityAvatarAndDocuments(params: {
     });
     documentFileUrls.push(driveRef ?? `${LOCAL_FILE_PREFIX}${id}`);
   }
+  await flushPlServerAttachmentsAfterEntityStaging(companyId);
   return { fileUrl, documentFileUrls };
 }
 
@@ -196,12 +274,15 @@ export async function uploadEntityAvatarAndDocumentsRemote(params: {
   avatarFile: File | null;
   documentFiles: File[];
   maxDocuments?: number;
+  company?: { storageOption?: string; plServerShared?: boolean } | null;
+  savePdfAsImage?: boolean;
 }): Promise<{ fileUrl: string | null; documentFileUrls: string[] }> {
-  if (await shouldStageEntityProfileFilesLocally(params.companyId)) {
+  if (await shouldStageEntityProfileFilesLocally(params.companyId, params.company)) {
     return stageEntityAvatarAndDocuments(params);
   }
   const { companyId, collectionSeg, avatarFile, documentFiles } = params;
   const maxDocuments = params.maxDocuments ?? DEFAULT_MAX_ENTITY_DOCS;
+  const filesForSave = await maybeConvertMasterDocumentPdfsToImages(documentFiles, params.savePdfAsImage);
   const documentFileUrls: string[] = [];
   const fsCompanyId = await resolveAuthoritativeFirestoreCompanyId(companyId);
   const prefix = `companies/${fsCompanyId}/${collectionSeg.replace(/_/g, "-")}-files`;
@@ -214,7 +295,7 @@ export async function uploadEntityAvatarAndDocumentsRemote(params: {
     fileUrl = await getDownloadURL(storageRef);
   }
 
-  for (const f of documentFiles) {
+  for (const f of filesForSave) {
     if (documentFileUrls.length >= maxDocuments) break;
     if (!isProfileDocumentFile(f)) continue;
     const storagePath = `${prefix}/documents/${Date.now()}_${safeEntityFileName(f.name)}`;
@@ -232,8 +313,10 @@ export async function stageItemAvatarAndAttachments(params: {
   avatarFile: File | null;
   attachmentFiles: File[];
   maxAttachments: number;
+  savePdfAsImage?: boolean;
 }): Promise<{ avatarUrl: string | null; newAttachmentUrls: string[] }> {
   const { companyId, itemId, avatarFile, attachmentFiles } = params;
+  const filesForSave = await maybeConvertMasterDocumentPdfsToImages(attachmentFiles, params.savePdfAsImage);
   const basePath = `companies/${companyId}/items/${itemId}`;
   const prefix = `companies/${companyId}/item-files`;
 
@@ -264,7 +347,7 @@ export async function stageItemAvatarAndAttachments(params: {
   }
 
   const newAttachmentUrls: string[] = [];
-  for (const f of attachmentFiles) {
+  for (const f of filesForSave) {
     if (newAttachmentUrls.length >= params.maxAttachments) break;
     if (!isProfileDocumentFile(f)) continue;
     const id = generateLocalFileId();
@@ -290,6 +373,7 @@ export async function stageItemAvatarAndAttachments(params: {
     });
     newAttachmentUrls.push(driveRef ?? `${LOCAL_FILE_PREFIX}${id}`);
   }
+  await flushPlServerAttachmentsAfterEntityStaging(companyId);
   return { avatarUrl, newAttachmentUrls };
 }
 
@@ -300,11 +384,13 @@ export async function uploadItemAvatarAndAttachmentsRemote(params: {
   avatarFile: File | null;
   attachmentFiles: File[];
   maxAttachments: number;
+  savePdfAsImage?: boolean;
 }): Promise<{ avatarUrl: string | null; newAttachmentUrls: string[] }> {
   if (await shouldStageEntityProfileFilesLocally(params.companyId)) {
     return stageItemAvatarAndAttachments(params);
   }
   const { companyId, avatarFile, attachmentFiles, maxAttachments } = params;
+  const filesForSave = await maybeConvertMasterDocumentPdfsToImages(attachmentFiles, params.savePdfAsImage);
   const prefix = `companies/${companyId}/item-files`;
   let avatarUrl: string | null = null;
   if (avatarFile && isProfileAvatarImageFile(avatarFile)) {
@@ -314,7 +400,7 @@ export async function uploadItemAvatarAndAttachmentsRemote(params: {
     avatarUrl = await getDownloadURL(storageRef);
   }
   const newAttachmentUrls: string[] = [];
-  for (const f of attachmentFiles) {
+  for (const f of filesForSave) {
     if (newAttachmentUrls.length >= maxAttachments) break;
     if (!isProfileDocumentFile(f)) continue;
     const storagePath = `${prefix}/attachments/${Date.now()}_${safeEntityFileName(f.name)}`;
@@ -330,10 +416,24 @@ export function syncEntityAttachmentsAfterSave(companyId: string): void {
   void syncEntityAttachmentsAfterSaveAsync(companyId);
 }
 
+export async function syncEntityAttachmentsAfterSaveAndWait(companyId: string): Promise<void> {
+  await syncEntityAttachmentsAfterSaveAsync(companyId);
+}
+
 async function syncEntityAttachmentsAfterSaveAsync(companyId: string): Promise<void> {
   const cid = String(companyId || "").trim();
   if (!cid) return;
   try {
+    const { shouldEnqueuePlServerAttachmentUpload, flushPlServerAttachmentUploadQueueNow } = await import(
+      "@/lib/plServerAttachmentUploadQueue"
+    );
+    if (await shouldEnqueuePlServerAttachmentUpload(cid)) {
+      await Promise.race([
+        flushPlServerAttachmentUploadQueueNow(cid),
+        new Promise<void>((resolve) => setTimeout(resolve, PL_SERVER_ENTITY_ATTACHMENT_FLUSH_BUDGET_MS)),
+      ]);
+      return;
+    }
     if (await shouldUseLocalCloudSync(cid)) {
       const { scheduleLocalCloudSyncInBackground } = await import("@/lib/localCloudSync/engine");
       scheduleLocalCloudSyncInBackground(cid, { force: true });

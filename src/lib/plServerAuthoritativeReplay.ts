@@ -38,6 +38,49 @@ function replaySimulateLanClientRoute(): boolean {
   );
 }
 
+async function preflightPendingRowAttachments(row: PendingAuthoritativeCompanyDocWrite): Promise<void> {
+  const {
+    flushPlServerAttachmentsForRecordBeforeAuthoritativeSave,
+    listLocalAttachmentIdsInRecord,
+  } = await import("@/lib/plServerAttachmentUploadQueue");
+  if ((await listLocalAttachmentIdsInRecord(row.payload)).length === 0) return;
+  const result = await flushPlServerAttachmentsForRecordBeforeAuthoritativeSave(row.companyId, row.payload, {
+    throwOnFailure: true,
+  });
+  if (!result.ok) {
+    throw new Error(result.error || "attachment_upload_failed");
+  }
+}
+
+async function markPendingReplayFailure(
+  row: PendingAuthoritativeCompanyDocWrite,
+  error: unknown
+): Promise<"retry" | "permanent"> {
+  const errorClass = classifyAuthoritativeWriteFailure(error);
+  const message = error instanceof Error ? error.message : String(error);
+  const nextRetry = row.retryCount + 1;
+
+  if (!isAuthoritativeWriteFailureRetryable(errorClass) || nextRetry > MAX_AUTO_RETRIES) {
+    await markPendingAuthoritativeWriteState(row, "failed_permanent", {
+      inFlightSince: null,
+      retryCount: nextRetry,
+      lastError: message,
+      lastErrorClass: errorClass,
+      nextAttemptAt: null,
+    });
+    return "permanent";
+  }
+
+  await markPendingAuthoritativeWriteState(row, "retry_scheduled", {
+    inFlightSince: null,
+    retryCount: nextRetry,
+    lastError: message,
+    lastErrorClass: errorClass,
+    nextAttemptAt: computeNextRetryAttemptAt(nextRetry),
+  });
+  return "retry";
+}
+
 async function replayOnePendingRow(
   row: PendingAuthoritativeCompanyDocWrite
 ): Promise<"success" | "retry" | "permanent"> {
@@ -51,12 +94,50 @@ async function replayOnePendingRow(
       simulateLanClient,
     }))
   ) {
+    try {
+      await preflightPendingRowAttachments(row);
+    } catch (e) {
+      return markPendingReplayFailure(row, e);
+    }
+
+    const { flushPlServerMirrorDocPushNow } = await import("@/lib/plServerClientMirrorPush");
+    const mirrorPush = await flushPlServerMirrorDocPushNow(
+      row.companyId,
+      row.collectionName,
+      row.docId,
+      row.payload
+    );
+    if (mirrorPush.ok) {
+      if (!verifySkipPendingDeleteOnSuccess()) {
+        await removePendingAuthoritativeCompanyDocWrite(row.queueItemId);
+      }
+      return "success";
+    }
+
+    const nextRetry = row.retryCount + 1;
+    if (nextRetry > MAX_AUTO_RETRIES) {
+      await markPendingAuthoritativeWriteState(row, "failed_permanent", {
+        inFlightSince: null,
+        retryCount: nextRetry,
+        lastError: "authoritative_route_unavailable",
+        lastErrorClass: "host_unavailable",
+        nextAttemptAt: null,
+      });
+      return "permanent";
+    }
     await markPendingAuthoritativeWriteState(row, "retry_scheduled", {
-      nextAttemptAt: computeNextRetryAttemptAt(row.retryCount),
+      nextAttemptAt: computeNextRetryAttemptAt(nextRetry),
+      retryCount: nextRetry,
       lastError: "authoritative_route_unavailable",
       lastErrorClass: "host_unavailable",
     });
     return "retry";
+  }
+
+  try {
+    await preflightPendingRowAttachments(row);
+  } catch (e) {
+    return markPendingReplayFailure(row, e);
   }
 
   await markPendingAuthoritativeWriteState(row, "sending", {
@@ -82,29 +163,21 @@ async function replayOnePendingRow(
     }
     return "success";
   } catch (e) {
-    const errorClass = classifyAuthoritativeWriteFailure(e);
-    const message = e instanceof Error ? e.message : String(e);
-    const nextRetry = row.retryCount + 1;
-
-    if (!isAuthoritativeWriteFailureRetryable(errorClass) || nextRetry > MAX_AUTO_RETRIES) {
-      await markPendingAuthoritativeWriteState(row, "failed_permanent", {
-        inFlightSince: null,
-        retryCount: nextRetry,
-        lastError: message,
-        lastErrorClass: errorClass,
-        nextAttemptAt: null,
-      });
-      return "permanent";
+    const { flushPlServerMirrorDocPushNow } = await import("@/lib/plServerClientMirrorPush");
+    const mirrorPush = await flushPlServerMirrorDocPushNow(
+      row.companyId,
+      row.collectionName,
+      row.docId,
+      row.payload
+    );
+    if (mirrorPush.ok) {
+      if (!verifySkipPendingDeleteOnSuccess()) {
+        await removePendingAuthoritativeCompanyDocWrite(row.queueItemId);
+      }
+      return "success";
     }
 
-    await markPendingAuthoritativeWriteState(row, "retry_scheduled", {
-      inFlightSince: null,
-      retryCount: nextRetry,
-      lastError: message,
-      lastErrorClass: errorClass,
-      nextAttemptAt: computeNextRetryAttemptAt(nextRetry),
-    });
-    return "retry";
+    return markPendingReplayFailure(row, e);
   }
 }
 

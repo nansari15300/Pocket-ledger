@@ -16,10 +16,11 @@ import Link from "next/link";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
-import {
-  EntityListQuickFilterBar,
+import { EntityListQuickFilterBar,
   type EntityListQuickFilter,
 } from "@/components/entity/EntityListQuickFilterBar";
+import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
+import { useCompany } from "@/hooks/useCompany";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -56,6 +57,7 @@ export const PartyList = React.memo(({
   hideQuickFilterBar?: boolean;
 }) => {
   const { formatCurrency } = useDate();
+  const { company } = useCompany();
   const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
@@ -101,6 +103,15 @@ export const PartyList = React.memo(({
     return [...pinned, ...filteredRest];
   }, [parties, searchTerm, topPartyId, quickFilter]);
 
+  const visiblePartyAttachmentUrls = useMemo(
+    () =>
+      filteredAndSortedParties
+        .map((party) => trimEntityFileUrlForPreview(party.fileUrl))
+        .filter((u): u is string => Boolean(u)),
+    [filteredAndSortedParties]
+  );
+  usePrewarmVisibleAttachments(visiblePartyAttachmentUrls, company?.id);
+
   // यदि कुनै पार्टी भेटिएन भने
   if (filteredAndSortedParties.length === 0) {
     return (
@@ -138,6 +149,7 @@ export const PartyList = React.memo(({
                             >
                               <ResolvedEntityAvatar
                                 className="h-8 w-8 border text-xs"
+                                companyId={party.companyId}
                                 src={attachmentPreviewUrl ?? undefined}
                                 alt={party.name}
                                 fallbackText={getInitials(party.name)}

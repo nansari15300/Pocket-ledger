@@ -409,6 +409,14 @@ export function AccountDetails({
       closingBalance = periodDr - periodCr;
   }
 
+  /** Match party ledger: when period OB is 0 but books OB exists, running/header use books OB. */
+  const ledgerOpeningForRunning = useMemo(() => {
+    if (account.isSpecial && !canViewSpecialBalance) return openingBalanceForPeriod;
+    const master = Number(account?.openingBalance) || 0;
+    if (Math.abs(openingBalanceForPeriod) < 1e-6 && Math.abs(master) > 1e-6) return master;
+    return openingBalanceForPeriod;
+  }, [openingBalanceForPeriod, account?.openingBalance, account.isSpecial, canViewSpecialBalance]);
+
   /** Spend-wise layout hamesha poori ledger se — date range baad me sirf rows hide. */
   const spendWiseGroupingTransactions = useMemo(() => {
     let source = allProcessedTransactions.filter((t: any) => t.type !== "note");
@@ -691,9 +699,9 @@ export function AccountDetails({
     if (spendWiseView) return rows;
     return recomputeRunningBalanceTopToBottom(
       sortTransactionsWithFiscalMergeForCompany(rows, "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company),
-      openingBalanceForPeriod
+      ledgerOpeningForRunning
     );
-  }, [displayTransactions, filterByUnapprovedOnly, unapprovedOnly, spendWiseView, openingBalanceForPeriod, company]);
+  }, [displayTransactions, filterByUnapprovedOnly, unapprovedOnly, spendWiseView, ledgerOpeningForRunning, company]);
 
   // Check mode: hide/mark rows; statement view par running balance dubara (spend-wise par filter only)
   const [statementKeyboardNav, setStatementKeyboardNav] = useState<
@@ -710,13 +718,13 @@ export function AccountDetails({
   const ledgerSortedTransactions = useMemo(() => {
     const filtered = statementCheck.filterTransactions([...sortedTransactions]);
     if (!statementCheck.checkModeActive || spendWiseView) return filtered;
-    return recomputeRunningBalanceTopToBottom(filtered, openingBalanceForPeriod);
+    return recomputeRunningBalanceTopToBottom(filtered, ledgerOpeningForRunning);
   }, [
     sortedTransactions,
     statementCheck.filterTransactions,
     statementCheck.checkModeActive,
     spendWiseView,
-    openingBalanceForPeriod,
+    ledgerOpeningForRunning,
   ]);
 
   // Footer Total/(before)/(after) — statement voucher list; spend-wise me bhi wahi count
@@ -726,7 +734,7 @@ export function AccountDetails({
     const sorted = sortTransactionsWithFiscalMergeForCompany(rows, "date", DEFAULT_TRANSACTION_SORT_ORDER, undefined, company);
     const filtered = statementCheck.filterTransactions([...sorted]);
     if (statementCheck.checkModeActive) {
-      return recomputeRunningBalanceTopToBottom(filtered, openingBalanceForPeriod);
+      return recomputeRunningBalanceTopToBottom(filtered, ledgerOpeningForRunning);
     }
     return filtered;
   }, [
@@ -1055,10 +1063,24 @@ export function AccountDetails({
     }
   };
   
+  /** Top header = table last running balance (Book Opening included). */
+  const headerClosingBalance = useMemo(() => {
+    const list = ledgerSortedTransactions as any[];
+    if (list.length > 0) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const row = list[i];
+        if (row?._spendWiseSpacer) continue;
+        const bal = row?.balance ?? row?.runningBalance;
+        if (typeof bal === "number" && Number.isFinite(bal)) return bal;
+      }
+    }
+    return ledgerOpeningForRunning + (Number(periodDr) || 0) - (Number(periodCr) || 0);
+  }, [ledgerSortedTransactions, ledgerOpeningForRunning, periodDr, periodCr]);
+
   const balanceText = useMemo(() => {
-    if (closingBalance === 0) return "Settled";
-    return closingBalance >= 0 ? "Dr" : "Cr";
-  }, [closingBalance]);
+    if (headerClosingBalance === 0) return "Settled";
+    return headerClosingBalance >= 0 ? "Dr" : "Cr";
+  }, [headerClosingBalance]);
   
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
     const range = dateRange;
@@ -1409,15 +1431,15 @@ export function AccountDetails({
       </div>
       {/* Balance row */}
       <div className="px-3 py-2 border-b flex-shrink-0">
-        <p className={cn("text-2xl font-bold flex justify-center items-baseline gap-px", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+        <p className={cn("text-2xl font-bold flex justify-center items-baseline gap-px", headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
           {showMaskedBalance ? (
             "*****"
-          ) : closingBalance === 0 ? (
+          ) : headerClosingBalance === 0 ? (
             "Settled"
           ) : (
             <>
-              <span>{formatCurrency(Math.abs(closingBalance), { noSuffix: true })}</span>
-              <span className="text-lg">{closingBalance >= 0 ? "Dr" : "Cr"}</span>
+              <span>{formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}</span>
+              <span className="text-lg">{headerClosingBalance >= 0 ? "Dr" : "Cr"}</span>
             </>
           )}
         </p>
@@ -1687,15 +1709,15 @@ export function AccountDetails({
                       </Button>
                     </EditAccountDialog>
                   )}
-                  <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0 flex justify-center items-baseline gap-px", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                  <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0 flex justify-center items-baseline gap-px", headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
                     {showMaskedBalance ? (
                       "*****"
-                    ) : closingBalance === 0 ? (
+                    ) : headerClosingBalance === 0 ? (
                       "Settled"
                     ) : (
                       <>
-                        <span>{formatCurrency(Math.abs(closingBalance), { showDrCr: false })}</span>
-                        <span className="text-sm">{closingBalance >= 0 ? "Dr" : "Cr"}</span>
+                        <span>{formatCurrency(Math.abs(headerClosingBalance), { showDrCr: false })}</span>
+                        <span className="text-sm">{headerClosingBalance >= 0 ? "Dr" : "Cr"}</span>
                       </>
                     )}
                   </div>

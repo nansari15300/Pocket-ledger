@@ -244,7 +244,14 @@ export async function ensureOfflineCachedAttachmentDisplay(
         return { displayUrl: meta.displayUrl, blob: null, contentType: meta.contentType ?? null };
       }
     }
-    const blob = await getBlobFromLocalFileRef(trimmed, { companyId });
+    let blob = await getBlobFromLocalFileRef(trimmed, { companyId });
+    if ((!blob || blob.size <= 0) && companyId) {
+      const { fetchPlServerAttachmentBlob } = await import("@/lib/plServerAttachmentFetch");
+      blob = await fetchPlServerAttachmentBlob(companyId, trimmed, signal);
+      if (blob && blob.size > 0) {
+        void putCachedBlob(trimmed, blob);
+      }
+    }
     return { displayUrl: null, blob, contentType: blob?.type ?? null };
   }
 
@@ -281,6 +288,17 @@ async function blobFromHybridFetch(
   /** Prefetch = lambi wait; UI hover/click = chhota cap taaki spinner 20s na atke */
   timeoutMs: number = prefetchRequestTimeoutMs()
 ): Promise<HybridFetchResult> {
+  const recentFailure = readRecentAttachmentFetchFailure(url);
+  if (recentFailure) {
+    return {
+      blob: null,
+      status: recentFailure.status,
+      retryable: false,
+      source: "exception",
+      error: recentFailure.error,
+    };
+  }
+
   const objectPathForSdk = normalizeFirebaseStorageObjectPathForSdk(url);
   if (
     /^voucher-files\//i.test(objectPathForSdk) ||
@@ -294,9 +312,18 @@ async function blobFromHybridFetch(
       signal
     ).catch(() => null);
     if (b && b.size > 0) {
+      clearRecentAttachmentFetchFailure(url);
       return { blob: b, status: 200, retryable: false, source: "firebase_sdk" };
     }
-    return { blob: null, status: null, retryable: true, source: "exception", error: "firebase_object_path_fetch_failed" };
+    const failure: HybridFetchResult = {
+      blob: null,
+      status: null,
+      retryable: true,
+      source: "exception",
+      error: "firebase_object_path_fetch_failed",
+    };
+    rememberRecentAttachmentFetchFailure(url, failure);
+    return failure;
   }
   if (!isEligibleAttachmentHttpsUrl(url)) {
     return { blob: null, status: null, retryable: false, source: "http_error", error: "ineligible_url" };
@@ -308,6 +335,7 @@ async function blobFromHybridFetch(
       signal
     ).catch(() => null);
     if (b && b.size > 0) {
+      clearRecentAttachmentFetchFailure(url);
       return { blob: b, status: 200, retryable: false, source: "firebase_sdk" };
     }
     const pathFromUrl = tryGetStoragePathFromFirebaseDownloadUrl(url);
@@ -318,6 +346,8 @@ async function blobFromHybridFetch(
         signal
       ).catch(() => null);
       if (b2 && b2.size > 0) {
+        clearRecentAttachmentFetchFailure(url);
+        clearRecentAttachmentFetchFailure(pathFromUrl);
         return { blob: b2, status: 200, retryable: false, source: "firebase_sdk" };
       }
     }
@@ -327,15 +357,18 @@ async function blobFromHybridFetch(
       signal
     ).catch(() => null);
     if (corsBlob && corsBlob.size > 0) {
+      clearRecentAttachmentFetchFailure(url);
       return { blob: corsBlob, status: 200, retryable: false, source: "http_fetch" };
     }
-    return {
+    const failure: HybridFetchResult = {
       blob: null,
       status: null,
       retryable: false,
       source: "exception",
       error: "firebase_storage_download_failed",
     };
+    rememberRecentAttachmentFetchFailure(url, failure);
+    return failure;
   }
   try {
     const res = await runWithTimeoutSignal(
@@ -346,15 +379,19 @@ async function blobFromHybridFetch(
     if (!res.ok) {
       const status = typeof res.status === "number" ? res.status : null;
       const retryable = status != null && RETRYABLE_HTTP.has(status);
-      return {
+      const failure: HybridFetchResult = {
         blob: null,
         status,
         retryable,
         source: "http_error",
         error: `http_${status ?? "unknown"}`,
       };
+      rememberRecentAttachmentFetchFailure(url, failure);
+      return failure;
     }
-    return { blob: await res.blob(), status: res.status, retryable: false, source: "http_fetch" };
+    const blob = await res.blob();
+    if (blob && blob.size > 0) clearRecentAttachmentFetchFailure(url);
+    return { blob, status: res.status, retryable: false, source: "http_fetch" };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return {
@@ -426,7 +463,60 @@ function uiAttachmentCacheMissTimeoutMs(): number {
   return usesEmbeddedNativeAttachmentStorage() ? 22_000 : 7_500;
 }
 
-/** Parent abort + timeout — Firebase `getBlob` signal ignore karta hai; race se hang avoid. */
+/** Static EXE/APK guard: broken remote URLs should not block every hover/page refresh. */
+type AttachmentFetchFailureMemo = {
+  untilMs: number;
+  status: number | null;
+  error: string;
+};
+
+const RECENT_ATTACHMENT_FETCH_FAILURE_TTL_MS = 10 * 60 * 1000;
+const recentAttachmentFetchFailures = new Map<string, AttachmentFetchFailureMemo>();
+
+function attachmentFetchFailureMemoKey(raw: string): string {
+  const stable = getStableFirebaseObjectKey(raw);
+  return (stable || offlineAttachmentCacheLookupKey(raw)).trim();
+}
+
+function readRecentAttachmentFetchFailure(raw: string): AttachmentFetchFailureMemo | null {
+  const key = attachmentFetchFailureMemoKey(raw);
+  if (!key) return null;
+  const memo = recentAttachmentFetchFailures.get(key);
+  if (!memo) return null;
+  if (memo.untilMs <= Date.now()) {
+    recentAttachmentFetchFailures.delete(key);
+    return null;
+  }
+  return memo;
+}
+
+function rememberRecentAttachmentFetchFailure(raw: string, result: HybridFetchResult): void {
+  if (result.blob?.size || result.retryable) return;
+  const key = attachmentFetchFailureMemoKey(raw);
+  if (!key) return;
+  const error = result.error || result.source || "fetch_failed";
+  recentAttachmentFetchFailures.set(key, {
+    untilMs: Date.now() + RECENT_ATTACHMENT_FETCH_FAILURE_TTL_MS,
+    status: result.status,
+    error,
+  });
+  if (recentAttachmentFetchFailures.size > 500) {
+    const now = Date.now();
+    for (const [k, memo] of recentAttachmentFetchFailures) {
+      if (memo.untilMs <= now || recentAttachmentFetchFailures.size > 500) {
+        recentAttachmentFetchFailures.delete(k);
+      }
+      if (recentAttachmentFetchFailures.size <= 500) break;
+    }
+  }
+}
+
+function clearRecentAttachmentFetchFailure(raw: string): void {
+  const key = attachmentFetchFailureMemoKey(raw);
+  if (key) recentAttachmentFetchFailures.delete(key);
+}
+
+/** Parent abort + timeout: Firebase `getBlob` ignores signals, so race it with a timer. */
 async function runWithTimeoutSignal<T>(
   fn: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
@@ -818,6 +908,13 @@ async function putCachedBlob(urlStr: string, blob: Blob): Promise<boolean> {
     void import("@/lib/attachmentLoadReady").then((m) => m.markAttachmentUrlReady(urlStr));
   }
   return ok;
+}
+
+/** Upload ke turant baad: staff preview server re-fetch skip — pending blob se offline cache seed. */
+export async function seedOfflineAttachmentCacheFromBlob(urlStr: string, blob: Blob): Promise<boolean> {
+  const trimmed = String(urlStr || "").trim();
+  if (!trimmed || !blob?.size) return false;
+  return putCachedBlob(trimmed, blob);
 }
 
 /**

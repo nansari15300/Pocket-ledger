@@ -19,6 +19,8 @@ export type LocalAppServerConfig = {
   clientAccessToken: string;
   publicHost: string;
   requireRemoteAccessToken: boolean;
+  /** Normalized listing URLs to include in Messages share invites (empty = all available). */
+  selectedInviteUrls?: string[];
 };
 
 export type LocalAppServerAccessTokenSummary = {
@@ -124,4 +126,18 @@ export function getElectronLocalServerApi(): PlElectronLocalServerApi | null {
   if (electron) return electron;
   if (isLocalhostDevPreview()) return createDevPlLocalServerClientApi();
   return null;
+}
+
+/** Settings UI + share invites: Electron `sharingActive`, dev bridge `running` fallback. */
+export function isLocalAppServerSharingActive(status: LocalAppServerStatus | null | undefined): boolean {
+  if (!status) return false;
+  return status.sharingActive === true || status.running === true;
+}
+
+export function resolveLocalAppServerSharingPort(
+  status: LocalAppServerStatus | null | undefined
+): number | null {
+  if (!isLocalAppServerSharingActive(status)) return null;
+  const port = status?.sharingPort ?? status?.port;
+  return port && port > 0 ? port : null;
 }

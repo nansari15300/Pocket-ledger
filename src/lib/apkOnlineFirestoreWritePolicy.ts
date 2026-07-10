@@ -13,6 +13,8 @@ import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
+import { companyStrategyUsesSqliteFirstLedgerWrites } from "@/lib/staticAttachmentDisplayUrl";
 
 /**
  * Voucher/attachment pipeline: `navigator.onLine === false` par Storage `uploadBytes` / `getDownloadURL` await mat karo —
@@ -40,6 +42,7 @@ export function apkEmbeddedSqliteFirstWritesPreferred(): boolean {
 export function preferLocalLedgerReads(
   company?: { storageOption?: string | null; syncedFromCloud?: boolean } | null
 ): boolean {
+  if (isPlServerThinStaffClient()) return true;
   if (company && companyRowUsesSqliteLedgerWrites(company)) return true;
   if (company && isOfflineCompanyStorage(company)) return true;
   return isLocalOnlyMode() || apkEmbeddedSqliteFirstWritesPreferred() || isClientNavigatorOffline();
@@ -63,6 +66,7 @@ export function apkCloudFirestoreMasterWriteFromCompanyShape(company: { storageO
  * online Firestore company web par seedha Firestore (dev + production).
  */
 export async function apkCloudCompanyUsesSqliteFirstWrites(companyId: string): Promise<boolean> {
+  if (isPlServerThinStaffClient()) return true;
   if (apkEmbeddedSqliteFirstWritesPreferred()) return true;
   const cid = String(companyId || "").trim();
   if (!cid) return false;
@@ -70,7 +74,7 @@ export async function apkCloudCompanyUsesSqliteFirstWrites(companyId: string): P
   try {
     const row = await getLocalCompanyById(cid, { includeDeleted: true });
     if (row) {
-      return companyRowUsesSqliteLedgerWrites(row);
+      return companyStrategyUsesSqliteFirstLedgerWrites(row) || companyRowUsesSqliteLedgerWrites(row);
     }
   } catch {
     /* SQLite unavailable — niche fallback */
@@ -90,7 +94,9 @@ export async function apkCloudCompanyUsesSqliteFirstWrites(companyId: string): P
 
 /** Master/item forms: mirror `EditItemDialog` / party — `company` sync available */
 export function apkEntityWriteUsesLocalSqliteMirror(company: { storageOption?: string; syncedFromCloud?: boolean } | null | undefined): boolean {
+  if (isPlServerThinStaffClient()) return true;
   if (apkEmbeddedSqliteFirstWritesPreferred()) return true;
+  if (company && companyStrategyUsesSqliteFirstLedgerWrites(company)) return true;
   if (company && companyRowUsesSqliteLedgerWrites(company)) return true;
   if (company && isOfflineCompanyStorage(company)) return true;
   if (!isLocalOnlyMode()) return false;
@@ -105,6 +111,7 @@ export function apkEntityWriteUsesLocalSqliteMirror(company: { storageOption?: s
 export function apkCloudEntityMasterReadFromSqliteMirror(
   company: { storageOption?: string } | null | undefined
 ): boolean {
+  if (isPlServerThinStaffClient()) return true;
   return apkCloudFirestoreMasterWriteFromCompanyShape(company) && isLocalOnlyMode();
 }
 
@@ -112,11 +119,13 @@ export function apkCloudEntityMasterReadFromSqliteMirror(
  * APK + Firestore company (`storageOption` ≠ local) + device offline ⇒ UI: view-only (Save/Copy/Delete band; Cancel chalu).
  * EXE/desktop: `isCapacitorNativeApp` false — hamesha false.
  * Static build: hamesha local save — view-only kabhi nahi.
+ * PlServer staff: SQLite mirror + pending sync — offline Save allowed (online company jaisa).
  */
 export function apkCloudCompanyOfflineViewOnly(
   company: { storageOption?: string } | null | undefined,
   navigatorOnline: boolean
 ): boolean {
+  if (isPlServerThinStaffClient()) return false;
   if (!isCapacitorNativeApp() || !company) return false;
   if (String(company.storageOption ?? "").toLowerCase() === "local") return false;
   /** Static/APK embedded: offline par bhi SQLite/outbox — Save band mat karo. */

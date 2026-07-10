@@ -80,7 +80,7 @@ import { isRecurringVoucherGenerationEnabled } from "@/lib/recurringVoucherSetti
 import { BTN_SAVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { stripIdsForCrossCompanyClone } from "@/lib/crossCompanyMasterPrefill";
 import { filterVoucherAttachmentsForCompanyContext } from "@/lib/crossCompanyAttachmentAccess";
-import { importVoucherAttachmentsAsFilesForLocalCloudCopy } from "@/lib/voucherLocalAttachmentUpload";
+import { cloneVoucherAttachmentsAsNewFilesForCopy } from "@/lib/voucherLocalAttachmentUpload";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { persistLedgerModalParentFromBrowser } from "@/lib/modalUrlSync";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
@@ -2522,6 +2522,9 @@ export function AddVoucherDialog(props: any) {
           return null;
         }
       }
+      if (effectiveVoucher) {
+        sourceDoc = mergeAttachmentFieldsFromRowForEffectiveVoucher(sourceDoc, effectiveVoucher);
+      }
       const targetCompanyDoc = copyToCompanies.find((c) => c.id === destinationCompanyId) || null;
       const nextVoucherNumber = await getNextVoucherNumberForCompany({
         companyId: destinationCompanyId,
@@ -2546,8 +2549,7 @@ export function AddVoucherDialog(props: any) {
         // Cross-company create me stale approval carry na ho; target voucher fresh pending/editable rahe.
         isApproved: false,
       };
-      const importedCopy = await importVoucherAttachmentsAsFilesForLocalCloudCopy({
-        targetCompanyId: destinationCompanyId,
+      const importedCopy = await cloneVoucherAttachmentsAsNewFilesForCopy({
         sourceCompanyId,
         voucher: copyPayloadBase,
       });
@@ -2587,6 +2589,7 @@ export function AddVoucherDialog(props: any) {
     defaultVoucherData,
     company,
     copySourceVoucherSnapshot,
+    effectiveVoucher,
   ]);
 
   /** Party/bank/target me create-save ke baad mismatch list dubara ginti — Copy buttons stale na rahein (`accountName` match ab mila ho). */

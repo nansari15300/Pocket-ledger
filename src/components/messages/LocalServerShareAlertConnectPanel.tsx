@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +13,9 @@ import {
 } from "@/lib/plServerShareInvite";
 import { connectFromLocalServerShareAlert } from "@/lib/plServerInviteConnectFlow";
 import { pickDefaultPlServerShareUrl } from "@/lib/plServerGateInviteLink";
+import { syncPlServerGateUrlForInvite } from "@/lib/plServerShareInviteFlow";
 import { useGate } from "@/contexts/GateContext";
+import { useCompany } from "@/hooks/useCompany";
 
 type Props = {
   notification: Record<string, unknown>;
@@ -22,6 +24,7 @@ type Props = {
 
 export function LocalServerShareAlertConnectPanel({ notification, onConnected }: Props) {
   const router = useRouter();
+  const { setCompanyId, reloadLocalCompanyRegistry } = useCompany();
   const { setSelectedGateIdForDetail, refreshGates } = useGate();
   const urlOptions = useMemo(
     () => localServerShareAlertUrlOptions(notification),
@@ -41,6 +44,18 @@ export function LocalServerShareAlertConnectPanel({ notification, onConnected }:
   const accessToken = String(notification.accessToken || "").trim();
   const gateLabel = String(notification.gateLabel || notification.tokenLabel || "Shared server").trim();
   const companyId = String(notification.companyId || "").trim() || null;
+  const serverPort = Number(notification.serverPort) || 0;
+
+  useEffect(() => {
+    const url = selectedUrl.trim();
+    if (!url || !accessToken) return;
+    syncPlServerGateUrlForInvite({
+      serverUrl: url,
+      accessToken,
+      gateLabel,
+      serverPort: serverPort > 0 ? serverPort : undefined,
+    });
+  }, [selectedUrl, accessToken, gateLabel, serverPort]);
 
   if (!urlOptions.length || !accessToken) return null;
 
@@ -57,16 +72,24 @@ export function LocalServerShareAlertConnectPanel({ notification, onConnected }:
     try {
       const result = await connectFromLocalServerShareAlert({
         serverUrl: selectedUrl,
+        serverUrls: urlOptions.map((o) => o.url),
         accessToken,
         gateLabel,
         companyId,
         username,
         password,
+        serverPort: serverPort > 0 ? serverPort : undefined,
       });
       refreshGates();
       setSelectedGateIdForDetail(result.gate.id);
+      if (result.companyId) {
+        setCompanyId(result.companyId);
+        await reloadLocalCompanyRegistry();
+      }
       toast.success("Connected to server", {
-        description: "Gate is ready — pick your company on the Gate page.",
+        description: result.companyId
+          ? "Opening your company — changes will sync live from the server."
+          : "Gate is ready — pick your company on the Gate page.",
       });
       onConnected?.();
       router.push(result.navigateTo);

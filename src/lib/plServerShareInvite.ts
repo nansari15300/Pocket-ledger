@@ -3,6 +3,7 @@
 import { addDoc, collection, getDocs, query, serverTimestamp, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { buildPlServerGateInviteLink } from "@/lib/plServerGateInviteLink";
+import { dedupePlServerListingUrls, rewritePlServerListingUrlsPort } from "@/lib/plServerPublicHostUrl";
 import { appNavHref } from "@/lib/appNavHref";
 
 export const LOCAL_SERVER_SHARE_ALERT_TYPE = "local_server_share";
@@ -63,13 +64,11 @@ export function localServerShareAlertUrlOptions(n: Record<string, unknown>): Loc
   }
   const primary = String(n.serverUrl || "").trim();
   if (primary) raw.push(primary);
-  const seen = new Set<string>();
+  const port = Number(n.serverPort) || 0;
+  const urls = port > 0 ? rewritePlServerListingUrlsPort(raw, port) : dedupePlServerListingUrls(raw);
   const out: LocalServerShareUrlOption[] = [];
-  for (const u of raw) {
-    const norm = u.endsWith("/") ? u : `${u}/`;
-    if (seen.has(norm)) continue;
-    seen.add(norm);
-    out.push({ url: norm, label: urlHostLabel(norm) });
+  for (const u of urls) {
+    out.push({ url: u, label: urlHostLabel(u) });
   }
   return out;
 }
@@ -82,6 +81,7 @@ export async function sendLocalServerShareInviteAlert(input: {
   senderName?: string | null;
   serverUrl: string;
   serverUrls?: string[];
+  serverPort?: number;
   accessToken: string;
   gateLabel?: string;
   tokenLabel?: string;
@@ -113,6 +113,7 @@ export async function sendLocalServerShareInviteAlert(input: {
   const urlList = localServerShareAlertUrlOptions({
     serverUrl: input.serverUrl,
     serverUrls: input.serverUrls,
+    serverPort: input.serverPort,
   });
   const message = [
     `${fromLabel} invited you to connect to their Pocket Ledger local server (${tokenLabel}).`,
@@ -139,6 +140,7 @@ export async function sendLocalServerShareInviteAlert(input: {
     companyId: input.companyId || null,
     serverUrl: input.serverUrl,
     serverUrls: allUrls.length ? allUrls : [input.serverUrl],
+    serverPort: input.serverPort ?? null,
     accessToken: input.accessToken,
     gateLabel: input.gateLabel || null,
     gateInvitePath: `/gate?pl_gate_server=${encodeURIComponent(input.serverUrl)}&pl_gate_token=${encodeURIComponent(input.accessToken)}${input.gateLabel ? `&pl_gate_label=${encodeURIComponent(input.gateLabel)}` : ""}`,

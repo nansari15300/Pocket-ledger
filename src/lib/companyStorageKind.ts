@@ -69,10 +69,11 @@ export function isSharedOnlineCompany(c: CompanyStorageRow | null | undefined): 
   return !c.isOwned && !isLocalSelectorCompanyRow(c);
 }
 
-/** Shared local / Drive join / server-gate mirror — Local tab me "Shared" section. */
+/** Shared local / Drive join — Local tab "Shared" section (server-gate alag tab me). */
 export function isSharedLocalCompany(c: CompanyStorageRow | null | undefined): boolean {
   if (!c || c.isOwned) return false;
   if (isSharedOnlineCompany(c)) return false;
+  if (isServerGateCompany(c)) return false;
   return isLocalSelectorCompanyRow(c);
 }
 
@@ -92,12 +93,10 @@ export function isPureLocalLedgerCompany(
 ): boolean {
   if (!c) return false;
   if (isServerGateCompany(c)) return true;
-  const so = String(c.storageOption ?? "").toLowerCase().trim();
-  if (so !== "local") return false;
   if (c.syncedFromCloud === true) return false;
   if (String(c.syncPolicy ?? "").toLowerCase() === "online") return false;
   if (String((c as { authoritativeCompanyId?: string }).authoritativeCompanyId ?? "").trim()) return false;
-  return true;
+  return isDeviceLocalCompany(c);
 }
 
 /** Ledger read/write SQLite only — Firestore listeners / pull skip (local restore, device-local). */
@@ -111,15 +110,17 @@ export function shouldReadLedgerFromSqliteOnly(
   return isPureLocalLedgerCompany(c);
 }
 
-export type CompanyListTab = "local" | "online";
+export type CompanyListTab = "local" | "online" | "server";
 
 export type SelectorCompanyBuckets = {
   localOwnedCompanies: Company[];
   sharedLocalCompanies: Company[];
+  serverSharedCompanies: Company[];
   cloudOwnedCompanies: Company[];
   sharedCloudCompanies: Company[];
   localTabCompanies: Company[];
   onlineTabCompanies: Company[];
+  serverTabCompanies: Company[];
 };
 
 function dedupeCompaniesById(companies: Company[]): Company[] {
@@ -137,16 +138,20 @@ export function partitionCompaniesForSelector(companies: Company[]): SelectorCom
   const localOwnedCompanies = owned.filter((c) => isLocalSelectorCompanyRow(c));
   const cloudOwnedCompanies = owned.filter((c) => !isLocalSelectorCompanyRow(c));
   const sharedCloudCompanies = rows.filter((c) => isSharedOnlineCompany(c));
+  const serverSharedCompanies = rows.filter((c) => isServerGateCompany(c));
   const sharedLocalCompanies = rows.filter((c) => isSharedLocalCompany(c));
   const localTabCompanies = dedupeCompaniesById([...localOwnedCompanies, ...sharedLocalCompanies]);
   const onlineTabCompanies = dedupeCompaniesById([...cloudOwnedCompanies, ...sharedCloudCompanies]);
+  const serverTabCompanies = dedupeCompaniesById([...serverSharedCompanies]);
   return {
     localOwnedCompanies,
     sharedLocalCompanies,
+    serverSharedCompanies,
     cloudOwnedCompanies,
     sharedCloudCompanies,
     localTabCompanies,
     onlineTabCompanies,
+    serverTabCompanies,
   };
 }
 
@@ -156,10 +161,12 @@ export function defaultSelectorTab(
 ): CompanyListTab {
   const id = companyId?.trim();
   if (id) {
+    if (buckets.serverTabCompanies.some((c) => c.id === id)) return "server";
     if (buckets.localTabCompanies.some((c) => c.id === id)) return "local";
     if (buckets.onlineTabCompanies.some((c) => c.id === id)) return "online";
   }
   if (buckets.localTabCompanies.length > 0) return "local";
+  if (buckets.serverTabCompanies.length > 0) return "server";
   return "online";
 }
 
@@ -176,12 +183,24 @@ export function ensureSelectedInTabList(
   if (!selected) return list;
   const isLocalTabRow =
     isDeviceLocalCompany(selected) ||
-    isServerGateCompany(selected) ||
     isSharedLocalCompany(selected);
+  if (tab === "server" && isServerGateCompany(selected)) return [selected, ...list];
   if (tab === "local" && isLocalTabRow) return [selected, ...list];
   if (tab === "online" && !isLocalTabRow && !isServerGateCompany(selected)) return [selected, ...list];
   if (tab === "online" && isSharedOnlineCompany(selected)) return [selected, ...list];
   return list;
+}
+
+/** Web/dev: SQLite device-local row ko online mirror flags se overwrite mat karo. */
+export function stampPureLocalDeviceCompanyRow<T extends CompanyStorageRow>(c: T): T {
+  if (!c || isServerGateCompany(c)) return c;
+  if (!isDeviceLocalCompany(c)) return c;
+  return {
+    ...c,
+    storageOption: "local",
+    syncedFromCloud: false,
+    syncPolicy: "offline",
+  } as T;
 }
 
 /** Owned companies for settings (delete / handover) — registry + filtered list merge. */

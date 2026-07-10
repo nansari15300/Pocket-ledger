@@ -1,11 +1,10 @@
 "use client";
 
 import { useEffect } from "react";
-import { listLocalCompanies } from "@/lib/localCompanyStore";
+import { listLocalCompanies, localCompanyRowIsDeleted } from "@/lib/localCompanyStore";
 import {
-  isLocalServerShareableCompany,
-  toPlServerSharedCompanySummary,
-} from "@/lib/localServerShareableCompanies";
+  normalizeLocalCompanyRowForHost,
+} from "@/lib/listShareableLocalCompaniesForHost";
 import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 import { clearBrowserDbCache } from "@/lib/localSqlite";
 
@@ -104,8 +103,15 @@ export function ServerShareableCompaniesBridge() {
     };
 
     window.__plListShareableLocalCompanies = async () => {
+      const { isLocalServerShareableCompany, toPlServerSharedCompanySummary } = await import(
+        "@/lib/localServerShareableCompanies"
+      );
       const rows = await listLocalCompanies();
-      return rows.filter(isLocalServerShareableCompany).map(toPlServerSharedCompanySummary);
+      return rows
+        .filter((row) => !localCompanyRowIsDeleted(row))
+        .map(normalizeLocalCompanyRowForHost)
+        .filter(isLocalServerShareableCompany)
+        .map(toPlServerSharedCompanySummary);
     };
 
     window.__plValidateLocalCompanyLogin = async (companyId, username, password) => {

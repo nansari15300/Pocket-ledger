@@ -41,6 +41,7 @@ import {
   getBackupEncryptionPassphraseFromSession,
 } from "@/lib/serverBackupEncryption";
 import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
+import { isDeviceLocalCompany } from "@/lib/companyStorageKind";
 import { mergeVoucherFileUrlsForEditDialog } from "@/lib/resolveVoucherAttachmentRemoteUrl";
 import { isLocalFileRef } from "@/lib/localPendingFiles";
 import {
@@ -479,7 +480,11 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
         );
       } else {
         if (row.collection_name === "vouchers") {
-          docFieldsToWrite = await hydrateVoucherLocalAttachmentsForServer(fsCompanyId, docFieldsToWrite);
+          const skipAttachHydrate =
+            apkEmbeddedSqliteFirstWritesPreferred() && isDeviceLocalCompany(reg);
+          if (!skipAttachHydrate) {
+            docFieldsToWrite = await hydrateVoucherLocalAttachmentsForServer(fsCompanyId, docFieldsToWrite);
+          }
         } else {
           docFieldsToWrite = await hydratePendingLocalFileRefsDeep(fsCompanyId, docFieldsToWrite);
         }

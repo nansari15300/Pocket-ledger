@@ -97,6 +97,14 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
     return { ok: false, error: "writeEntity: missing companyId, collectionName, or docId" };
   }
 
+  try {
+    const { assertPlServerStaffWriteAllowed } = await import("@/lib/plServerStaffOfflinePolicy");
+    await assertPlServerStaffWriteAllowed(companyId);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: msg };
+  }
+
   if (collectionName === "vouchers") {
     try {
       await assertCompanyAllowsLedgerMutations(companyId);
@@ -128,7 +136,10 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
             effectiveDocId,
             buildLedgerTombstoneFields(effectiveDocId)
           );
-          await upsertCompanyDocInBrowserDb(companyId, collectionName, effectiveDocId, merged, upsertOpts);
+          const persisted = await upsertCompanyDocInBrowserDb(companyId, collectionName, effectiveDocId, merged, upsertOpts);
+          if (!persisted) {
+            return { ok: false, error: "sqlite tombstone skipped" };
+          }
         } catch (e) {
           return { ok: false, error: e instanceof Error ? e.message : "sqlite tombstone failed" };
         }
@@ -167,7 +178,10 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
           : await mergeWithExistingLocalDoc(companyId, collectionName, effectiveDocId, patch);
 
     try {
-      await upsertCompanyDocInBrowserDb(companyId, collectionName, effectiveDocId, merged, upsertOpts);
+      const persisted = await upsertCompanyDocInBrowserDb(companyId, collectionName, effectiveDocId, merged, upsertOpts);
+      if (!persisted) {
+        return { ok: false, error: "sqlite upsert skipped" };
+      }
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : "sqlite upsert failed" };
     }

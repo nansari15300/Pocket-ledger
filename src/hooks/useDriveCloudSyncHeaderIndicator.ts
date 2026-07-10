@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useCompany } from "@/hooks/useCompany";
 import { readCloudSyncConfigFromCompany, shouldUseLocalCloudSync } from "@/lib/localCloudSync/companyConfig";
 import { isLocalCloudSyncCycleRunning } from "@/lib/localCloudSync/engine";
+import { isLocalGoogleDriveSyncDisabled } from "@/lib/localCloudSync/driveSyncDisabled";
 import {
   PL_DRIVE_CLOUD_SYNC_STATUS_EVENT,
   type DriveCloudSyncStatusDetail,
@@ -17,7 +18,7 @@ export function useDriveCloudSyncHeaderIndicator(): { showSpinner: boolean } {
 
   const refresh = useCallback(async () => {
     const cid = String(companyId || "").trim();
-    if (!cid) {
+    if (!cid || isLocalGoogleDriveSyncDisabled()) {
       setDriveCompany(false);
       setSyncing(false);
       return;

@@ -6,15 +6,13 @@
 import { startOfDay } from "date-fns";
 import type { TransactionSortBy, TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { getFiscalMergePartitionDateFromCompany, FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
+import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 
 /** Party/Bank/Staff/… statement footer: default `sortBy === "date"` ke saath ascending = purani date upar, nayi neeche. */
 export const DEFAULT_TRANSACTION_SORT_ORDER: TransactionSortOrder = "asc";
 
 function getDate(t: any): number {
-  const d = t?.date?.toDate ? t.date.toDate() : t?.date;
-  if (d instanceof Date) return d.getTime();
-  if (typeof d === "string") return new Date(d).getTime();
-  return 0;
+  return parseFirestoreDateFieldToJsDate(t?.date)?.getTime() ?? 0;
 }
 
 function getAmount(t: any): number {
@@ -46,7 +44,7 @@ function getStatusOrder(t: any): number {
 }
 
 function getCreatedAtTime(t: any): number {
-  return t?.createdAt?.toDate ? t.createdAt.toDate().getTime() : 0;
+  return parseFirestoreDateFieldToJsDate(t?.createdAt)?.getTime() ?? 0;
 }
 
 /** Optional: Recent / daybook jahan same date par naya voucher upar chahiye. */
@@ -136,9 +134,8 @@ function transactionDayStartMs(t: any): number | null {
   if (t.type === FISCAL_YEAR_PARTITION_ROW_TYPE) return null;
   const raw = t?.date;
   if (!raw) return null;
-  const d =
-    raw instanceof Date ? raw : typeof raw.toDate === "function" ? raw.toDate() : new Date(raw);
-  if (!(d instanceof Date) || isNaN(d.getTime())) return null;
+  const d = parseFirestoreDateFieldToJsDate(raw);
+  if (!d || isNaN(d.getTime())) return null;
   return startOfDay(d).getTime();
 }
 

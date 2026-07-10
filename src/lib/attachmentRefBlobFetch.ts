@@ -56,6 +56,13 @@ export async function fetchAttachmentRefBlob(
       companyId: options?.companyId,
     });
     if (blob && blob.size > 0) return blob;
+    try {
+      const { tryOfflineCachedAttachmentBlobMultiKey } = await import("@/lib/offlineAttachmentUrlCache");
+      const cached = await tryOfflineCachedAttachmentBlobMultiKey(String(rawUrl).trim());
+      if (cached && cached.size > 0) return cached;
+    } catch {
+      /* offline cache optional */
+    }
     if (options?.galleryUrls?.length) {
       for (const g of options.galleryUrls) {
         const gt = String(g || "").trim();

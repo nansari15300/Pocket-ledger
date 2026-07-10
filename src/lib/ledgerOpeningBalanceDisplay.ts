@@ -38,6 +38,28 @@ export function isMasterOpeningDateInLedgerQueryRange(
   return ob <= rawTo!;
 }
 
+/**
+ * Stack Book Opening + Dated Opening only when period carry differs from books OB
+ * (some pre-filter activity was cut). "All" preset still sets a from→to range — without
+ * this check both rows show the same books balance and opening looks doubled.
+ */
+export function shouldStackBookOpeningAboveDatedRow(input: {
+  ledgerDateFilterActive?: boolean;
+  ledgerShowBookOpeningRow?: boolean;
+  booksOpeningBalance?: number | null;
+  /** Period / page carry opening (same scale as booksOpeningBalance). */
+  periodOpeningBalance: number;
+  masterOpeningDateWithinLedgerRange: boolean;
+}): boolean {
+  const booksOb = input.booksOpeningBalance;
+  if (!input.ledgerDateFilterActive || !input.ledgerShowBookOpeningRow) return false;
+  if (booksOb == null || !Number.isFinite(booksOb) || Math.abs(booksOb) < BOOK_OB_EPS) return false;
+  if (!input.masterOpeningDateWithinLedgerRange) return false;
+  const period = Number(input.periodOpeningBalance) || 0;
+  if (Math.abs(period) < BOOK_OB_EPS) return false;
+  return Math.abs(period - booksOb) >= BOOK_OB_EPS;
+}
+
 export type LedgerOpeningPrintInput = {
   context: string;
   /** Page / period carry opening (Dated Opening row). */
@@ -88,12 +110,13 @@ export function resolveLedgerOpeningPrintRows(
     masterObDay
   );
 
-  const showBookOpeningAboveDatedRow =
-    ledgerDateFilterActive &&
-    ledgerShowBookOpeningRow &&
-    booksOpeningBalance != null &&
-    Math.abs(booksOb) >= BOOK_OB_EPS &&
-    masterOpeningDateWithinLedgerRange;
+  const showBookOpeningAboveDatedRow = shouldStackBookOpeningAboveDatedRow({
+    ledgerDateFilterActive,
+    ledgerShowBookOpeningRow,
+    booksOpeningBalance,
+    periodOpeningBalance: openingBalance,
+    masterOpeningDateWithinLedgerRange,
+  });
 
   const datedRowDate = ledgerDateFilterActive
     ? periodRowDate
@@ -103,7 +126,12 @@ export function resolveLedgerOpeningPrintRows(
 
   const primaryPillLabel = showBookOpeningAboveDatedRow
     ? "Dated Opening"
-    : ledgerShowBookOpeningRow && !ledgerDateFilterActive
+    : ledgerShowBookOpeningRow &&
+        (!ledgerDateFilterActive ||
+          (masterOpeningDateWithinLedgerRange &&
+            (booksOpeningBalance == null ||
+              Math.abs(openingBalance - booksOb) < BOOK_OB_EPS ||
+              Math.abs(openingBalance) < BOOK_OB_EPS)))
       ? "Book Opening"
       : "Dated Opening";
 

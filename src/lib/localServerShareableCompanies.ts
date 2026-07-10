@@ -1,18 +1,26 @@
 "use client";
 
 import type { Company } from "@/hooks/useCompany";
-import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { isDeviceLocalCompany, isPureLocalLedgerCompany, isServerGateCompany } from "@/lib/companyStorageKind";
+import { isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
 import type { LocalCompanyDoc } from "@/lib/localCompanyStore";
-import { isCloudBackedCompanyShape } from "@/lib/offlineFullWarmSync";
 
 type ShareableCompanyRow = Company | LocalCompanyDoc | { storageOption?: string };
 
-/** Local server gate tokens: sirf device-local companies — online/Firebase sharing alag channel hai. */
+/**
+ * Host PC par P2P server se share — sirf **pure local** company (SQLite-owned).
+ * Online / Firestore mirror (`storageOption: firebase`, `syncedFromCloud`) yahan nahi — unka share Firebase se hota hai.
+ */
 export function isLocalServerShareableCompany(c: ShareableCompanyRow | null | undefined): boolean {
   if (!c) return false;
-  if (!isOfflineCompanyStorage(c as { storageOption?: string })) return false;
-  if (isCloudBackedCompanyShape(c as Company)) return false;
-  return true;
+  if (isServerGateCompany(c as { plServerShared?: boolean })) return false;
+  if (
+    isCloudLinkedCompanyStorage(c as { storageOption?: string; syncedFromCloud?: boolean }) &&
+    !isDeviceLocalCompany(c as Company)
+  ) {
+    return false;
+  }
+  return isPureLocalLedgerCompany(c as Company);
 }
 
 export type PlServerSharedCompanySummary = {

@@ -47,6 +47,7 @@ import {
   LinkedVouchersColored,
   BillWiseLinkedDetailCells,
   voucherTypePillClassName,
+  type FileColumnDisplayMode,
   type TxnDrCrSide,
 } from "./transactionTableShared";
 import { Badge } from "@/components/ui/badge";
@@ -83,6 +84,11 @@ import { getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize"
 import { statementCheckTxnId } from "@/lib/statementCheckModeStorage";
 import { stripSpendWiseSyntheticOpeningMaster } from "@/lib/ledgerPagePrint";
 import {
+  BOOK_OB_EPS as SHARED_BOOK_OB_EPS,
+  isMasterOpeningDateInLedgerQueryRange as isMasterOpeningDateInLedgerQueryRangeShared,
+  shouldStackBookOpeningAboveDatedRow,
+} from "@/lib/ledgerOpeningBalanceDisplay";
+import {
   extractSpendWiseGroupTransactions,
   printSpendWiseGroupTransactions,
   type SpendWiseGroupPrintConfig,
@@ -103,23 +109,12 @@ function normalizeLedgerObDateField(v: unknown): Date | null {
   return parseOpeningBalanceDateToLocalNoon(v);
 }
 
-/** Form "As on" date ledger query range (from/to days, inclusive) ke andar? — andar: stacked Book row / single-row Book pill; bahar: sirf Dated. */
+/** Form "As on" date ledger query range (from/to days, inclusive) ke andar? — shared helper. */
 function isMasterOpeningDateInLedgerQueryRange(
   range: { from?: Date | null; to?: Date | null } | null | undefined,
   masterObDay: Date | null
 ): boolean {
-  if (!masterObDay || !range) return false;
-  const ob = startOfDay(masterObDay).getTime();
-  const rawFrom = range.from != null ? startOfDay(range.from).getTime() : undefined;
-  const rawTo = range.to != null ? startOfDay(range.to).getTime() : undefined;
-  if (rawFrom == null && rawTo == null) return false;
-  if (rawFrom != null && rawTo != null) {
-    const lo = Math.min(rawFrom, rawTo);
-    const hi = Math.max(rawFrom, rawTo);
-    return ob >= lo && ob <= hi;
-  }
-  if (rawFrom != null) return ob >= rawFrom;
-  return ob <= rawTo!;
+  return isMasterOpeningDateInLedgerQueryRangeShared(range, masterObDay);
 }
 
 /** Spend-wise row grouping — mobile cards + desktop table must share shape; hooks using this stay above any conditional return. */
@@ -365,6 +360,7 @@ export function TransactionsTable({
       context === "staff" ||
       (context === "group" && (groupEntityType === "party" || groupEntityType === "staff")));
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [fileDisplayMode, setFileDisplayMode] = useState<FileColumnDisplayMode>("preview");
   const tableContainerRef = useRef<HTMLDivElement>(null);
   // Keep spend-wise blink/selection groups consistent for derived row ids.
   const normalizeSpendWiseRowBase = useCallback((id?: string) => {
@@ -680,8 +676,9 @@ export function TransactionsTable({
   // Get animation settings - check enabled flag explicitly (match PartyList / list motion). Disable when parent asks (e.g. view toggle).
   const isRowAnimationEnabled = !disableLayoutAnimation && animationSettings?.rows?.enabled === true;
   const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 0.4) : 0;
-  /** Framer `layout` on `<tr>` mis-projects the row menu between Accounts/User; spend-wise groups only. */
-  const useTxnRowLayoutAnimation = hasSpendWiseGroups && isRowAnimationEnabled;
+  /** Framer `layout` on `<tr>` mis-projects row menu on account/user columns — party/staff/statement safe. */
+  const useTxnRowLayoutAnimation =
+    isRowAnimationEnabled && (hasSpendWiseGroups || context !== "account");
   /** Date filter par popLayout purani row positions preserve karta hai — spend-wise list neeche chipak jati hai. */
   const spendWiseListAnimateKey = useMemo(() => {
     if (!ledgerDateFilterActive) return "spend-wise-all";
@@ -779,6 +776,7 @@ export function TransactionsTable({
     const fileFilterMode: "all" | "with" | "without" =
       fileFilterRaw === "with" || fileFilterRaw === "without" ? fileFilterRaw : "all";
     const isFileFiltered = fileFilterMode !== "all";
+    const isFileMenuActive = isFileFiltered || fileDisplayMode !== "preview";
     const innerPadding = ensureMinGaps ? "px-[10px]" : "px-2";
     const setFileFilter = (mode: "all" | "with" | "without") => {
       if (!setFilters) return;
@@ -798,7 +796,7 @@ export function TransactionsTable({
           className={cn(
             "flex items-center justify-center gap-1 font-bold py-3 whitespace-nowrap",
             innerPadding,
-            isFileFiltered ? "text-red-600" : "text-black"
+            isFileMenuActive ? "text-red-600" : "text-black"
           )}
         >
           <span>File</span>
@@ -816,7 +814,7 @@ export function TransactionsTable({
                   className={cn(txnTableIconBtnCn, "h-6 w-6")}
                   aria-label="Filter by file attachment"
                 >
-                  <CheckSquare className={cn("h-4 w-4", isFileFiltered && "text-red-600")} />
+                  <CheckSquare className={cn("h-4 w-4", isFileMenuActive && "text-red-600")} />
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="p-2 w-52" align="center" onCloseAutoFocus={(e: Event) => e.preventDefault()}>
@@ -849,6 +847,29 @@ export function TransactionsTable({
                   <label htmlFor="txn-file-filter-without" className="text-sm font-medium cursor-pointer flex-1">
                     Without file
                   </label>
+                </div>
+                <div className="mt-2 border-t pt-2">
+                  <p className="mb-1 px-0.5 text-xs font-semibold uppercase text-muted-foreground">View</p>
+                  <div className="flex items-center gap-2 py-1">
+                    <Checkbox
+                      id="txn-file-display-preview"
+                      checked={fileDisplayMode === "preview"}
+                      onCheckedChange={() => setFileDisplayMode("preview")}
+                    />
+                    <label htmlFor="txn-file-display-preview" className="text-sm font-medium cursor-pointer flex-1">
+                      Preview
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-2 py-1">
+                    <Checkbox
+                      id="txn-file-display-tick"
+                      checked={fileDisplayMode === "tick"}
+                      onCheckedChange={() => setFileDisplayMode("tick")}
+                    />
+                    <label htmlFor="txn-file-display-tick" className="text-sm font-medium cursor-pointer flex-1">
+                      Tick only
+                    </label>
+                  </div>
                 </div>
               </PopoverContent>
             </Popover>
@@ -931,7 +952,7 @@ export function TransactionsTable({
   const ledgerOpeningPillsEnabled =
     typeof ledgerDateFilterActive === "boolean" &&
     ["party", "account", "staff", "tax", "item", "expense", "group"].includes(context);
-  const BOOK_OB_EPS = 5e-4;
+  const BOOK_OB_EPS = SHARED_BOOK_OB_EPS;
   const masterBookSignedScaled = booksObScaled ?? 0;
   const bookRowOpeningDr = masterBookSignedScaled > 0 ? masterBookSignedScaled : 0;
   const bookRowOpeningCr = masterBookSignedScaled < 0 ? Math.abs(masterBookSignedScaled) : 0;
@@ -1074,20 +1095,28 @@ export function TransactionsTable({
     () => isMasterOpeningDateInLedgerQueryRange(dateRange, openingBalanceRowDate),
     [dateRange, openingBalanceRowDate]
   );
+  // "All" preset still sets from→to — stack only when period carry ≠ books OB (pre-filter txs cut).
   const showBookOpeningAboveDatedRow =
     ledgerOpeningPillsEnabled &&
-    Boolean(ledgerDateFilterActive) &&
-    ledgerShowBookOpeningRow &&
-    booksObScaled != null &&
-    Math.abs(booksObScaled) >= BOOK_OB_EPS &&
-    masterOpeningDateWithinLedgerRange;
+    shouldStackBookOpeningAboveDatedRow({
+      ledgerDateFilterActive: Boolean(ledgerDateFilterActive),
+      ledgerShowBookOpeningRow,
+      booksOpeningBalance: booksObScaled,
+      periodOpeningBalance: displayOpeningBalance,
+      masterOpeningDateWithinLedgerRange,
+    });
   /** Stacked / single dated row: master book pill vs period/pagination carry pill. */
   const bookOpeningRowPillText = ledgerOpeningPillsEnabled ? "Book Opening" : openingBalanceLabel;
-  /** Dated row pill — stacked mode me hamesha; single row me sirf jab book-only na ho (page>1 / filter carry). */
+  /** Dated row pill — stacked mode me hamesha; single row me Book jab filter kuch cut na kare. */
   const primaryOpeningRowPillText = ledgerOpeningPillsEnabled
     ? showBookOpeningAboveDatedRow
       ? "Dated Opening"
-      : ledgerShowBookOpeningRow && !ledgerDateFilterActive
+      : ledgerShowBookOpeningRow &&
+          (!ledgerDateFilterActive ||
+            (masterOpeningDateWithinLedgerRange &&
+              (booksObScaled == null ||
+                Math.abs(displayOpeningBalance - booksObScaled) < BOOK_OB_EPS ||
+                Math.abs(displayOpeningBalance) < BOOK_OB_EPS)))
         ? "Book Opening"
         : "Dated Opening"
     : openingBalanceLabel;
@@ -1482,7 +1511,7 @@ export function TransactionsTable({
               className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
               onClick={(e) => e.stopPropagation()}
             >
-              <OpeningBalanceFileCellContent fileUrls={openingBalanceAttachmentUrls} />
+              <OpeningBalanceFileCellContent fileUrls={openingBalanceAttachmentUrls} displayMode={fileDisplayMode} />
             </TableCell>
           )}
           {showCol("dr") && !hideDebitColumn && (
@@ -1528,7 +1557,10 @@ export function TransactionsTable({
             className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
             onClick={(e) => e.stopPropagation()}
           >
-            <OpeningBalanceFileCellContent fileUrls={showBookOpeningAboveDatedRow ? undefined : openingBalanceAttachmentUrls} />
+            <OpeningBalanceFileCellContent
+              fileUrls={showBookOpeningAboveDatedRow ? undefined : openingBalanceAttachmentUrls}
+              displayMode={fileDisplayMode}
+            />
           </TableCell>
         )}
         {showCol("dr") && !hideDebitColumn && (
@@ -2153,7 +2185,7 @@ export function TransactionsTable({
                           className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <OpeningBalanceFileCellContent fileUrls={openingBalanceAttachmentUrls} />
+                          <OpeningBalanceFileCellContent fileUrls={openingBalanceAttachmentUrls} displayMode={fileDisplayMode} />
                         </TableCell>
                       )}
                       {showCol("dr") && !hideDebitColumn && (
@@ -2201,7 +2233,10 @@ export function TransactionsTable({
                         className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <OpeningBalanceFileCellContent fileUrls={showBookOpeningAboveDatedRow ? undefined : openingBalanceAttachmentUrls} />
+                        <OpeningBalanceFileCellContent
+                          fileUrls={showBookOpeningAboveDatedRow ? undefined : openingBalanceAttachmentUrls}
+                          displayMode={fileDisplayMode}
+                        />
                       </TableCell>
                     )}
                     {showCol("dr") && !hideDebitColumn && <TableCell className={cn("text-right text-green-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
@@ -2377,6 +2412,7 @@ export function TransactionsTable({
                                           isBillWise={isBillWiseMode}
                                           ensureMinGaps={ensureMinGaps}
                                           showFileColumn={showFileBySelection}
+                                          fileDisplayMode={fileDisplayMode}
                                           statusBillWiseOnly={statusBillWiseOnly}
                                           highlightPendingApproval={highlightPendingApproval}
                                           textSearchHighlight={transactionCardSearchHighlight}
@@ -2445,6 +2481,7 @@ export function TransactionsTable({
                           isBillWise={isBillWiseMode}
                           ensureMinGaps={ensureMinGaps}
                           showFileColumn={showFileBySelection}
+                          fileDisplayMode={fileDisplayMode}
                           statusBillWiseOnly={statusBillWiseOnly}
                           highlightPendingApproval={highlightPendingApproval}
                           textSearchHighlight={transactionCardSearchHighlight}
@@ -2517,6 +2554,7 @@ export function TransactionsTable({
                         isBillWise={isBillWiseMode}
                         ensureMinGaps={ensureMinGaps}
                         showFileColumn={showFileBySelection}
+                        fileDisplayMode={fileDisplayMode}
                         statusBillWiseOnly={statusBillWiseOnly}
                         highlightPendingApproval={highlightPendingApproval}
                         textSearchHighlight={transactionCardSearchHighlight}

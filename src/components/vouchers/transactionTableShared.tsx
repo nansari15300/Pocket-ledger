@@ -19,7 +19,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { AttachmentHoverPortal } from "@/components/vouchers/AttachmentHoverPortal";
-import { SingleAttachmentHoverPreviewBody } from "@/components/vouchers/attachmentHoverPreviewBody";
+import { MultiAttachmentPortalPreview } from "@/components/vouchers/attachmentHoverPreviewBody";
 import { differenceInDays } from "date-fns";
 import { useDate } from "@/hooks/useDate";
 import { useCompany } from "@/hooks/useCompany";
@@ -86,6 +86,7 @@ export type Context =
   | "other";
 
 export type Transaction = Record<string, any>;
+export type FileColumnDisplayMode = "preview" | "tick";
 
 /**
  * Ledger row par attachment — File column filter (with / without / all).
@@ -99,8 +100,10 @@ export function transactionRowHasFileAttachment(t: { fileUrls?: unknown; unassig
  */
 export function OpeningBalanceFileCellContent({
   fileUrls,
+  displayMode = "preview",
 }: {
   fileUrls?: readonly string[] | null;
+  displayMode?: FileColumnDisplayMode;
 }) {
   const { company } = useCompany();
   const localLedgerOnly = companyRequiresLocalAttachmentUrlsOnly(company);
@@ -128,20 +131,10 @@ export function OpeningBalanceFileCellContent({
       // Click se preview; pointer cursor taaki hover-help jaisa na lage
       triggerClassName="inline-flex cursor-pointer"
       onPreviewDoubleClick={singlePdfOpen}
-      preview={
-        // Keep preview width tight so portal does not add side whitespace strips.
-        <div className="flex w-max max-w-none flex-col gap-3">
-          {urls.map((url, idx) => (
-            <SingleAttachmentHoverPreviewBody
-              key={idx}
-              url={String(url)}
-              gallery={urls.length > 1 ? { urls, startIndex: idx } : undefined}
-            />
-          ))}
-        </div>
-      }
+      galleryUrls={urls.length > 1 ? urls : undefined}
+      preview={<MultiAttachmentPortalPreview urls={urls} />}
     >
-      <VoucherAttachmentFileIndicator urls={urls} aria-label="Has attachment" />
+      <VoucherAttachmentFileIndicator urls={urls} displayMode={displayMode} aria-label="Has attachment" />
     </AttachmentHoverPortal>
   );
 }
@@ -877,6 +870,7 @@ export const TransactionRow = React.memo(
     isBillWise,
     ensureMinGaps = false,
     showFileColumn = false,
+    fileDisplayMode = "preview",
     showItemPartyColumn = true,
     isSpendWiseChild = false,
     isSpendWiseGroupFirst = false,
@@ -1193,19 +1187,10 @@ export const TransactionRow = React.memo(
                 <AttachmentHoverPortal
                   triggerClassName="inline-flex cursor-pointer"
                   onPreviewDoubleClick={singlePdfOpen}
-                  preview={
-                    <div className="flex w-max max-w-none flex-col gap-3">
-                      {rowUrls.map((u, idx) => (
-                        <SingleAttachmentHoverPreviewBody
-                          key={`${u}-${idx}`}
-                          url={u}
-                          gallery={rowUrls.length > 1 ? { urls: rowUrls, startIndex: idx } : undefined}
-                        />
-                      ))}
-                    </div>
-                  }
+                  galleryUrls={rowUrls.length > 1 ? rowUrls : undefined}
+                  preview={<MultiAttachmentPortalPreview urls={rowUrls} />}
                 >
-                  <VoucherAttachmentFileIndicator urls={rowUrls} aria-label="Has attachment" />
+                  <VoucherAttachmentFileIndicator urls={rowUrls} displayMode={fileDisplayMode} aria-label="Has attachment" />
                 </AttachmentHoverPortal>
               );
             })()}

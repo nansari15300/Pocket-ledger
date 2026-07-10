@@ -23,6 +23,7 @@ import { dismissOpenInAppPdfPreviewIfPresent, showInAppPdfPreview } from "@/lib/
 import { shareAttachmentFromPreviewSrc } from "@/lib/shareAttachmentBlob";
 import { resolveStaticAttachmentDisplay } from "@/lib/staticAttachmentDisplayUrl";
 import { usesEmbeddedNativeAttachmentStorage } from "@/lib/usesEmbeddedNativeAttachmentStorage";
+import type { CompanyAttachmentMode } from "@/lib/companyAttachmentStrategies/types";
 
 function pathLooksImage(pathLower: string): boolean {
   return /\.(jpe?g|png|gif|webp|bmp|svg)$/.test(pathLower);
@@ -44,13 +45,21 @@ type ResolvedSlide =
   | { kind: "pdf"; src: string; revoke: () => void }
   | { kind: "other"; href: string; revoke: () => void };
 
-async function resolveSlide(url: string, kindHint?: AttachmentKindHint): Promise<ResolvedSlide> {
+async function resolveSlide(
+  url: string,
+  kindHint?: AttachmentKindHint,
+  options?: { localLedgerOnly?: boolean; companyId?: string; companyMode?: CompanyAttachmentMode }
+): Promise<ResolvedSlide> {
   const u = String(url || "").trim();
   const noop = () => {};
 
   // EXE/APK: display sirf pl-attachments / blob — HTTPS transport download ke liye preload me.
   if (usesEmbeddedNativeAttachmentStorage()) {
-    const resolved = await resolveStaticAttachmentDisplay(u, { localLedgerOnly: true });
+    const resolved = await resolveStaticAttachmentDisplay(u, {
+      localLedgerOnly: options?.localLedgerOnly ?? true,
+      companyId: options?.companyId,
+      companyMode: options?.companyMode,
+    });
     if (resolved.displayUrl) {
       const pathOnly = u.split("?")[0].split("#")[0].toLowerCase();
       const slideKind: "image" | "pdf" =
@@ -137,7 +146,11 @@ async function resolveSlide(url: string, kindHint?: AttachmentKindHint): Promise
     if (!/^https?:\/\//i.test(u)) {
       return { kind: "image", src: u, revoke: noop };
     }
-    const resolved = await resolveStaticAttachmentDisplay(u, { localLedgerOnly: false });
+    const resolved = await resolveStaticAttachmentDisplay(u, {
+      localLedgerOnly: options?.localLedgerOnly ?? false,
+      companyId: options?.companyId,
+      companyMode: options?.companyMode,
+    });
     if (resolved.displayUrl) return { kind: "image", src: resolved.displayUrl, revoke: noop };
     if (resolved.blob && resolved.blob.size > 0) {
       const objectUrl = URL.createObjectURL(resolved.blob);
@@ -244,7 +257,13 @@ function setZoomControlsVisible(
 export function openAttachmentGalleryInApp(
   urls: readonly string[],
   startIndex: number,
-  opts?: { title?: string; kinds?: readonly AttachmentKindHint[] }
+  opts?: {
+    title?: string;
+    kinds?: readonly AttachmentKindHint[];
+    localLedgerOnly?: boolean;
+    companyId?: string;
+    companyMode?: CompanyAttachmentMode;
+  }
 ): void {
   if (typeof document === "undefined") return;
 
@@ -255,6 +274,10 @@ export function openAttachmentGalleryInApp(
       openAttachmentInApp(list[0]!, {
         title: opts?.title,
         kind: opts?.kinds?.[0],
+        serverFallback:
+          opts?.companyId && opts?.companyMode === "server"
+            ? { companyId: opts.companyId, voucherId: "" }
+            : undefined,
       })
     );
     return;
@@ -463,7 +486,11 @@ export function openAttachmentGalleryInApp(
 
     try {
       const hint = opts?.kinds?.[idx];
-      const resolved = await resolveSlide(list[idx]!, hint);
+      const resolved = await resolveSlide(list[idx]!, hint, {
+        localLedgerOnly: opts?.localLedgerOnly,
+        companyId: opts?.companyId,
+        companyMode: opts?.companyMode,
+      });
       if (seq !== loadSeq || closed) {
         resolved.revoke();
         return;

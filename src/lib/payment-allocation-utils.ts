@@ -10,6 +10,8 @@ export const OPENING_BALANCE_VOUCHER_ID = "opening_balance";
 export type Allocation = {
   voucherId: string;
   amount: number;
+  /** Amount allocated to gross/taxable salary portion of add_salary target */
+  taxableAmount?: number;
   /** Amount allocated to tax portion of the target voucher (tax and net are separate accounts) */
   taxAmount?: number;
   /** Amount allocated to net portion of the target voucher */
@@ -18,11 +20,12 @@ export type Allocation = {
   linkedAccountId?: string;
 };
 
-/** For backward compatibility: total allocated = amount. If taxAmount/netAmount set, amount should equal taxAmount + netAmount. */
-export function getAllocationTotal(a: Allocation | { voucherId?: string; amount?: number; taxAmount?: number; netAmount?: number; linkedAccountId?: string }): number {
+/** For backward compatibility: total allocated = amount. If taxable/tax/net set, amount should equal their sum. */
+export function getAllocationTotal(a: Allocation | { voucherId?: string; amount?: number; taxableAmount?: number; taxAmount?: number; netAmount?: number; linkedAccountId?: string }): number {
+  const taxable = Number((a as any).taxableAmount) || 0;
   const tax = Number((a as any).taxAmount) || 0;
   const net = Number((a as any).netAmount) || 0;
-  if (tax > 0 || net > 0) return tax + net;
+  if (taxable > 0 || tax > 0 || net > 0) return taxable + tax + net;
   return Number(a.amount) || 0;
 }
 
@@ -36,6 +39,7 @@ function billWiseAllocationSyncFingerprint(arr: readonly Allocation[] | null | u
       .map((a) => ({
         voucherId: a.voucherId,
         amount: getAllocationTotal(a),
+        taxableAmount: (a as { taxableAmount?: number }).taxableAmount ?? null,
         taxAmount: (a as { taxAmount?: number }).taxAmount ?? null,
         netAmount: (a as { netAmount?: number }).netAmount ?? null,
         linkedAccountId: (a as { linkedAccountId?: string }).linkedAccountId ?? null,
@@ -55,6 +59,10 @@ export function hasBillWiseAllocationSyncWork(
   );
 }
 
+export function getTaxableFromAllocation(a: Allocation): number {
+  return Number((a as any).taxableAmount) || 0;
+}
+
 export function getTaxFromAllocation(a: Allocation): number {
   return Number((a as any).taxAmount) || 0;
 }
@@ -64,6 +72,52 @@ export function getNetFromAllocation(a: Allocation): number {
   const net = Number((a as any).netAmount) || 0;
   if (tax > 0 || net > 0) return net;
   return Number(a.amount) || 0;
+}
+
+/** Staff Dr amount on a manual journal (excludes add_salary journals). */
+export function getJournalStaffDrAmount(voucher: any, staffId: string): number | null {
+  if (voucher?.type !== "journal" || voucher?.subType === "add_salary" || !Array.isArray(voucher?.entries)) return null;
+  const entry = voucher.entries.find((e: any) => String(e?.accountId ?? "") === String(staffId));
+  if (!entry) return null;
+  const debit = Number(entry.debit) || 0;
+  return debit > 0 ? debit : null;
+}
+
+export function isSalaryBillWiseSourceVoucher(v: any): boolean {
+  const t = String(v?.type ?? "");
+  return t === "payment_out" || t === "direct_expense" || (t === "journal" && v?.subType !== "add_salary");
+}
+
+export type TaxNetTaxableAllocated = { tax: number; net: number; taxable: number };
+
+/** Allocations from payment outs / journals → add_salary voucherId, split by taxable/tax/net. */
+export function getTaxNetTaxableAllocatedByVoucherIdFromSalarySources(vouchers: any[]): Map<string, TaxNetTaxableAllocated> {
+  const map = new Map<string, TaxNetTaxableAllocated>();
+  for (const v of vouchers) {
+    if (!isSalaryBillWiseSourceVoucher(v)) continue;
+    const allocations = (v.allocations as Allocation[] | undefined) || [];
+    for (const a of allocations) {
+      if (!a.voucherId) continue;
+      const cur = map.get(a.voucherId) ?? { tax: 0, net: 0, taxable: 0 };
+      cur.tax += getTaxFromAllocation(a);
+      cur.net += getNetFromAllocation(a);
+      cur.taxable += getTaxableFromAllocation(a);
+      map.set(a.voucherId, cur);
+    }
+  }
+  return map;
+}
+
+/** Remaining linkable amount on a journal row for one staff Dr line. */
+export function getJournalRemainingForStaff(voucher: any, staffId: string): number {
+  const total = getJournalStaffDrAmount(voucher, staffId);
+  if (total == null) return 0;
+  const allocations = ((voucher.allocations as Allocation[] | undefined) || []).filter((a) => {
+    const lid = String((a as any).linkedAccountId ?? "");
+    return !lid || lid === String(staffId);
+  });
+  const allocated = allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
+  return Math.max(0, total - allocated);
 }
 
 export type PaymentStatus = "paid" | "partially_paid" | "unpaid";

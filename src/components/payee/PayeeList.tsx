@@ -7,7 +7,11 @@ import { MasterListRow } from "@/components/ui/master-list-row";
 import { Badge } from "@/components/ui/badge";
 import { useDate } from "@/hooks/useDate";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { Users, Landmark, Briefcase, Receipt, DollarSign, Building } from "lucide-react";
+import { Users, Briefcase, Receipt, DollarSign, Building } from "lucide-react";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { masterEntityAttachmentPreviewUrl } from "@/lib/masterEntityAttachmentPreviewUrl";
+import { useCompany } from "@/hooks/useCompany";
 
 export type UnifiedPayee = {
   id: string;
@@ -38,6 +42,7 @@ export function PayeeList({
   searchTerm: string;
 }) {
   const { formatCurrency } = useDate();
+  const { company } = useCompany();
 
   const filteredPayees = payees.filter((payee) =>
     payee.name.toLowerCase().includes(searchTerm.toLowerCase())
@@ -50,6 +55,7 @@ export function PayeeList({
           {filteredPayees.map((payee) => {
             const isSelected = selectedPayee?.id === payee.id && selectedPayee?.type === payee.type;
             const Icon = typeIconMap[payee.type] || Building;
+            const attachmentPreviewUrl = masterEntityAttachmentPreviewUrl(payee.entity);
             return (
               <li key={`${payee.type}-${payee.id}`}>
                 <MasterListRow
@@ -61,9 +67,18 @@ export function PayeeList({
                 >
                   <div className="flex items-center justify-between w-full gap-2">
                     <div className="flex items-center gap-2 flex-1 min-w-0">
-                        <div className="h-8 w-8 flex-shrink-0 flex items-center justify-center bg-muted rounded-md text-muted-foreground">
-                            <Icon className="h-4 w-4" />
-                        </div>
+                        <EntityFileAttachmentHover
+                          fileUrl={attachmentPreviewUrl}
+                          triggerClassName="inline-flex shrink-0 rounded-full"
+                        >
+                          <ResolvedEntityAvatar
+                            className="h-8 w-8 text-xs"
+                            companyId={payee.entity?.companyId ?? company?.id}
+                            src={attachmentPreviewUrl ?? undefined}
+                            alt={payee.name}
+                            fallbackSlot={<Icon className="h-4 w-4 text-muted-foreground" />}
+                          />
+                        </EntityFileAttachmentHover>
                        <Tooltip>
                         <TooltipTrigger className="text-sm font-medium whitespace-nowrap truncate flex-1 min-w-0 text-left p-0 h-auto bg-transparent hover:bg-transparent border-none shadow-none">
                           {payee.name}

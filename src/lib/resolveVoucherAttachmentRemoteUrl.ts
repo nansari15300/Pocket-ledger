@@ -3,7 +3,7 @@
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { isLocalFileRef, LOCAL_FILE_PREFIX } from "@/lib/localPendingFiles";
-import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
+import { normalizeFileUrlsField, getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
@@ -233,4 +233,35 @@ export function mergeVoucherFileUrlsForEditDialog(
   if (liveAllLocal && rowRemotes.length === live.length) return row;
   if (liveAllLocal && rowRemotes.length === 1 && live.length === 1) return rowRemotes;
   return live;
+}
+
+/**
+ * P2P / live pull merge: stale export kabhi `fileUrls` khali bhejta hai — local attachments mat hatao.
+ */
+export function mergeVoucherMirrorPullAttachments(
+  existing: Record<string, unknown> | null | undefined,
+  incoming: Record<string, unknown>,
+  opts?: { existingEditTimeMs?: number; incomingEditTimeMs?: number }
+): Record<string, unknown> {
+  const merged = { ...incoming };
+  const existingUrls = getVoucherAttachmentUrlsForUi(existing);
+  const incomingUrls = getVoucherAttachmentUrlsForUi(incoming);
+  const hasIncomingFileUrls = Object.prototype.hasOwnProperty.call(incoming, "fileUrls");
+  const existingMs = opts?.existingEditTimeMs ?? 0;
+  const incomingMs = opts?.incomingEditTimeMs ?? 0;
+
+  if (existingUrls.length === 0) return merged;
+
+  if (!hasIncomingFileUrls) {
+    merged.fileUrls = existingUrls;
+    return merged;
+  }
+  if (incomingUrls.length === 0 && existingMs >= incomingMs) {
+    merged.fileUrls = existingUrls;
+    return merged;
+  }
+  if (incomingUrls.length > 0) {
+    merged.fileUrls = mergeVoucherFileUrlsForEditDialog(incomingUrls, existingUrls);
+  }
+  return merged;
 }

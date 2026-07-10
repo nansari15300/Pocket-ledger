@@ -45,6 +45,9 @@ import usePermissions, { type PermissionConfig, type UserRole, initialPermission
 import { cn } from "@/lib/utils";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { isLocalCompanyHostShareable } from "@/lib/listShareableLocalCompaniesForHost";
+import { isElectronLocalServerApiAvailable } from "@/lib/electronLocalServer";
+import { LocalPlServerSharePanel } from "@/components/settings/LocalPlServerSharePanel";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { updateCompanyDocRoot } from "@/lib/companyDocsClient";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
@@ -176,7 +179,7 @@ function normalizePermissionConfigForSave(config: PermissionConfig): PermissionC
 }
 
 export function ManageShare() {
-  const { company: companyData, companyId, allCompanies, reloadLocalCompanyRegistry, triggerSync } = useCompany();
+  const { company: companyData, companyId, allCompanies, allCompaniesRegistry, reloadLocalCompanyRegistry, triggerSync, localCompanyRegistryEpoch } = useCompany();
   const { user } = useAuth();
   const { toast } = useToast();
   const { can } = usePermissions();
@@ -200,6 +203,34 @@ export function ManageShare() {
   const [allAppUsers, setAllAppUsers] = useState<any[]>([]);
   /** Revoke ke baad context/SQLite stale ho sakta hai — turant list se hatao; `companyData.sharedWith` sync par khud saaf. */
   const [optimisticRevokedEmails, setOptimisticRevokedEmails] = useState<string[]>([]);
+  const [plServerHostShareable, setPlServerHostShareable] = useState(false);
+  const [plServerHostShareableResolved, setPlServerHostShareableResolved] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPlServerHostShareableResolved(false);
+    const cid = String(companyId || "").trim();
+    if (!cid || !companyData || !isOfflineCompanyStorage(companyData)) {
+      setPlServerHostShareable(false);
+      setPlServerHostShareableResolved(true);
+      return;
+    }
+    if (!isElectronLocalServerApiAvailable()) {
+      setPlServerHostShareable(false);
+      setPlServerHostShareableResolved(true);
+      return;
+    }
+    const registry = allCompaniesRegistry?.length ? allCompaniesRegistry : allCompanies;
+    void isLocalCompanyHostShareable(cid, registry, companyData).then((ok) => {
+      if (!cancelled) {
+        setPlServerHostShareable(ok);
+        setPlServerHostShareableResolved(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, companyData, allCompanies, allCompaniesRegistry, localCompanyRegistryEpoch]);
 
   useEffect(() => {
     const sw = companyData?.sharedWith || [];
@@ -827,9 +858,57 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
 
   /** SQLite / device-only: email-based Firestore share yahan support nahi — Company login + Local users. */
   const isDeviceLocalCompany = isOfflineCompanyStorage(companyData);
+  const isPlServerHostShare =
+    isDeviceLocalCompany &&
+    plServerHostShareable &&
+    isElectronLocalServerApiAvailable();
+  const hostShareablePending =
+    isDeviceLocalCompany && isElectronLocalServerApiAvailable() && !plServerHostShareableResolved;
+
+  if (hostShareablePending) {
+    return (
+      <div className="p-4 sm:p-6 md:p-8">
+        <Card className={cn("w-full max-w-lg mx-auto", settingsDetailCardShell)} {...{ [companyProfileChromeRoot]: "" }}>
+          <CardContent className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Checking local server sharing…
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8">
-        {isDeviceLocalCompany && companyData && companyId ? (
+        {isPlServerHostShare && companyData && companyId ? (
+          <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
+            <CardHeader className={cn(companyProfilePageBg, "flex flex-row flex-wrap items-start justify-between gap-4")}>
+              <div>
+                <CardTitle className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span>Manage Sharing</span>
+                  <span className="text-muted-foreground font-normal tracking-tight" aria-hidden>
+                    ----&gt;
+                  </span>
+                  <span className="text-base sm:text-lg font-semibold">{companyData.name}</span>
+                </CardTitle>
+                <CardDescription>
+                  Share this local company via your PC server. Users get a Messages invite — ledger stays on this device.
+                </CardDescription>
+              </div>
+            </CardHeader>
+            <CardContent className={`p-4 ${companyProfileGreenZone}`}>
+              <LocalPlServerSharePanel
+                companyId={companyId}
+                companyName={companyData.name}
+                allCompaniesRegistry={allCompaniesRegistry?.length ? allCompaniesRegistry : allCompanies}
+                variant="manageShare"
+                onUsersChanged={() => {
+                  void reloadLocalCompanyRegistry();
+                  triggerSync();
+                }}
+              />
+            </CardContent>
+          </Card>
+        ) : isDeviceLocalCompany && companyData && companyId ? (
           <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
             <CardContent className="p-4 text-sm text-muted-foreground">
               Local company login users are managed in{" "}

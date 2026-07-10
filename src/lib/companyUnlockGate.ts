@@ -1,7 +1,8 @@
 import type { Company } from "@/hooks/useCompany";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
-import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
+import { parseLocalCompanyUserRows, findLocalCompanyUserRowForAppUser } from "@/lib/localCompanyUsers";
 import { isServerGateCompany } from "@/lib/companyStorageKind";
+import { isCurrentUserOwnerOfCompanyRow } from "@/lib/companyOnlineIntegrity";
 import {
   hasValidStoredOfflineUnlockSession,
   readStoredOfflineUnlockSession,
@@ -66,6 +67,35 @@ export function offlineCompanyHasLocalLoginUsers(company: unknown): boolean {
   return parseLocalCompanyUserRows((company as { localCompanyUsers?: unknown }).localCompanyUsers).length > 0;
 }
 
+/**
+ * Local / server-gate company: unlock sirf is app user ke liye jab unki row / protect password ho.
+ * Owner ko staff rows ki wajah se prompt nahi — sirf jab owner ne khud password set kiya ho.
+ */
+export function localCompanyAppUserRequiresUnlock(
+  company: unknown,
+  appUser?: { uid?: string | null; email?: string | null; isOwner?: boolean }
+): boolean {
+  if (!company || typeof company !== "object") return false;
+  const row = company as CompanyUnlockRow & { localCompanyUsers?: unknown; driveSharedJoin?: unknown };
+  if (isDriveSharedLocalJoinRow(row)) return true;
+
+  const isOwner = appUser?.isOwner === true;
+  const users = parseLocalCompanyUserRows(row.localCompanyUsers);
+  const userRow = findLocalCompanyUserRowForAppUser(users, appUser?.uid, appUser?.email);
+
+  if (isOwner) {
+    if (userRow?.password?.trim()) return true;
+    if (String(row.password ?? "").trim()) return true;
+    return false;
+  }
+
+  if (userRow?.password?.trim()) return true;
+  const se = getShareEntryForEmail(row, appUser?.email);
+  if (se?.password?.trim()) return true;
+  if (String(row.password ?? "").trim() && !userRow) return true;
+  return false;
+}
+
 /** Drive se shared join — Select / login se pehle company unlock check. */
 export function isDriveSharedLocalJoinRow(row: unknown): boolean {
   if (!row || typeof row !== "object") return false;
@@ -75,11 +105,22 @@ export function isDriveSharedLocalJoinRow(row: unknown): boolean {
 /** SQLite / list row: koi bhi unlock (password, local users, shared user password) zaroori hai? */
 export function companyDocRequiresUnlock(
   doc: unknown,
-  userEmail?: string | null
+  userEmail?: string | null,
+  firebaseUid?: string | null,
+  isOwnedHint?: boolean
 ): boolean {
   if (!doc || typeof doc !== "object") return false;
   const row = doc as CompanyUnlockRow & { localCompanyUsers?: unknown; driveSharedJoin?: unknown };
   if (isDriveSharedLocalJoinRow(row)) return true;
+
+  const isLocalLedgerRow = isOfflineCompanyStorage(row) || isServerGateCompany(row);
+  if (isLocalLedgerRow) {
+    const isOwner =
+      isOwnedHint === true ||
+      isCurrentUserOwnerOfCompanyRow(row, { uid: String(firebaseUid || "").trim(), email: userEmail ?? null });
+    return localCompanyAppUserRequiresUnlock(doc, { uid: firebaseUid, email: userEmail, isOwner });
+  }
+
   if (String(row.password ?? "").trim()) return true;
   if (offlineCompanyHasLocalLoginUsers(row)) return true;
   const se = getShareEntryForEmail(row, userEmail);
@@ -87,19 +128,19 @@ export function companyDocRequiresUnlock(
 }
 
 /** Select se pehle dialog dikhana hai ya nahi (remembered session check async path me). */
-export function shouldPromptCompanyUnlock(company: CompanyUnlockRow, userEmail?: string | null): boolean {
+export function shouldPromptCompanyUnlock(
+  company: CompanyUnlockRow,
+  userEmail?: string | null,
+  firebaseUid?: string | null
+): boolean {
   if (isServerGateCompany(company)) {
-    return companyDocRequiresUnlock(company, userEmail);
+    return companyDocRequiresUnlock(company, userEmail, firebaseUid, company.isOwned);
   }
   if (isOnlineSharedCompany(company)) {
     return !!company.password || onlineSharedHasPerUserPassword(company, userEmail);
   }
   if (isOfflineCompanyStorage(company)) {
-    if (isDriveSharedLocalJoinRow(company)) return true;
-    if (company.password) return true;
-    if (offlineCompanyHasLocalLoginUsers(company)) return true;
-    const se = getShareEntryForEmail(company, userEmail || undefined);
-    return !!se?.password;
+    return companyDocRequiresUnlock(company, userEmail, firebaseUid, company.isOwned);
   }
   const se = getShareEntryForEmail(company, userEmail || undefined);
   return !!(se?.password || company.password);
@@ -120,28 +161,34 @@ export async function shouldPromptCompanyUnlockAsync(
       return false;
     }
   }
-  if (shouldPromptCompanyUnlock(company, userEmail)) return true;
+  if (shouldPromptCompanyUnlock(company, userEmail, firebaseUid)) return true;
   if (!company.id) return false;
   try {
     const doc = await getLocalCompanyById(company.id, { includeDeleted: true });
     if (!doc) return false;
+    const isOwned =
+      company.isOwned === true ||
+      isCurrentUserOwnerOfCompanyRow(doc, { uid: String(firebaseUid || "").trim(), email: userEmail ?? null });
     if (isServerGateCompany(company) || isServerGateCompany(doc)) {
-      return companyDocRequiresUnlock(doc, userEmail);
+      return companyDocRequiresUnlock(doc, userEmail, firebaseUid, isOwned);
     }
     if (!isOfflineCompanyStorage(company)) return false;
-    return companyDocRequiresUnlock(doc, userEmail);
+    return companyDocRequiresUnlock(doc, userEmail, firebaseUid, isOwned);
   } catch {
     return false;
   }
 }
 
 /** Username field: online shared jab Protect on ho ya shared user ka apna password ho; offline shared jab share row me name+password ho */
-export function showCompanyUserNameField(company: CompanyUnlockRow, userEmail?: string | null): boolean {
+export function showCompanyUserNameField(company: CompanyUnlockRow, userEmail?: string | null, firebaseUid?: string | null): boolean {
   if (isServerGateCompany(company)) {
-    return companyDocRequiresUnlock(company, userEmail);
+    return companyDocRequiresUnlock(company, userEmail, firebaseUid, company.isOwned);
   }
   if (isOnlineSharedCompany(company)) {
     return !!company.password || onlineSharedHasPerUserPassword(company, userEmail);
+  }
+  if (isOfflineCompanyStorage(company)) {
+    return companyDocRequiresUnlock(company, userEmail, firebaseUid, company.isOwned);
   }
   const se = getShareEntryForEmail(company, userEmail || undefined);
   return !!(se?.password && String((se as { name?: string }).name || "").trim());

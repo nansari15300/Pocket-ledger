@@ -46,6 +46,7 @@ import {
   voucherAttachmentUiFingerprint,
 } from "@/lib/voucherFormAttachmentSave";
 import { normalizeVoucherRowAttachmentsForUi, getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize";
+import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { getBillWiseAllocatedToTarget, getPaymentStatus as getPaymentStatusResult, isSaleOrPurchaseBillVoucherType } from "@/lib/payment-allocation-utils";
 import { shouldSuppressTransientCompanyClear } from "@/lib/apkLedgerRouteShield";
@@ -143,9 +144,9 @@ type VoucherContextType = {
 function sortDocsByDateField(data: any[], orderByField: string): any[] {
   const copy = [...data];
   copy.sort((a: any, b: any) => {
-    const dateA = a[orderByField]?.toDate ? a[orderByField].toDate() : new Date(a[orderByField]);
-    const dateB = b[orderByField]?.toDate ? b[orderByField].toDate() : new Date(b[orderByField]);
-    return dateA.getTime() - dateB.getTime();
+    const dateA = parseFirestoreDateFieldToJsDate(a[orderByField])?.getTime() ?? 0;
+    const dateB = parseFirestoreDateFieldToJsDate(b[orderByField])?.getTime() ?? 0;
+    return dateA - dateB;
   });
   return copy;
 }
@@ -704,7 +705,13 @@ export const VoucherProvider = ({
       const applyPatch = <T extends { id: string }>(setter: StateSetter<T>) => {
         setter((prev) => {
           const idx = prev.findIndex((row) => String(row.id) === String(id));
-          if (idx < 0) return prev;
+          if (idx < 0) {
+            if (isServerGateCompanyContext && collection === "bank_accounts" && patch.accountName) {
+              const inserted = { ...patch, id } as T;
+              return [...prev, inserted];
+            }
+            return prev;
+          }
           const merged = { ...prev[idx], ...patch, id } as T;
           const next = prev.slice();
           next[idx] = merged;
@@ -734,7 +741,7 @@ export const VoucherProvider = ({
           break;
       }
     },
-    []
+    [isServerGateCompanyContext]
   );
 
   /** Stale-deps se effect storm na ho: async name fetch closure me fresh cache (plan limits unrelated hang fix). */
@@ -1200,9 +1207,9 @@ export const VoucherProvider = ({
             if (cancelled) return;
             if (orderByField) {
               data.sort((a: any, b: any) => {
-                const dateA = a[orderByField]?.toDate ? a[orderByField].toDate() : new Date(a[orderByField]);
-                const dateB = b[orderByField]?.toDate ? b[orderByField].toDate() : new Date(b[orderByField]);
-                return dateA.getTime() - dateB.getTime();
+                const dateA = parseFirestoreDateFieldToJsDate(a[orderByField])?.getTime() ?? 0;
+                const dateB = parseFirestoreDateFieldToJsDate(b[orderByField])?.getTime() ?? 0;
+                return dateA - dateB;
               });
             }
             let dataForUi = data;
@@ -1460,7 +1467,8 @@ export const VoucherProvider = ({
       (isLocalOnlyMode() ||
         companyRowUsesSqliteLedgerWrites(co as Parameters<typeof companyRowUsesSqliteLedgerWrites>[0]) ||
         sqliteLedgerRouteHint.usesSqlite ||
-        isCloudBackedCompany(co));
+        isCloudBackedCompany(co) ||
+        isServerGateCompanyContext);
       if (shouldSkipHeavyVoucherBootstrap(pathname)) return;
     if (!shouldListenSqliteBump) return;
 
@@ -1528,6 +1536,10 @@ export const VoucherProvider = ({
       const d = (ev as CustomEvent<BrowserDbCollectionBumpDetail>).detail;
       if (!d || d.companyId !== companyId || !d.collection) return;
       const coll = d.collection;
+      if (isServerGateCompanyContext || d.immediate === true) {
+        mergeCollectionFromSqliteBump(coll);
+        return;
+      }
       // Active page ke bahar collection bump ignore — unnecessary background merge avoid.
       if (!activeMasterCollectionPathsForRoute(pathname, voucherFormMasterScope).has(coll)) return;
       if (
@@ -1557,6 +1569,14 @@ export const VoucherProvider = ({
     const onServerMirror = (ev: Event) => {
       const d = (ev as CustomEvent<PlServerClientMirrorEventDetail>).detail;
       if (!d?.companyIds?.includes(companyId)) return;
+      const refreshPlServerLive = () => {
+        mergeCollectionFromSqliteBump("vouchers");
+        mergeActiveCollectionsFromServerMirror();
+      };
+      if (isServerGateCompanyContext) {
+        refreshPlServerLive();
+        return;
+      }
       if (embeddedClientPrefersQuietBackgroundSync()) {
         const key = `${companyId}::server-mirror`;
         const prevTimer = sqliteBumpMergeTimersRef.current[key];
@@ -1600,6 +1620,7 @@ export const VoucherProvider = ({
     pathname,
     voucherFormMasterScope,
     sqliteLedgerRouteHint.usesSqlite,
+    isServerGateCompanyContext,
   ]);
 
   /** Voucher/account/user display names: masters se pehle, bounded Firestore chunk — `collection('users')` full scan hata (400+ vouchers / large user base = hang). */

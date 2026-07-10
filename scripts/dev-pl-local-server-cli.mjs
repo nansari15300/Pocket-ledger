@@ -51,6 +51,88 @@ async function killExistingServerProcess() {
   await new Promise((resolve) => setTimeout(resolve, 400));
 }
 
+function readDevWebPort() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(root, ".pl-dev-web-port.json"), "utf8"));
+    const port = Number(raw.port);
+    if (Number.isFinite(port) && port > 0 && port < 65536) return port;
+  } catch {
+    /* ignore */
+  }
+  const envPort = Number(process.env.PORT || process.env.NEXT_DEV_PORT || "");
+  if (Number.isFinite(envPort) && envPort > 0 && envPort < 65536) return envPort;
+  return 3000;
+}
+
+async function invokeDevHostBridge(type, payload = {}) {
+  const port = readDevWebPort();
+  const res = await fetch(`http://127.0.0.1:${port}/api/dev-pl-host-bridge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "invoke", type, payload }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg =
+      (typeof data.message === "string" && data.message) ||
+      (typeof data.error === "string" && data.error) ||
+      `host_bridge_http_${res.status}`;
+    throw new Error(msg);
+  }
+  return data.result;
+}
+
+function registerDevHostBridgeProviders() {
+  localAppServer.setShareableCompaniesProvider(async () => {
+    try {
+      const rows = await invokeDevHostBridge("list_shareable_companies", {});
+      return Array.isArray(rows) ? rows : [];
+    } catch {
+      return [];
+    }
+  });
+
+  localAppServer.setLocalCompanyAuthProvider(async (companyId, username, password) => {
+    try {
+      const result = await invokeDevHostBridge("validate_login", { companyId, username, password });
+      if (result && typeof result === "object") return result;
+      return { ok: false, error: "Host bridge login failed" };
+    } catch (e) {
+      return {
+        ok: false,
+        error:
+          e instanceof Error
+            ? e.message
+            : "Host browser bridge unavailable — keep npm run dev tab open on the server PC.",
+      };
+    }
+  });
+
+  localAppServer.setCompanyMirrorExportProvider(async (companyId) => {
+    try {
+      return await invokeDevHostBridge("export_mirror_bundle", { companyId });
+    } catch {
+      return null;
+    }
+  });
+
+  localAppServer.setCompanyMirrorCollectionExportProvider(async (companyId, collection) => {
+    try {
+      return await invokeDevHostBridge("export_mirror_collection", { companyId, collection });
+    } catch {
+      return null;
+    }
+  });
+
+  localAppServer.setMirrorHealthProvider(async (companyId) => {
+    try {
+      return await invokeDevHostBridge("mirror_health", { companyId });
+    } catch {
+      return { ok: false, error: "mirror_health_unavailable" };
+    }
+  });
+}
+
 function ensureDeps() {
   const outDir = path.join(root, "out");
   const staticPublicDir = fs.existsSync(outDir) ? outDir : path.join(root, "public");
@@ -82,6 +164,7 @@ function ensureDeps() {
       }
     },
   });
+  registerDevHostBridgeProviders();
 }
 
 async function main() {

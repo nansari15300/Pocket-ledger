@@ -196,7 +196,14 @@ export async function openAttachmentInApp(
     const normalized = g.urls.map((x) => String(x).trim()).filter((s) => s.length > 0);
     if (normalized.length > 1) {
       const i = Math.max(0, Math.min(g.startIndex, normalized.length - 1));
-      openAttachmentGalleryInApp(normalized, i, { title: opts?.title, kinds: g.kinds });
+      const galleryMode = opts?.serverFallback?.companyId && opts?.localLedgerOnly ? "server" : opts?.localLedgerOnly ? "local" : "online";
+      openAttachmentGalleryInApp(normalized, i, {
+        title: opts?.title,
+        kinds: g.kinds,
+        localLedgerOnly: opts?.localLedgerOnly,
+        companyId: opts?.serverFallback?.companyId,
+        companyMode: galleryMode,
+      });
       return;
     }
   }
@@ -272,6 +279,19 @@ export async function openAttachmentInApp(
       if (await tryOpenPlServerLocalAttachment(sfCompanyId, u, { title: opts?.title, kind: kindHint })) {
         return;
       }
+    }
+    if (!blob?.size) {
+      const { readActiveAttachmentCompanyId } = await import("@/lib/firestorePermissionSuppress");
+      const activeCid = String(readActiveAttachmentCompanyId() || "").trim();
+      if (activeCid && activeCid !== sfCompanyId) {
+        if (await tryOpenPlServerLocalAttachment(activeCid, u, { title: opts?.title, kind: kindHint })) {
+          return;
+        }
+      }
+    }
+    if (!blob?.size && sfCompanyId) {
+      const { resolvePlServerStaffAttachmentPreviewBlob } = await import("@/lib/plServerAttachmentFetch");
+      blob = await resolvePlServerStaffAttachmentPreviewBlob(u, { companyId: sfCompanyId });
     }
     if (!blob?.size) {
       if (sf?.companyId && sf?.voucherId) {
@@ -370,6 +390,11 @@ export async function openAttachmentInApp(
   const online = typeof navigator !== "undefined" && navigator.onLine;
   const embeddedInstantHttps =
     usesEmbeddedNativeAttachmentStorage() && isHttp && online && !localLedgerOnly;
+  const strategyMode = localLedgerOnly
+    ? opts?.serverFallback?.companyId
+      ? "server"
+      : "local"
+    : "online";
 
   if (embeddedInstantHttps) {
     if (kind === "image" || isDataImage || pathLooksImage(pathOnly)) {
@@ -394,7 +419,11 @@ export async function openAttachmentInApp(
 
   if (kind === "image" || isDataImage || pathLooksImage(pathOnly)) {
     if (!isDataImage && (usesEmbeddedNativeAttachmentStorage() || localLedgerOnly)) {
-      const resolved = await resolveStaticAttachmentDisplay(u, { localLedgerOnly });
+      const resolved = await resolveStaticAttachmentDisplay(u, {
+        localLedgerOnly,
+        companyMode: strategyMode,
+        companyId: opts?.serverFallback?.companyId,
+      });
       if (resolved.displayUrl) {
         showInAppImagePreview(resolved.displayUrl, () => {}, {
           title: opts?.title ?? "Image",
@@ -438,7 +467,11 @@ export async function openAttachmentInApp(
 
   if (kind === "pdf" || isDataPdf || pathLooksPdf(pathOnly)) {
     if (localLedgerOnly || usesEmbeddedNativeAttachmentStorage()) {
-      const resolved = await resolveStaticAttachmentDisplay(u, { localLedgerOnly });
+      const resolved = await resolveStaticAttachmentDisplay(u, {
+        localLedgerOnly,
+        companyMode: strategyMode,
+        companyId: opts?.serverFallback?.companyId,
+      });
       if (resolved.displayUrl) {
         if (shouldUseInAppPdfPreviewOverlay()) {
           await showInAppPdfPreview(resolved.displayUrl, () => {}, {

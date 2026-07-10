@@ -38,7 +38,10 @@ import {
   downloadAndMergeOpeningUsersFromDrive,
   downloadAndMergeOpeningMastersFromDrive,
 } from "@/lib/localCloudSync/openingDriveSnapshot";
-import { forceReencryptDriveIfNeeded } from "@/lib/localCloudSync/forceReencryptDrive";
+import {
+  isLocalGoogleDriveSyncDisabled,
+  LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE,
+} from "@/lib/localCloudSync/driveSyncDisabled";
 
 export type RunLocalCloudSyncCycleOptions = {
   force?: boolean;
@@ -175,6 +178,9 @@ export async function runLocalCloudSyncCycle(
 }> {
   const cid = String(companyId || "").trim();
   if (!cid) return { ok: false, error: "missing companyId", uploaded: 0, downloaded: 0 };
+  if (isLocalGoogleDriveSyncDisabled()) {
+    return { ok: false, error: LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE, uploaded: 0, downloaded: 0 };
+  }
 
   const ledgerOnly = options?.ledgerOnly === true;
   const attachmentsOnly = options?.attachmentsOnly === true;
@@ -605,6 +611,7 @@ export async function runLocalCloudSyncCycle(
 export function scheduleDriveAttachmentSyncAfterRestore(companyId: string): void {
   const cid = String(companyId || "").trim();
   if (!cid) return;
+  if (isLocalGoogleDriveSyncDisabled()) return;
   void runLocalCloudSyncCycle(cid, { force: true, attachmentsOnly: true }).catch((e) => {
     warnLocalCloudSync("background attachment sync failed", {
       companyId: cid,
@@ -620,6 +627,7 @@ export function scheduleLocalCloudSyncInBackground(
 ): void {
   const cid = String(companyId || "").trim();
   if (!cid) return;
+  if (isLocalGoogleDriveSyncDisabled()) return;
   void runLocalCloudSyncCycle(cid, { force: options?.force === true }).catch((e) => {
     warnLocalCloudSync("background cloud sync failed", {
       companyId: cid,
@@ -638,6 +646,25 @@ export async function getLocalCloudSyncStatus(companyId: string): Promise<{
   syncSummaryHistory: CloudSyncSummaryHistoryEntry[];
   syncSummaryResetAt: number | null;
 }> {
+  if (isLocalGoogleDriveSyncDisabled()) {
+    return {
+      pending: 0,
+      lastSyncAt: null,
+      lastSyncedOp: 0,
+      status: "disabled",
+      lastError: LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE,
+      lastSyncSummary: {
+        addedFiles: 0,
+        addedVouchers: 0,
+        uploadedFiles: 0,
+        uploadedVouchers: 0,
+        downloadedFiles: 0,
+        downloadedVouchers: 0,
+      },
+      syncSummaryHistory: [],
+      syncSummaryResetAt: null,
+    };
+  }
   const cursor = await getCloudSyncCursor(companyId);
   const pending = await countPendingLocalCloudSyncOps(companyId);
   const reg = await getLocalCompanyById(companyId, { includeDeleted: true });

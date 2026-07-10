@@ -26,6 +26,11 @@ const VOUCHER_PENDING_16 = "phase1b-v-pending-16";
 const VOUCHER_M4_17 = "phase1b-v-m4-plshared-17";
 const VOUCHER_M4_18 = "phase1b-v-m4-plshared-18";
 const VOUCHER_M4_20 = "phase1b-v-m4-plshared-20";
+const VOUCHER_READ_21 = "phase1b-v-read-pull-21";
+const VOUCHER_READ_23 = "phase1b-v-read-fresh-23";
+const VOUCHER_PILOT_ROUTE_LIMIT = "phase1b-v-pilot-route-limit";
+const VOUCHER_PILOT_ATTACH = "phase1b-v-pilot-attach-local";
+const MAX_AUTO_RETRIES_PILOT = 12;
 const VOUCHER_MIRROR = "phase1b-v-mirror-push";
 const VOUCHER_NOOP = "phase1b-v-noop-save";
 const VOUCHER_RESTART = "phase1b-v-restart-persist";
@@ -194,6 +199,28 @@ async function seedPlServerSharedClientCompanyUi(uiWc) {
   );
 }
 
+async function pullLiveSyncUi(uiWc, companyId = COMPANY_ID) {
+  return uiWc.executeJavaScript(
+    `(async () => {
+      if (typeof window.__plPhase1bVerifyPullPlServerSharedCompanyLive !== "function") {
+        return { ok: false, fullPull: false, error: "shim_missing" };
+      }
+      return await window.__plPhase1bVerifyPullPlServerSharedCompanyLive(${JSON.stringify(companyId)});
+    })()`,
+    true
+  );
+}
+
+async function getClientVoucherUi(uiWc, voucherId, companyId = COMPANY_ID) {
+  return uiWc.executeJavaScript(
+    `(async () => {
+      if (typeof window.__plPhase1bVerifyGetVoucher !== "function") return null;
+      return await window.__plPhase1bVerifyGetVoucher(${JSON.stringify(companyId)}, ${JSON.stringify(voucherId)});
+    })()`,
+    true
+  );
+}
+
 async function countPendingAuthoritativeUi(uiWc) {
   return uiWc.executeJavaScript(
     `(async () => {
@@ -232,6 +259,17 @@ async function getPendingStateUi(uiWc, docId) {
         ${JSON.stringify(COMPANY_ID)},
         ${JSON.stringify(docId)}
       );
+    })()`,
+    true
+  );
+}
+
+async function setPendingRetryCountUi(uiWc, docId, retryCount) {
+  return uiWc.executeJavaScript(
+    `(async () => {
+      const fn = window.__plPhase1bVerifySetPendingAuthoritativeRetryCount;
+      if (typeof fn !== "function") return { ok: false };
+      return await fn(${JSON.stringify(COMPANY_ID)}, ${JSON.stringify(docId)}, ${retryCount});
     })()`,
     true
   );
@@ -396,6 +434,8 @@ function assertScenario(name, checks) {
  * @param {string} deps.userDataPath
  * @param {object} deps.localAppServer
  * @param {() => Promise<number|null>} deps.startSharedLocalServer
+ * @param {() => Promise<number|null>} deps.resumeHostSharingAfterBootIfConfigured
+ * @param {(cfg: object, st: object) => boolean} deps.shouldOfferTrayStartSharing
  * @param {() => Promise<void>} deps.stopSharingOnly
  * @param {() => Promise<import('electron').WebContents>} deps.ensureServerDataBridgeWindow
  * @param {Function} deps.runInServerAppRenderer
@@ -962,6 +1002,184 @@ async function runPhase1bRuntimeVerify(deps) {
     assertScenario("Scenario 20 — plServerShared no mirror push on save", [
       { label: "mirror queue === 0", pass: uiCap20.mirrorQueues === 0, actual: uiCap20.mirrorQueues },
       { label: "authoritative HTTP === 1", pass: stats20.authoritativeHttp === 1, actual: stats20.authoritativeHttp },
+    ])
+  );
+
+  // --- Milestone 5A: Read-path live pull (21–23) ---
+  // Scenario 21 — Host write → client pull → client SQLite reflects Host
+  deps.resetVerifyStats();
+  await resetCapture(bridge);
+  await resetCapture(uiWin.webContents);
+  const payload21 = voucherPayload(VOUCHER_READ_21, 2101);
+  await bridgeHostUpsert(deps.runInServerAppRenderer, VOUCHER_READ_21, payload21, true);
+  await sleep(400);
+  const exportIds21Host = await exportVoucherIds(deps.runMirrorCollectionExportWithMeta);
+  const pull21 = await pullLiveSyncUi(uiWin.webContents);
+  await sleep(200);
+  const clientAfter21 = await getClientVoucherUi(uiWin.webContents, VOUCHER_READ_21);
+
+  report.scenarios.push(
+    assertScenario("Scenario 21 — Host write → client live pull", [
+      { label: "host export contains voucher", pass: exportIds21Host.includes(VOUCHER_READ_21), actual: exportIds21Host },
+      { label: "pull ok === true", pass: pull21?.ok === true, actual: pull21 },
+      { label: "pull fullPull === true", pass: pull21?.fullPull === true, actual: pull21 },
+      { label: "client voucher after pull", pass: Boolean(clientAfter21?.id === VOUCHER_READ_21), actual: clientAfter21 },
+    ])
+  );
+
+  // Scenario 23 — Freshness: Host-only voucher visible on client after pull
+  deps.resetVerifyStats();
+  const payload23 = voucherPayload(VOUCHER_READ_23, 2301);
+  await bridgeHostUpsert(deps.runInServerAppRenderer, VOUCHER_READ_23, payload23, true);
+  await sleep(400);
+  const clientBefore23 = await getClientVoucherUi(uiWin.webContents, VOUCHER_READ_23);
+  const pull23 = await pullLiveSyncUi(uiWin.webContents);
+  await sleep(200);
+  const clientAfter23 = await getClientVoucherUi(uiWin.webContents, VOUCHER_READ_23);
+  const exportIds23 = await exportVoucherIds(deps.runMirrorCollectionExportWithMeta);
+
+  report.scenarios.push(
+    assertScenario("Scenario 23 — Read freshness after Host write", [
+      { label: "client missing voucher before pull", pass: clientBefore23 == null, actual: clientBefore23 },
+      { label: "host export contains voucher", pass: exportIds23.includes(VOUCHER_READ_23), actual: exportIds23 },
+      { label: "pull ok === true", pass: pull23?.ok === true, actual: pull23 },
+      { label: "client voucher after pull", pass: Boolean(clientAfter23?.id === VOUCHER_READ_23), actual: clientAfter23 },
+    ])
+  );
+
+  // Scenario 22 — Pull failure honesty when Host sharing unavailable
+  await deps.stopSharingOnly();
+  const pull22 = await pullLiveSyncUi(uiWin.webContents);
+  await deps.startSharedLocalServer();
+  await sleep(300);
+
+  report.scenarios.push(
+    assertScenario("Scenario 22 — Live pull failure returns ok:false", [
+      { label: "pull ok === false", pass: pull22?.ok === false, actual: pull22 },
+      { label: "pull fullPull === false", pass: pull22?.fullPull === false, actual: pull22 },
+    ])
+  );
+
+  // --- LAN office pilot blockers (24–27) ---
+  // Scenario 24 — H1: boot resume when userWantsRunning true (simulated crash/reboot)
+  await deps.stopSharingOnly();
+  deps.localAppServer.saveConfig(deps.userDataPath, { userWantsRunning: true });
+  const st24Before = deps.localAppServer.getStatus(deps.userDataPath);
+  await deps.resumeHostSharingAfterBootIfConfigured();
+  await sleep(300);
+  const st24After = deps.localAppServer.getStatus(deps.userDataPath);
+
+  report.scenarios.push(
+    assertScenario("Scenario 24 — H1 boot resume sharing when userWantsRunning", [
+      { label: "userWantsRunning === true", pass: st24Before.userWantsRunning === true, actual: st24Before.userWantsRunning },
+      { label: "sharing inactive before resume", pass: st24Before.sharingActive === false, actual: st24Before.sharingActive },
+      { label: "app UI serving before resume", pass: st24Before.appUiServing === true, actual: st24Before.appUiServing },
+      { label: "sharing active after resume", pass: st24After.sharingActive === true, actual: st24After.sharingActive },
+    ])
+  );
+
+  // Scenario 25 — H1: explicit stop preserved (no auto resume)
+  await deps.stopSharingOnly();
+  deps.localAppServer.saveConfig(deps.userDataPath, { userWantsRunning: false });
+  await deps.localAppServer.startStaticServer(deps.userDataPath, { forAppUi: true });
+  const st25Before = deps.localAppServer.getStatus(deps.userDataPath);
+  await deps.resumeHostSharingAfterBootIfConfigured();
+  const st25After = deps.localAppServer.getStatus(deps.userDataPath);
+
+  report.scenarios.push(
+    assertScenario("Scenario 25 — H1 explicit stop not auto-resumed", [
+      { label: "userWantsRunning === false", pass: st25Before.userWantsRunning === false, actual: st25Before.userWantsRunning },
+      { label: "sharing inactive before", pass: st25Before.sharingActive === false, actual: st25Before.sharingActive },
+      { label: "app UI serving before", pass: st25Before.appUiServing === true, actual: st25Before.appUiServing },
+      { label: "sharing still inactive after", pass: st25After.sharingActive === false, actual: st25After.sharingActive },
+    ])
+  );
+
+  // Scenario 26 — H2: tray offers restart whenever sharing off but app UI up
+  deps.localAppServer.saveConfig(deps.userDataPath, { userWantsRunning: true });
+  await deps.stopSharingOnly();
+  const cfg26a = deps.localAppServer.loadConfig(deps.userDataPath);
+  const st26a = deps.localAppServer.getStatus(deps.userDataPath);
+  const tray26a = deps.shouldOfferTrayStartSharing(cfg26a, st26a);
+
+  deps.localAppServer.saveConfig(deps.userDataPath, { userWantsRunning: false });
+  const cfg26b = deps.localAppServer.loadConfig(deps.userDataPath);
+  const st26b = deps.localAppServer.getStatus(deps.userDataPath);
+  const tray26b = deps.shouldOfferTrayStartSharing(cfg26b, st26b);
+
+  await deps.startSharedLocalServer();
+  const cfg26c = deps.localAppServer.loadConfig(deps.userDataPath);
+  const st26c = deps.localAppServer.getStatus(deps.userDataPath);
+  const tray26c = deps.shouldOfferTrayStartSharing(cfg26c, st26c);
+
+  report.scenarios.push(
+    assertScenario("Scenario 26 — H2 tray restart when sharing inactive", [
+      { label: "tray start when userWantsRunning true", pass: tray26a === true, actual: tray26a },
+      { label: "tray start when userWantsRunning false (stopped)", pass: tray26b === true, actual: tray26b },
+      { label: "tray start hidden when sharing active", pass: tray26c === false, actual: tray26c },
+    ])
+  );
+
+  // Scenario 27 — P1: route_unavailable reaches failed_permanent after retry limit
+  await clearAllPendingUi(uiWin.webContents);
+  await installLanClientGateUi(uiWin.webContents, sharingPort, tokenRec.token);
+  await enableVerifyLanClientReplayRoute(uiWin.webContents);
+  await deps.stopSharingOnly();
+  await lanClientUpsertVoucher(uiWin.webContents, VOUCHER_PILOT_ROUTE_LIMIT, voucherPayload(VOUCHER_PILOT_ROUTE_LIMIT, 2701));
+  await sleep(300);
+  const pending27Before = await countPendingAuthoritativeUi(uiWin.webContents);
+  const bump27 = await setPendingRetryCountUi(uiWin.webContents, VOUCHER_PILOT_ROUTE_LIMIT, MAX_AUTO_RETRIES_PILOT);
+  const drain27 = await drainPendingAuthoritativeUi(uiWin.webContents);
+  await sleep(200);
+  const state27 = await getPendingStateUi(uiWin.webContents, VOUCHER_PILOT_ROUTE_LIMIT);
+  await deps.startSharedLocalServer();
+
+  report.scenarios.push(
+    assertScenario("Scenario 27 — P1 route_unavailable permanent after retry limit", [
+      { label: "pending created", pass: pending27Before === 1, actual: pending27Before },
+      { label: "retry count seeded", pass: bump27?.ok === true, actual: bump27 },
+      { label: "state failed_permanent", pass: state27 === "failed_permanent", actual: state27 },
+      { label: "permanentFailures >= 1", pass: (drain27?.permanentFailures ?? 0) >= 1, actual: drain27 },
+    ])
+  );
+
+  // Scenario 28 — Local attachment ref survives host bridge write + export
+  const attachPayload28 = {
+    ...voucherPayload(VOUCHER_PILOT_ATTACH, 2801),
+    fileUrls: ["local:phase1b-verify-attach-ref"],
+    files: [],
+  };
+  await uiWin.webContents.executeJavaScript(
+    `(async () => {
+      if (typeof window.__plPhase1bVerifyUpsertVoucher !== "function") return { ok: false };
+      return await window.__plPhase1bVerifyUpsertVoucher(
+        ${JSON.stringify(COMPANY_ID)},
+        ${JSON.stringify(VOUCHER_PILOT_ATTACH)},
+        ${JSON.stringify(attachPayload28)}
+      );
+    })()`,
+    true
+  );
+  await sleep(500);
+  const exportOut28 = await deps.runMirrorCollectionExportWithMeta(COMPANY_ID, "vouchers");
+  const docs28 =
+    exportOut28 && typeof exportOut28 === "object" && Array.isArray(exportOut28.docs)
+      ? exportOut28.docs
+      : Array.isArray(exportOut28)
+        ? exportOut28
+        : [];
+  const exportIds28 = docs28.map((d) => String(d?.id || "").trim()).filter(Boolean);
+  const exportRow28 = docs28.find((d) => String(d?.id) === VOUCHER_PILOT_ATTACH);
+  const exportUrls28 = Array.isArray(exportRow28?.fileUrls) ? exportRow28.fileUrls : [];
+
+  report.scenarios.push(
+    assertScenario("Scenario 28 — Local attachment ref survives host bridge export", [
+      { label: "export contains voucher", pass: exportIds28.includes(VOUCHER_PILOT_ATTACH), actual: exportIds28 },
+      {
+        label: "export fileUrls contains local ref",
+        pass: exportUrls28.some((u) => String(u).includes("local:phase1b-verify-attach-ref")),
+        actual: exportUrls28,
+      },
     ])
   );
 

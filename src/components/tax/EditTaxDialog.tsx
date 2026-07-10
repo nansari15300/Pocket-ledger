@@ -132,8 +132,15 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
       JSON.stringify(initialDocUrlsRef.current);
   const onLiveAttachmentFields = useCallback(
     (fields: { fileUrl?: string | null; documentFileUrls?: string[] }) => {
-      if (fields.fileUrl !== undefined) setFile(fields.fileUrl || null);
-      if (fields.documentFileUrls) setDocSlots(fields.documentFileUrls);
+      if (fields.fileUrl !== undefined) {
+        const nextFile = fields.fileUrl || null;
+        setFile(nextFile);
+        initialFileRef.current = nextFile;
+      }
+      if (fields.documentFileUrls) {
+        setDocSlots(fields.documentFileUrls);
+        initialDocUrlsRef.current = fields.documentFileUrls;
+      }
     },
     []
   );

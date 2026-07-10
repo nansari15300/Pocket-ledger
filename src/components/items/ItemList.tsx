@@ -23,6 +23,8 @@ import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
+import { useCompany } from "@/hooks/useCompany";
 
 interface ItemListProps {
   items: Item[];
@@ -99,6 +101,7 @@ export function ItemList({
   hideQuickFilterBar = false,
 }: ItemListProps) {
   const { formatCurrency } = useDate();
+  const { company } = useCompany();
   const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
@@ -123,6 +126,15 @@ export function ItemList({
   const filteredAndSortedRows = useMemo(() => {
     return filterAndSortMasterEntityListRows(enrichedRows, searchTerm, quickFilter) as ItemListFilterRow[];
   }, [enrichedRows, searchTerm, quickFilter]);
+
+  const visibleItemAttachmentUrls = useMemo(
+    () =>
+      filteredAndSortedRows
+        .map(({ item }) => trimEntityFileUrlForPreview(item.fileUrls?.[0]))
+        .filter((u): u is string => Boolean(u)),
+    [filteredAndSortedRows]
+  );
+  usePrewarmVisibleAttachments(visibleItemAttachmentUrls, company?.id);
 
   if (filteredAndSortedRows.length === 0) {
     return (
@@ -166,6 +178,7 @@ export function ItemList({
                         >
                           <ResolvedEntityAvatar
                             className="h-8 w-8 text-sm"
+                            companyId={item.companyId}
                             src={attachmentPreviewUrl ?? undefined}
                             alt={item.name}
                             fallbackSlot={<Package />}

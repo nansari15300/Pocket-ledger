@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { isLocalCompanyId, localAuthLogin, setLocalAuthToken } from "@/lib/localApiClient";
 import { localAuthLoginClientOnly } from "@/lib/localCompanyUsers";
+import { useAuth } from "@/hooks/useAuth";
 import { useDataSource } from "@/contexts/DataSourceContext";
 import { Loader2 } from "lucide-react";
 
@@ -17,6 +18,7 @@ type Props = {
 };
 
 export function LocalLoginForm({ companyId, companyName, onSuccess }: Props) {
+  const { user } = useAuth();
   const { localApiBaseUrl } = useDataSource();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -33,10 +35,13 @@ export function LocalLoginForm({ companyId, companyName, onSuccess }: Props) {
     setLoading(true);
     try {
       // Local company: SQLite doc me `localCompanyUsers` — bina Node server ke login (server path baad me optional).
-      const { token, user } = isLocalCompanyId(companyId)
-        ? await localAuthLoginClientOnly(companyId, username.trim(), password)
+      const { token, user: localUser } = isLocalCompanyId(companyId)
+        ? await localAuthLoginClientOnly(companyId, username.trim(), password, {
+            uid: user?.uid,
+            email: user?.email,
+          })
         : await localAuthLogin(localApiBaseUrl, companyId, username.trim(), password);
-      setLocalAuthToken(companyId, token, user);
+      setLocalAuthToken(companyId, token, localUser);
       onSuccess();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Login fail.");

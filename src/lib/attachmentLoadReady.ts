@@ -6,7 +6,10 @@ import {
   getBlobFromLocalFileRef,
   isLocalFileRef,
 } from "@/lib/localPendingFiles";
-import { isOfflineCachedAttachmentOnDevice } from "@/lib/offlineAttachmentUrlCache";
+import {
+  getOfflineCachedAttachmentNativeRef,
+  isOfflineCachedAttachmentOnDevice,
+} from "@/lib/offlineAttachmentUrlCache";
 import { normalizeAttachmentUrlForDevicePreview } from "@/lib/attachmentHoldClipboard";
 import { peekHoverCachedBlobUrl } from "@/lib/attachmentHoverBlobCache";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
@@ -22,6 +25,10 @@ export type AttachmentUrlLoadStatus = "unknown" | "loading" | "ready";
 
 const statusByUrl = new Map<string, AttachmentUrlLoadStatus>();
 const storeListeners = new Set<() => void>();
+let attachmentUiRefreshTick = 0;
+let attachmentUiRefreshListenersInstalled = false;
+let lastWindowRefreshAt = 0;
+const WINDOW_REFRESH_THROTTLE_MS = 800;
 
 function urlKey(raw: string): string {
   return normalizeAttachmentUrlForDevicePreview(String(raw || "").trim());
@@ -36,6 +43,38 @@ export function subscribeAttachmentLoadStore(onChange: () => void): () => void {
   return () => {
     storeListeners.delete(onChange);
   };
+}
+
+export function getAttachmentUiRefreshTick(): number {
+  return attachmentUiRefreshTick;
+}
+
+export function requestAttachmentUiRefresh(): void {
+  attachmentUiRefreshTick = (attachmentUiRefreshTick + 1) % Number.MAX_SAFE_INTEGER;
+  publishAttachmentLoadStore();
+}
+
+export function ensureAttachmentUiRefreshListeners(): void {
+  if (attachmentUiRefreshListenersInstalled) return;
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  attachmentUiRefreshListenersInstalled = true;
+
+  const requestFromWindow = () => {
+    if (document.visibilityState === "hidden") return;
+    const now = Date.now();
+    if (now - lastWindowRefreshAt < WINDOW_REFRESH_THROTTLE_MS) return;
+    lastWindowRefreshAt = now;
+    requestAttachmentUiRefresh();
+  };
+
+  const onVisibility = () => {
+    if (document.visibilityState === "visible") requestFromWindow();
+  };
+
+  document.addEventListener("visibilitychange", onVisibility);
+  window.addEventListener("focus", requestFromWindow);
+  window.addEventListener("pageshow", requestFromWindow);
+  window.addEventListener("online", requestFromWindow);
 }
 
 export function getAttachmentUrlLoadStatus(raw: string): AttachmentUrlLoadStatus {
@@ -59,10 +98,12 @@ export async function isAttachmentUrlReadyOnDevice(
     if (meta?.displayUrl?.trim() || meta?.filePath?.trim()) return true;
     const blob = await getBlobFromLocalFileRef(u, { companyId: cid });
     if (blob && blob.size > 0) return true;
-    if (cid && galleryUrls?.length) {
-      const { fetchAttachmentRefBlob } = await import("@/lib/attachmentRefBlobFetch");
-      const paired = await fetchAttachmentRefBlob(u, { companyId: cid, galleryUrls });
-      return !!(paired && paired.size > 0);
+    if (await isOfflineCachedAttachmentOnDevice(u)) return true;
+    try {
+      const native = await getOfflineCachedAttachmentNativeRef(u);
+      if (native?.displayUrl?.trim()) return true;
+    } catch {
+      /* optional */
     }
     return false;
   }
@@ -95,6 +136,32 @@ export function computeAttachmentUrlsReadyState(urls: readonly string[]): "loadi
 }
 
 const warmInFlight = new Set<string>();
+const warmRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const warmAttemptByUrl = new Map<string, number>();
+const WARM_RETRY_MS = 5_000;
+const WARM_MAX_ATTEMPTS = 3;
+
+function scheduleAttachmentWarmRetry(
+  raw: string,
+  companyId?: string,
+  galleryUrls?: readonly string[]
+): void {
+  const k = urlKey(raw);
+  if (!k || warmRetryTimers.has(k)) return;
+  const attempts = (warmAttemptByUrl.get(k) ?? 0) + 1;
+  warmAttemptByUrl.set(k, attempts);
+  if (attempts >= WARM_MAX_ATTEMPTS) {
+    markAttachmentUrlReady(raw);
+    return;
+  }
+  warmRetryTimers.set(
+    k,
+    setTimeout(() => {
+      warmRetryTimers.delete(k);
+      void ensureAttachmentUrlReadyOnDevice(raw, companyId, galleryUrls);
+    }, WARM_RETRY_MS)
+  );
+}
 
 /** Background: bytes cache / hover LRU — green tick jab ready. */
 export async function ensureAttachmentUrlReadyOnDevice(
@@ -136,12 +203,14 @@ export async function ensureAttachmentUrlReadyOnDevice(
       markAttachmentUrlReady(u);
       return true;
     }
-    statusByUrl.set(k, "unknown");
+    statusByUrl.set(k, "loading");
     publishAttachmentLoadStore();
+    scheduleAttachmentWarmRetry(u, cid, galleryUrls);
     return false;
   } catch {
-    statusByUrl.set(k, "unknown");
+    statusByUrl.set(k, "loading");
     publishAttachmentLoadStore();
+    scheduleAttachmentWarmRetry(u, cid, galleryUrls);
     return false;
   } finally {
     warmInFlight.delete(k);

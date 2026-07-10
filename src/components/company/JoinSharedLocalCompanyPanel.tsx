@@ -38,6 +38,10 @@ import { cloudSyncJoinPanelCard, cloudSyncNestedCard } from "@/lib/companyProfil
 import { CloudSyncHelpPopover } from "@/components/company/CloudSyncHelpPopover";
 import { purgeAllLocalCompaniesMissingOnDrive } from "@/lib/localCloudSync/driveCompanyFolderLifecycle";
 import { markSuppressFirestorePermissionForCompany } from "@/lib/firestorePermissionSuppress";
+import {
+  isLocalGoogleDriveSyncDisabled,
+  LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE,
+} from "@/lib/localCloudSync/driveSyncDisabled";
 
 type Props = {
   /** false = list load mat karo (dialog band) */
@@ -68,12 +72,19 @@ export function JoinSharedLocalCompanyPanel({
   /** Har Drive folder ka alag password — encrypt ON par kaunsi company clear rahe. */
   const [passwordByFolderId, setPasswordByFolderId] = useState<Record<string, string>>({});
   const [localRegistryRows, setLocalRegistryRows] = useState<LocalCompanyDoc[]>([]);
+  const driveSyncDisabled = isLocalGoogleDriveSyncDisabled();
 
   const refreshLocalJoinState = useCallback(async () => {
     setLocalRegistryRows(await listLocalCompanies({ includeDeleted: true }));
   }, []);
 
   const loadInvites = useCallback(async () => {
+    if (driveSyncDisabled) {
+      setLoading(false);
+      setInvites([]);
+      setError(LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -91,12 +102,12 @@ export function JoinSharedLocalCompanyPanel({
     } finally {
       setLoading(false);
     }
-  }, [user?.uid, reloadLocalCompanyRegistry, refreshLocalJoinState]);
+  }, [user?.uid, reloadLocalCompanyRegistry, refreshLocalJoinState, driveSyncDisabled]);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || driveSyncDisabled) return;
     void loadInvites();
-  }, [active, loadInvites]);
+  }, [active, loadInvites, driveSyncDisabled]);
 
   // Join ke baad "Connected" + company selector list — local registry dubara padho.
   useEffect(() => {
@@ -132,6 +143,10 @@ export function JoinSharedLocalCompanyPanel({
   const hasAnyInvites = ownedInvites.length > 0 || groupedBySharer.length > 0;
 
   const connectDrive = async () => {
+    if (driveSyncDisabled) {
+      toast({ title: "Drive sync disabled", description: LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE });
+      return;
+    }
     try {
       const firebaseUser = await getFirebaseAuthUserForApi();
       if (companyId) markDriveOAuthReturnGrace(companyId);
@@ -153,6 +168,7 @@ export function JoinSharedLocalCompanyPanel({
   };
 
   const handleJoin = async (invite: DriveSharedCompanyInvite) => {
+    if (driveSyncDisabled) return;
     setJoiningId(invite.companyId);
     try {
       const rowPassword = passwordByFolderId[invite.driveFolderId]?.trim() || undefined;
@@ -191,6 +207,7 @@ export function JoinSharedLocalCompanyPanel({
   };
 
   const handleResync = async (invite: DriveSharedCompanyInvite) => {
+    if (driveSyncDisabled) return;
     setJoiningId(invite.companyId);
     try {
       const rowPassword = passwordByFolderId[invite.driveFolderId]?.trim() || undefined;
@@ -224,6 +241,7 @@ export function JoinSharedLocalCompanyPanel({
   };
 
   const handleSelectConnected = async (inv: DriveSharedCompanyInvite) => {
+    if (driveSyncDisabled) return;
     setJoiningId(inv.companyId);
     try {
       const companyId = await preloadDriveSharedCompanyLoginFromInvite(inv);
@@ -273,6 +291,7 @@ export function JoinSharedLocalCompanyPanel({
               onChange={(e) =>
                 setPasswordByFolderId((prev) => ({ ...prev, [inv.driveFolderId]: e.target.value }))
               }
+              disabled={driveSyncDisabled}
               className="h-9"
             />
           </div>
@@ -290,6 +309,7 @@ export function JoinSharedLocalCompanyPanel({
               onChange={(e) =>
                 setPasswordByFolderId((prev) => ({ ...prev, [inv.driveFolderId]: e.target.value }))
               }
+              disabled={driveSyncDisabled}
               className="h-9"
             />
           </div>
@@ -301,7 +321,7 @@ export function JoinSharedLocalCompanyPanel({
               size="sm"
               variant="default"
               className="rounded-full"
-              disabled={busy}
+              disabled={busy || driveSyncDisabled}
               onClick={() => void handleSelectConnected(inv)}
             >
               Select
@@ -313,7 +333,7 @@ export function JoinSharedLocalCompanyPanel({
               size="sm"
               variant="outline"
               className="rounded-full"
-              disabled={busy}
+              disabled={busy || driveSyncDisabled}
               onClick={() => void handleResync(inv)}
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Sync from Drive"}
@@ -324,7 +344,7 @@ export function JoinSharedLocalCompanyPanel({
               size="sm"
               variant="default"
               className="rounded-full"
-              disabled={busy}
+              disabled={busy || driveSyncDisabled}
               onClick={() => void handleJoin(inv)}
             >
               {busy ? (
@@ -371,13 +391,26 @@ export function JoinSharedLocalCompanyPanel({
       ) : null}
 
       <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" size="sm" className="rounded-full px-4" onClick={() => void connectDrive()}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="rounded-full px-4"
+          disabled={driveSyncDisabled}
+          onClick={() => void connectDrive()}
+        >
           Connect Google Drive
         </Button>
-        <Button type="button" variant="ghost" size="sm" disabled={loading} onClick={() => void loadInvites()}>
+        <Button type="button" variant="ghost" size="sm" disabled={loading || driveSyncDisabled} onClick={() => void loadInvites()}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Refresh list"}
         </Button>
       </div>
+
+      {driveSyncDisabled ? (
+        <p className="text-sm font-medium text-amber-900 rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/35 dark:text-amber-100">
+          {LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE}
+        </p>
+      ) : null}
 
       {error ? (
         <p className="text-sm text-destructive rounded-md border border-destructive/30 bg-destructive/5 p-3">

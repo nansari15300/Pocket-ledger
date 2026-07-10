@@ -48,6 +48,7 @@ import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, A
 import { cn } from "@/lib/utils";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
+import { beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
 
 import { useToast } from "@/hooks/use-toast";
 import { useCompany } from "@/hooks/useCompany";
@@ -70,7 +71,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
 import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_PC_DATE_ROW, VOUCHER_PC_DATE_BOTH_SLOT, VOUCHER_PC_DATE_BS_PILL, VOUCHER_PC_DATE_AD_PILL } from "@/components/vouchers/voucherButtonStyles";
-import { getPaymentOutRemaining, getTaxFromAllocation, getNetFromAllocation, hasPaymentLinks, getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import { getPaymentOutRemaining, getTaxFromAllocation, getNetFromAllocation, getTaxableFromAllocation, getJournalStaffDrAmount, getJournalRemainingForStaff, isSalaryBillWiseSourceVoucher, hasPaymentLinks, getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 
 import { firestore, storage } from "@/lib/firebase";
@@ -185,7 +186,23 @@ function formatSalaryFormValidationErrors(errors: FieldErrors<SalaryFormValues>)
   return errorMessages.length > 0 ? errorMessages.join(", ") : "Please check all fields and try again.";
 }
 
+type SalaryLinkBalanceKind = "tax" | "net";
+
 type SalaryLinkMap = Record<string, { taxAmount: number; netAmount: number }>;
+
+const getSalaryLinkAmountByKind = (
+  amounts: { taxAmount: number; netAmount: number },
+  kind: SalaryLinkBalanceKind
+): number => {
+  if (kind === "tax") return Number(amounts.taxAmount) || 0;
+  return Number(amounts.netAmount) || 0;
+};
+
+const getSalaryLinkAmountFromAllocation = (a: Allocation, kind: SalaryLinkBalanceKind): number => {
+  if (kind === "tax") return getTaxFromAllocation(a);
+  // Legacy taxableAmount links (mistaken earlier tab) count as after-tax/net.
+  return getNetFromAllocation(a) + getTaxableFromAllocation(a);
+};
 
 const normaliseSalaryLinkMap = (map: SalaryLinkMap): SalaryLinkMap => {
   const entries = (Object.entries(map) as Array<[string, { taxAmount: number; netAmount: number }]>)
@@ -417,8 +434,8 @@ export function SalaryForm({
   const [linkPaymentAmounts, setLinkPaymentAmounts] = useState<Record<string, number>>({});
   const [linkPaymentSaving, setLinkPaymentSaving] = useState(false);
   const [autoLinkSaving, setAutoLinkSaving] = useState(false);
-  // Default salary link mode should open with taxable balance selected.
-  const [linkBalanceKind, setLinkBalanceKind] = useState<"tax" | "net">("tax");
+  // Default salary link mode: After Tax Salary (net) selected first.
+  const [linkBalanceKind, setLinkBalanceKind] = useState<SalaryLinkBalanceKind>("net");
   /** Latest openingBalanceAllocated for this salary voucher, kept in state so edit-mode form save cannot overwrite DONE changes with stale props. */
   const [latestOBAllocated, setLatestOBAllocated] = useState<number>(Number((voucher as any)?.openingBalanceAllocated) || 0);
   /** Local-first bill-wise link draft; sync to server only on main Save like party bill-wise flow. */
@@ -535,7 +552,7 @@ export function SalaryForm({
             setSavedVoucherIdRef(voucher.id);
             const initialUrls = voucherAttachmentUrlsForFormState(voucher);
             setFiles(initialUrls);
-            initialFilesRef.current = initialUrls;
+            initialFilesRef.current = initialUrls.filter((f): f is string => typeof f === "string");
             setSavePdfAsImage(shouldSuggestPdfAsImage(initialUrls));
             // Sync local OB allocation from the loaded voucher for edit mode.
             setLatestOBAllocated(Number((voucher as any)?.openingBalanceAllocated) || 0);
@@ -678,7 +695,7 @@ export function SalaryForm({
     const totalLinkAmount = Object.values(linkPaymentAmounts).reduce((s, a) => s + Number(a || 0), 0);
     if (totalLinkAmount > totalForView) {
       sonnerToast.error("Cannot save minus balance", {
-        description: `Total link amount (${formatCurrency(totalLinkAmount, { noSuffix: true, noAnimation: true })}) cannot exceed voucher ${linkBalanceKind === "tax" ? "tax" : "net"} total (${formatCurrency(totalForView, { noSuffix: true, noAnimation: true })}).`,
+        description: `Total link amount (${formatCurrency(totalLinkAmount, { noSuffix: true, noAnimation: true })}) cannot exceed voucher ${linkBalanceKind === "tax" ? "tax" : "after tax salary"} total (${formatCurrency(totalForView, { noSuffix: true, noAnimation: true })}).`,
       });
       return;
     }
@@ -692,24 +709,24 @@ export function SalaryForm({
   const handleAutoLink = async () => {
     const outstanding = totalForView - totalLinked;
     if (outstanding <= 0) {
-      sonnerToast.info(linkBalanceKind === "tax" ? "Tax balance is already fully linked." : "Net balance is already fully linked.");
+      sonnerToast.info(linkBalanceKind === "tax" ? "Tax balance is already fully linked." : "After tax salary is already fully linked.");
       return;
     }
-    if (paymentOutsOldestFirst.length === 0) {
-      sonnerToast.info("No payment outs with remaining amount to link.");
+    if (linkSourcesOldestFirst.length === 0) {
+      sonnerToast.info("No payment outs or journal vouchers with remaining amount to link.");
       return;
     }
     setAutoLinkSaving(true);
     try {
       const suggested: Record<string, number> = {};
-      linkedPayments.forEach((p) => { suggested[p.id] = linkBalanceKind === "tax" ? p.taxAmount : p.netAmount; });
+      linkedPayments.forEach((p) => { suggested[p.id] = getSalaryLinkAmountByKind(p, linkBalanceKind); });
       let remainingToAllocate = outstanding;
       if (obLinkState.showOBRow && remainingToAllocate > 0 && obLinkState.obLinkable > 0) {
         const fromOB = Math.min(obLinkState.obLinkable, remainingToAllocate);
         suggested[OPENING_BALANCE_VOUCHER_ID] = fromOB;
         remainingToAllocate -= fromOB;
       }
-      for (const po of paymentOutsOldestFirst) {
+      for (const po of linkSourcesOldestFirst) {
         if (remainingToAllocate <= 0) break;
         const allocate = Math.min(po.remaining, remainingToAllocate);
         if (allocate <= 0) continue;
@@ -727,6 +744,12 @@ export function SalaryForm({
       setAutoLinkSaving(false);
     }
   };
+
+  const watchedLineItems = useWatch({ control: form.control, name: "lineItems" });
+  const staffIdsFromSalary = useMemo(
+    () => [...new Set(((watchedLineItems ?? []) as any[]).map((l: any) => l.staffId).filter(Boolean))],
+    [watchedLineItems]
+  );
 
   /** Push the current local bill-wise draft to source vouchers only after the salary voucher itself is saved. */
   const syncSalaryBillWiseLinks = useCallback(async (salaryVoucherId: string) => {
@@ -766,12 +789,16 @@ export function SalaryForm({
         }
         continue;
       }
-      // Keep both tax/net parts on the source voucher in sync with the latest local draft.
+      const isJournalSource = data?.type === "journal" && data?.subType !== "add_salary";
+      const staffIdForJournalLink = isJournalSource
+        ? staffIdsFromSalary.find((sid) => getJournalStaffDrAmount(data, sid) != null)
+        : undefined;
       const nextEntry: Allocation = {
         voucherId: salaryVoucherId,
         amount: desired.taxAmount + desired.netAmount,
         taxAmount: desired.taxAmount,
         netAmount: desired.netAmount,
+        ...(staffIdForJournalLink ? { linkedAccountId: staffIdForJournalLink } : {}),
       };
       if (idx >= 0) allocations[idx] = nextEntry;
       else allocations.push(nextEntry);
@@ -792,13 +819,7 @@ export function SalaryForm({
     initialOBAllocatedRef.current = Number(latestOBAllocated) || 0;
     // Local draft is now synced to server after main Save.
     setHasLocalBillWiseDraftEdits(false);
-  }, [companyId, localSalaryLinkMap, latestOBAllocated, allVouchers]);
-
-  const watchedLineItems = useWatch({ control: form.control, name: "lineItems" });
-  const staffIdsFromSalary = useMemo(
-    () => [...new Set(((watchedLineItems ?? []) as any[]).map((l: any) => l.staffId).filter(Boolean))],
-    [watchedLineItems]
-  );
+  }, [companyId, localSalaryLinkMap, latestOBAllocated, allVouchers, staffIdsFromSalary]);
 
   useEffect(() => {
     const currentLineItems = form.getValues("lineItems") || [];
@@ -846,14 +867,28 @@ export function SalaryForm({
     if (isPaymentMode) return { linkedPayments: [] as LinkedPaymentRow[], totalLinkedTax: 0, totalLinkedNet: 0 };
     const salaryVoucherId = voucher?.id ?? savedVoucherIdRef;
     if (!salaryVoucherId || !allVouchers?.length) return { linkedPayments: [] as LinkedPaymentRow[], totalLinkedTax: 0, totalLinkedNet: 0 };
-    const paymentOutVouchers = allVouchers.filter((v: any) => v.type === "payment_out" || v.type === "direct_expense");
+    const staffSet = new Set(staffIdsFromSalary);
+    const sourceVouchers = allVouchers.filter((v: any) => {
+      if (!isSalaryBillWiseSourceVoucher(v)) return false;
+      if (v.type === "payment_out" || v.type === "direct_expense") {
+        return v.staffId && staffSet.has(v.staffId);
+      }
+      if (v.type === "journal") {
+        return staffIdsFromSalary.some((sid) => getJournalStaffDrAmount(v, sid) != null);
+      }
+      return false;
+    });
     const list: LinkedPaymentRow[] = [];
-    for (const po of paymentOutVouchers) {
+    for (const po of sourceVouchers) {
       const allocations = (po.allocations as Allocation[] | undefined) || [];
       for (const a of allocations) {
         if (a.voucherId !== salaryVoucherId) continue;
+        if (po.type === "journal") {
+          const lid = String((a as any).linkedAccountId ?? "");
+          if (lid && !staffSet.has(lid)) continue;
+        }
         const taxAmt = getTaxFromAllocation(a);
-        const netAmt = getNetFromAllocation(a);
+        const netAmt = getNetFromAllocation(a) + getTaxableFromAllocation(a);
         if (taxAmt <= 0 && netAmt <= 0) continue;
         list.push({
           id: po.id,
@@ -865,7 +900,7 @@ export function SalaryForm({
       }
     }
     return { linkedPayments: list, totalLinkedTax: 0, totalLinkedNet: 0 };
-  }, [voucher?.id, savedVoucherIdRef, allVouchers, isPaymentMode]);
+  }, [voucher?.id, savedVoucherIdRef, allVouchers, isPaymentMode, staffIdsFromSalary]);
   const billWiseLinkDirty = !areSalaryLinkMapsEqual(localSalaryLinkMap, initialSalaryLinkMapRef.current) || latestOBAllocated !== initialOBAllocatedRef.current;
   useEffect(() => {
     // While local draft has unsaved DONE changes, ignore stale server snapshots.
@@ -908,16 +943,29 @@ export function SalaryForm({
   const totalLinkedNet = linkedPayments.reduce((s, p) => s + p.netAmount, 0);
   const totalLinked = linkBalanceKind === "tax" ? totalLinkedTax : totalLinkedNet;
   const totalForView = linkBalanceKind === "tax" ? totalTaxAmount : totalAfterTaxSalary;
-  // Bill-wise card totals should include Opening Balance when net balance mode is active.
-  const billWiseLinkedTotal = linkBalanceKind === "tax" ? totalLinkedTax : totalLinkedNet + (Number(latestOBAllocated) || 0);
+  const billWiseLinkedTotal =
+    (linkBalanceKind === "tax" ? totalLinkedTax : totalLinkedNet) +
+    (Number(latestOBAllocated) || 0);
   const billWiseRemainingTotal = Math.max(0, totalForView - billWiseLinkedTotal);
   const selectedLinkTotal = Object.values(linkPaymentAmounts).reduce((s, a) => s + Number(a || 0), 0);
   const salaryRemainingToLink = Math.max(0, totalForView - selectedLinkTotal);
-  const linkedPaymentsForView = useMemo(() => linkedPayments.map((p) => ({ ...p, amount: linkBalanceKind === "tax" ? p.taxAmount : p.netAmount })).filter((p) => p.amount > 0), [linkedPayments, linkBalanceKind]);
-  const paymentOutsWithRemaining = useMemo(() => {
-    if (!allVouchers?.length || staffIdsFromSalary.length === 0) return [];
+  const linkedPaymentsForView = useMemo(
+    () => linkedPayments.map((p) => ({ ...p, amount: getSalaryLinkAmountByKind(p, linkBalanceKind) })).filter((p) => p.amount > 0),
+    [linkedPayments, linkBalanceKind]
+  );
+  type SalaryLinkSourceRow = {
+    id: string;
+    voucherNumber?: string;
+    date?: unknown;
+    amount: number;
+    remaining: number;
+    sourceType: "payment_out" | "journal" | "opening_balance";
+    staffId?: string;
+  };
+  const linkSourcesWithRemaining = useMemo(() => {
+    if (!allVouchers?.length || staffIdsFromSalary.length === 0) return [] as SalaryLinkSourceRow[];
     const staffSet = new Set(staffIdsFromSalary);
-    return allVouchers
+    const paymentOutRows: SalaryLinkSourceRow[] = allVouchers
       .filter((v: any) => (v.type === "payment_out" || v.type === "direct_expense") && getPaymentOutRemaining(v) > 0 && v.staffId && staffSet.has(v.staffId))
       .map((v: any) => ({
         id: v.id,
@@ -925,21 +973,43 @@ export function SalaryForm({
         date: v.date,
         amount: Number(v.amount ?? v.total ?? 0),
         remaining: getPaymentOutRemaining(v),
-      }))
-      .sort((a: { date: unknown }, b: { date: unknown }) => {
-        const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
-        const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
-        return dB - dA;
-      });
+        sourceType: "payment_out" as const,
+        staffId: v.staffId,
+      }));
+    const journalRows: SalaryLinkSourceRow[] = [];
+    for (const v of allVouchers as any[]) {
+      if (v.type !== "journal" || v.subType === "add_salary") continue;
+      for (const staffId of staffIdsFromSalary) {
+        const drAmount = getJournalStaffDrAmount(v, staffId);
+        if (drAmount == null) continue;
+        const remaining = getJournalRemainingForStaff(v, staffId);
+        if (remaining <= 0) continue;
+        journalRows.push({
+          id: v.id,
+          voucherNumber: v.voucherNumber,
+          date: v.date,
+          amount: drAmount,
+          remaining,
+          sourceType: "journal",
+          staffId,
+        });
+        break;
+      }
+    }
+    return [...paymentOutRows, ...journalRows].sort((a, b) => {
+      const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
+      const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
+      return dB - dA;
+    });
   }, [allVouchers, staffIdsFromSalary]);
 
-  const paymentOutsOldestFirst = useMemo(() => {
-    return [...paymentOutsWithRemaining].sort((a, b) => {
+  const linkSourcesOldestFirst = useMemo(() => {
+    return [...linkSourcesWithRemaining].sort((a, b) => {
       const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
       const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
       return dA - dB;
     });
-  }, [paymentOutsWithRemaining]);
+  }, [linkSourcesWithRemaining]);
 
   /** Opening balance (OB) for Add Salary: only debit-side staff OB can be linked here, and it is consumed by other credit-side vouchers. */
   const obLinkState = useMemo(() => {
@@ -974,7 +1044,13 @@ export function SalaryForm({
       .map(([id, amounts]) => {
         const target = allVouchers?.find((v: any) => v.id === id);
         const allocations = (target?.allocations as Allocation[] | undefined) || [];
-        const currentLinked = linkBalanceKind === "tax" ? (Number(amounts.taxAmount) || 0) : (Number(amounts.netAmount) || 0);
+        const currentLinked = getSalaryLinkAmountByKind(
+          {
+            taxAmount: Number(amounts.taxAmount) || 0,
+            netAmount: Number(amounts.netAmount) || 0,
+          },
+          linkBalanceKind
+        );
         const linkedOnOthers = salaryVoucherId
           ? allocations.filter((a) => a.voucherId !== salaryVoucherId).reduce((s, a) => s + getAllocationTotal(a), 0)
           : allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
@@ -988,7 +1064,7 @@ export function SalaryForm({
         };
       })
       .filter((row) => row.currentLinked > 0);
-    const obRows = linkBalanceKind === "net" && latestOBAllocated > 0
+    const obRows = latestOBAllocated > 0
       ? [{
           id: OPENING_BALANCE_VOUCHER_ID,
           voucherNumber: "Opening Balance",
@@ -1024,41 +1100,64 @@ export function SalaryForm({
     onEffectiveLinksChange(billWiseCardRows.length > 0);
   }, [onEffectiveLinksChange, billWiseCardRows.length]);
 
-  /** Payment outs shown in Link Payment dialog: with remaining OR already linked (same staff only). Prepend Opening Balance row when staff has OB so user can link from OB in both dialogs. */
+  /** Payment outs + journal Dr rows in Link Payment dialog: with remaining OR already linked (same staff only). Prepend Opening Balance when staff has Dr OB. */
   const paymentOutsForLinkDialog = useMemo(() => {
     const staffSet = new Set(staffIdsFromSalary);
     const salaryVoucherId = voucher?.id ?? savedVoucherIdRef ?? null;
-    const currentKindLinkedById = new Map(linkedPayments.map((p) => [p.id, linkBalanceKind === "tax" ? p.taxAmount : p.netAmount]));
-    const withRemainingIds = new Set(paymentOutsWithRemaining.map((p: { id: string }) => p.id));
+    const currentKindLinkedById = new Map(linkedPayments.map((p) => [p.id, getSalaryLinkAmountByKind(p, linkBalanceKind)]));
+    const withRemainingIds = new Set(linkSourcesWithRemaining.map((p) => p.id));
+    const getAllocatedToOthers = (v: any, staffId?: string) => {
+      const allocations = (v?.allocations as Allocation[] | undefined) || [];
+      return salaryVoucherId
+        ? allocations
+            .filter((a) => {
+              if (a.voucherId === salaryVoucherId) return false;
+              if (staffId && (a as any).linkedAccountId && String((a as any).linkedAccountId) !== String(staffId)) return false;
+              return true;
+            })
+            .reduce((s, a) => s + getSalaryLinkAmountFromAllocation(a, linkBalanceKind), 0)
+        : allocations.reduce((s, a) => s + getSalaryLinkAmountFromAllocation(a, linkBalanceKind), 0);
+    };
     const linkedOnly = linkedPayments
       .filter((p) => {
         const v = allVouchers?.find((v: any) => v.id === p.id);
-        return v && v.staffId && staffSet.has(v.staffId);
+        if (!v) return false;
+        if (v.type === "payment_out" || v.type === "direct_expense") {
+          return v.staffId && staffSet.has(v.staffId);
+        }
+        if (v.type === "journal" && v.subType !== "add_salary") {
+          return staffIdsFromSalary.some((sid) => getJournalStaffDrAmount(v, sid) != null);
+        }
+        return false;
       })
       .filter((p) => !withRemainingIds.has(p.id))
       .map((p) => {
         const v = allVouchers?.find((v: any) => v.id === p.id);
-        const allocations = (v?.allocations as Allocation[] | undefined) || [];
-        const allocatedToOthers = salaryVoucherId
-          ? allocations.filter((a) => a.voucherId !== salaryVoucherId).reduce((s, a) => s + getAllocationTotal(a), 0)
-          : allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
+        const journalStaffId =
+          v?.type === "journal"
+            ? staffIdsFromSalary.find((sid) => getJournalStaffDrAmount(v, sid) != null)
+            : undefined;
+        const rowAmount =
+          v?.type === "journal" && journalStaffId
+            ? (getJournalStaffDrAmount(v, journalStaffId) ?? 0)
+            : Number(v?.amount ?? v?.total ?? 0) || 0;
         return {
           id: p.id,
           voucherNumber: p.voucherNumber,
           date: p.date,
-          amount: Number(v?.amount ?? v?.total ?? 0) || 0,
-          // Free the current salary's current-kind amount so edit-mode link changes are validated locally.
-          remaining: (currentKindLinkedById.get(p.id) ?? 0),
-          allocatedToOthers,
+          amount: rowAmount,
+          remaining: currentKindLinkedById.get(p.id) ?? 0,
+          allocatedToOthers: getAllocatedToOthers(v, journalStaffId),
+          sourceType: v?.type === "journal" ? ("journal" as const) : ("payment_out" as const),
         };
       });
-    const withRemainingWithOthers = paymentOutsWithRemaining.map((p: { id: string; voucherNumber?: string; date?: unknown; amount: number; remaining: number }) => {
+    const withRemainingWithOthers = linkSourcesWithRemaining.map((p) => {
       const v = allVouchers?.find((v: any) => v.id === p.id);
-      const allocations = (v?.allocations as Allocation[] | undefined) || [];
-      const allocatedToOthers = salaryVoucherId
-        ? allocations.filter((a) => a.voucherId !== salaryVoucherId).reduce((s, a) => s + getAllocationTotal(a), 0)
-        : allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
-      return { ...p, remaining: p.remaining + (currentKindLinkedById.get(p.id) ?? 0), allocatedToOthers };
+      return {
+        ...p,
+        remaining: p.remaining + (currentKindLinkedById.get(p.id) ?? 0),
+        allocatedToOthers: getAllocatedToOthers(v, p.staffId),
+      };
     });
     const combined = [...withRemainingWithOthers, ...linkedOnly];
     combined.sort((a, b) => {
@@ -1067,10 +1166,18 @@ export function SalaryForm({
       return dB - dA;
     });
     const obRow = obLinkState.showOBRow
-      ? [{ id: OPENING_BALANCE_VOUCHER_ID, voucherNumber: "—", date: null, amount: obLinkState.staffOBTotal, remaining: obLinkState.obLinkable, allocatedToOthers: Math.max(0, obLinkState.obAllocatedToOthers) }]
+      ? [{
+          id: OPENING_BALANCE_VOUCHER_ID,
+          voucherNumber: "—",
+          date: null,
+          amount: obLinkState.staffOBTotal,
+          remaining: obLinkState.obLinkable,
+          allocatedToOthers: Math.max(0, obLinkState.obAllocatedToOthers),
+          sourceType: "opening_balance" as const,
+        }]
       : [];
     return [...obRow, ...combined];
-  }, [paymentOutsWithRemaining, linkedPayments, linkBalanceKind, staffIdsFromSalary, allVouchers, voucher?.id, savedVoucherIdRef, obLinkState]);
+  }, [linkSourcesWithRemaining, linkedPayments, linkBalanceKind, staffIdsFromSalary, allVouchers, voucher?.id, savedVoucherIdRef, obLinkState]);
   // Show the same "x voucher(s) available to link" helper count in Add Salary bill-wise card.
   const billWiseLinkableVoucherCount = useMemo(
     () => paymentOutsForLinkDialog.filter((row: any) => (Number(row?.remaining ?? 0) || 0) > 0).length,
@@ -1080,7 +1187,7 @@ export function SalaryForm({
   /** Open bill-wise link dialog from Add Salary. Dialog edits only local draft; server sync happens on main Save. */
   const handleOpenBillWiseDialog = useCallback(() => {
     const initial: Record<string, number> = {};
-    linkedPayments.forEach((p) => { initial[p.id] = linkBalanceKind === "tax" ? p.taxAmount : p.netAmount; });
+    linkedPayments.forEach((p) => { initial[p.id] = getSalaryLinkAmountByKind(p, linkBalanceKind); });
     if (obLinkState.showOBRow || latestOBAllocated > 0) initial[OPENING_BALANCE_VOUCHER_ID] = latestOBAllocated;
     setLinkPaymentAmounts(initial);
     setIsLinkPaymentDialogOpen(true);
@@ -1097,7 +1204,7 @@ export function SalaryForm({
         prevLinkDialogOpenRef.current = true;
         const initial: Record<string, number> = {};
         // Seed existing payment/OB links once when the dialog opens so edit state stays stable while open.
-        linkedPayments.forEach((p) => { initial[p.id] = linkBalanceKind === "tax" ? p.taxAmount : p.netAmount; });
+        linkedPayments.forEach((p) => { initial[p.id] = getSalaryLinkAmountByKind(p, linkBalanceKind); });
         if (obLinkState.showOBRow) initial[OPENING_BALANCE_VOUCHER_ID] = obLinkState.openingBalanceAllocated;
         setLinkPaymentAmounts(initial);
       }
@@ -1360,14 +1467,13 @@ export function SalaryForm({
 
 
 async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = false, onSuccess?: () => void) {
-    const toastId = sonnerToast.loading("Saving salary voucher...");
-    setIsLoading(true);
-
     if (!user || !companyId) {
-        sonnerToast.error("Error", { id: toastId, description: "Login and company selection required." });
-        setIsLoading(false);
-        return;
+      sonnerToast.error("Error", { description: "Login and company selection required." });
+      return;
     }
+    const toastId = await beginVoucherSaveLoadingOrBlock(companyId, "Saving salary voucher...");
+    if (toastId == null) return;
+    setIsLoading(true);
 
     const totalDebit = data.lineItems.filter(l => l.type === 'debit').reduce((sum, l) => sum + l.salary, 0);
     const totalCredit = data.lineItems.filter(l => l.type === 'credit').reduce((sum, l) => sum + l.afterTaxSalary, 0);
@@ -1714,7 +1820,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
           sonnerToast.error("Voucher limit reached", { id: toastId, description: error.message, action: { label: "Upgrade", onClick: () => window.location.assign("/billing") } });
         } else {
           console.error("Error saving salary voucher:", error);
-          sonnerToast.error("Error saving voucher.", { id: toastId });
+          voucherSaveErrorToast(toastId, error, "Failed to save salary voucher.");
         }
     } finally {
         if (isMounted.current) setIsLoading(false);
@@ -2543,18 +2649,22 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                             <span>Link for bill wise</span>
                           </div>
                           <p className="text-sm text-muted-foreground">{billWiseLinkableVoucherCount} voucher(s) available to link.</p>
-                          <div className="flex gap-2">
+                          <div className="flex gap-2 flex-wrap">
+                            <label className="flex items-center gap-1.5 cursor-pointer text-sm">
+                              <input type="radio" name="linkBalanceKind" checked={linkBalanceKind === "net"} onChange={() => setLinkBalanceKind("net")} className="rounded-full" />
+                              <span>After Tax Salary</span>
+                            </label>
                             <label className="flex items-center gap-1.5 cursor-pointer text-sm">
                               <input type="radio" name="linkBalanceKind" checked={linkBalanceKind === "tax"} onChange={() => setLinkBalanceKind("tax")} className="rounded-full" />
                               <span>Tax balance</span>
                             </label>
-                            <label className="flex items-center gap-1.5 cursor-pointer text-sm">
-                              <input type="radio" name="linkBalanceKind" checked={linkBalanceKind === "net"} onChange={() => setLinkBalanceKind("net")} className="rounded-full" />
-                              <span>Net balance</span>
-                            </label>
                           </div>
                           {billWiseCardRows.length === 0 ? (
-                            <p className="text-sm text-muted-foreground">{linkBalanceKind === "tax" ? "No tax-linked payment details." : "No payment outs linked to this voucher (net)."}</p>
+                            <p className="text-sm text-muted-foreground">
+                              {linkBalanceKind === "tax"
+                                ? "No tax-linked payment details."
+                                : "No after tax salary linked payment details."}
+                            </p>
                           ) : (
                             <div className="overflow-x-auto -mx-1 min-w-0 scrollbar-slim-dim-extra">
                               <table className="w-full text-sm border-collapse min-w-[400px]">
@@ -2620,7 +2730,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                 <Link2 className="h-4 w-4 mr-2" />
                                 Add Link
                               </Button>
-                              <Button type="button" variant="outline" size="sm" className="w-fit" disabled={autoLinkSaving || ((voucher?.id ?? savedVoucherIdRef) ? (billWiseRemainingTotal <= 0 || paymentOutsOldestFirst.length === 0) : false)} onClick={handleAutoLinkFromCard}>
+                              <Button type="button" variant="outline" size="sm" className="w-fit" disabled={autoLinkSaving || ((voucher?.id ?? savedVoucherIdRef) ? (billWiseRemainingTotal <= 0 || linkSourcesOldestFirst.length === 0) : false)} onClick={handleAutoLinkFromCard}>
                                 {autoLinkSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Zap className="h-4 w-4 mr-2" />}
                                 Auto Link
                               </Button>
@@ -2881,10 +2991,10 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
               </table>
             </div>
             <p className="text-sm font-medium text-muted-foreground shrink-0 pt-1 text-center">From Voucher</p>
-            <p className="text-sm text-muted-foreground shrink-0 -mt-0.5 hidden md:block text-center">Payment outs (same staff) (only linkable or already selected)</p>
+            <p className="text-sm text-muted-foreground shrink-0 -mt-0.5 hidden md:block text-center">Payment outs &amp; journal vouchers (same staff Dr) (only linkable or already selected)</p>
             <div className="flex-1 min-h-0 border rounded-md overflow-auto scrollbar-slim-dim">
               {paymentOutsForLinkDialog.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-8 text-center">{staffIdsFromSalary.length === 0 ? "Add staff in Salary Details first." : "No payment outs for this staff to link or edit."}</p>
+                <p className="text-sm text-muted-foreground py-8 text-center">{staffIdsFromSalary.length === 0 ? "Add staff in Salary Details first." : "No payment outs or journal vouchers for this staff to link or edit."}</p>
               ) : (
                 <div className="min-w-0 overflow-x-auto">
                   <table className="table-row-stripe-7 w-full text-sm border-collapse min-w-[600px]">
@@ -2901,7 +3011,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                       </tr>
                     </thead>
                     <tbody>
-                      {paymentOutsForLinkDialog.map((row: { id: string; voucherNumber?: string; date?: unknown; amount?: number; remaining?: number; allocatedToOthers?: number }) => {
+                      {paymentOutsForLinkDialog.map((row: { id: string; voucherNumber?: string; date?: unknown; amount?: number; remaining?: number; allocatedToOthers?: number; sourceType?: "payment_out" | "journal" | "opening_balance" }) => {
                         const d = row.date ? (typeof (row.date as any)?.toDate === "function" ? (row.date as any).toDate() : new Date(row.date as string | number)) : null;
                         const dateStr = d && !isNaN(d.getTime()) ? (dateSystem === "AD" ? formatDate(d) : dateSystem === "BS" ? formatDateBS(d) : `${formatDateBS(d)} (${formatDate(d)})`) : "—";
                         // Normalize all row amounts before rendering so Opening Balance never shows object text in amount cells.
@@ -2933,7 +3043,13 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                             </td>
                             <td className="p-2 text-muted-foreground whitespace-nowrap align-middle">{dateStr}</td>
                             <td className="p-2 font-medium whitespace-nowrap align-middle">{row.voucherNumber ?? "—"}</td>
-                            <td className="p-2 whitespace-nowrap align-middle">{row.id === OPENING_BALANCE_VOUCHER_ID ? "Opening Balance" : "payment out"}</td>
+                            <td className="p-2 whitespace-nowrap align-middle">
+                              {row.id === OPENING_BALANCE_VOUCHER_ID
+                                ? "Opening Balance"
+                                : row.sourceType === "journal"
+                                  ? "journal voucher"
+                                  : "payment out"}
+                            </td>
                             <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap align-middle tabular-nums">{formatCurrencyForPrint(rowAmount, { noSuffix: true })} Dr</td>
                             <td className="p-2 text-right text-muted-foreground whitespace-nowrap align-middle tabular-nums">{formatCurrencyForPrint(otherLinked, { noSuffix: true })} Dr</td>
                             <td className="p-2 text-right text-muted-foreground whitespace-nowrap align-middle tabular-nums">{formatCurrencyForPrint(linked, { noSuffix: true })} Dr</td>
@@ -2961,14 +3077,14 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                   disabled={totalForView <= 0 || paymentOutsForLinkDialog.length === 0}
                   onClick={() => {
                     const suggested: Record<string, number> = {};
-                    linkedPayments.forEach((p) => { suggested[p.id] = linkBalanceKind === "tax" ? p.taxAmount : p.netAmount; });
+                    linkedPayments.forEach((p) => { suggested[p.id] = getSalaryLinkAmountByKind(p, linkBalanceKind); });
                     let remainingToAllocate = totalForView - Object.values(suggested).reduce((s, a) => s + Number(a || 0), 0);
                     if (obLinkState.showOBRow && remainingToAllocate > 0 && obLinkState.obLinkable > 0) {
                       const fromOB = Math.min(obLinkState.obLinkable, remainingToAllocate);
                       suggested[OPENING_BALANCE_VOUCHER_ID] = fromOB;
                       remainingToAllocate -= fromOB;
                     }
-                    for (const po of paymentOutsOldestFirst) {
+                    for (const po of linkSourcesOldestFirst) {
                       if (remainingToAllocate <= 0) break;
                       const allocate = Math.min(po.remaining, remainingToAllocate);
                       if (allocate > 0) { suggested[po.id] = (suggested[po.id] ?? 0) + allocate; remainingToAllocate -= allocate; }

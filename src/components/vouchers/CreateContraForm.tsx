@@ -46,6 +46,8 @@ import {
   completeVoucherBackgroundProgress,
   replaceVoucherSaveLoadingWithShortSuccess,
   showVoucherBackgroundProgress,
+  beginVoucherSaveLoadingOrBlock,
+  voucherSaveErrorToast,
 } from "@/lib/voucherSaveUi";
 import BsDatePicker from "../ui/BsDatePicker";
 import { Combobox } from "@/components/ui/combobox";
@@ -686,7 +688,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       setSavedVoucherId(voucher.id);
       const urlsEdit = voucherAttachmentUrlsForFormState(voucher);
       setFiles(urlsEdit);
-      initialFilesRef.current = urlsEdit;
+      initialFilesRef.current = urlsEdit.filter((f): f is string => typeof f === "string");
       setSavePdfAsImage(shouldSuggestPdfAsImage(urlsEdit));
     } else if (voucher) {
       // Naya Contra: template object id ke bina — dirty par seed se files overwrite mat karo.
@@ -919,7 +921,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
     }
 
-    const toastId = sonnerToast.loading("Saving contra entry...");
+    const toastId = await beginVoucherSaveLoadingOrBlock(companyId, "Saving contra entry...");
+    if (toastId == null) return;
     setIsLoading(true);
 
     // Contra: primary number for duplicate check and save (Out/In treated as voucher numbers).
@@ -1245,7 +1248,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       } else {
         const message = error?.message || (typeof error === 'string' ? error : 'Unknown error');
         console.error("Error saving contra voucher:", error);
-        sonnerToast.error("Error saving voucher.", { id: toastId, description: message });
+        voucherSaveErrorToast(toastId, error, message);
       }
     } finally {
         setIsLoading(false);
@@ -2223,4 +2226,3 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     </>
   );
 }
-

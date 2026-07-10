@@ -3,7 +3,7 @@
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
-import { Building2, PlusCircle, Share2, UserPlus, ChevronDown, KeyRound, Eye, EyeOff, Loader2, Check, LogOut } from "lucide-react";
+import { Building2, PlusCircle, Share2, UserPlus, ChevronDown, KeyRound, Eye, EyeOff, Loader2, Check, LogOut, Server } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -19,6 +19,7 @@ import {
 import { DeleteCompanyDialog } from "./DeleteCompanyDialog";
 import { ShareCompanyDialog } from "./ShareCompanyDialog";
 import { AddLocalCompanyUserDialog } from "./AddLocalCompanyUserDialog";
+import { PlServerSharedCompanyUrlDialog } from "./PlServerSharedCompanyUrlDialog";
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useCompany } from "@/hooks/useCompany";
 import type { Company as CompanyData } from "@/hooks/useCompany";
@@ -91,6 +92,7 @@ import {
   isSharedLocalCompany,
   isServerGateCompany,
   isLocalSelectorCompanyRow,
+  stampPureLocalDeviceCompanyRow,
   type CompanyListTab,
 } from "@/lib/companyStorageKind";
 import { normalizeRowForLocalDriveSyncUi } from "@/lib/localCloudSync/companyConfig";
@@ -116,12 +118,14 @@ function CompanySelectorTabBar({
   onChange,
   localCount,
   onlineCount,
+  serverCount,
   compact,
 }: {
   value: CompanyListTab;
   onChange: (tab: CompanyListTab) => void;
   localCount: number;
   onlineCount: number;
+  serverCount: number;
   compact?: boolean;
 }) {
   const tabBtn = (tab: CompanyListTab, label: string, count: number) => (
@@ -130,7 +134,7 @@ function CompanySelectorTabBar({
       type="button"
       className={cn(
         "flex-1 rounded-sm font-medium transition-colors",
-        compact ? "px-2 py-1.5 text-xs" : "px-3 py-2 text-sm",
+        compact ? "px-1.5 py-1.5 text-[11px]" : "px-2 py-2 text-sm",
         value === tab ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
       )}
       onPointerDown={(e) => e.preventDefault()}
@@ -148,6 +152,7 @@ function CompanySelectorTabBar({
       )}
     >
       {tabBtn("local", "Local", localCount)}
+      {tabBtn("server", "Server", serverCount)}
       {tabBtn("online", "Online", onlineCount)}
     </div>
   );
@@ -179,12 +184,6 @@ function handleRememberUsernameCheckboxChange(
     saveRememberedSharedUnlockUsername(firebaseUid, companyId, typed, userEmail);
   }
 }
-
-/** Radix: sidebar click = pointer-outside; header company menu band na ho. */
-const stopCloseIfMainSidebar = (e: { preventDefault: () => void; target: EventTarget | null }) => {
-  const el = e.target as HTMLElement | null;
-  if (el?.closest?.("[data-pl-main-sidebar]")) e.preventDefault();
-};
 
 const GoogleDriveIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 512 512">
@@ -219,7 +218,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   } = useCompany();
   const [driveJoinOpen, setDriveJoinOpen] = useState(true);
   const [dialogState, setDialogState] = useState<{
-    type: "share" | "addLocalUser" | "delete" | null;
+    type: "share" | "addLocalUser" | "delete" | "plServerUrl" | null;
     company: CompanyData | null;
   }>({ type: null, company: null });
   const [companies, setCompanies] = useState<CompanyData[]>(() =>
@@ -315,8 +314,6 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         });
         map.set(c.id, {
           ...normalized,
-          storageOption: "local",
-          syncedFromCloud: false,
           isOwned: driveSharedJoin ? false : resolveOwned(c),
         });
         return;
@@ -351,8 +348,6 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
           });
           const forSelector = {
             ...normalized,
-            storageOption: "local" as const,
-            syncedFromCloud: false,
             isOwned: driveSharedJoin ? false : resolveOwned(row as CompanyData),
           };
           if (!isCompanyVisibleInSelector(forSelector)) continue;
@@ -482,7 +477,9 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
           });
           return;
         }
-        const { token, user: localUser } = await localAuthLoginForCompanyContext(companyToUnlock.id, u, p);
+        const { token, user: localUser } = await localAuthLoginForCompanyContext(companyToUnlock.id, u, p, {
+          appUser: { uid: user?.uid, email: user?.email },
+        });
         setLocalAuthToken(companyToUnlock.id, token, localUser);
         saveOfflineUnlockSession(user?.uid, companyToUnlock.id, rememberUnlockDays, token, localUser, user?.email);
         try {
@@ -594,6 +591,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   const {
     localTabCompanies,
     onlineTabCompanies,
+    serverTabCompanies,
   } = buckets;
   const localList = useMemo(
     () => ensureSelectedInTabList(localTabCompanies, companyId, selectorCompanies, "local"),
@@ -603,10 +601,18 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     () => ensureSelectedInTabList(onlineTabCompanies, companyId, selectorCompanies, "online"),
     [onlineTabCompanies, companyId, selectorCompanies]
   );
+  const serverList = useMemo(
+    () => ensureSelectedInTabList(serverTabCompanies, companyId, selectorCompanies, "server"),
+    [serverTabCompanies, companyId, selectorCompanies]
+  );
   const myLocalDisplay = useMemo(() => localList.filter((c) => c.isOwned), [localList]);
   const sharedLocalDisplay = useMemo(
     () => localList.filter((c) => isSharedLocalCompany(c)),
     [localList]
+  );
+  const serverSharedDisplay = useMemo(
+    () => serverList.filter((c) => isServerGateCompany(c)),
+    [serverList]
   );
   const myOnlineDisplay = useMemo(() => onlineList.filter((c) => c.isOwned), [onlineList]);
   const sharedOnlineDisplay = useMemo(
@@ -647,8 +653,6 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         });
         return {
           ...normalized,
-          storageOption: "local",
-          syncedFromCloud: false,
           isOwned: driveSharedJoin
             ? false
             : user?.uid
@@ -678,12 +682,17 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   };
 
   const [ownerNames, setOwnerNames] = useState<Record<string, string>>({});
+  const activeSharedCompaniesForOwnerLookup = useMemo(() => {
+    if (listTab === "local") return sharedLocalDisplay;
+    if (listTab === "server") return serverSharedDisplay;
+    return sharedOnlineDisplay;
+  }, [listTab, sharedLocalDisplay, serverSharedDisplay, sharedOnlineDisplay]);
   const sharedOwnerIdsKey = useMemo(
     () =>
-      [...new Set([...sharedOnlineDisplay, ...sharedLocalDisplay].map((c) => c.ownerId).filter(Boolean))]
+      [...new Set(activeSharedCompaniesForOwnerLookup.map((c) => c.ownerId).filter(Boolean))]
         .sort()
         .join(","),
-    [sharedOnlineDisplay, sharedLocalDisplay]
+    [activeSharedCompaniesForOwnerLookup]
   );
   useEffect(() => {
     if (!sharedOwnerIdsKey) return;
@@ -788,14 +797,18 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
               onValueChange={(v) => setListTab(v as CompanyListTab)}
               className="w-full"
             >
-              <TabsList className="grid w-full grid-cols-2">
+              <TabsList className="grid w-full grid-cols-3">
                 <TabsTrigger value="local">
                   Local{localList.length > 0 ? ` (${localList.length})` : ""}
+                </TabsTrigger>
+                <TabsTrigger value="server">
+                  Server{serverList.length > 0 ? ` (${serverList.length})` : ""}
                 </TabsTrigger>
                 <TabsTrigger value="online">
                   Online{onlineList.length > 0 ? ` (${onlineList.length})` : ""}
                 </TabsTrigger>
               </TabsList>
+              {listTab === "local" ? (
               <TabsContent value="local" className="mt-4 space-y-4">
                 {localList.length > 0 ? (
                   <div className="space-y-5">
@@ -820,16 +833,10 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                               <CompanyItem company={company} />
                               {(company.ownerEmail || ownerNames[company.ownerId]) ? (
                                 <p className="pl-10 text-xs text-muted-foreground">
-                                  {isServerGateCompany(company)
-                                    ? `Shared from server · ${company.ownerEmail || ownerNames[company.ownerId] || ""}`
-                                    : (
-                                      <>
-                                        Shared by:{" "}
-                                        {ownerNames[company.ownerId]
-                                          ? `${ownerNames[company.ownerId]} (${company.ownerEmail || ""})`
-                                          : company.ownerEmail || ""}
-                                      </>
-                                    )}
+                                  Shared by:{" "}
+                                  {ownerNames[company.ownerId]
+                                    ? `${ownerNames[company.ownerId]} (${company.ownerEmail || ""})`
+                                    : company.ownerEmail || ""}
                                 </p>
                               ) : null}
                             </li>
@@ -867,6 +874,34 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                   ) : null}
                 </div>
               </TabsContent>
+              ) : null}
+              {listTab === "server" ? (
+              <TabsContent value="server" className="mt-4 space-y-4">
+                {serverList.length > 0 ? (
+                  <div className="space-y-3">
+                    <h3 className="text-sm font-medium text-muted-foreground">Shared from local server</h3>
+                    <ul className="space-y-3">
+                      {serverSharedDisplay.map((company) => (
+                        <li key={company.id} className="space-y-1">
+                          <CompanyItem company={company} />
+                          {(company.ownerEmail || ownerNames[company.ownerId]) ? (
+                            <p className="pl-10 text-xs text-muted-foreground">
+                              Shared from server ·{" "}
+                              {company.ownerEmail || ownerNames[company.ownerId] || ""}
+                            </p>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="rounded-md border border-dashed bg-muted/20 px-3 py-6 text-center text-sm text-muted-foreground">
+                    No server-shared companies yet. Connect to a host PC from Settings → Server → Client connect.
+                  </p>
+                )}
+              </TabsContent>
+              ) : null}
+              {listTab === "online" ? (
               <TabsContent value="online" className="mt-4 space-y-4">
                 {onlineList.length === 0 ? (
                   <p className="rounded-md border border-dashed bg-muted/20 px-3 py-6 text-center text-sm text-muted-foreground">
@@ -909,6 +944,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                   </div>
                 )}
               </TabsContent>
+              ) : null}
             </Tabs>
           </CardContent>
           <CardFooter className="shrink-0 flex flex-col sm:flex-row gap-2 justify-center border-t bg-card pt-4">
@@ -929,6 +965,13 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         onUserAdded={() => {
           reloadLocalCompanyRegistry();
           triggerSync();
+        }}
+      />
+      <PlServerSharedCompanyUrlDialog
+        company={dialogState.type === "plServerUrl" ? dialogState.company : null}
+        open={dialogState.type === "plServerUrl"}
+        onOpenChange={(open) => {
+          if (!open) setDialogState({ type: null, company: null });
         }}
       />
       {dialogState.company && (
@@ -1179,10 +1222,10 @@ export function CompanyActions({
 }) {
   const router = useRouter();
   const { user } = useAuth();
-  const { companyId, setCompanyId, triggerSync, reloadLocalCompanyRegistry } = useCompany();
+  const { companyId, setCompanyId, triggerSync, reloadLocalCompanyRegistry, company: contextCompany } = useCompany();
   const { activeGate } = useGate();
   const [dialogState, setDialogState] = useState<{
-    type: "share" | "addLocalUser" | "delete" | null;
+    type: "share" | "addLocalUser" | "delete" | "plServerUrl" | null;
     company: CompanyData | null;
   }>({ type: null, company: null });
   const [companyToUnlock, setCompanyToUnlock] = useState<CompanyData | null>(null);
@@ -1196,9 +1239,9 @@ export function CompanyActions({
   const uploadLocked = useRestoreCloudUploadLock();
 
   const activeCompany =
+    (companyId && contextCompany?.id === companyId ? contextCompany : null) ||
     (companyId ? companies.find((c) => c.id === companyId) : null) ||
-    (companyId ? null : companies[0]) ||
-    companies[0];
+    (!companyId ? companies[0] : null);
 
   useEffect(() => {
     if (uploadLocked) return;
@@ -1311,7 +1354,9 @@ export function CompanyActions({
           });
           return;
         }
-        const { token, user: localUser } = await localAuthLoginForCompanyContext(companyToUnlock.id, u, p);
+        const { token, user: localUser } = await localAuthLoginForCompanyContext(companyToUnlock.id, u, p, {
+          appUser: { uid: user?.uid, email: user?.email },
+        });
         setLocalAuthToken(companyToUnlock.id, token, localUser);
         saveOfflineUnlockSession(user?.uid, companyToUnlock.id, rememberUnlockDays, token, localUser, user?.email);
         toast({ title: "Access Granted", description: `Switched to ${companyToUnlock.name}.` });
@@ -1389,6 +1434,7 @@ export function CompanyActions({
   const {
     localTabCompanies,
     onlineTabCompanies,
+    serverTabCompanies,
   } = buckets;
   const localList = useMemo(
     () => ensureSelectedInTabList(localTabCompanies, companyId, selectorCompanies, "local"),
@@ -1398,10 +1444,18 @@ export function CompanyActions({
     () => ensureSelectedInTabList(onlineTabCompanies, companyId, selectorCompanies, "online"),
     [onlineTabCompanies, companyId, selectorCompanies]
   );
+  const serverList = useMemo(
+    () => ensureSelectedInTabList(serverTabCompanies, companyId, selectorCompanies, "server"),
+    [serverTabCompanies, companyId, selectorCompanies]
+  );
   const myLocalDisplay = useMemo(() => localList.filter((c) => c.isOwned), [localList]);
   const sharedLocalDisplay = useMemo(
     () => localList.filter((c) => isSharedLocalCompany(c)),
     [localList]
+  );
+  const serverSharedDisplay = useMemo(
+    () => serverList.filter((c) => isServerGateCompany(c)),
+    [serverList]
   );
   const myOnlineDisplay = useMemo(() => onlineList.filter((c) => c.isOwned), [onlineList]);
   const sharedOnlineDisplay = useMemo(
@@ -1418,12 +1472,17 @@ export function CompanyActions({
   }, [menuOpen, companyId, buckets]);
 
   const [ownerNames, setOwnerNames] = useState<Record<string, string>>({});
+  const activeSharedCompaniesForOwnerLookup = useMemo(() => {
+    if (listTab === "local") return sharedLocalDisplay;
+    if (listTab === "server") return serverSharedDisplay;
+    return sharedOnlineDisplay;
+  }, [listTab, sharedLocalDisplay, serverSharedDisplay, sharedOnlineDisplay]);
   const sharedOwnerIdsKey = useMemo(
     () =>
-      [...new Set([...sharedOnlineDisplay, ...sharedLocalDisplay].map((c) => c.ownerId).filter(Boolean))]
+      [...new Set(activeSharedCompaniesForOwnerLookup.map((c) => c.ownerId).filter(Boolean))]
         .sort()
         .join(","),
-    [sharedOnlineDisplay, sharedLocalDisplay]
+    [activeSharedCompaniesForOwnerLookup]
   );
   useEffect(() => {
     if (!sharedOwnerIdsKey) return;
@@ -1476,13 +1535,14 @@ export function CompanyActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuPortal>
-        <DropdownMenuContent className="w-72" onPointerDownOutside={stopCloseIfMainSidebar} onInteractOutside={stopCloseIfMainSidebar}>
+        <DropdownMenuContent className="w-72">
           <DropdownMenuGroup className="p-2">
               <CompanySelectorTabBar
                 compact
                 value={listTab}
                 onChange={setListTab}
                 localCount={localList.length}
+                serverCount={serverList.length}
                 onlineCount={onlineList.length}
               />
               {listTab === "local" ? (
@@ -1526,22 +1586,47 @@ export function CompanyActions({
                             </div>
                             {(company.ownerEmail || ownerNames[company.ownerId]) ? (
                               <div className="mt-0.5 truncate pl-6 text-xs text-muted-foreground group-data-[highlighted]:text-white">
-                                {isServerGateCompany(company)
-                                  ? `Shared from server · ${company.ownerEmail || ownerNames[company.ownerId] || ""}`
-                                  : (
-                                    <>
-                                      Shared by:{" "}
-                                      {ownerNames[company.ownerId]
-                                        ? `${ownerNames[company.ownerId]} (${company.ownerEmail || ""})`
-                                        : company.ownerEmail || ""}
-                                    </>
-                                  )}
+                                Shared by:{" "}
+                                {ownerNames[company.ownerId]
+                                  ? `${ownerNames[company.ownerId]} (${company.ownerEmail || ""})`
+                                  : company.ownerEmail || ""}
                               </div>
                             ) : null}
                           </DropdownMenuItem>
                         ))}
                       </div>
                     ) : null}
+                  </div>
+                )
+              ) : listTab === "server" ? (
+                serverList.length === 0 ? (
+                  <p className="px-2 py-3 text-xs text-muted-foreground">No server-shared companies.</p>
+                ) : (
+                  <div className="mt-2 max-h-64 overflow-y-auto rounded-md border bg-muted/20 p-1">
+                    <DropdownMenuLabel className="pl-2 text-[11px] text-muted-foreground">
+                      Shared from local server
+                    </DropdownMenuLabel>
+                    {serverSharedDisplay.map((company) => (
+                      <DropdownMenuItem
+                        key={company.id}
+                        onSelect={() => handleSelectCompany(company)}
+                        className="flex flex-col items-stretch py-2 group"
+                      >
+                        <div className="flex w-full items-center gap-2">
+                          <Server className="h-4 w-4 shrink-0" />
+                          <span className="flex-1 truncate font-medium">{company.name}</span>
+                          {company.id === companyId && (
+                            <Check className="h-4 w-4 shrink-0 text-green-600" />
+                          )}
+                        </div>
+                        {(company.ownerEmail || ownerNames[company.ownerId]) ? (
+                          <div className="mt-0.5 truncate pl-6 text-xs text-muted-foreground group-data-[highlighted]:text-white">
+                            Shared from server ·{" "}
+                            {company.ownerEmail || ownerNames[company.ownerId] || ""}
+                          </div>
+                        ) : null}
+                      </DropdownMenuItem>
+                    ))}
                   </div>
                 )
               ) : onlineList.length === 0 ? (
@@ -1619,6 +1704,14 @@ export function CompanyActions({
                   <span>{isOfflineCompanyStorage(activeCompany) ? "Add User" : "Share"}</span>
                 </DropdownMenuItem>
               )}
+              {activeCompany && isServerGateCompany(activeCompany) && (
+                <DropdownMenuItem
+                  onSelect={() => setDialogState({ type: "plServerUrl", company: activeCompany })}
+                >
+                  <Server className="mr-2 h-4 w-4" />
+                  <span>Change server IP</span>
+                </DropdownMenuItem>
+              )}
           </DropdownMenuGroup>
         </DropdownMenuContent>
         </DropdownMenuPortal>
@@ -1633,6 +1726,13 @@ export function CompanyActions({
         onUserAdded={() => {
           reloadLocalCompanyRegistry();
           triggerSync();
+        }}
+      />
+      <PlServerSharedCompanyUrlDialog
+        company={dialogState.type === "plServerUrl" ? dialogState.company : null}
+        open={dialogState.type === "plServerUrl"}
+        onOpenChange={(open) => {
+          if (!open) setDialogState({ type: null, company: null });
         }}
       />
       {dialogState.company && (

@@ -69,7 +69,6 @@ export async function isAuthoritativeLanClientWriteEligible(
 ): Promise<boolean> {
   if (typeof window === "undefined") return false;
   if (options?.notify === false) return false;
-  if (isPlRemoteServerClientMode()) return false;
   if (isCanonicalServerBridgeRenderer()) return false;
   if (!ctx?.simulateLanClient && (await isLocalAuthoritativeHostForCompany(companyId))) return false;
   if (!shouldFetchPlServerAccessContext()) return false;

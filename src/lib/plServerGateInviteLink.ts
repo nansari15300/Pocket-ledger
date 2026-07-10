@@ -4,6 +4,7 @@ import { appNavHref } from "@/lib/appNavHref";
 import { POCKET_LEDGER_HOSTED_API_ORIGIN } from "@/lib/billingApiOrigin";
 import { normalizeServerUrl } from "@/lib/gates/gateStore";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { pickDefaultPlServerShareUrlForClient } from "@/lib/plServerClientUrlPick";
 
 export const PL_GATE_SERVER_PARAM = "pl_gate_server";
 export const PL_GATE_TOKEN_PARAM = "pl_gate_token";
@@ -74,10 +75,7 @@ export function readAndStripPlGatePrefillFromLocation(): PlGatePrefillPayload | 
   }
 }
 
-/** Pick sensible default server URL from status list (prefer public/LAN over loopback). */
+/** Pick default server URL — LAN/This PC on dev, Public on HTTPS web. */
 export function pickDefaultPlServerShareUrl(urls: string[]): string {
-  const norm = urls.map((u) => normalizeServerUrl(u)).filter(Boolean);
-  if (!norm.length) return "";
-  const nonLoopback = norm.filter((u) => !/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/)/i.test(u));
-  return (nonLoopback[0] || norm[0])!;
+  return pickDefaultPlServerShareUrlForClient(urls);
 }

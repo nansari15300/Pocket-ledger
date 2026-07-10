@@ -73,7 +73,10 @@ import { toast as sonnerToast } from "sonner";
 import { Card, CardHeader, CardTitle, CardContent } from "../ui/card";
 import { SpecialAccountAccessControl } from "./SpecialAccountAccessControl";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
-import { EntityOpeningBalanceNarrationField } from "@/components/common/EntityProfileDocumentsNarrationFields";
+import {
+  EntityOpeningBalanceNarrationField,
+  MasterPdfAsImageToggle,
+} from "@/components/common/EntityProfileDocumentsNarrationFields";
 import { cnMasterEntityDialogContent, masterEntityDialogHeaderClassName } from "@/lib/masterEntityDialogClasses";
 import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
 import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
@@ -166,8 +169,15 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
       JSON.stringify(initialDocUrlsRef.current);
   const onLiveAttachmentFields = useCallback(
     (fields: { fileUrl?: string | null; documentFileUrls?: string[] }) => {
-      if (fields.fileUrl !== undefined) setFile(fields.fileUrl || null);
-      if (fields.documentFileUrls) setDocSlots(fields.documentFileUrls);
+      if (fields.fileUrl !== undefined) {
+        const nextFile = fields.fileUrl || null;
+        setFile(nextFile);
+        initialFileRef.current = nextFile;
+      }
+      if (fields.documentFileUrls) {
+        setDocSlots(fields.documentFileUrls);
+        initialDocUrlsRef.current = fields.documentFileUrls;
+      }
     },
     []
   );
@@ -915,7 +925,9 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                     </p>
                   ) : (
                     <div className="flex items-center gap-4 flex-wrap">
-                      {file ? <FilePreview file={file} onRemove={removeAvatar} /> : null}
+                      {file ? (
+                        <FilePreview file={file} attachmentCompanyId={companyId ?? undefined} onRemove={removeAvatar} />
+                      ) : null}
                       {!file ? (
                         <FormControl>
                           <AttachmentHoldPasteSurface
@@ -961,36 +973,40 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                       </Link>
                     </p>
                   ) : (
-                    <div className="flex flex-wrap items-start gap-2">{/* add slot inline with FilePreviews */}
-                      {docSlots.map((slot, idx) => (
-                        <FilePreview
-                          key={typeof slot === "string" ? `${slot}-${idx}` : `${slot.name}-${idx}-${slot.size}`}
-                          file={slot}
-                          onRemove={() => removeDocAt(idx)}
-                          size={96}
-                        />
-                      ))}
-                      {docSlots.length < 5 ? (
-                        <FormControl>
-                          <AttachmentHoldPasteSurface
-                            enabled={canAttachDocuments}
-                            onShortActivate={() => docsInputRef.current?.click()}
-                            onPastedFiles={(incoming) => void handleDocsChange(syntheticFileInputChangeEvent(incoming))}
-                            className="relative h-24 w-24 shrink-0 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                          >
-                            <Upload className="h-6 w-6" />
-                            <span className="text-xs mt-1 text-center px-1">PDF / image</span>
-                            <Input
-                              type="file"
-                              className="hidden"
-                              ref={docsInputRef}
-                              onChange={handleDocsChange}
-                              accept="image/*,application/pdf"
-                              multiple
-                            />
-                          </AttachmentHoldPasteSurface>
-                        </FormControl>
-                      ) : null}
+                    <div className="space-y-2">
+                      <MasterPdfAsImageToggle id="edit-bank-account-pdf-as-image" />
+                      <div className="flex flex-wrap items-start gap-2">{/* add slot inline with FilePreviews */}
+                        {docSlots.map((slot, idx) => (
+                          <FilePreview
+                            key={typeof slot === "string" ? `${slot}-${idx}` : `${slot.name}-${idx}-${slot.size}`}
+                            file={slot}
+                            attachmentCompanyId={companyId ?? undefined}
+                            onRemove={() => removeDocAt(idx)}
+                            size={96}
+                          />
+                        ))}
+                        {docSlots.length < 5 ? (
+                          <FormControl>
+                            <AttachmentHoldPasteSurface
+                              enabled={canAttachDocuments}
+                              onShortActivate={() => docsInputRef.current?.click()}
+                              onPastedFiles={(incoming) => void handleDocsChange(syntheticFileInputChangeEvent(incoming))}
+                              className="relative h-24 w-24 shrink-0 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
+                            >
+                              <Upload className="h-6 w-6" />
+                              <span className="text-xs mt-1 text-center px-1">PDF / image</span>
+                              <Input
+                                type="file"
+                                className="hidden"
+                                ref={docsInputRef}
+                                onChange={handleDocsChange}
+                                accept="image/*,application/pdf"
+                                multiple
+                              />
+                            </AttachmentHoldPasteSurface>
+                          </FormControl>
+                        ) : null}
+                      </div>
                     </div>
                   )}
                 </FormItem>

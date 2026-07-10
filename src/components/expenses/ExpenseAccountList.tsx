@@ -3,6 +3,9 @@ import type { ExpenseAccount } from "@/components/expenses/types";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { MasterListRow } from "@/components/ui/master-list-row";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { DollarSign, Lock } from "lucide-react";
 import { useDate } from "@/hooks/useDate";
 import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
@@ -10,6 +13,8 @@ import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/
 import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
+import { useCompany } from "@/hooks/useCompany";
+import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
 import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
@@ -46,6 +51,7 @@ export function ExpenseAccountList({
   hideQuickFilterBar = false,
 }: ExpenseAccountListProps) {
   const { formatCurrency } = useDate();
+  const { company } = useCompany();
   const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
@@ -57,6 +63,15 @@ export function ExpenseAccountList({
   const filteredAndSortedAccounts = useMemo(() => {
     return filterAndSortMasterEntityListRows(accounts ?? [], searchTerm, quickFilter);
   }, [accounts, searchTerm, quickFilter]);
+
+  const visibleAccountAttachmentUrls = useMemo(
+    () =>
+      filteredAndSortedAccounts
+        .map((a) => trimEntityFileUrlForPreview(a.fileUrl))
+        .filter((u): u is string => Boolean(u)),
+    [filteredAndSortedAccounts]
+  );
+  usePrewarmVisibleAttachments(visibleAccountAttachmentUrls, company?.id);
 
   if (filteredAndSortedAccounts.length === 0) {
     return (
@@ -92,14 +107,30 @@ export function ExpenseAccountList({
                 const isSelected = selectedAccount?.id === account.id;
                 const isSystem = (account as any).isSystemReserved;
                 const href = getItemHref?.(account);
+                const attachmentPreviewUrl = trimEntityFileUrlForPreview(account.fileUrl);
                 const cardClassName = cn(disabled && "cursor-not-allowed", masterListRowUnselectedCn(isSelected));
                 const cardContent = (
                       <div className="pl-master-list-row">
                         <div className="pl-master-list-row-leading">
                           <div className="relative flex-shrink-0">
-                            <div className="h-8 w-8 flex items-center justify-center bg-muted rounded-md text-muted-foreground">
-                              {isSystem ? <Lock className="h-4 w-4" /> : <DollarSign className="h-4 w-4" />}
-                            </div>
+                            <EntityFileAttachmentHover
+                              fileUrl={attachmentPreviewUrl}
+                              triggerClassName="inline-flex shrink-0 rounded-full"
+                            >
+                              <ResolvedEntityAvatar
+                                className="h-8 w-8 text-xs"
+                                companyId={(account as { companyId?: string }).companyId ?? company?.id}
+                                src={attachmentPreviewUrl ?? undefined}
+                                alt={account.name}
+                                fallbackSlot={
+                                  isSystem ? (
+                                    <Lock className="h-4 w-4 text-muted-foreground" />
+                                  ) : (
+                                    <DollarSign className="h-4 w-4 text-muted-foreground" />
+                                  )
+                                }
+                              />
+                            </EntityFileAttachmentHover>
                             {(pendingApprovalByAccountId[account.id] ?? 0) > 0 && (
                               <span
                                 className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-pink-500 text-white text-[10px] font-bold origin-center rounded-full"

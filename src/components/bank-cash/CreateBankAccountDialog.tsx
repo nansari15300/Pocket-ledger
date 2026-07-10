@@ -85,6 +85,7 @@ import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHold
 import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
 import { toast as sonnerToast } from "sonner";
 import { ScrollArea } from "../ui/scroll-area";
+import { MasterPdfAsImageToggle } from "@/components/common/EntityProfileDocumentsNarrationFields";
 import { Card, CardHeader, CardTitle, CardContent } from "../ui/card";
 import { SpecialAccountAccessControl } from "./SpecialAccountAccessControl";
 import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
@@ -1025,6 +1026,7 @@ export function CreateBankAccountDialog({
                         {avatarToUpload && (
                           <FilePreview
                             file={avatarToUpload.file}
+                            attachmentCompanyId={companyId ?? undefined}
                             onRemove={removeAvatar}
                             isCompressing={isCompressing}
                             compressionResult={compressionResult}
@@ -1075,31 +1077,40 @@ export function CreateBankAccountDialog({
                   ) : (
                     <RestrictedFileUploader>
                       {/* PDF add box previews ke saath hi row me — party form jaisa */}
-                      <div className="flex flex-wrap items-start gap-2">
-                        {documentFiles.map((f, idx) => (
-                          <FilePreview key={`${f.name}-${idx}-${f.size}`} file={f} onRemove={() => removeDocAt(idx)} size={96} />
-                        ))}
-                        {documentFiles.length < 5 && (
-                          <FormControl>
-                            <AttachmentHoldPasteSurface
-                              enabled={canAttachDocuments}
-                              onShortActivate={() => docsInputRef.current?.click()}
-                              onPastedFiles={(incoming) => void handleDocumentsChange(syntheticFileInputChangeEvent(incoming))}
-                              className="relative h-24 w-24 shrink-0 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                            >
-                              <Upload className="h-6 w-6" />
-                              <span className="text-xs mt-1 text-center px-1">PDF / image</span>
-                              <Input
-                                type="file"
-                                className="hidden"
-                                ref={docsInputRef}
-                                onChange={handleDocumentsChange}
-                                accept="image/*,application/pdf"
-                                multiple
-                              />
-                            </AttachmentHoldPasteSurface>
-                          </FormControl>
-                        )}
+                      <div className="space-y-2">
+                        <MasterPdfAsImageToggle id="create-bank-account-pdf-as-image" />
+                        <div className="flex flex-wrap items-start gap-2">
+                          {documentFiles.map((f, idx) => (
+                            <FilePreview
+                              key={`${f.name}-${idx}-${f.size}`}
+                              file={f}
+                              attachmentCompanyId={companyId ?? undefined}
+                              onRemove={() => removeDocAt(idx)}
+                              size={96}
+                            />
+                          ))}
+                          {documentFiles.length < 5 && (
+                            <FormControl>
+                              <AttachmentHoldPasteSurface
+                                enabled={canAttachDocuments}
+                                onShortActivate={() => docsInputRef.current?.click()}
+                                onPastedFiles={(incoming) => void handleDocumentsChange(syntheticFileInputChangeEvent(incoming))}
+                                className="relative h-24 w-24 shrink-0 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
+                              >
+                                <Upload className="h-6 w-6" />
+                                <span className="text-xs mt-1 text-center px-1">PDF / image</span>
+                                <Input
+                                  type="file"
+                                  className="hidden"
+                                  ref={docsInputRef}
+                                  onChange={handleDocumentsChange}
+                                  accept="image/*,application/pdf"
+                                  multiple
+                                />
+                              </AttachmentHoldPasteSurface>
+                            </FormControl>
+                          )}
+                        </div>
                       </div>
                     </RestrictedFileUploader>
                   )}

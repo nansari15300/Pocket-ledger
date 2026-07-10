@@ -21,15 +21,18 @@ import {
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { normalizeAttachmentUrlForDevicePreview } from "@/lib/attachmentHoldClipboard";
-import { peekHoverCachedBlobUrl, rememberHoverBlobUrl } from "@/lib/attachmentHoverBlobCache";
-import { getBlobFromAttachmentRefPreferLocalFirst } from "@/lib/attachmentPreviewResolve";
+import { forgetHoverBlobUrl, peekHoverCachedBlobUrl, rememberHoverBlobUrl } from "@/lib/attachmentHoverBlobCache";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { useCompany } from "@/hooks/useCompany";
 import { canFetchPlServerAttachmentForCompany } from "@/lib/plServerAttachmentFetch";
+import { requestAttachmentUiRefresh } from "@/lib/attachmentLoadReady";
 import {
+  companyAttachmentMode,
   companyRequiresLocalAttachmentUrlsOnly,
   resolveStaticAttachmentDisplay,
 } from "@/lib/staticAttachmentDisplayUrl";
+import type { CompanyAttachmentMode } from "@/lib/companyAttachmentStrategies/types";
+import { useAttachmentPreviewGallery } from "@/components/vouchers/attachmentPreviewGalleryContext";
 
 export async function prewarmHoverPreviewHttpsUrls(
   urls: readonly string[],
@@ -50,14 +53,42 @@ export async function prewarmHoverPreviewHttpsUrls(
       isDriveFileRef(u)
     );
   }))].slice(0, maxUrls);
+  const { markAttachmentUrlReady } = await import("@/lib/attachmentLoadReady");
   for (const url of unique) {
     if (options?.signal?.aborted) break;
-    if (peekHoverCachedBlobUrl(url)) continue;
+    if (peekHoverCachedBlobUrl(url)) {
+      markAttachmentUrlReady(url);
+      continue;
+    }
     try {
-      const blob = await getRemoteAttachmentBlobPreferOfflineCache(url, options?.signal, { companyId });
+      let blob: Blob | null = null;
+      if (isLocalFileRef(url) && companyId) {
+        const { resolvePlServerStaffAttachmentPreviewBlob } = await import("@/lib/plServerAttachmentFetch");
+        blob = await resolvePlServerStaffAttachmentPreviewBlob(url, {
+          companyId,
+          signal: options?.signal,
+        });
+      }
+      if (!blob?.size) {
+        blob = await getRemoteAttachmentBlobPreferOfflineCache(url, options?.signal, { companyId });
+      }
       if (!blob || blob.size === 0) continue;
-      const objectUrl = URL.createObjectURL(blob);
+      const kind = await sniffBlobKindForPreview(blob);
+      const mime =
+        kind === "pdf"
+          ? "application/pdf"
+          : kind === "image"
+            ? blob.type?.startsWith("image/")
+              ? blob.type
+              : "image/jpeg"
+            : blob.type || "application/octet-stream";
+      const typed =
+        blob.type === mime || (kind === "image" && blob.type?.startsWith("image/"))
+          ? blob
+          : new Blob([await blob.arrayBuffer()], { type: mime });
+      const objectUrl = URL.createObjectURL(typed);
       rememberHoverBlobUrl(url, objectUrl);
+      markAttachmentUrlReady(url);
     } catch {
       // Visible-list warm is best-effort; hover open path will still fetch on demand if needed.
     }
@@ -84,6 +115,7 @@ function HoverPreviewHttpsAwareImage(props: {
   onDoubleClick?: React.MouseEventHandler<HTMLImageElement>;
   localLedgerOnly?: boolean;
   companyId?: string;
+  companyMode?: CompanyAttachmentMode;
 }) {
   const u = String(props.url || "");
   const localBytesOnly = props.localLedgerOnly === true || embeddedAttachmentDisplayUsesLocalBytesOnly();
@@ -102,6 +134,11 @@ function HoverPreviewHttpsAwareImage(props: {
     return "";
   });
   const [loadFailed, setLoadFailed] = React.useState(false);
+  const [reloadKey, setReloadKey] = React.useState(0);
+
+  React.useEffect(() => {
+    setReloadKey(0);
+  }, [u]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -147,6 +184,7 @@ function HoverPreviewHttpsAwareImage(props: {
       setDisplaySrc("");
       void resolveStaticAttachmentDisplay(u, {
         localLedgerOnly: localBytesOnly,
+        companyMode: props.companyMode,
         signal: ac.signal,
         companyId: props.companyId,
       })
@@ -187,9 +225,15 @@ function HoverPreviewHttpsAwareImage(props: {
     // Online HTTPS: initial state already `u` — mat clear karo (warna 2–4s spinner).
     if (!canInstantHttps) {
       setDisplaySrc("");
+    } else {
+      setDisplaySrc((prev) => prev || u);
     }
 
-    void resolveStaticAttachmentDisplay(u, { localLedgerOnly: localBytesOnly, signal: ac.signal })
+    void resolveStaticAttachmentDisplay(u, {
+      localLedgerOnly: localBytesOnly,
+      companyMode: props.companyMode,
+      signal: ac.signal,
+    })
       .then((resolved) => {
         if (cancelled) return;
         if (canInstantHttps) {
@@ -220,7 +264,7 @@ function HoverPreviewHttpsAwareImage(props: {
         }
       }
     };
-  }, [u, localBytesOnly]);
+  }, [u, localBytesOnly, props.companyId, props.companyMode, reloadKey]);
 
   if (!displaySrc) {
     if (loadFailed) {
@@ -239,7 +283,11 @@ function HoverPreviewHttpsAwareImage(props: {
             onClick={() => {
               setLoadFailed(false);
               setDisplaySrc("");
-              void resolveStaticAttachmentDisplay(u, { localLedgerOnly: localBytesOnly, companyId: props.companyId }).then((resolved) => {
+              void resolveStaticAttachmentDisplay(u, {
+                localLedgerOnly: localBytesOnly,
+                companyMode: props.companyMode,
+                companyId: props.companyId,
+              }).then((resolved) => {
                 if (resolved.displayUrl) setDisplaySrc(resolved.displayUrl);
                 else if (resolved.blob && resolved.blob.size > 0) {
                   const ou = URL.createObjectURL(resolved.blob);
@@ -273,12 +321,112 @@ function HoverPreviewHttpsAwareImage(props: {
       className={props.className}
       loading={props.loading}
       onDoubleClick={props.onDoubleClick}
+      onError={() => {
+        forgetHoverBlobUrl(u, displaySrc);
+        if (reloadKey >= 2) {
+          setDisplaySrc("");
+          setLoadFailed(true);
+          return;
+        }
+        setLoadFailed(false);
+        setDisplaySrc("");
+        setReloadKey((n) => n + 1);
+        requestAttachmentUiRefresh();
+      }}
     />
   );
 }
 
 /** Multi-file row / local pending: gallery swipe App me */
 export type AttachmentPreviewGalleryOpts = { urls: readonly string[]; startIndex: number };
+
+/** Portal me nested FilePreview (blob:) PDF ko "FILE" icon dikha deta tha — seedha first-page raster. */
+function LocalPdfBlobHoverPreview({
+  sourceUrl,
+  blob,
+  onOpen,
+}: {
+  sourceUrl: string;
+  blob?: Blob | null;
+  onOpen: () => void;
+}) {
+  const [thumbUrl, setThumbUrl] = React.useState<string | null>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    let created: string | null = null;
+    void (async () => {
+      try {
+        setLoading(true);
+        let pdfBlob = blob && blob.size > 0 ? blob : null;
+        if (!pdfBlob) {
+          pdfBlob = await fetch(sourceUrl).then((r) => r.blob());
+        }
+        if (!pdfBlob?.size) throw new Error("empty_pdf");
+        const kind = await sniffBlobKindForPreview(pdfBlob);
+        if (kind !== "pdf") throw new Error("not_pdf");
+        if (pdfBlob.type !== "application/pdf") {
+          pdfBlob = new Blob([await pdfBlob.arrayBuffer()], { type: "application/pdf" });
+        }
+        const { convertPdfFirstPageToImage } = await import("@/lib/pdfToImage");
+        const result = await convertPdfFirstPageToImage(pdfBlob, 0.85, 800);
+        if (cancelled) {
+          URL.revokeObjectURL(result.thumbnailUrl);
+          return;
+        }
+        created = result.thumbnailUrl;
+        setThumbUrl(result.thumbnailUrl);
+      } catch {
+        if (!cancelled) setThumbUrl(null);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (created) {
+        try {
+          URL.revokeObjectURL(created);
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+  }, [sourceUrl, blob]);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[280px] min-w-[220px] items-center justify-center p-6">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" aria-label="Loading PDF preview" />
+      </div>
+    );
+  }
+  if (!thumbUrl) {
+    return (
+      <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-muted-foreground">
+        <span>PDF preview could not load — try Open</span>
+        <Button type="button" size="sm" variant="secondary" onClick={onOpen}>
+          Open PDF
+        </Button>
+      </div>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- pdf.js first-page raster
+    <img
+      src={thumbUrl}
+      alt=""
+      draggable={false}
+      className="block h-auto w-auto max-h-none max-w-none object-contain"
+      loading="eager"
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+    />
+  );
+}
 
 /** `local:` / `drive:` / `PL_ATTACH_V1` — PC hover preview: local/pending pehle, phir Drive (HTTPS image path alag). */
 export function LocalFileRefTooltipPreview({
@@ -294,7 +442,9 @@ export function LocalFileRefTooltipPreview({
   const companyId = companyIdProp ?? voucherAttachmentFb?.companyId ?? null;
   const effectiveUrl = React.useMemo(() => normalizeAttachmentUrlForDevicePreview(url), [url]);
   const [state, setState] = React.useState<
-    { status: "loading" } | { status: "error" } | { status: "ready"; objectUrl: string; mime: string }
+    | { status: "loading" }
+    | { status: "error" }
+    | { status: "ready"; objectUrl: string; mime: string; blob?: Blob }
   >({ status: "loading" });
 
   React.useEffect(() => {
@@ -303,19 +453,16 @@ export function LocalFileRefTooltipPreview({
     void (async () => {
       try {
         if (usesEmbeddedNativeAttachmentStorage() && isLocalFileRef(effectiveUrl)) {
-          // Native fast-path: preview ke liye JS blob read mat karo; direct `convertFileSrc` display URL hi use karo.
           const meta = getLocalFileRefMetaSync(effectiveUrl) ?? (await getLocalFileRefMeta(effectiveUrl));
           if (cancelled) return;
-          if (!meta?.displayUrl) {
-            setState({ status: "error" });
+          if (meta?.displayUrl && (meta.filePath || meta.fileUri)) {
+            const mime = String(meta.contentType || "application/octet-stream").toLowerCase();
+            setState({ status: "ready", objectUrl: meta.displayUrl, mime });
             return;
           }
-          const mime = String(meta.contentType || "application/octet-stream").toLowerCase();
-          setState({ status: "ready", objectUrl: meta.displayUrl, mime });
-          return;
         }
-        // Table/party preview: `local:` pending blob pehle; `drive:` par filename match / gallery `local:` phir Drive API.
-        const blob = await getBlobFromAttachmentRefPreferLocalFirst(url, {
+        const { resolvePlServerStaffAttachmentPreviewBlob } = await import("@/lib/plServerAttachmentFetch");
+        const blob = await resolvePlServerStaffAttachmentPreviewBlob(effectiveUrl, {
           galleryUrls: gallery?.urls,
           companyId: companyId ?? undefined,
         });
@@ -337,7 +484,7 @@ export function LocalFileRefTooltipPreview({
           urlRef.current = null;
           return;
         }
-        setState({ status: "ready", objectUrl, mime });
+        setState({ status: "ready", objectUrl, mime, blob });
       } catch {
         if (!cancelled) setState({ status: "error" });
       }
@@ -416,24 +563,11 @@ export function LocalFileRefTooltipPreview({
           }}
         />
       ) : isPdf ? (
-        /* Nested FilePreview ke img par dblclick nahi — React bubble tr.onDoubleClick tak; yahan stop + open */
-        <div
-          className="overflow-hidden rounded-lg border bg-background"
-          onDoubleClick={(e) => {
-            e.stopPropagation();
-            openAttachment();
-          }}
-        >
-          <FilePreview
-            file={objectUrl}
-            size={800}
-            disabled={false}
-            objectFit="contain"
-            enableHoverFullPreview={false}
-            showFormatBadge={false}
-            holdAttachmentClipboard={false}
-          />
-        </div>
+        <LocalPdfBlobHoverPreview
+          sourceUrl={objectUrl}
+          blob={state.status === "ready" ? state.blob : undefined}
+          onOpen={openAttachment}
+        />
       ) : (
         <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-muted-foreground">
           <span>Preview not available for this type</span>
@@ -450,6 +584,36 @@ export function LocalFileRefTooltipPreview({
  * Ek URL ke liye voucher File column / opening balance jaisa hover body —
  * party-bank stripes list+details avatar hover bhi yahi layout use karta hai.
  */
+export function MultiAttachmentPortalPreview({ urls }: { urls: readonly string[] }) {
+  const gallery = useAttachmentPreviewGallery();
+  const list = React.useMemo(
+    () => urls.map((u) => String(u || "").trim()).filter(Boolean),
+    [urls]
+  );
+
+  if (list.length === 0) {
+    return (
+      <div className="flex min-h-[120px] min-w-[200px] flex-col items-center justify-center gap-1 p-6 text-center text-sm text-muted-foreground">
+        <span>No preview</span>
+        <span className="text-xs opacity-80">No file attached</span>
+      </div>
+    );
+  }
+
+  const activeIndex =
+    gallery && gallery.urls.length > 1
+      ? Math.min(Math.max(gallery.index, 0), list.length - 1)
+      : 0;
+  const currentUrl = list[activeIndex] ?? list[0]!;
+
+  return (
+    <SingleAttachmentHoverPreviewBody
+      url={currentUrl}
+      gallery={list.length > 1 ? { urls: list, startIndex: activeIndex } : undefined}
+    />
+  );
+}
+
 export function SingleAttachmentHoverPreviewBody({
   url,
   gallery,
@@ -461,6 +625,7 @@ export function SingleAttachmentHoverPreviewBody({
   const voucherAttachmentFb = useVoucherAttachmentFallback();
   const localLedgerOnly =
     companyRequiresLocalAttachmentUrlsOnly(company) || embeddedAttachmentDisplayUsesLocalBytesOnly();
+  const attachmentMode = companyAttachmentMode(company, { localLedgerOnly });
   const normalized = trimEntityFileUrlForPreview(url);
   if (!normalized) {
     return (
@@ -514,7 +679,7 @@ export function SingleAttachmentHoverPreviewBody({
             : undefined,
     });
   const storagePath = storagePathRaw ?? undefined;
-  const caption = isPdf ? "PDF" : fmt;
+  const caption = usesDeviceBlobPreview ? (isPdf ? "PDF" : fmt === "FILE" ? "" : fmt) : isPdf ? "PDF" : fmt;
   const attachmentGallery =
     galleryOpts && galleryOpts.urls.length > 1
       ? { urls: [...galleryOpts.urls], startIndex: galleryOpts.startIndex }
@@ -533,6 +698,7 @@ export function SingleAttachmentHoverPreviewBody({
         <HoverPreviewHttpsAwareImage
           url={u}
           localLedgerOnly={localLedgerOnly}
+          companyMode={attachmentMode}
           companyId={voucherAttachmentFb?.companyId ?? company?.id}
           alt=""
           className="block h-auto w-auto max-h-none max-w-none object-contain"
@@ -559,11 +725,14 @@ export function SingleAttachmentHoverPreviewBody({
             enableHoverFullPreview={false}
             showFormatBadge={false}
             attachmentGallery={attachmentGallery}
+            attachmentCompanyId={voucherAttachmentFb?.companyId ?? company?.id ?? undefined}
             holdAttachmentClipboard={false}
           />
         </div>
       )}
-      <p className="text-center text-[10px] font-semibold text-muted-foreground">{caption}</p>
+      {caption ? (
+        <p className="text-center text-[10px] font-semibold text-muted-foreground">{caption}</p>
+      ) : null}
     </div>
   );
 }

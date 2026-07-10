@@ -2,7 +2,7 @@
 
 /**
  * Server → local only: Firebase Admin plan + offline license window (20d chunk, sub cap).
- * `authoritativeCompanyId` alag ho to bhi SQLite row sahi patch hoti hai.
+ * Pure local rows: `planSyncFirestoreCompanyId` for plan API only — NOT `authoritativeCompanyId` / cloud identity.
  *
  * Static/APK: `getBillingApiUrl('/api/company/sync-plan')` → pocket-ledger.com (billingApiOrigin.ts).
  * Local-only SQLite par bhi online live sync — policy `planSyncClientPolicy.ts` me; MAT HATANA refactors me.
@@ -12,6 +12,8 @@ import { hostedApiFetch } from "@/lib/hostedApiFetch";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { bumpLocalCompanyRegistry } from "@/lib/applyStripePlanToLocalCompany";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
+import { isServerGateCompany } from "@/lib/companyStorageKind";
+import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 import { isDriveCloudSyncLocalRegistryRow } from "@/lib/driveRestoredLocalCompany";
 import { clearCompanyPlanLocalCache, readCompanyPlanLocalCache, writeCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
 import { normalizePlanIdForClient, planTierIndex } from "@/config/plans";
@@ -125,7 +127,7 @@ async function applyAuthoritativePlanPayloadToLocal(opts: {
   }
 
   const storageLower = String((local as { storageOption?: string }).storageOption || "").toLowerCase();
-  const isDeviceLocalCompany = storageLower === "local";
+  const isPureLocalDeviceCompany = storageLower === "local";
   const isDriveLocalRegistry = isDriveCloudSyncLocalRegistryRow(local as Record<string, unknown>);
 
   const offlineUntil =
@@ -137,12 +139,6 @@ async function applyAuthoritativePlanPayloadToLocal(opts: {
     ...local,
     planId,
     planUpgradedAtMs: Date.now(),
-    authoritativeCompanyId: firebaseCompanyId,
-    ...(!isDeviceLocalCompany
-      ? { syncedFromCloud: true, syncPolicy: "online", storageOption: "firebase" }
-      : isDriveLocalRegistry
-        ? { syncedFromCloud: false, syncPolicy: "offline", storageOption: "local" }
-        : { syncedFromCloud: true }),
     ...(offlineUntil != null ? { offlineLicenseValidUntilMs: offlineUntil } : {}),
     ...(data.stripeCustomerId != null && data.stripeCustomerId !== ""
       ? { stripeCustomerId: data.stripeCustomerId }
@@ -154,6 +150,26 @@ async function applyAuthoritativePlanPayloadToLocal(opts: {
       ? { lastStripeCheckoutSessionId: data.lastStripeCheckoutSessionId }
       : {}),
   };
+
+  if (!isPureLocalDeviceCompany) {
+    merged.authoritativeCompanyId = firebaseCompanyId;
+    merged.syncedFromCloud = true;
+    merged.syncPolicy = "online";
+    merged.storageOption = "firebase";
+  } else if (isDriveLocalRegistry) {
+    merged.storageOption = "local";
+    merged.syncPolicy = "offline";
+    merged.syncedFromCloud = false;
+    merged.planSyncFirestoreCompanyId = firebaseCompanyId;
+    delete merged.authoritativeCompanyId;
+  } else {
+    // Pure local SQLite company — plan metadata only; identity stays local (never cloud-backed).
+    merged.storageOption = "local";
+    merged.syncPolicy = "offline";
+    merged.syncedFromCloud = false;
+    merged.planSyncFirestoreCompanyId = firebaseCompanyId;
+    delete merged.authoritativeCompanyId;
+  }
   if (planId === "basic") delete merged.planExpiryMs;
   else if (planExpiryMs != null) merged.planExpiryMs = planExpiryMs;
 
@@ -162,6 +178,15 @@ async function applyAuthoritativePlanPayloadToLocal(opts: {
   writePlanAuthoritativeSyncTimestamp(localCompanyId);
   bumpLocalCompanyRegistry();
   return { ok: true, applied: true };
+}
+
+/** Audit harness only — exercises production plan apply path without duplicating logic. */
+export async function applyAuthoritativePlanPayloadToLocalForAudit(opts: {
+  firebaseCompanyId: string;
+  localCompanyId: string;
+  data: ServerAuthoritativePlanPayload;
+}): Promise<SyncCompanyPlanResult> {
+  return applyAuthoritativePlanPayloadToLocal(opts);
 }
 
 /** Pure device-local company: Firestore `users/{uid}` account plan + owned online rows se SQLite plan patch. */
@@ -227,6 +252,7 @@ export async function syncLocalOnlyCompanyPlanFromOwnerAccount(opts: {
   }
 
   if (planId === "basic" && !hintBest) {
+    writePlanAuthoritativeSyncTimestamp(localCompanyId);
     return { ok: true, applied: false, reason: "no_account_plan" };
   }
 
@@ -497,6 +523,10 @@ export async function syncCompanyPlanFromServer(opts: {
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     return { ok: false, applied: false, reason: "offline" };
   }
+  // Gate→Connect staff tab (host origin): hosted sync-plan CORS noise avoid.
+  if (typeof window !== "undefined" && isPlRemoteServerClientMode()) {
+    return { ok: false, applied: false, reason: "pl_remote_client" };
+  }
   const firebaseCompanyId = opts.firebaseCompanyId.trim();
   const localCompanyId = opts.localCompanyId.trim();
   if (!firebaseCompanyId || !localCompanyId) {
@@ -504,9 +534,10 @@ export async function syncCompanyPlanFromServer(opts: {
   }
 
   // Pure local company (no authoritative cloud id yet): hosted `/sync-plan` par 404 noise avoid.
+  // PlServer shared (`plServerShared`): registry id = Firestore company id — local_only mat treat karo.
   try {
     const localRow = await getLocalCompanyById(localCompanyId);
-    if (localRow) {
+    if (localRow && !isServerGateCompany(localRow)) {
       const storage = String((localRow as { storageOption?: string }).storageOption || "local")
         .toLowerCase()
         .trim();

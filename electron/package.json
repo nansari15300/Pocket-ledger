@@ -29,6 +29,7 @@
       "googleAuthExternal.js",
       "localAppServer.js",
       "localAppServerAccessTokens.js",
+      "fetchPublicIpAddress.js",
       "plMirrorProtocol.cjs",
       "plWebPorts.cjs",
       "packagedStaticHeaders.cjs",

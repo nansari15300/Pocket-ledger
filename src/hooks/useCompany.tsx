@@ -36,7 +36,7 @@ import {
   reconcileOnlineMirrorsWithServer,
   resolveCompanyIsOwnedForUser,
 } from "@/lib/companyOnlineIntegrity";
-import { isPureLocalLedgerCompany, shouldReadLedgerFromSqliteOnly, isDeviceLocalCompany, isLocalSelectorCompanyRow } from "@/lib/companyStorageKind";
+import { isPureLocalLedgerCompany, shouldReadLedgerFromSqliteOnly, isDeviceLocalCompany, isLocalSelectorCompanyRow, stampPureLocalDeviceCompanyRow } from "@/lib/companyStorageKind";
 import { isLocalBackupRestoredCompanyRow, readLocalBackupRestoreSelectionGrace } from "@/lib/localBackupRestoreCompany";
 import {
   isProtectedDriveLocalRegistryRow,
@@ -574,12 +574,13 @@ function resolveOwnerIdQueryCandidates(
   return Array.from(seen);
 }
 
-/** Local-only company without `authoritativeCompanyId`: server `/sync-plan` call se 404 spam hota hai, isliye skip. */
+/** Plan-only sync is allowed for local SQLite rows; `sync-plan` keeps ledger identity local. */
 function canRunServerPlanSyncForCompanyRow(row: Company | null | undefined): boolean {
   if (!row) return false;
+  if (isServerGateCompany(row) || row.plServerShared === true) return true;
   const storage = String((row.storageOption || "local") as string).toLowerCase().trim();
   const authoritative = String((row.authoritativeCompanyId || "") as string).trim();
-  if (storage === "local" && !authoritative) return false;
+  if (storage === "local" && !authoritative) return true;
   return true;
 }
 
@@ -940,7 +941,16 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     const allowedForGate = filterCompaniesForActiveGate(registrySource, activeGate);
     if (!allowedForGate.some((c) => c.id === companyId)) {
       const selectedRow = registrySource.find((c) => c.id === companyId);
+      const localSqliteHit = latestLocalNormalizedCompaniesRef.current.find((c) => c.id === companyId);
       // List/Firestore refresh: user ne Local tab se device company chuni ho to online gate par bhi mat hatao.
+      if (!gateSwitched && localSqliteHit && isDeviceLocalCompany(localSqliteHit)) {
+        plDbgCompanyRecovery("gateFilter:keepDeviceLocalSqliteSelection", { companyId, gateId: activeGate.id });
+        return;
+      }
+      if (!gateSwitched && selectedRow && isDeviceLocalCompany(selectedRow) && isLocalSelectorCompanyRow(selectedRow)) {
+        plDbgCompanyRecovery("gateFilter:keepDeviceLocalSelection", { companyId, gateId: activeGate.id });
+        return;
+      }
       if (!gateSwitched && selectedRow && isCompanyVisibleInMainApp(selectedRow)) {
         plDbgCompanyRecovery("gateFilter:keepExplicitSelection", { companyId, gateId: activeGate.id });
         return;
@@ -973,19 +983,42 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     writeSelectedCompanyId(newCompanyId);
     const nextId = String(newCompanyId || "").trim();
     // Purani company row turant hatao — warna useVouchers stale `companyRef` se galat SQLite gate / merge kare.
-    const fromList = allCompaniesLiveRef.current.find((c) => c.id === nextId) ?? null;
-    if (fromList) {
-      setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, fromList));
+    const fromList =
+      allCompaniesLiveRef.current.find((c) => c.id === nextId) ??
+      allCompaniesRegistryLiveRef.current.find((c) => c.id === nextId) ??
+      latestLocalNormalizedCompaniesRef.current.find((c) => c.id === nextId) ??
+      null;
+    const fromListStamped = fromList ? stampPureLocalDeviceCompanyRow(fromList) : null;
+    if (fromListStamped) {
+      setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, fromListStamped));
       setLoading(false);
     } else {
       setCompany(null);
       setLoading(true);
+      void (async () => {
+        try {
+          const row = await getLocalCompanyById(nextId);
+          if (!row || companyIdLiveRef.current !== nextId) return;
+          const norm = stampPureLocalDeviceCompanyRow({
+            ...(row as unknown as Company),
+            id: row.id,
+            name: typeof row.name === "string" ? row.name : row.id,
+            storageOption: "local",
+            syncPolicy: "offline",
+            syncedFromCloud: false,
+          } as Company);
+          setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, norm));
+          setLoading(false);
+        } catch {
+          if (companyIdLiveRef.current === nextId) setLoading(false);
+        }
+      })();
     }
     setCompanyIdState(nextId);
     if (nextId) {
       markActiveAttachmentCompanyId(nextId);
     }
-    if (fromList && isLocalSelectorCompanyRow(fromList)) {
+    if (fromListStamped && isLocalSelectorCompanyRow(fromListStamped)) {
       markSuppressFirestorePermissionForCompany(nextId);
     }
     if (typeof window !== "undefined") {
@@ -1537,6 +1570,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       cancelled = true;
       stopOnlinePlanSync();
+      planPeriodicSyncInFlightRef.current = false;
       if (deferredLazyPlanTimer != null) {
         win.clearTimeout(deferredLazyPlanTimer);
         deferredLazyPlanTimer = null;
@@ -1558,26 +1592,65 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   }, [user, companyId, authLoading, refreshAuthoritativePlan]);
 
   /**
-   * Shared company select: turant server plan → SQLite/cache (owner upgrade ke baad file limit / entitlements).
+   * Company select (priority): turant server plan → SQLite/cache — PlServer shared pehle, list race ka wait nahi.
    * Static/native local-only: shared user ko bhi online plan sync — MAT HATANA (planSyncClientPolicy.ts).
    */
+  const planSelectSyncInFlightRef = useRef(false);
   useEffect(() => {
     if (!user?.uid || !companyId?.trim() || authLoading) return;
     if (shouldSkipPeriodicPlanSyncForLocalOnlyMode(isLocalOnlyMode())) return;
-    const activeGate = getActiveGate();
-    if (
-      !filterCompaniesForActiveGate(allCompaniesLiveRef.current, activeGate).some(
-        (c) => c.id === companyId
-      )
-    ) {
-      return;
-    }
-    const row = allCompanies.find((c) => c.id === companyId);
-    if (!canRunServerPlanSyncForCompanyRow(row)) return;
-    if (!row || isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user.email ?? null })) return;
-    void refreshAuthoritativePlan();
+    if (typeof navigator !== "undefined" && !navigator.onLine) return;
+
+    let cancelled = false;
+    void (async () => {
+      const cid = companyId.trim();
+      let row =
+        allCompaniesLiveRef.current.find((c) => c.id === cid) ??
+        allCompaniesRegistryLiveRef.current.find((c) => c.id === cid) ??
+        null;
+      if (!row) {
+        try {
+          const fromSql = await getLocalCompanyById(cid);
+          row = fromSql ? normalizeLocalCompany(fromSql as unknown as Company) : null;
+        } catch {
+          row = null;
+        }
+      }
+      if (cancelled || !row || !canRunServerPlanSyncForCompanyRow(row)) return;
+
+      const isServerShared = isServerGateCompany(row) || row.plServerShared === true;
+      const isLocalPlanOnly =
+        isDeviceLocalCompany(row) && !String((row.authoritativeCompanyId || "") as string).trim();
+      const isSharedUser = !isCurrentUserOwnerOfCompanyRow(row, {
+        uid: user.uid,
+        email: user.email ?? null,
+      });
+      if (!isServerShared && !isSharedUser && !isLocalPlanOnly) return;
+
+      if (!isServerShared && !isLocalPlanOnly) {
+        const activeGate = getActiveGate();
+        const inGateList = filterCompaniesForActiveGate(allCompaniesLiveRef.current, activeGate).some(
+          (c) => c.id === cid
+        );
+        if (!inGateList) return;
+      }
+
+      if (planSelectSyncInFlightRef.current) return;
+      planSelectSyncInFlightRef.current = true;
+      planPeriodicSyncInFlightRef.current = true;
+      try {
+        await refreshAuthoritativePlan();
+      } finally {
+        planSelectSyncInFlightRef.current = false;
+        planPeriodicSyncInFlightRef.current = false;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- burst sirf company switch par
-  }, [companyId, user?.uid, authLoading, gateEpoch]);
+  }, [companyId, user?.uid, authLoading, gateEpoch, refreshAuthoritativePlan, normalizeLocalCompany]);
 
   // Static/APK offline: SQLite + getDocs mirror. Online par web jaisa live listeners (niche wala effect).
   useEffect(() => {

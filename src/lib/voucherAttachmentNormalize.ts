@@ -42,10 +42,36 @@ export function dedupeVoucherAttachmentUrlList(urls: readonly string[]): string[
   return out;
 }
 
-/** Voucher edit form `files` state — UI + save dono ke liye ek source. */
+/** Voucher edit form `files` state — UI + save dono ke liye ek source (string URL ya copy-draft `File`). */
 export function voucherAttachmentUrlsForFormState(
   row: { fileUrls?: unknown; unassignedFile?: unknown } | null | undefined
-): string[] {
+): (File | string)[] {
+  if (!row) return [];
+  const mixed: (File | string)[] = [];
+  if (Array.isArray(row.fileUrls)) {
+    for (const u of row.fileUrls) {
+      if (typeof File !== "undefined" && u instanceof File) {
+        mixed.push(u);
+        continue;
+      }
+      if (typeof u === "string" && u.trim()) mixed.push(u.trim());
+    }
+  }
+  if (mixed.length > 0) {
+    const seen = new Set<string>();
+    const out: (File | string)[] = [];
+    for (const entry of mixed) {
+      if (typeof File !== "undefined" && entry instanceof File) {
+        out.push(entry);
+        continue;
+      }
+      const s = String(entry || "").trim();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      out.push(s);
+    }
+    return out;
+  }
   return dedupeVoucherAttachmentUrlList(getVoucherAttachmentUrlsForUi(row));
 }
 

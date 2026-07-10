@@ -41,7 +41,7 @@ import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, A
 import { cn } from "@/lib/utils";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
-import { replaceVoucherSaveLoadingWithShortSuccess } from "@/lib/voucherSaveUi";
+import { replaceVoucherSaveLoadingWithShortSuccess, beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
 
 import { useToast } from "@/hooks/use-toast";
 import { useCompany } from "@/hooks/useCompany";
@@ -633,7 +633,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const hasUnsavedFilePick = files.some((f) => f instanceof File);
     if (hasUnsavedFilePick) return;
     if (_isFileDirty) return;
-    const incoming = voucherAttachmentUrlsForFormState(voucher);
+    const incoming = voucherAttachmentUrlsForFormState(voucher).filter((f): f is string => typeof f === "string");
     const cur = files.filter((f): f is string => typeof f === "string");
     const snap = savedFileUrlsSnapshotRef.current;
     if (snap) {
@@ -1533,7 +1533,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       return;
     }
     
-    const toastId = sonnerToast.loading("Saving journal...");
+    const toastId = await beginVoucherSaveLoadingOrBlock(companyId, "Saving journal...");
+    if (toastId == null) return;
     setIsLoading(true);
 
     try {
@@ -1793,7 +1794,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       } else {
         const message = error?.message || (typeof error === "string" ? error : "Unknown error");
         console.error("Error saving journal voucher:", error);
-        sonnerToast.error("Error saving voucher.", { id: toastId, description: message });
+        voucherSaveErrorToast(toastId, error, message);
       }
     } finally {
         if (isMounted.current) setIsLoading(false);

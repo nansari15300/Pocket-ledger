@@ -17,7 +17,7 @@ import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
 import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 import { activateOnlineGateForCompanyPicker } from "@/lib/gates/gateClientDefaults";
-import { isLocalSelectorCompanyRow } from "@/lib/companyStorageKind";
+import { isLocalSelectorCompanyRow, stampPureLocalDeviceCompanyRow, isDeviceLocalCompany } from "@/lib/companyStorageKind";
 import { normalizeRowForLocalDriveSyncUi } from "@/lib/localCloudSync/companyConfig";
 
 /** Device-local SQLite rows — online Firestore picker list me merge (Drive restore / join ke baad). */
@@ -42,12 +42,23 @@ function mergeDeviceLocalCompaniesIntoMap(
       id: c.id,
       name: typeof c.name === "string" ? c.name : c.id,
     });
-    companyMap.set(c.id, {
+    const stamped = stampPureLocalDeviceCompanyRow({
       ...normalized,
       storageOption: "local",
       syncedFromCloud: false,
+    } as Company);
+    const nextRow = {
+      ...stamped,
       isOwned: driveSharedJoin ? false : isOwnedByUser(c),
-    });
+    };
+    if (companyMap.has(c.id)) {
+      const existing = companyMap.get(c.id)!;
+      if (isDeviceLocalCompany(stamped)) {
+        companyMap.set(c.id, { ...existing, ...nextRow, isOwned: nextRow.isOwned ?? existing.isOwned });
+        continue;
+      }
+    }
+    companyMap.set(c.id, nextRow);
   }
 }
 
@@ -62,6 +73,7 @@ export type Company = {
   /** Admin recycle-bin hidden tab marker: normal company picker list se hide. */
   movedToAdminRecycleAt?: unknown;
   storageOption?: 'firebase' | 'drive' | 'local';
+  syncedFromCloud?: boolean;
 };
 
 /** /company page list guard: deleted + admin-hidden rows ko normal app picker se hatao. */

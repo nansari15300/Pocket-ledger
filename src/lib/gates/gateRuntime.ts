@@ -3,6 +3,7 @@
 import type { Company } from "@/hooks/useCompany";
 import { isCloudBackedCompanyShape } from "@/lib/offlineFullWarmSync";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { isDeviceLocalCompany } from "@/lib/companyStorageKind";
 import {
   DATA_SOURCE_MODE_STORAGE_KEY,
   type DataSourceMode,
@@ -12,6 +13,8 @@ import {
   isPlRemoteServerClientMode,
   markPlRemoteServerClientMode,
 } from "@/lib/plRemoteServerClient";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import {
   clearPlServerAccessContext,
   applyPlServerAccessContextPayload,
@@ -152,6 +155,34 @@ export async function activateLocalServerGateOnBundledClient(
   return { ok: true };
 }
 
+/** Web browser: activate server gate in-place — no full-page redirect to host URL. */
+export async function activateLocalServerGateOnWebClient(
+  gate: GateRecord
+): Promise<{ ok: boolean; message?: string }> {
+  if (gate.type !== "local_server" || !gate.serverUrl) {
+    return { ok: false, message: "Invalid server gate" };
+  }
+  const token = resolveLocalServerGateAccessToken(gate);
+  if (!token) {
+    return {
+      ok: false,
+      message: "Missing access token — edit this gate and paste the token from the server owner.",
+    };
+  }
+  persistDevClientAccessToken(token);
+  writeActiveGateId(gate.id);
+  applyActiveGateRuntime({ ...gate, accessToken: token || gate.accessToken });
+  const ctx = await refreshActiveLocalServerGateContext({ ...gate, accessToken: token || gate.accessToken });
+  if (ctx?.error) return { ok: false, message: ctx.error };
+  dispatchGateChanged();
+  return { ok: true };
+}
+
+function shouldOpenLocalServerGateInSameBrowserTab(): boolean {
+  if (typeof window === "undefined") return false;
+  return !isElectronDesktopApp() && !isCapacitorNativeApp();
+}
+
 type PlElectronGateBridge = {
   setRemoteAuth?: (serverUrl: string, accessToken: string) => { ok?: boolean };
 };
@@ -161,15 +192,19 @@ export function resolveLocalServerGateAccessToken(gate: GateRecord): string {
   return (gate.accessToken || "").trim() || readDevClientAccessToken();
 }
 
-/** Open remote server in WebView (APK/EXE client path). */
+/** Open remote server in WebView (APK/EXE) or in-place on web (localhost / pocket-ledger.com). */
 export function navigateToLocalServerGate(gate: GateRecord, companyId?: string): void {
   if (gate.type !== "local_server" || !gate.serverUrl) return;
   const token = resolveLocalServerGateAccessToken(gate);
   if (token) persistDevClientAccessToken(token);
-  const url = buildLocalServerConnectUrl(gate.serverUrl, token, companyId);
-  markPlRemoteServerClientMode();
   applyActiveGateRuntime({ ...gate, accessToken: token || gate.accessToken });
   writeActiveGateId(gate.id);
+  if (shouldOpenLocalServerGateInSameBrowserTab()) {
+    dispatchGateChanged();
+    return;
+  }
+  const url = buildLocalServerConnectUrl(gate.serverUrl, token, companyId);
+  markPlRemoteServerClientMode();
   try {
     const bridge = (window as Window & { plElectronGate?: PlElectronGateBridge }).plElectronGate;
     bridge?.setRemoteAuth?.(gate.serverUrl, token);
@@ -214,6 +249,7 @@ export function filterCompaniesForActiveGate(companies: Company[], gate: GateRec
       (c) =>
         !isOfflineCompanyStorage(c) ||
         isCloudBackedCompanyShape(c) ||
+        isDeviceLocalCompany(c) ||
         String(c.storageOption || "").toLowerCase() === "firebase"
     );
   }

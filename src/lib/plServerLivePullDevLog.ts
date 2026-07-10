@@ -3,20 +3,21 @@
 import { getLocalAuthToken } from "@/lib/localApiClient";
 import { getActiveGate } from "@/lib/gates/gateStore";
 import type { GateRecord } from "@/lib/gates/gateTypes";
-import { isServerGateCompany } from "@/lib/companyStorageKind";
 import {
   getPlServerSharedCompanies,
   readPlServerGatePreviewContext,
   shouldFetchPlServerAccessContext,
 } from "@/lib/plServerAccessContext";
 import { isCompanyAllowedOnActiveServerGate } from "@/lib/plServerRemoteCompanyLogin";
+import { isPlServerSharedCompanyRow } from "@/lib/plServerAccessContext";
 import { resolveLocalServerGateAccessToken } from "@/lib/gates/gateRuntime";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 
-/** Live pull tracing — dev + packaged EXE (public web production me band). */
+/** Live pull tracing — dev + packaged EXE/APK (public web production me band). */
 function livePullLoggingEnabled(): boolean {
   if (process.env.NODE_ENV === "development") return true;
-  return isElectronDesktopApp();
+  return isElectronDesktopApp() || isCapacitorNativeApp();
 }
 
 export function livePullDevLog(message: string, detail?: Record<string, unknown>): void {
@@ -26,6 +27,18 @@ export function livePullDevLog(message: string, detail?: Record<string, unknown>
     return;
   }
   console.log(`[LivePull] ${message}`);
+}
+
+/** Operator / dev bug catch — failures with actionable root-cause codes (EXE + dev). */
+export function livePullBugCatch(
+  code: string,
+  detail: Record<string, unknown> & { companyId?: string }
+): void {
+  if (!livePullLoggingEnabled()) return;
+  console.warn(`[LivePullBug] ${code}`, {
+    at: new Date().toISOString(),
+    ...detail,
+  });
 }
 
 /** Per-doc merge skip — EXE + dev (public web production me band). */
@@ -84,7 +97,9 @@ export function buildLivePullSchedulerSnapshot(
   const gatePathOk =
     gate.type === "local_server" && Boolean(gate.serverUrl) && gateCompanyAllowed;
   const canSync = localAuthTokenPresent || gatePathOk;
-  const isServerRow = isServerGateCompany(company) || company?.plServerShared === true;
+  const isServerRow =
+    isPlServerSharedCompanyRow(company, gate.id) ||
+    (Boolean(id) && isPlServerSharedCompanyRow({ id }, gate.id));
   const preview = readPlServerGatePreviewContext(gate.id);
   const blockers: LivePullSchedulerSnapshot["blockers"] = {};
   if (!id) blockers.noCompanyId = true;

@@ -34,13 +34,12 @@ function serializeMirrorDoc(doc: Record<string, unknown>): Record<string, unknow
   return outboxJsonParse(outboxJsonStringify(doc));
 }
 
-/** Host bridge renderer: loopback PlServer transport for post-commit publish. */
-export async function resolvePlServerHostPublishTransport(
+/** Host PC loopback HTTP — main window + bridge dono se (attachment mirror / mirror publish). */
+export async function resolvePlServerHostLoopbackTransport(
   companyId: string
 ): Promise<HostPublishTransport | null> {
   if (typeof window === "undefined") return null;
   if (isPlRemoteServerClientMode()) return null;
-  if (!isCanonicalServerBridgeRenderer()) return null;
   if (!isLocalAppServerHost()) return null;
 
   const id = String(companyId || "").trim();
@@ -65,37 +64,20 @@ export async function resolvePlServerHostPublishTransport(
     return null;
   }
 
-  let tokens: Awaited<ReturnType<typeof api.listAccessTokens>> = [];
-  try {
-    tokens = await api.listAccessTokens();
-  } catch {
-    return null;
-  }
-  if (!tokens.length) return null;
-
-  let tokenId: string | null = null;
-  for (const row of tokens) {
-    const allowed = Array.isArray(row.allowedCompanyIds) ? row.allowedCompanyIds : [];
-    if (!allowed.length || allowed.includes(id)) {
-      tokenId = row.id;
-      break;
-    }
-  }
-  if (!tokenId) return null;
-
-  let accessToken = "";
-  try {
-    const secret = await api.getAccessTokenSecret(tokenId);
-    if (!secret?.ok || !secret.token) return null;
-    accessToken = secret.token;
-  } catch {
-    return null;
-  }
-
+  // Host loopback requests hit 127.0.0.1; the local server explicitly trusts localhost.
+  // Do not require a user-created share token just to preview this PC's own attachment bytes.
   return {
     baseUrl: `http://127.0.0.1:${sharingPort}`,
-    accessToken,
+    accessToken: "",
   };
+}
+
+/** Host bridge renderer: loopback PlServer transport for post-commit publish. */
+export async function resolvePlServerHostPublishTransport(
+  companyId: string
+): Promise<HostPublishTransport | null> {
+  if (!isCanonicalServerBridgeRenderer()) return null;
+  return resolvePlServerHostLoopbackTransport(companyId);
 }
 
 async function shouldPublishHostMirrorAfterBridgeWrite(companyId: string): Promise<boolean> {

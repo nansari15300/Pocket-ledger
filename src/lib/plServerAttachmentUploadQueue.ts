@@ -1,23 +1,20 @@
 "use client";
 
-import { isServerGateCompany } from "@/lib/companyStorageKind";
-import { getLocalCompanyById } from "@/lib/localCompanyStore";
-import { isLocalAppServerHost } from "@/lib/localAppServerDevPreview";
-import { isLocalServerShareableCompany } from "@/lib/localServerShareableCompanies";
 import { gateHttpPost } from "@/lib/gates/gateServerFetch";
 import { shouldFetchPlServerAccessContext } from "@/lib/plServerAccessContext";
-import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 import {
   LOCAL_FILE_PREFIX,
   getPendingPayloadForLocalRef,
   resolvePendingPayloadCompanyId,
   type PendingFilePayload,
 } from "@/lib/localPendingFiles";
-import { computeSha256HexFromBlob } from "@/lib/security/sha256Hex";
+import { computeSha256HexFromBytes } from "@/lib/security/sha256Hex";
 import { resolvePlServerMirrorTransport } from "@/lib/plServerClientMirrorPush";
+import { resolvePlServerHostLoopbackTransport } from "@/lib/plServerHostMirrorPublish";
 
 const UPLOAD_DEBOUNCE_MS = 400;
 const UPLOAD_RETRY_MS = 4_000;
+const UPLOAD_SAVE_TIMEOUT_MS = 15_000;
 
 type QueuedAttachment = {
   companyId: string;
@@ -29,6 +26,21 @@ type QueuedAttachment = {
   contentType?: string;
 };
 
+type AttachmentUploadTransport = {
+  baseUrl: string;
+  accessToken: string;
+  viaHostLoopback: boolean;
+};
+
+export type PlServerAttachmentUploadFlushResult = {
+  ok: boolean;
+  uploaded: number;
+  failed: number;
+  missingBytes: number;
+  pending: number;
+  error?: string;
+};
+
 const queuedAttachments = new Map<string, QueuedAttachment>();
 const pendingFlushByCompany = new Map<string, ReturnType<typeof setTimeout>>();
 const retryFlushByCompany = new Map<string, ReturnType<typeof setTimeout>>();
@@ -37,45 +49,44 @@ function queueKey(companyId: string, localId: string): string {
   return `${companyId}::${localId}`;
 }
 
-function blobToBase64(blob: Blob): Promise<string> {
-  return blob.arrayBuffer().then((ab) => {
-    const bytes = new Uint8Array(ab);
-    let binary = "";
-    const chunkSize = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-    }
-    return btoa(binary);
-  });
+function arrayBufferToBase64(ab: ArrayBuffer): string {
+  const bytes = new Uint8Array(ab);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
 }
 
-/** Server PC: shareable source company — bytes already on this device. */
-async function shouldSkipPlServerAttachmentUploadAsHost(companyId: string): Promise<boolean> {
-  if (isPlRemoteServerClientMode()) return false;
-  if (typeof window === "undefined" || !isLocalAppServerHost()) return false;
-  if (typeof window.__plListShareableLocalCompanies !== "function") return false;
+/** Host main window → loopback bridge storage; staff → active gate URL. */
+async function resolvePlServerAttachmentUploadTransport(
+  companyId: string
+): Promise<AttachmentUploadTransport | null> {
   const id = String(companyId || "").trim();
-  if (!id) return false;
-  try {
-    const reg = await getLocalCompanyById(id, { includeDeleted: true });
-    if (!reg || !isLocalServerShareableCompany(reg)) return false;
-    if (isServerGateCompany(reg)) return false;
-    return true;
-  } catch {
-    return false;
+  if (!id) return null;
+
+  const hostLoopback = await resolvePlServerHostLoopbackTransport(id);
+  if (hostLoopback) {
+    return { ...hostLoopback, viaHostLoopback: true };
   }
+
+  if (!shouldFetchPlServerAccessContext()) return null;
+  const transport = resolvePlServerMirrorTransport(id);
+  if (!transport) return null;
+  if (!transport.gateAllowed && !transport.unlockedLocally) return null;
+  return {
+    baseUrl: transport.baseUrl,
+    accessToken: transport.accessToken,
+    viaHostLoopback: false,
+  };
 }
 
 export async function shouldEnqueuePlServerAttachmentUpload(companyId: string): Promise<boolean> {
-  if (typeof window === "undefined" || !shouldFetchPlServerAccessContext()) return false;
-  if (isPlRemoteServerClientMode()) return false;
+  if (typeof window === "undefined") return false;
   const id = String(companyId || "").trim();
   if (!id) return false;
-  if (await shouldSkipPlServerAttachmentUploadAsHost(id)) return false;
-  const transport = resolvePlServerMirrorTransport(id);
-  if (!transport) return false;
-  if (!transport.gateAllowed && !transport.unlockedLocally) return false;
-  return true;
+  return (await resolvePlServerAttachmentUploadTransport(id)) != null;
 }
 
 function scheduleAttachmentUploadFlush(companyId: string): void {
@@ -126,19 +137,68 @@ export function enqueuePlServerAttachmentUpload(payload: PendingFilePayload): vo
   })();
 }
 
-async function flushPlServerAttachmentUploadQueue(companyId: string): Promise<void> {
+function normalizeLocalIdSet(localIds?: readonly string[]): Set<string> | null {
+  if (!localIds?.length) return null;
+  const out = new Set<string>();
+  for (const id of localIds) {
+    const s = String(id || "").trim();
+    if (s) out.add(s);
+  }
+  return out.size > 0 ? out : null;
+}
+
+function countQueuedAttachmentsForCompany(companyId: string, localIds?: readonly string[]): number {
   const cid = String(companyId || "").trim();
-  if (!cid) return;
-  if (!(await shouldEnqueuePlServerAttachmentUpload(cid))) return;
-  const transport = resolvePlServerMirrorTransport(cid);
-  if (!transport) return;
+  if (!cid) return 0;
+  const allowed = normalizeLocalIdSet(localIds);
+  return [...queuedAttachments.entries()].filter(
+    ([key, item]) => key.startsWith(`${cid}::`) && (!allowed || allowed.has(item.localId))
+  ).length;
+}
+
+function buildFlushFailureError(result: PlServerAttachmentUploadFlushResult): Error {
+  return new Error(
+    result.error ||
+      `PL server attachment upload failed (${result.failed} failed, ${result.pending} pending).`
+  );
+}
+
+async function flushPlServerAttachmentUploadQueue(
+  companyId: string,
+  options?: { throwOnFailure?: boolean; localIds?: readonly string[] }
+): Promise<PlServerAttachmentUploadFlushResult> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return { ok: true, uploaded: 0, failed: 0, missingBytes: 0, pending: 0 };
+  const allowed = normalizeLocalIdSet(options?.localIds);
+  const keysForCompany = [...queuedAttachments.entries()]
+    .filter(([key, item]) => key.startsWith(`${cid}::`) && (!allowed || allowed.has(item.localId)))
+    .map(([key]) => key);
+  if (keysForCompany.length === 0) {
+    return { ok: true, uploaded: 0, failed: 0, missingBytes: 0, pending: 0 };
+  }
+
+  const transport = await resolvePlServerAttachmentUploadTransport(cid);
+  if (!transport) {
+    scheduleAttachmentUploadRetry(cid);
+    const result: PlServerAttachmentUploadFlushResult = {
+      ok: false,
+      uploaded: 0,
+      failed: keysForCompany.length,
+      missingBytes: 0,
+      pending: keysForCompany.length,
+      error: "attachment_upload_transport_unavailable",
+    };
+    if (options?.throwOnFailure) throw buildFlushFailureError(result);
+    return result;
+  }
 
   const url = `${transport.baseUrl.replace(/\/$/, "")}/__pl_attachment`;
-  const keysForCompany = [...queuedAttachments.entries()]
-    .filter(([key]) => key.startsWith(`${cid}::`))
-    .map(([key]) => key);
 
   let hadFailure = false;
+  let uploaded = 0;
+  let failed = 0;
+  let missingBytes = 0;
+  let lastError = "";
 
   for (const key of keysForCompany) {
     const item = queuedAttachments.get(key);
@@ -146,15 +206,23 @@ async function flushPlServerAttachmentUploadQueue(companyId: string): Promise<vo
     const pending = await getPendingPayloadForLocalRef(`${LOCAL_FILE_PREFIX}${item.localId}`);
     if (!pending?.blob || pending.blob.size <= 0) {
       hadFailure = true;
+      failed += 1;
+      missingBytes += 1;
+      lastError = "attachment_bytes_missing";
       continue;
     }
     let base64 = "";
     let sha256Hex = "";
     try {
-      base64 = await blobToBase64(pending.blob);
-      sha256Hex = await computeSha256HexFromBlob(pending.blob);
+      const ab = await pending.blob.arrayBuffer();
+      [base64, sha256Hex] = await Promise.all([
+        Promise.resolve(arrayBufferToBase64(ab)),
+        computeSha256HexFromBytes(ab),
+      ]);
     } catch {
       hadFailure = true;
+      failed += 1;
+      lastError = "attachment_encode_failed";
       continue;
     }
     try {
@@ -168,15 +236,18 @@ async function flushPlServerAttachmentUploadQueue(companyId: string): Promise<vo
         storagePathPrefix: item.storagePathPrefix || pending.storagePathPrefix,
         docPath: item.docPath || pending.docPath,
         field: item.field || pending.field,
-      });
+      }, { timeoutMs: UPLOAD_SAVE_TIMEOUT_MS });
       if (!status || status >= 400) {
         console.warn("[plServerAttachmentUpload] upload failed", {
           companyId: cid,
           localId: item.localId,
+          viaHostLoopback: transport.viaHostLoopback,
           status,
           body: String(body || "").slice(0, 200),
         });
         hadFailure = true;
+        failed += 1;
+        lastError = body || `HTTP ${status || 0}`;
         continue;
       }
       let parsed: { ok?: boolean; error?: string; deduped?: boolean } = {};
@@ -192,34 +263,289 @@ async function flushPlServerAttachmentUploadQueue(companyId: string): Promise<vo
         console.warn("[plServerAttachmentUpload] upload rejected", {
           companyId: cid,
           localId: item.localId,
+          viaHostLoopback: transport.viaHostLoopback,
           error: parsed.error,
         });
         hadFailure = true;
+        failed += 1;
+        lastError = parsed.error || "attachment_upload_rejected";
         continue;
       }
       queuedAttachments.delete(key);
+      uploaded += 1;
+      const localRef = localRefFromPendingId(item.localId);
+      void import("@/lib/offlineAttachmentUrlCache").then(async (m) => {
+        await m.seedOfflineAttachmentCacheFromBlob(localRef, pending.blob);
+      });
+      void import("@/lib/attachmentLoadReady").then((m) => m.markAttachmentUrlReady(localRef));
     } catch (e) {
       console.warn("[plServerAttachmentUpload] upload network error", {
         companyId: cid,
         localId: item.localId,
+        viaHostLoopback: transport.viaHostLoopback,
         error: e instanceof Error ? e.message : String(e),
       });
       hadFailure = true;
+      failed += 1;
+      lastError = e instanceof Error ? e.message : String(e);
     }
   }
 
   if (hadFailure) scheduleAttachmentUploadRetry(cid);
+  const pending = countQueuedAttachmentsForCompany(cid, options?.localIds);
+  const result: PlServerAttachmentUploadFlushResult = {
+    ok: !hadFailure && pending === 0,
+    uploaded,
+    failed,
+    missingBytes,
+    pending,
+    error: hadFailure ? lastError || "attachment_upload_failed" : undefined,
+  };
+  if (options?.throwOnFailure && !result.ok) throw buildFlushFailureError(result);
+  return result;
 }
 
 export function isPlServerAttachmentUploadPending(companyId: string, localId: string): boolean {
   return queuedAttachments.has(queueKey(String(companyId || "").trim(), String(localId || "").trim()));
 }
 
-/** Dev / tests: force flush without debounce. */
-export async function flushPlServerAttachmentUploadQueueNow(companyId: string): Promise<void> {
-  await flushPlServerAttachmentUploadQueue(String(companyId || "").trim());
+/** Save path: debounce/retry cancel karke turant server par bytes push. */
+export async function flushPlServerAttachmentUploadQueueNow(
+  companyId: string,
+  options?: { throwOnFailure?: boolean; localIds?: readonly string[] }
+): Promise<PlServerAttachmentUploadFlushResult> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return { ok: true, uploaded: 0, failed: 0, missingBytes: 0, pending: 0 };
+  const pendingTimer = pendingFlushByCompany.get(cid);
+  if (pendingTimer) {
+    clearTimeout(pendingTimer);
+    pendingFlushByCompany.delete(cid);
+  }
+  const retryTimer = retryFlushByCompany.get(cid);
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+    retryFlushByCompany.delete(cid);
+  }
+  return flushPlServerAttachmentUploadQueue(cid, options);
 }
 
 export function localRefFromPendingId(localId: string): string {
   return `${LOCAL_FILE_PREFIX}${String(localId || "").trim()}`;
+}
+
+function localIdFromAttachmentRef(raw: string): string | null {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed.startsWith(LOCAL_FILE_PREFIX)) return null;
+  const id = trimmed.slice(LOCAL_FILE_PREFIX.length).trim();
+  return id || null;
+}
+
+async function listLocalAttachmentRefsInRecord(record: Record<string, unknown>): Promise<string[]> {
+  const { getVoucherAttachmentUrlsForUi } = await import("@/lib/voucherAttachmentNormalize");
+  const { listLocalAttachmentRefsInEntityRecord } = await import("@/lib/entityProfileLocalFiles");
+  const seen = new Set<string>();
+  const push = (raw: unknown) => {
+    if (typeof raw !== "string") return;
+    const ref = raw.trim();
+    if (!localIdFromAttachmentRef(ref)) return;
+    seen.add(ref);
+  };
+  for (const ref of getVoucherAttachmentUrlsForUi(record)) push(ref);
+  for (const ref of listLocalAttachmentRefsInEntityRecord(record)) push(ref);
+  return [...seen];
+}
+
+export async function listLocalAttachmentIdsInRecord(record: Record<string, unknown>): Promise<string[]> {
+  const seen = new Set<string>();
+  for (const ref of await listLocalAttachmentRefsInRecord(record)) {
+    const id = localIdFromAttachmentRef(ref);
+    if (id) seen.add(id);
+  }
+  return [...seen];
+}
+
+async function localRefHasPendingBytes(localRef: string): Promise<boolean> {
+  const localId = localIdFromAttachmentRef(localRef);
+  if (!localId) return false;
+  const pending = await getPendingPayloadForLocalRef(`${LOCAL_FILE_PREFIX}${localId}`);
+  return Boolean(pending?.blob && pending.blob.size > 0);
+}
+
+async function localRefIsAvailableOnPlServerHost(companyId: string, localRef: string): Promise<boolean> {
+  try {
+    const { fetchPlServerAttachmentBlob } = await import("@/lib/plServerAttachmentFetch");
+    const blob = await fetchPlServerAttachmentBlob(companyId, localRef);
+    return Boolean(blob && blob.size > 0);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Direct PL/host write guard: record me `local:` refs tabhi authoritative doc me jaane do
+ * jab bytes queue/host par confirmed hon. Warna server doc preview corrupt ho jata hai.
+ */
+export async function flushPlServerAttachmentsForRecordBeforeAuthoritativeSave(
+  companyId: string,
+  record: Record<string, unknown>,
+  options?: { throwOnFailure?: boolean }
+): Promise<PlServerAttachmentUploadFlushResult> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return { ok: true, uploaded: 0, failed: 0, missingBytes: 0, pending: 0 };
+  const refs = await listLocalAttachmentRefsInRecord(record);
+  if (refs.length === 0) return { ok: true, uploaded: 0, failed: 0, missingBytes: 0, pending: 0 };
+
+  const localIds = await listLocalAttachmentIdsInRecord(record);
+  if (!(await shouldEnqueuePlServerAttachmentUpload(cid))) {
+    const result: PlServerAttachmentUploadFlushResult = {
+      ok: false,
+      uploaded: 0,
+      failed: refs.length,
+      missingBytes: 0,
+      pending: refs.length,
+      error: "attachment_upload_transport_unavailable",
+    };
+    if (options?.throwOnFailure) throw buildFlushFailureError(result);
+    return result;
+  }
+
+  await ensurePlServerAttachmentsQueuedFromRecord(cid, record);
+
+  const missingLocalBytes: string[] = [];
+  for (const ref of refs) {
+    if (!(await localRefHasPendingBytes(ref))) missingLocalBytes.push(ref);
+  }
+  if (missingLocalBytes.length > 0) {
+    for (const ref of missingLocalBytes) {
+      if (await localRefIsAvailableOnPlServerHost(cid, ref)) continue;
+      const result: PlServerAttachmentUploadFlushResult = {
+        ok: false,
+        uploaded: 0,
+        failed: missingLocalBytes.length,
+        missingBytes: missingLocalBytes.length,
+        pending: countQueuedAttachmentsForCompany(cid, localIds),
+        error: "attachment_bytes_missing_on_device_and_host",
+      };
+      if (options?.throwOnFailure) throw buildFlushFailureError(result);
+      return result;
+    }
+  }
+
+  return flushPlServerAttachmentUploadQueueNow(cid, {
+    throwOnFailure: options?.throwOnFailure,
+    localIds,
+  });
+}
+
+async function queueLocalRefIfPending(companyId: string, localRef: string): Promise<void> {
+  const cid = String(companyId || "").trim();
+  const localId = localIdFromAttachmentRef(localRef);
+  if (!cid || !localId) return;
+  const key = queueKey(cid, localId);
+  if (queuedAttachments.has(key)) return;
+  const pending = await getPendingPayloadForLocalRef(`${LOCAL_FILE_PREFIX}${localId}`);
+  if (!pending?.blob || pending.blob.size <= 0) return;
+  queuedAttachments.set(key, {
+    companyId: cid,
+    localId,
+    fileName: pending.fileName,
+    contentType: pending.contentType || pending.blob.type || "application/octet-stream",
+    docPath: pending.docPath,
+    field: pending.field,
+    storagePathPrefix: pending.storagePathPrefix,
+  });
+}
+
+/** Save/flush se pehle: payload ke `local:` refs queue me hon (enqueue race — receipt bytes miss). */
+export async function ensurePlServerAttachmentsQueuedFromRecord(
+  companyId: string,
+  record: Record<string, unknown>
+): Promise<void> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return;
+  if (!(await shouldEnqueuePlServerAttachmentUpload(cid))) return;
+  const seen = new Set<string>();
+  const queueRef = async (localRef: string) => {
+    const id = localIdFromAttachmentRef(localRef);
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    await queueLocalRefIfPending(cid, localRef);
+  };
+  for (const ref of await listLocalAttachmentRefsInRecord(record)) {
+    await queueRef(ref);
+  }
+}
+
+/** Host main window: saved attachments (vouchers + masters) ko bridge storage me mirror (staff GET fix). */
+export async function backfillPlServerHostAttachmentsToBridge(): Promise<void> {
+  if (typeof window === "undefined") return;
+  const { isLocalAppServerHost } = await import("@/lib/localAppServerDevPreview");
+  const { isCanonicalServerBridgeRenderer } = await import("@/lib/hostBridgeWrite");
+  if (!isLocalAppServerHost() || isCanonicalServerBridgeRenderer()) return;
+
+  const { listLocalCompanies } = await import("@/lib/localCompanyStore");
+  const { isLocalServerShareableCompany } = await import("@/lib/localServerShareableCompanies");
+  const { isServerGateCompany } = await import("@/lib/companyStorageKind");
+  const { listCompanyDocsFromBrowserDb } = await import("@/lib/localCompanyDocMirror");
+  const { getVoucherAttachmentUrlsForUi } = await import("@/lib/voucherAttachmentNormalize");
+  const { listLocalAttachmentRefsInEntityRecord } = await import("@/lib/entityProfileLocalFiles");
+
+  const MASTER_COLLECTIONS = [
+    "parties",
+    "bank_accounts",
+    "staff",
+    "items",
+    "taxes",
+    "expense_accounts",
+  ] as const;
+
+  const companies = await listLocalCompanies();
+  for (const row of companies) {
+    const cid = String(row.id || "").trim();
+    if (!cid || !isLocalServerShareableCompany(row) || isServerGateCompany(row)) continue;
+    if (!(await resolvePlServerHostLoopbackTransport(cid))) continue;
+
+    const seen = new Set<string>();
+
+    const queueRef = async (localRef: string) => {
+      const localId = localIdFromAttachmentRef(localRef);
+      if (!localId || seen.has(localId)) return;
+      seen.add(localId);
+      const pending = await getPendingPayloadForLocalRef(`${LOCAL_FILE_PREFIX}${localId}`);
+      if (!pending?.blob || pending.blob.size <= 0) return;
+      queuedAttachments.set(queueKey(cid, localId), {
+        companyId: cid,
+        localId,
+        fileName: pending.fileName,
+        contentType: pending.contentType || pending.blob.type || "application/octet-stream",
+        docPath: pending.docPath,
+        field: pending.field,
+        storagePathPrefix: pending.storagePathPrefix,
+      });
+    };
+
+    const vouchers = await listCompanyDocsFromBrowserDb(cid, "vouchers", { forBackupMerge: true }).catch(
+      () => [] as Array<Record<string, unknown>>
+    );
+    for (const voucher of vouchers) {
+      for (const url of getVoucherAttachmentUrlsForUi(voucher)) {
+        await queueRef(url);
+      }
+    }
+
+    for (const col of MASTER_COLLECTIONS) {
+      const rows = await listCompanyDocsFromBrowserDb(cid, col, { forBackupMerge: true }).catch(
+        () => [] as Array<Record<string, unknown>>
+      );
+      for (const doc of rows) {
+        for (const ref of listLocalAttachmentRefsInEntityRecord(doc)) {
+          await queueRef(ref);
+        }
+      }
+    }
+
+    if (seen.size > 0) {
+      await flushPlServerAttachmentUploadQueueNow(cid);
+    }
+  }
 }

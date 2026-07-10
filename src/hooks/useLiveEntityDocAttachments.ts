@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { doc, onSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
@@ -19,16 +19,24 @@ type LiveEntityAttachmentFields = {
 };
 
 function readAttachmentFieldsFromRow(d: Record<string, unknown>): LiveEntityAttachmentFields {
-  return {
-    fileUrl: (d.fileUrl as string | null | undefined) ?? null,
-    documentFileUrls: Array.isArray(d.documentFileUrls)
+  const out: LiveEntityAttachmentFields = {};
+  if (Object.prototype.hasOwnProperty.call(d, "fileUrl")) {
+    out.fileUrl = (d.fileUrl as string | null | undefined) ?? null;
+  }
+  if (Object.prototype.hasOwnProperty.call(d, "documentFileUrls")) {
+    out.documentFileUrls = Array.isArray(d.documentFileUrls)
       ? d.documentFileUrls.filter((u): u is string => typeof u === "string")
-      : [],
-    avatarUrl: (d.avatarUrl as string | null | undefined) ?? null,
-    fileUrls: Array.isArray(d.fileUrls)
+      : [];
+  }
+  if (Object.prototype.hasOwnProperty.call(d, "avatarUrl")) {
+    out.avatarUrl = (d.avatarUrl as string | null | undefined) ?? null;
+  }
+  if (Object.prototype.hasOwnProperty.call(d, "fileUrls")) {
+    out.fileUrls = Array.isArray(d.fileUrls)
       ? d.fileUrls.filter((u): u is string => typeof u === "string")
-      : [],
-  };
+      : [];
+  }
+  return out;
 }
 
 /**
@@ -46,6 +54,9 @@ export function useLiveEntityDocAttachments(params: {
   onFields: (fields: LiveEntityAttachmentFields) => void;
 }): void {
   const { enabled, companyId, collection, entityId, attachmentsDirty, preferSqliteMirror, onFields } = params;
+  const [effectivePreferSqlite, setEffectivePreferSqlite] = useState<boolean | null>(
+    preferSqliteMirror === true ? true : null
+  );
 
   const attachmentsDirtyRef = useRef(attachmentsDirty);
   attachmentsDirtyRef.current = attachmentsDirty;
@@ -58,7 +69,31 @@ export function useLiveEntityDocAttachments(params: {
   };
 
   useEffect(() => {
-    if (!enabled || !companyId || !entityId || preferSqliteMirror) return;
+    if (!enabled || !companyId) {
+      setEffectivePreferSqlite(null);
+      return;
+    }
+    if (preferSqliteMirror === true) {
+      setEffectivePreferSqlite(true);
+      return;
+    }
+    let cancelled = false;
+    setEffectivePreferSqlite(null);
+    void import("@/lib/plServerThinStaffClient")
+      .then(({ isPlServerThinStaffCompany }) => isPlServerThinStaffCompany(companyId))
+      .then((thinStaffCompany) => {
+        if (!cancelled) setEffectivePreferSqlite(thinStaffCompany);
+      })
+      .catch(() => {
+        if (!cancelled) setEffectivePreferSqlite(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, companyId, preferSqliteMirror]);
+
+  useEffect(() => {
+    if (!enabled || !companyId || !entityId || effectivePreferSqlite !== false) return;
     let unsub: (() => void) | undefined;
     let cancelled = false;
     void resolveAuthoritativeFirestoreCompanyId(companyId).then((fsCompanyId) => {
@@ -73,10 +108,10 @@ export function useLiveEntityDocAttachments(params: {
       cancelled = true;
       unsub?.();
     };
-  }, [enabled, companyId, collection, entityId, preferSqliteMirror]);
+  }, [enabled, companyId, collection, entityId, effectivePreferSqlite]);
 
   useEffect(() => {
-    if (!enabled || !companyId || !entityId) return;
+    if (!enabled || !companyId || !entityId || effectivePreferSqlite == null) return;
 
     const loadFromSqlite = async () => {
       if (attachmentsDirtyRef.current) return;
@@ -89,7 +124,7 @@ export function useLiveEntityDocAttachments(params: {
       }
     };
 
-    if (preferSqliteMirror) void loadFromSqlite();
+    if (effectivePreferSqlite) void loadFromSqlite();
 
     const onBump = (event: Event) => {
       const detail = (event as CustomEvent<BrowserDbCollectionBumpDetail>).detail;
@@ -99,5 +134,5 @@ export function useLiveEntityDocAttachments(params: {
 
     window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
     return () => window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
-  }, [enabled, companyId, collection, entityId, preferSqliteMirror]);
+  }, [enabled, companyId, collection, entityId, effectivePreferSqlite]);
 }

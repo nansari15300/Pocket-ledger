@@ -15,6 +15,10 @@ import { setCloudSyncCursor } from "@/lib/localCloudSync/queue";
 import type { CloudSyncManifest, DriveSharedCompanyListItem } from "@/lib/localCloudSync/types";
 import { markDriveRestoreSelectionGrace } from "@/lib/driveRestoredLocalCompany";
 import { downloadAndMergeOpeningUsersFromDrive } from "@/lib/localCloudSync/openingDriveSnapshot";
+import {
+  isLocalGoogleDriveSyncDisabled,
+  LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE,
+} from "@/lib/localCloudSync/driveSyncDisabled";
 
 export type DriveSharedCompanyInvite = DriveSharedCompanyListItem;
 
@@ -37,6 +41,7 @@ async function resolveOwnerUidByEmail(email: string): Promise<string | null> {
 
 /** Drive par shared company folders — joined rows UI me "Connected" dikhane ke liye filter mat karo. */
 export async function listDriveSharedLocalCompanyInvites(): Promise<DriveSharedCompanyInvite[]> {
+  if (isLocalGoogleDriveSyncDisabled()) return [];
   const res = await postDriveJsonViaClient<{ companies?: DriveSharedCompanyInvite[] }>(
     "/api/local-cloud-sync/drive/list-shared-companies",
     {}
@@ -108,6 +113,7 @@ export function isDriveSharedInviteAlreadyJoined(
 export async function peekDriveSharedCompanyManifest(
   invite: DriveSharedCompanyInvite
 ): Promise<CloudSyncManifest> {
+  if (isLocalGoogleDriveSyncDisabled()) throw new Error(LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE);
   return postDriveJsonViaClient<CloudSyncManifest>("/api/local-cloud-sync/drive/manifest", {
     companyId: invite.companyId,
     companyName: invite.companyName,
@@ -126,6 +132,7 @@ export async function joinDriveSharedLocalCompany(
   invite: DriveSharedCompanyInvite,
   options?: JoinDriveSharedLocalCompanyOptions
 ): Promise<string> {
+  if (isLocalGoogleDriveSyncDisabled()) throw new Error(LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE);
   const firebaseUser = await getFirebaseAuthUserForApi();
 
   let manifest: CloudSyncManifest = { latestOp: 0 };
@@ -221,6 +228,7 @@ export async function resyncDriveLocalCompanyFromInvite(
   invite: DriveSharedCompanyInvite,
   options?: JoinDriveSharedLocalCompanyOptions
 ): Promise<string> {
+  if (isLocalGoogleDriveSyncDisabled()) throw new Error(LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE);
   const locals = await listLocalCompanies({ includeDeleted: true });
   const joined = findJoinedLocalCompanyForDriveInvite(invite, locals);
   if (!joined?.id) {
@@ -296,6 +304,7 @@ export async function resyncDriveLocalCompanyFromInvite(
 export async function preloadDriveSharedCompanyLoginFromInvite(
   invite: DriveSharedCompanyInvite
 ): Promise<string> {
+  if (isLocalGoogleDriveSyncDisabled()) throw new Error(LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE);
   const locals = await listLocalCompanies({ includeDeleted: true });
   const joined = findJoinedLocalCompanyForDriveInvite(invite, locals);
   if (!joined?.id) {

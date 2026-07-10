@@ -60,6 +60,8 @@ import {
   completeVoucherBackgroundProgress,
   replaceVoucherSaveLoadingWithShortSuccess,
   showVoucherBackgroundProgress,
+  beginVoucherSaveLoadingOrBlock,
+  voucherSaveErrorToast,
 } from "@/lib/voucherSaveUi";
 import type { CopyMasterDraftRequestPayload } from "./AddVoucherDialog";
 import BsDatePicker from "../ui/BsDatePicker";
@@ -89,6 +91,7 @@ import {
   convertPdfAttachmentsToJpegIfEnabled,
   shouldSuggestPdfAsImage,
 } from "@/lib/voucherAttachmentPdfAsImage";
+import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
 import { useAccountBalance } from "@/hooks/useAccountBalance";
 import { bankAccountAllowsVoucherMinusBalance } from "@/lib/bankAccountMinusBalancePolicy";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -333,6 +336,7 @@ export function CreatePaymentOutForm({
     () => files.filter((f): f is string => typeof f === "string"),
     [files]
   );
+  usePrewarmVisibleAttachments(attachmentClientFileUrlsForPreview, companyId);
   const [savePdfAsImage, setSavePdfAsImage] = useState(false);
   const showPdfAsImageToggle = useMemo(
     () =>
@@ -1145,7 +1149,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         setSavedVoucherId(voucher.id);
         const editUrls = voucherAttachmentUrlsForFormState(voucher);
         setFiles(editUrls);
-        initialFilesRef.current = editUrls;
+        initialFilesRef.current = editUrls.filter((f): f is string => typeof f === "string");
         setSavePdfAsImage(shouldSuggestPdfAsImage(editUrls));
         if (lastSyncedVoucherIdRef.current !== voucher.id) {
           lastSyncedVoucherIdRef.current = voucher.id;
@@ -1210,7 +1214,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const hasUnsavedFilePick = files.some((f) => f instanceof File);
     if (hasUnsavedFilePick) return;
     if (_isFileDirty) return;
-    const incoming = voucherAttachmentUrlsForFormState(voucher);
+    const incoming = voucherAttachmentUrlsForFormState(voucher).filter((f): f is string => typeof f === "string");
     const cur = files.filter((f): f is string => typeof f === "string");
     const snap = savedFileUrlsSnapshotRef.current;
     if (snap) {
@@ -1393,7 +1397,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       return;
     }
 
-    const toastId = sonnerToast.loading("Saving payment...");
+    const toastId = await beginVoucherSaveLoadingOrBlock(companyId, "Saving payment...");
+    if (toastId == null) return;
     setIsLoading(true);
 
     try {
@@ -1820,7 +1825,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         sonnerToast.error("Voucher limit reached", { id: toastId, description: error.message, action: { label: "Upgrade", onClick: () => window.location.assign("/billing") } });
       } else {
         console.error("Error saving voucher: ", error);
-        sonnerToast.error("Error", { id: toastId, description: "Failed to save voucher." });
+        voucherSaveErrorToast(toastId, error, "Failed to save voucher.");
       }
     } finally {
         setIsLoading(false);
@@ -3657,4 +3662,3 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     </>
   );
 }
-

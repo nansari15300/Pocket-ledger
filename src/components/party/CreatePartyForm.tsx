@@ -84,6 +84,7 @@ import {
   fetchRemoteUrlAsFile,
   partyPrefillPartsFromPartyRow,
 } from "@/lib/crossCompanyMasterPrefill";
+import { MasterPdfAsImageToggle } from "@/components/common/EntityProfileDocumentsNarrationFields";
 
 
 const formSchema = z
@@ -904,6 +905,7 @@ export function CreatePartyForm({
                 {avatarToUpload && (
                   <FilePreview
                     file={avatarToUpload.file}
+                    attachmentCompanyId={companyId ?? undefined}
                     onRemove={removeAvatar}
                     isCompressing={isCompressing}
                     compressionResult={compressionResult}
@@ -959,37 +961,41 @@ export function CreatePartyForm({
           ) : (
             <RestrictedFileUploader>
               {/* Add box aur previews ek hi flex row — pehle alag `space-y` se box hamesha neeche chala jata tha */}
-              <div className="flex flex-wrap items-start gap-2">
-                {/* 96px = Tailwind w-24 h-24 — dashed “PDF / image” box ke barabar */}
-                {documentFiles.map((f, idx) => (
-                  <FilePreview
-                    key={`${f.name}-${idx}-${f.size}`}
-                    file={f}
-                    onRemove={() => removeDocAt(idx)}
-                    size={96}
-                  />
-                ))}
-                {documentFiles.length < 5 && (
-                  <FormControl>
-                    <AttachmentHoldPasteSurface
-                      enabled={canAttachDocuments}
-                      onShortActivate={() => docsInputRef.current?.click()}
-                      onPastedFiles={(incoming) => void handleDocumentsChange(syntheticFileInputChangeEvent(incoming))}
-                      className="relative h-24 w-24 shrink-0 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                    >
-                      <Upload className="h-6 w-6" />
-                      <span className="text-xs mt-1 text-center px-1">PDF / image</span>
-                      <Input
-                        type="file"
-                        className="hidden"
-                        ref={docsInputRef}
-                        onChange={handleDocumentsChange}
-                        accept="image/*,application/pdf"
-                        multiple
-                      />
-                    </AttachmentHoldPasteSurface>
-                  </FormControl>
-                )}
+              <div className="space-y-2">
+                <MasterPdfAsImageToggle id="create-party-pdf-as-image" />
+                <div className="flex flex-wrap items-start gap-2">
+                  {/* 96px = Tailwind w-24 h-24 — dashed “PDF / image” box ke barabar */}
+                  {documentFiles.map((f, idx) => (
+                    <FilePreview
+                      key={`${f.name}-${idx}-${f.size}`}
+                      file={f}
+                      attachmentCompanyId={companyId ?? undefined}
+                      onRemove={() => removeDocAt(idx)}
+                      size={96}
+                    />
+                  ))}
+                  {documentFiles.length < 5 && (
+                    <FormControl>
+                      <AttachmentHoldPasteSurface
+                        enabled={canAttachDocuments}
+                        onShortActivate={() => docsInputRef.current?.click()}
+                        onPastedFiles={(incoming) => void handleDocumentsChange(syntheticFileInputChangeEvent(incoming))}
+                        className="relative h-24 w-24 shrink-0 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
+                      >
+                        <Upload className="h-6 w-6" />
+                        <span className="text-xs mt-1 text-center px-1">PDF / image</span>
+                        <Input
+                          type="file"
+                          className="hidden"
+                          ref={docsInputRef}
+                          onChange={handleDocumentsChange}
+                          accept="image/*,application/pdf"
+                          multiple
+                        />
+                      </AttachmentHoldPasteSurface>
+                    </FormControl>
+                  )}
+                </div>
               </div>
             </RestrictedFileUploader>
           )}

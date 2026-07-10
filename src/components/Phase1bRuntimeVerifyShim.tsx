@@ -36,12 +36,20 @@ declare global {
       companyId: string,
       docId: string
     ) => Promise<string | null>;
+    __plPhase1bVerifySetPendingAuthoritativeRetryCount?: (
+      companyId: string,
+      docId: string,
+      retryCount: number
+    ) => Promise<{ ok: boolean; retryCount?: number }>;
     __plPhase1bVerifyClearAllPendingAuthoritativeWrites?: () => Promise<{ removed: number }>;
     __plPhase1bVerifySimulateLanClientAuthoritativeRoute?: boolean;
     __plPhase1bVerifySeedPlServerSharedClientCompany?: (
       companyId: string,
       name: string
     ) => Promise<{ ok: boolean }>;
+    __plPhase1bVerifyPullPlServerSharedCompanyLive?: (
+      companyId: string
+    ) => Promise<{ ok: boolean; fullPull: boolean }>;
   }
 }
 
@@ -117,7 +125,7 @@ export function Phase1bRuntimeVerifyShim() {
     window.__plPhase1bVerifyDrainPendingAuthoritativeQueue = async () => {
       const { drainPlServerAuthoritativePendingQueue } = await import("@/lib/plServerAuthoritativeReplay");
       const result = await drainPlServerAuthoritativePendingQueue("verify");
-      return { drained: result.drained };
+      return { drained: result.drained, permanentFailures: result.permanentFailures };
     };
 
     window.__plPhase1bVerifyColdStartPendingReplay = async () => {
@@ -132,6 +140,15 @@ export function Phase1bRuntimeVerifyShim() {
       );
       const row = await getPendingAuthoritativeWriteByCoalesceKey(companyId, "vouchers", docId);
       return row?.state ?? null;
+    };
+
+    window.__plPhase1bVerifySetPendingAuthoritativeRetryCount = async (companyId, docId, retryCount) => {
+      const { getPendingAuthoritativeWriteByCoalesceKey, markPendingAuthoritativeWriteState } =
+        await import("@/lib/plServerAuthoritativePendingQueue");
+      const row = await getPendingAuthoritativeWriteByCoalesceKey(companyId, "vouchers", docId);
+      if (!row) return { ok: false };
+      await markPendingAuthoritativeWriteState(row, row.state, { retryCount });
+      return { ok: true, retryCount };
     };
 
     window.__plPhase1bVerifyClearAllPendingAuthoritativeWrites = async () => {
@@ -157,6 +174,11 @@ export function Phase1bRuntimeVerifyShim() {
       return { ok: true };
     };
 
+    window.__plPhase1bVerifyPullPlServerSharedCompanyLive = async (companyId) => {
+      const { syncPlServerSharedCompanyLive } = await import("@/lib/plServerClientMirrorPush");
+      return syncPlServerSharedCompanyLive(companyId);
+    };
+
     return () => {
       delete window.__plPhase1bVerifySeedCompany;
       delete window.__plPhase1bVerifyUpsertVoucher;
@@ -170,9 +192,11 @@ export function Phase1bRuntimeVerifyShim() {
       delete window.__plPhase1bVerifyDrainPendingAuthoritativeQueue;
       delete window.__plPhase1bVerifyColdStartPendingReplay;
       delete window.__plPhase1bVerifyGetPendingAuthoritativeState;
+      delete window.__plPhase1bVerifySetPendingAuthoritativeRetryCount;
       delete window.__plPhase1bVerifyClearAllPendingAuthoritativeWrites;
       delete window.__plPhase1bVerifySimulateLanClientAuthoritativeRoute;
       delete window.__plPhase1bVerifySeedPlServerSharedClientCompany;
+      delete window.__plPhase1bVerifyPullPlServerSharedCompanyLive;
     };
   }, []);
 

@@ -60,7 +60,7 @@ import {
 } from "@/lib/voucherLocalAttachmentUpload";
 import { applyVoucherAttachmentsAfterFormSave } from "@/lib/voucherFormAttachmentSave";
 import { toast as sonnerToast } from "sonner";
-import { replaceVoucherSaveLoadingWithShortSuccess } from "@/lib/voucherSaveUi";
+import { replaceVoucherSaveLoadingWithShortSuccess, beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
@@ -302,7 +302,7 @@ export function CreateNoteForm({
     const urls = voucherAttachmentUrlsForFormState(voucher);
     if (urls.length > 0) {
       setFiles(urls);
-      initialFilesRef.current = [...urls];
+      initialFilesRef.current = urls.filter((f): f is string => typeof f === "string");
       setSavePdfAsImage(shouldSuggestPdfAsImage(urls));
     } else {
       setFiles([]);
@@ -487,7 +487,8 @@ export function CreateNoteForm({
       return;
     }
     
-    const toastId = sonnerToast.loading("Saving note...");
+    const toastId = await beginVoucherSaveLoadingOrBlock(companyId, "Saving note...");
+    if (toastId == null) return;
     setIsLoading(true);
 
     try {
@@ -672,7 +673,7 @@ export function CreateNoteForm({
         } else if (isVoucherLimitError(err)) {
           sonnerToast.error("Voucher limit reached", { id: toastId, description: err.message, action: { label: "Upgrade", onClick: () => window.location.assign("/billing") } });
         } else {
-          sonnerToast.error("Save failed", { id: toastId });
+          voucherSaveErrorToast(toastId, err, "Save failed.");
         }
     } finally {
         setIsLoading(false);

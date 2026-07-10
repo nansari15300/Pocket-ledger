@@ -4,9 +4,14 @@ import { resolveDriveHostedApiUrl } from "@/lib/driveHostedApiOrigin";
 import { getFirebaseIdTokenForApi } from "@/lib/firebaseAuthForApi";
 import { hostedApiFetch } from "@/lib/hostedApiFetch";
 import { assertDriveMutationAllowedForCompany } from "@/lib/localCloudSync/driveUploadGate";
+import {
+  isLocalGoogleDriveSyncDisabled,
+  LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE,
+} from "@/lib/localCloudSync/driveSyncDisabled";
 
 /** Shared Drive API POST — client modules se duplicate fetch na ho. */
 export async function postDriveJsonViaClient<T>(path: string, body: unknown): Promise<T> {
+  if (isLocalGoogleDriveSyncDisabled()) throw new Error(LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE);
   await assertDriveMutationAllowedForCompany(path, body);
   const { token } = await getFirebaseIdTokenForApi();
   const apiUrl = resolveDriveHostedApiUrl(path);

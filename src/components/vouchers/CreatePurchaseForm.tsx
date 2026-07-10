@@ -40,7 +40,7 @@ import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, A
 import { cn } from "@/lib/utils";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
-import { replaceVoucherSaveLoadingWithShortSuccess } from "@/lib/voucherSaveUi";
+import { replaceVoucherSaveLoadingWithShortSuccess, beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
 
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -944,17 +944,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       data: PurchaseFormValues,
       { saveAndNew, print, approveAfterSave }: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}
     ): Promise<string | null> => {
-      const toastId = sonnerToast.loading("Saving purchase...");
-      if (isMounted.current) setIsLoading(true);
-
       if (!user || !companyId || !company) {
-        sonnerToast.error("Error", {
-          id: toastId,
-          description: "Login and company selection required.",
-        });
-        if (isMounted.current) setIsLoading(false);
+        sonnerToast.error("Error", { description: "Login and company selection required." });
         return null;
       }
+
+      const toastId = await beginVoucherSaveLoadingOrBlock(companyId, "Saving purchase...");
+      if (toastId == null) return null;
+      if (isMounted.current) setIsLoading(true);
 
       try {
         // Permission check: create or edit
@@ -1278,7 +1275,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           sonnerToast.error("Voucher limit reached", { id: toastId, description: error.message, action: { label: "Upgrade", onClick: () => window.location.assign("/billing") } });
         } else {
           console.error("Error preparing save operation: ", error);
-          sonnerToast.error("Error", { id: toastId, description: "An error occurred before saving." });
+          voucherSaveErrorToast(toastId, error, "An error occurred before saving.");
         }
         return null;
       } finally {

@@ -21,6 +21,8 @@ import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
 } from "@/components/entity/EntityListQuickFilterBar";
+import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
+import { useCompany } from "@/hooks/useCompany";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -55,6 +57,7 @@ export function StaffList({
   hideQuickFilterBar?: boolean;
 }) {
   const { formatCurrency } = useDate();
+  const { company } = useCompany();
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
@@ -89,6 +92,15 @@ export function StaffList({
       });
   }, [staff, searchTerm, quickFilter]);
 
+  const visibleStaffAttachmentUrls = useMemo(
+    () =>
+      filteredAndSortedStaff
+        .map((s) => trimEntityFileUrlForPreview(s.fileUrl))
+        .filter((u): u is string => Boolean(u)),
+    [filteredAndSortedStaff]
+  );
+  usePrewarmVisibleAttachments(visibleStaffAttachmentUrls, company?.id);
+
 
   return (
     <div className={masterListShellCn}>
@@ -116,6 +128,7 @@ export function StaffList({
                       >
                         <ResolvedEntityAvatar
                           className="h-8 w-8 text-xs"
+                          companyId={staffMember.companyId}
                           src={attachmentPreviewUrl ?? undefined}
                           alt={staffMember.name}
                           fallbackSlot={<Briefcase className="h-4 w-4 text-muted-foreground" />}

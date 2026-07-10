@@ -33,8 +33,7 @@ import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
 import { useDate } from "@/hooks/useDate";
 import { firestore } from "@/lib/firebase";
-import { collection, getDocs, addDoc, serverTimestamp, Timestamp } from "firebase/firestore";
-import { uploadFile } from "@/lib/storage";
+import { collection, getDocs, doc, Timestamp } from "firebase/firestore";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -57,6 +56,9 @@ import { RestrictedFileUploader } from "@/components/ui/RestrictedFileUploader";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { apkCloudCompanyOfflineViewOnly } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { uploadItemAvatarAndAttachmentsRemote } from "@/lib/entityProfileLocalFiles";
+import { writeEntity } from "@/lib/writeGateway";
+import { MasterPdfAsImageToggle } from "@/components/common/EntityProfileDocumentsNarrationFields";
 
 const schema = z.object({
   name: z.string().min(2, "Item name must be at least 2 characters."),
@@ -194,7 +196,9 @@ export function CreateFinishedGoodDialog({
         return;
       }
 
-      const fileUrls: string[] = [];
+      const itemRef = doc(collection(firestore, `companies/${companyId}/items`));
+      const newItemId = itemRef.id;
+      let fileUrls: string[] = [];
       const toUpload = files.filter((f): f is File => f instanceof File);
       if (toUpload.length > 0 && canAddAvatar) {
         const totalBytes = toUpload.slice(0, 3).reduce((s, f) => s + (f.size || 0), 0);
@@ -204,8 +208,9 @@ export function CreateFinishedGoodDialog({
           setIsLoading(false);
           return;
         }
+        const preparedFiles: File[] = [];
         for (const file of toUpload) {
-          if (fileUrls.length >= 3) break;
+          if (preparedFiles.length >= 3) break;
           const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
           let toSend: File;
           if (isPdf) {
@@ -225,19 +230,20 @@ export function CreateFinishedGoodDialog({
             }
             toSend = compressed;
           }
-          const res = await uploadFile(
-            { name: toSend.name, type: toSend.type, arrayBuffer: await toSend.arrayBuffer() },
+          preparedFiles.push(toSend);
+        }
+        if (preparedFiles.length > 0) {
+          const staged = await uploadItemAvatarAndAttachmentsRemote({
             companyId,
-            company?.name,
-            "avatar",
-            undefined,
-            undefined,
-            undefined,
-            new Date()
-          );
-          if (res.success && res.url) {
-            fileUrls.push(res.url);
-            await incrementCompanyStorage(companyId, { attachmentsBytes: toSend.size, storageBytes: toSend.size });
+            itemId: newItemId,
+            avatarFile: null,
+            attachmentFiles: preparedFiles,
+            maxAttachments: 3,
+          });
+          fileUrls = staged.newAttachmentUrls;
+          const uploadedBytes = preparedFiles.reduce((s, f) => s + (f.size || 0), 0);
+          if (uploadedBytes > 0) {
+            await incrementCompanyStorage(companyId, { attachmentsBytes: uploadedBytes, storageBytes: uploadedBytes });
           }
         }
       }
@@ -265,7 +271,7 @@ export function CreateFinishedGoodDialog({
         credit: 0,
         balance: 0,
         stockQty: 0,
-        createdAt: serverTimestamp(),
+        createdAt: Timestamp.now(),
         salePriceUnit: unitTrimmed,
         purchasePriceUnit: unitTrimmed,
         saleTaxId: null,
@@ -275,10 +281,17 @@ export function CreateFinishedGoodDialog({
         isDeleted: false,
       };
 
-      const docRef = await addDoc(collection(firestore, `companies/${companyId}/items`), submissionData);
+      const writeRes = await writeEntity({
+        companyId,
+        collectionName: "items",
+        docId: newItemId,
+        operation: "create",
+        data: submissionData,
+      });
+      if (writeRes.ok === false) throw new Error(writeRes.error);
 
       sonnerToast.success("Finished good created", { id: toastId, description: `"${values.name}" added.` });
-      onItemCreated?.(docRef.id);
+      onItemCreated?.(newItemId);
       onOpenChange(false);
     } catch (err: any) {
       console.error("Create finished good error:", err);
@@ -442,11 +455,13 @@ export function CreateFinishedGoodDialog({
             />
             <div className="space-y-2">
               <FormLabel>Avatar / Image (optional)</FormLabel>
+              {canAddAvatar ? <MasterPdfAsImageToggle id="create-finished-good-pdf-as-image" /> : null}
               <div className="flex flex-wrap gap-2">
                 {files.map((file, idx) => (
                   <div key={idx} className="relative">
                     <FilePreview
                       file={file}
+                      attachmentCompanyId={companyId ?? undefined}
                       onRemove={canAddAvatar ? () => setFiles((p) => p.filter((_, i) => i !== idx)) : undefined}
                     />
                   </div>

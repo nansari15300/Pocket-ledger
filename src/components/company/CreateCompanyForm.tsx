@@ -413,6 +413,7 @@ export function CreateCompanyForm({
             displayName: "Admin",
             role: "manager",
             password: pw,
+            uid: effectiveUserId,
           });
         }
         if (addCompanyUserEnabled) {

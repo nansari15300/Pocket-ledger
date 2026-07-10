@@ -11,6 +11,8 @@ import { getLocalAuthToken, getLocalAuthUser, LOCAL_AUTH_CHANGED_EVENT } from "@
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { resolvePlanIdForActiveCompany } from "@/lib/accountPlanForOwner";
 import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
+import { companyRowUsesSqliteLedgerWrites, isServerGateCompany } from "@/lib/companyStorageKind";
+import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
 
 
 export type UserRole = "viewer" | "data-entry" | "accountant" | "editor" | "manager" | "owner";
@@ -80,6 +82,15 @@ export const initialPermissionConfig: PermissionConfig = {
 /** Offline company SQLite session — ye role Firebase owner se alag ho sakta hai (same email owner + staff login). */
 function isLocalStorageCompany(c: { storageOption?: string } | null | undefined): boolean {
   return String(c?.storageOption || "local").toLowerCase() === "local";
+}
+
+/** Local / server-gate / SQLite ledger — plan cache miss par bhi profile + doc attachments khulen. */
+function localLikeCompanyForAttachments(c: { storageOption?: string; plServerShared?: boolean } | null | undefined): boolean {
+  if (!c) return isLocalOnlyMode() || isPlServerThinStaffClient();
+  if (isLocalStorageCompany(c)) return true;
+  if (isServerGateCompany(c)) return true;
+  if (companyRowUsesSqliteLedgerWrites(c)) return true;
+  return isLocalOnlyMode() || isPlServerThinStaffClient();
 }
 
 const usePermissions = () => {
@@ -250,7 +261,7 @@ const usePermissions = () => {
           config.allowAttachments !== false &&
           roleAllowsFiles &&
           (!canAddFileImagePdf || planMaxFiles === 0) &&
-          (isLocalStorageCompany(company) || isLocalOnlyMode())
+          localLikeCompanyForAttachments(company)
         ) {
           canAddFileImagePdf = true;
           planMaxFiles = Math.max(
@@ -265,7 +276,7 @@ const usePermissions = () => {
           company &&
           role !== "viewer" &&
           !canAddAvatar &&
-          (isLocalStorageCompany(company) || isLocalOnlyMode())
+          localLikeCompanyForAttachments(company)
         ) {
           canAddAvatar = true;
         }

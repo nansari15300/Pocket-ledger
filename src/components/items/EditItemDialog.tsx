@@ -110,6 +110,7 @@ import { isSystemParentGroup } from "@/lib/system-groups";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
+import { useLiveEntityDocAttachments } from "@/hooks/useLiveEntityDocAttachments";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { softDeleteCompanySubdocToRecycleBin } from "@/lib/recycleBinEntityLifecycle";
@@ -126,7 +127,10 @@ import {
 } from "@/components/ui/tooltip";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import Image from 'next/image';
-import { EntityOpeningBalanceNarrationField } from "@/components/common/EntityProfileDocumentsNarrationFields";
+import {
+  EntityOpeningBalanceNarrationField,
+  MasterPdfAsImageToggle,
+} from "@/components/common/EntityProfileDocumentsNarrationFields";
 
 
 const fileSchema = z.object({
@@ -272,6 +276,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
   const [prefillTaxName, setPrefillTaxName] = useState("");
   const [taxFieldToApply, setTaxFieldToApply] = useState<"purchaseTaxId" | "saleTaxId" | "openingBalanceTaxId" | null>(null);
   const [files, setFiles] = useState<(File | string)[]>([]);
+  const initialFileUrlsRef = useRef<string[]>(item.fileUrls || []);
   const { dateSystem, formatDate } = useDate();
   const isMobile = useIsMobile();
 
@@ -316,6 +321,25 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
   const { canAddAvatar, canAddFileImagePdf } = usePermissions();
   /** Naye file attachments — offline par local staging; online par `uploadItemAvatarAndAttachmentsRemote` */
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
+  const attachmentsDirty =
+    files.some((x) => x instanceof File) ||
+    JSON.stringify(files.filter((x): x is string => typeof x === "string")) !==
+      JSON.stringify(initialFileUrlsRef.current);
+  const onLiveAttachmentFields = useCallback((fields: { fileUrls?: string[] }) => {
+    if (fields.fileUrls) {
+      setFiles(fields.fileUrls);
+      initialFileUrlsRef.current = fields.fileUrls;
+    }
+  }, []);
+  useLiveEntityDocAttachments({
+    enabled: isOpen,
+    companyId,
+    collection: "items",
+    entityId: item.id,
+    attachmentsDirty,
+    preferSqliteMirror: sqliteListsOnlyNoSnapshot,
+    onFields: onLiveAttachmentFields,
+  });
   const { processedItemGroups, processedTaxes } = useVouchers();
   const processedItemGroupsRef = useRef(processedItemGroups);
   const processedTaxesRef = useRef(processedTaxes);
@@ -462,6 +486,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
         openingBalanceNarration: item.openingBalanceNarration ?? "",
       });
       setFiles(item.fileUrls || []);
+      initialFileUrlsRef.current = item.fileUrls || [];
     }
   }, [isOpen, item, form]);
 
@@ -595,6 +620,8 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
           const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
           const isLocalGuestUser = user?.uid === "local_guest_user";
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+          setFiles(fileUrls);
+          initialFileUrlsRef.current = fileUrls;
           setTimeout(() => {
             onItemUpdated({
               id: itemRefSnap.id,
@@ -615,6 +642,8 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
         const itemRef = doc(firestore, `companies/${companyId}/items`, itemRefSnap.id);
         await updateDoc(itemRef, updatePayload);
 
+        setFiles(fileUrls);
+        initialFileUrlsRef.current = fileUrls;
         setTimeout(() => {
           onItemUpdated({
             id: itemRefSnap.id,
@@ -1211,31 +1240,39 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                       </p>
                     ) : (
                     <RestrictedFileUploader>
-                      <div className="flex flex-wrap gap-4">
-                        {files.map((file, index) => (
-                          <FilePreview key={index} file={file} onRemove={() => removeFile(index)} />
-                        ))}
-                        {files.length < 5 && (
-                          <FormControl>
-                            <AttachmentHoldPasteSurface
-                              enabled={canAttachDocuments}
-                              onShortActivate={() => fileInputRef.current?.click()}
-                              onPastedFiles={(incoming) => void handleFileChange(syntheticFileInputChangeEvent(incoming))}
-                              className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                            >
-                              <Upload className="h-6 w-6" />
-                              <span className="text-xs mt-1">Add File</span>
-                              <Input
-                                type="file"
-                                className="hidden"
-                                ref={fileInputRef}
-                                onChange={handleFileChange}
-                                accept="image/*,application/pdf"
-                                multiple
-                              />
-                            </AttachmentHoldPasteSurface>
-                          </FormControl>
-                        )}
+                      <div className="space-y-2">
+                        <MasterPdfAsImageToggle id="edit-item-pdf-as-image" />
+                        <div className="flex flex-wrap gap-4">
+                          {files.map((file, index) => (
+                            <FilePreview
+                              key={index}
+                              file={file}
+                              attachmentCompanyId={companyId ?? undefined}
+                              onRemove={() => removeFile(index)}
+                            />
+                          ))}
+                          {files.length < 5 && (
+                            <FormControl>
+                              <AttachmentHoldPasteSurface
+                                enabled={canAttachDocuments}
+                                onShortActivate={() => fileInputRef.current?.click()}
+                                onPastedFiles={(incoming) => void handleFileChange(syntheticFileInputChangeEvent(incoming))}
+                                className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
+                              >
+                                <Upload className="h-6 w-6" />
+                                <span className="text-xs mt-1">Add File</span>
+                                <Input
+                                  type="file"
+                                  className="hidden"
+                                  ref={fileInputRef}
+                                  onChange={handleFileChange}
+                                  accept="image/*,application/pdf"
+                                  multiple
+                                />
+                              </AttachmentHoldPasteSurface>
+                            </FormControl>
+                          )}
+                        </div>
                       </div>
                     </RestrictedFileUploader>
                     )}

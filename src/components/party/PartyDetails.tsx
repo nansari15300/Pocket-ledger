@@ -634,6 +634,17 @@ export function PartyDetails({
     });
   }, [sortedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, mergedUserNames, mobileSearchNames, party.id]);
 
+  /** Top header balance = same as table last running balance (includes Book Opening). */
+  const headerClosingBalance = useMemo(() => {
+    const list = searchFilteredTransactions as any[];
+    if (list.length > 0) {
+      const last = list[list.length - 1];
+      const bal = last?.balance ?? last?.runningBalance;
+      if (typeof bal === "number" && Number.isFinite(bal)) return bal;
+    }
+    return ledgerOpeningForRunning + (Number(periodDr) || 0) - (Number(periodCr) || 0);
+  }, [searchFilteredTransactions, ledgerOpeningForRunning, periodDr, periodCr]);
+
   // Statement check mode + tail paging (PC footer Check mode + hidden-row totals)
   const {
     statementCheck,
@@ -838,7 +849,7 @@ export function PartyDetails({
       { "Date (BS)": "Total", Debit: periodDr, Credit: periodCr },
       {
         "Date (BS)": "Closing Balance",
-        Balance: `${Math.abs(closingBalance).toFixed(2)} ${closingBalance >= 0 ? "Dr" : "Cr"}`,
+        Balance: `${Math.abs(headerClosingBalance).toFixed(2)} ${headerClosingBalance >= 0 ? "Dr" : "Cr"}`,
       },
     ];
     const worksheet = XLSX.utils.json_to_sheet([...rows, {}, ...summaryRows] as Record<string, unknown>[]);
@@ -853,7 +864,7 @@ export function PartyDetails({
     openingBalanceForPeriod,
     periodDr,
     periodCr,
-    closingBalance,
+    headerClosingBalance,
     party.name,
   ]);
 
@@ -869,7 +880,7 @@ export function PartyDetails({
   if(!party) return null;
 
   const dateRangeLabel = buildDateRangeText() || "All Time";
-  const balanceLabel = closingBalance >= 0 ? "To Receive" : "To Pay";
+  const balanceLabel = headerClosingBalance >= 0 ? "To Receive" : "To Pay";
   const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
   const masterPartyOpening = Number(party.openingBalance) || 0;
   // Statement: full period opening in Balance. Bill-wise: same as print — remaining on OB, status + linked voucher nos.
@@ -941,7 +952,7 @@ export function PartyDetails({
                         ·
                       </span>
                       <span
-                        className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
+                        className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(headerClosingBalance))}
                         title={party.name}
                       >
                         {party.name}
@@ -950,10 +961,10 @@ export function PartyDetails({
                     <span
                       className={cn(
                         "shrink-0 text-sm font-bold whitespace-nowrap",
-                        closingBalance >= 0 ? "text-green-600" : "text-red-600"
+                        headerClosingBalance >= 0 ? "text-green-600" : "text-red-600"
                       )}
                     >
-                      {formatCurrency(closingBalance, { showDrCr: true, noAnimation: true })}
+                      {formatCurrency(headerClosingBalance, { showDrCr: true, noAnimation: true })}
                     </span>
                   </>
                 )}
@@ -988,8 +999,8 @@ export function PartyDetails({
           </div>
           {/* Selected party balance (closing) */}
           <div className="px-3 py-3 border-b flex-shrink-0">
-            <p className={cn("text-2xl font-bold text-center", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-              {balanceLabel} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
+            <p className={cn("text-2xl font-bold text-center", headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+              {balanceLabel} {formatCurrency(Math.abs(headerClosingBalance), { noSuffix: true })}
             </p>
           </div>
           {/* Dropdown + Edit icon + Search - same size (equal width & height) */}
@@ -1398,8 +1409,8 @@ export function PartyDetails({
                       </Button>
                     </EditPartyDialog>
                   )}
-                  <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                    {formatCurrency(closingBalance, { showDrCr: true, noAnimation: true })}
+                  <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                    {formatCurrency(headerClosingBalance, { showDrCr: true, noAnimation: true })}
                   </div>
                   {/* Linked reconciliation — balance ke baad, related account compare */}
                   {party.id !== "all" && !(party as any).isSystemAccount ? (

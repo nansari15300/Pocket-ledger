@@ -20,6 +20,7 @@ export const COMPANY_COLLECTION_PATHS = [
   "tax_groups",
   "expense_groups",
   "alarms",
+  "recurring_voucher_templates",
 ] as const;
 
 export type CompanyCollectionPath = (typeof COMPANY_COLLECTION_PATHS)[number];
@@ -96,6 +97,24 @@ export async function cacheCompanyCollection(companyId: string, collectionPath: 
     tx.onerror = () => {
       db.close();
       reject(tx.error);
+    };
+  });
+}
+
+export async function getCachedCompanyCollection(companyId: string, collectionPath: string) {
+  const db = await openDB();
+  return new Promise<any[] | null>((resolve, reject) => {
+    const tx = db.transaction(COLLECTION_STORE, "readonly");
+    const store = tx.objectStore(COLLECTION_STORE);
+    const req = store.get(`${companyId}:${collectionPath}`);
+    req.onsuccess = () => {
+      db.close();
+      const data = req.result?.data;
+      resolve(Array.isArray(data) ? data : null);
+    };
+    req.onerror = () => {
+      db.close();
+      reject(req.error);
     };
   });
 }

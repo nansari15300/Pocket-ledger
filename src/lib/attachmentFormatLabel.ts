@@ -16,6 +16,25 @@ const MIME_TO_LABEL: Record<string, string> = {
   "image/svg+xml": "SVG",
 };
 
+const EXT_TO_MIME: Record<string, string> = {
+  pdf: "application/pdf",
+  jpeg: "image/jpeg",
+  jpe: "image/jpeg",
+  jpg: "image/jpeg",
+  jfif: "image/jpeg",
+  pjpeg: "image/jpeg",
+  png: "image/png",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  svg: "image/svg+xml",
+  heic: "image/heic",
+  heif: "image/heif",
+  avif: "image/avif",
+  tif: "image/tiff",
+  tiff: "image/tiff",
+};
+
 function extensionFromPath(path: string): string {
   const base = path.split("?")[0].split("/").pop() || "";
   const i = base.lastIndexOf(".");
@@ -39,12 +58,40 @@ function normalizeExt(ext: string): string {
     svg: "SVG",
     heic: "HEIC",
     heif: "HEIF",
+    avif: "AVIF",
+    tif: "TIFF",
+    tiff: "TIFF",
     doc: "DOC",
     docx: "DOCX",
     xls: "XLS",
     xlsx: "XLSX",
   };
   return map[e] ?? e.toUpperCase();
+}
+
+export function inferAttachmentContentTypeFromName(
+  fileName?: string | null,
+  contentType?: string | null
+): string {
+  const ct = String(contentType || "").trim().toLowerCase();
+  if (ct && ct !== "application/octet-stream" && ct !== "binary/octet-stream") return ct;
+  const ext = extensionFromPath(String(fileName || ""));
+  return EXT_TO_MIME[ext] || ct || "application/octet-stream";
+}
+
+export function getAttachmentPreviewKindFromHints(
+  fileName?: string | null,
+  contentType?: string | null
+): "image" | "pdf" | "other" | null {
+  const normalized = inferAttachmentContentTypeFromName(fileName, contentType);
+  if (normalized === "application/pdf" || normalized.includes("pdf")) return "pdf";
+  if (normalized.startsWith("image/")) return "image";
+  const label = getAttachmentFormatLabelFromHints(fileName, normalized);
+  if (label === "PDF") return "pdf";
+  if (label && ["JPG", "JPEG", "PNG", "GIF", "WEBP", "BMP", "SVG", "HEIC", "HEIF", "AVIF", "TIFF"].includes(label)) {
+    return "image";
+  }
+  return label ? "other" : null;
 }
 
 export function getAttachmentFormatLabel(source: string | File): string {
@@ -126,13 +173,42 @@ export async function sniffBlobKindForPreview(blob: Blob): Promise<"pdf" | "imag
   if (mime && mime !== "application/octet-stream") return "other";
   if (blob.size < 5) return "other";
   try {
-    const buf = await blob.slice(0, 5).arrayBuffer();
+    const buf = await blob.slice(0, Math.min(blob.size, 512)).arrayBuffer();
     const head = new TextDecoder("latin1", { fatal: false }).decode(buf);
     if (head.startsWith("%PDF")) return "pdf";
     const u8 = new Uint8Array(buf);
     if (u8[0] === 0xff && u8[1] === 0xd8) return "image";
     if (u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4e && u8[3] === 0x47) return "image";
     if (u8[0] === 0x47 && u8[1] === 0x49 && u8[2] === 0x46) return "image";
+    if (u8[0] === 0x42 && u8[1] === 0x4d) return "image";
+    if (
+      u8[0] === 0x52 &&
+      u8[1] === 0x49 &&
+      u8[2] === 0x46 &&
+      u8[3] === 0x46 &&
+      u8[8] === 0x57 &&
+      u8[9] === 0x45 &&
+      u8[10] === 0x42 &&
+      u8[11] === 0x50
+    ) {
+      return "image";
+    }
+    if (
+      (u8[0] === 0x49 && u8[1] === 0x49 && u8[2] === 0x2a && u8[3] === 0x00) ||
+      (u8[0] === 0x4d && u8[1] === 0x4d && u8[2] === 0x00 && u8[3] === 0x2a)
+    ) {
+      return "image";
+    }
+    if (u8[4] === 0x66 && u8[5] === 0x74 && u8[6] === 0x79 && u8[7] === 0x70) {
+      const brand = head.slice(8, 12).toLowerCase();
+      if (["heic", "heix", "hevc", "hevx", "heif", "mif1", "msf1", "avif", "avis"].includes(brand)) {
+        return "image";
+      }
+    }
+    const textHead = head.trimStart().slice(0, 256).toLowerCase();
+    if (textHead.startsWith("<svg") || (textHead.startsWith("<?xml") && textHead.includes("<svg"))) {
+      return "image";
+    }
   } catch {
     /* slice/fetch fail — "other" */
   }

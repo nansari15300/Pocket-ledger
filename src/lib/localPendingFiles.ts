@@ -24,6 +24,7 @@ import {
   upsertAttachmentFileRef,
 } from "@/lib/attachmentFileRefStore";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
+import { inferAttachmentContentTypeFromName } from "@/lib/attachmentFormatLabel";
 import { isGoogleDriveCloudSyncCompany, uploadPendingAttachmentPayloadToDrive } from "@/lib/localCloudSync/driveCloudSyncClient";
 import { getLocalCompanyById, listLocalCompanies } from "@/lib/localCompanyStore";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
@@ -786,56 +787,64 @@ export async function putPendingFile(
   options?: PutPendingFileOptions
 ): Promise<void> {
   const createdAt = payload.createdAt ?? Date.now();
+  const normalizedContentType = inferAttachmentContentTypeFromName(
+    payload.fileName,
+    payload.contentType || payload.blob?.type
+  );
+  const normalizedPayload: PendingFilePayload = {
+    ...payload,
+    contentType: normalizedContentType,
+  };
   if (usesEmbeddedNativeAttachmentStorage()) {
     // APK/EXE: bytes disk par; SQLite me path/meta row.
-    const path = pendingFileDataDirPath(payload.id, payload.fileName);
-    const ok = await writeAttachmentBlobToDataDir(path, payload.blob);
+    const path = pendingFileDataDirPath(normalizedPayload.id, normalizedPayload.fileName);
+    const ok = await writeAttachmentBlobToDataDir(path, normalizedPayload.blob);
     if (!ok) throw new Error("Failed to persist pending attachment on device storage");
-    const sha256Hex = await computeSha256HexFromBlob(payload.blob);
+    const sha256Hex = await computeSha256HexFromBlob(normalizedPayload.blob);
     const meta: PendingFileMeta = {
-      docPath: payload.docPath,
-      field: payload.field,
-      arrayIndex: payload.arrayIndex,
-      storagePathPrefix: payload.storagePathPrefix,
-      fileName: payload.fileName,
+      docPath: normalizedPayload.docPath,
+      field: normalizedPayload.field,
+      arrayIndex: normalizedPayload.arrayIndex,
+      storagePathPrefix: normalizedPayload.storagePathPrefix,
+      fileName: normalizedPayload.fileName,
       createdAt,
     };
     await upsertAttachmentFileRef(
       {
         scope: "pending_file",
-        id: payload.id,
+        id: normalizedPayload.id,
         filePath: path,
-        contentType: payload.contentType || payload.blob.type || "application/octet-stream",
-        size: payload.blob.size || 0,
+        contentType: normalizedPayload.contentType,
+        size: normalizedPayload.blob.size || 0,
         metaJson: JSON.stringify(meta),
         updatedAt: createdAt,
         sha256Hex,
       },
-      { required: payload.requireSqliteIndex === true }
+      { required: normalizedPayload.requireSqliteIndex === true }
     );
     const fileUri = await getAttachmentFileUriFromDataDir(path);
     let displayUrl: string | undefined;
     if (fileUri && isCapacitorNativeApp()) {
       displayUrl = Capacitor.convertFileSrc(fileUri);
     } else {
-      displayUrl = (await electronAttachmentDisplayUrlFromPath(path, payload.contentType)) ?? undefined;
+      displayUrl = (await electronAttachmentDisplayUrlFromPath(path, normalizedPayload.contentType)) ?? undefined;
     }
     setLocalFileRefMetaCache({
-      id: payload.id,
-      contentType: payload.contentType || payload.blob.type || "application/octet-stream",
-      fileName: payload.fileName,
+      id: normalizedPayload.id,
+      contentType: normalizedPayload.contentType,
+      fileName: normalizedPayload.fileName,
       filePath: path,
       fileUri: fileUri ?? undefined,
       displayUrl,
-      size: payload.blob.size || 0,
+      size: normalizedPayload.blob.size || 0,
       createdAt,
-      docPath: payload.docPath,
-      field: payload.field,
-      storagePathPrefix: payload.storagePathPrefix,
+      docPath: normalizedPayload.docPath,
+      field: normalizedPayload.field,
+      storagePathPrefix: normalizedPayload.storagePathPrefix,
     });
     if (!options?.skipPlServerAttachmentUploadEnqueue) {
       const { enqueuePlServerAttachmentUpload } = await import("@/lib/plServerAttachmentUploadQueue");
-      enqueuePlServerAttachmentUpload(payload);
+      enqueuePlServerAttachmentUpload(normalizedPayload);
     }
     return;
   }
@@ -843,24 +852,24 @@ export async function putPendingFile(
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
     const store = tx.objectStore(STORE);
-    const row = { ...payload, createdAt };
+    const row = { ...normalizedPayload, createdAt };
     store.put(row);
     tx.oncomplete = () => {
       db.close();
       // Web preview: `getLocalFileRefMetaSync` / UI — native `putPendingFile` jaisa runtime cache seed (IDB ke alawa fast path).
       setLocalFileRefMetaCache({
-        id: payload.id,
-        contentType: payload.contentType || payload.blob.type || "application/octet-stream",
-        fileName: payload.fileName,
-        size: payload.blob.size || 0,
+        id: normalizedPayload.id,
+        contentType: normalizedPayload.contentType,
+        fileName: normalizedPayload.fileName,
+        size: normalizedPayload.blob.size || 0,
         createdAt,
-        docPath: payload.docPath,
-        field: payload.field,
-        storagePathPrefix: payload.storagePathPrefix,
+        docPath: normalizedPayload.docPath,
+        field: normalizedPayload.field,
+        storagePathPrefix: normalizedPayload.storagePathPrefix,
       });
       if (!options?.skipPlServerAttachmentUploadEnqueue) {
         void import("@/lib/plServerAttachmentUploadQueue").then(({ enqueuePlServerAttachmentUpload }) => {
-          enqueuePlServerAttachmentUpload(payload);
+          enqueuePlServerAttachmentUpload(normalizedPayload);
         });
       }
       resolve();

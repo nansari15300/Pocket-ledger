@@ -79,7 +79,15 @@ export async function convertPdfAttachmentsToJpegIfEnabled(
     /* Offline `local:uuid` — URL me extension nahi; IndexedDB blob sniff se PDF tabhi convert */
     if (isLocalFileRef(url)) {
       try {
-        const blob = await getBlobFromLocalFileRef(url);
+        let blob = await getBlobFromLocalFileRef(url);
+        if (!blob || blob.size === 0) {
+          const { readActiveAttachmentCompanyId } = await import("@/lib/firestorePermissionSuppress");
+          const cid = readActiveAttachmentCompanyId() ?? undefined;
+          if (cid) {
+            const { resolvePlServerStaffAttachmentPreviewBlob } = await import("@/lib/plServerAttachmentFetch");
+            blob = await resolvePlServerStaffAttachmentPreviewBlob(url, { companyId: cid });
+          }
+        }
         if (!blob || blob.size === 0) {
           out.push(url);
           continue;

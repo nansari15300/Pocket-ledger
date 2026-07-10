@@ -22,6 +22,7 @@ import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
+import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
 
 /**
  * Legacy rollback: `NEXT_PUBLIC_VOUCHER_ATTACHMENT_FIRESTORE_IMMEDIATE_UPLOAD=1` → purana flow (online + Firestore-first par form `uploadBytes` await).
@@ -38,6 +39,7 @@ export function voucherAttachmentFirestoreImmediateUploadEnabled(): boolean {
 
 /** Single product gate: immediate Storage upload on save off unless legacy env above. */
 export function voucherNewAttachmentsAlwaysStageAsLocalPending(): boolean {
+  if (isPlServerThinStaffClient()) return true;
   // Web online: hamesha Firebase-immediate semantics treat karo; `local:` sirf offline/embedded flows me.
   if (typeof navigator !== "undefined" && navigator.onLine && !isElectronDesktopApp() && !isCapacitorNativeApp() && !isStaticAppBuild()) {
     return false;
@@ -103,6 +105,8 @@ export async function appendLocalOnlyVoucherFilesToUrls(params: {
  * Legacy env `NEXT_PUBLIC_VOUCHER_ATTACHMENT_FIRESTORE_IMMEDIATE_UPLOAD=1` par sirf offline / sqlite-first par stage (purana UX).
  */
 export async function shouldStageNewVoucherFilesAsLocalPending(companyId: string): Promise<boolean> {
+  // PL staff writes are server-authoritative, but bytes must travel via `/__pl_attachment`, not Firebase Storage.
+  if (isPlServerThinStaffClient()) return true;
   // Offline client: stage in IndexedDB (`local:`) so user can still save and sync later.
   if (isClientNavigatorOffline()) return true;
   // Embedded shells (EXE/APK/static): keep local pending pipeline.
@@ -121,6 +125,7 @@ export async function shouldStageNewVoucherFilesAsLocalPending(companyId: string
  * save ke waqt `incrementCompanyStorage` await se "Saving…" mat atkao.
  */
 export function shouldDeferStorageIncrementUntilPendingUpload(): boolean {
+  if (isPlServerThinStaffClient()) return true;
   // Web online immediate upload (cloud Firestore company only): increment right away.
   if (typeof navigator !== "undefined" && navigator.onLine && !isElectronDesktopApp() && !isCapacitorNativeApp() && !isStaticAppBuild()) {
     return false;
@@ -184,6 +189,68 @@ export async function blobFromAttachmentRefForCopy(
 }
 
 /**
+ * Copy To / Save & Copy To: har attachment ko naye `File` bytes me clone karo —
+ * draft me dikhe + save par naya URL/upload (purana ref reuse na ho).
+ */
+export async function cloneVoucherAttachmentsAsNewFilesForCopy<T extends Record<string, unknown>>(params: {
+  sourceCompanyId?: string;
+  voucher: T;
+}): Promise<{ voucher: T; importedCount: number }> {
+  if (typeof File === "undefined") return { voucher: params.voucher, importedCount: 0 };
+  const source = params.voucher;
+  const cid = String(params.sourceCompanyId || "").trim();
+  const rawUrls = Array.isArray(source.fileUrls) ? source.fileUrls : [];
+  const existingFiles = rawUrls.filter(
+    (u): u is File => typeof File !== "undefined" && u instanceof File
+  );
+  const strUrls = rawUrls
+    .filter((u): u is string => typeof u === "string" && u.trim().length > 0)
+    .map((u) => u.trim());
+  const uf = source.unassignedFile;
+  if (strUrls.length === 0 && uf && typeof uf === "object" && uf !== null) {
+    const url = String((uf as { url?: string }).url || "").trim();
+    if (url) strUrls.push(url);
+  }
+  if (strUrls.length === 0) {
+    if (existingFiles.length > 0) {
+      return {
+        voucher: { ...source, fileUrls: existingFiles, files: [], unassignedFile: null } as T,
+        importedCount: 0,
+      };
+    }
+    return { voucher: source, importedCount: 0 };
+  }
+
+  const clonedFiles: File[] = [...existingFiles];
+  let importedCount = 0;
+  for (let i = 0; i < strUrls.length; i++) {
+    const ref = strUrls[i]!;
+    const blob = await blobFromAttachmentRefForCopy(ref, {
+      companyId: cid || undefined,
+      galleryUrls: strUrls,
+    });
+    if (!blob || blob.size <= 0) continue;
+    clonedFiles.push(
+      new File([blob], fileNameFromAttachmentRef(ref, clonedFiles.length + 1, blob.type), {
+        type: blob.type || "application/octet-stream",
+      })
+    );
+    importedCount += 1;
+  }
+  if (clonedFiles.length === 0) return { voucher: source, importedCount: 0 };
+
+  return {
+    voucher: {
+      ...source,
+      fileUrls: clonedFiles,
+      files: [],
+      unassignedFile: null,
+    } as T,
+    importedCount,
+  };
+}
+
+/**
  * Copy-to-local-company: remote/local refs ko File objects me materialize karo taaki target local company save par
  * `appendLocalOnlyVoucherFilesToUrls` se predictable `local:` refs ban sakein (stale cross-company URLs persist na hon).
  */
@@ -199,35 +266,10 @@ export async function importVoucherAttachmentsAsFilesForLocalCloudCopy<T extends
   if (!reg || !isOfflineCompanyStorage(reg as { storageOption?: string })) {
     return { voucher: params.voucher, importedCount: 0 };
   }
-
-  const source = params.voucher;
-  const rawUrls = Array.isArray(source.fileUrls) ? source.fileUrls : [];
-  const strUrls = rawUrls.filter((u): u is string => typeof u === "string" && u.trim().length > 0);
-  if (strUrls.length === 0) return { voucher: source, importedCount: 0 };
-
-  const importedFiles: File[] = [];
-  for (let i = 0; i < strUrls.length; i++) {
-    const ref = strUrls[i]!.trim();
-    const blob = await blobFromAttachmentRefForCopy(ref, {
-      companyId: params.sourceCompanyId,
-      galleryUrls: strUrls,
-    });
-    if (!blob || blob.size <= 0) continue;
-    importedFiles.push(
-      new File([blob], fileNameFromAttachmentRef(ref, i + 1, blob.type), {
-        type: blob.type || "application/octet-stream",
-      })
-    );
-  }
-  if (importedFiles.length === 0) return { voucher: source, importedCount: 0 };
-
-  // Existing non-string entries (already File) preserve; string refs replace with newly imported Files.
-  const preserved = rawUrls.filter((u) => !(typeof u === "string" && u.trim().length > 0));
-  const nextVoucher = {
-    ...source,
-    fileUrls: [...preserved, ...importedFiles],
-  } as T;
-  return { voucher: nextVoucher, importedCount: importedFiles.length };
+  return cloneVoucherAttachmentsAsNewFilesForCopy({
+    sourceCompanyId: params.sourceCompanyId,
+    voucher: params.voucher,
+  });
 }
 
 /**

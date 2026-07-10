@@ -38,6 +38,8 @@ import {
   completeVoucherBackgroundProgress,
   replaceVoucherSaveLoadingWithShortSuccess,
   showVoucherBackgroundProgress,
+  beginVoucherSaveLoadingOrBlock,
+  voucherSaveErrorToast,
 } from "@/lib/voucherSaveUi";
 import BsDatePicker from "../ui/BsDatePicker";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -1203,7 +1205,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         setSavedVoucherId(voucher.id);
         const urls = voucherAttachmentUrlsForFormState(voucher);
         setFiles(urls);
-        initialFilesRef.current = urls;
+        initialFilesRef.current = urls.filter((f): f is string => typeof f === "string");
         setSavePdfAsImage(shouldSuggestPdfAsImage(urls));
         if (lastSyncedVoucherIdRef.current !== voucher.id) {
           lastSyncedVoucherIdRef.current = voucher.id;
@@ -1262,7 +1264,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const hasUnsavedFilePick = files.some((f) => f instanceof File);
     if (hasUnsavedFilePick) return;
     if (_isFileDirty) return;
-    const incoming = voucherAttachmentUrlsForFormState(voucher);
+    const incoming = voucherAttachmentUrlsForFormState(voucher).filter((f): f is string => typeof f === "string");
     const cur = files.filter((f): f is string => typeof f === "string");
     const snap = savedFileUrlsSnapshotRef.current;
     if (snap) {
@@ -1387,7 +1389,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       return;
     }
 
-    const toastId = sonnerToast.loading("Saving income...");
+    const toastId = await beginVoucherSaveLoadingOrBlock(companyId, "Saving income...");
+    if (toastId == null) return;
     setIsLoading(true);
 
     try {
@@ -1605,6 +1608,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const postSaveTail = async () => {
           let bgSyncPartialFailure = false;
           try {
+            if (docId && companyId && rawFileUrlsForPostSave.length > 0) {
+              const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
+                companyId,
+                voucherId: docId,
+                rawFileUrls: rawFileUrlsForPostSave,
+                storageFolder: String(voucherType),
+              });
+              savedFileUrlsSnapshotRef.current = [...persistedUrls];
+              setFiles(persistedUrls);
+              initialFilesRef.current = persistedUrls;
+            }
+
             if (spendWisePending && docId && user?.uid) {
               const currentlyLinkedIds = new Set(spendWiseLinkedRowIds);
               const allAffectedIds = new Set([...currentlyLinkedIds, ...spendWisePending.ids]);
@@ -1656,18 +1671,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 voucherId: a.voucherId,
                 amount: getAllocationTotal(a),
               }));
-            }
-
-            if (docId && companyId && _isFileDirty) {
-              const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
-                companyId,
-                voucherId: docId,
-                rawFileUrls: rawFileUrlsForPostSave,
-                storageFolder: String(voucherType),
-              });
-              savedFileUrlsSnapshotRef.current = [...persistedUrls];
-              setFiles(persistedUrls);
-              initialFilesRef.current = persistedUrls;
             }
 
             if (shouldAutoFlushOutboxAfterEnqueue()) {
@@ -1821,7 +1824,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         sonnerToast.error("Voucher limit reached", { id: toastId, description: error.message, action: { label: "Upgrade", onClick: () => window.location.assign("/billing") } });
       } else {
         console.error("Error saving voucher: ", error);
-        sonnerToast.error("Error", { id: toastId, description: "Failed to save voucher." });
+        voucherSaveErrorToast(toastId, error, "Failed to save voucher.");
       }
     } finally {
         setIsLoading(false);
@@ -3268,4 +3271,3 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     </>
   );
 }
-

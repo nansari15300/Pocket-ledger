@@ -4,6 +4,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
 import { createGoogleOAuth2Client, resolveGoogleOAuthRedirectUri } from "@/lib/server/googleOAuthCredentials";
 import { saveGoogleDriveTokensForUser } from "@/lib/localCloudSync/server/driveOAuthServer";
+import {
+  isLocalGoogleDriveSyncDisabled,
+  LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE,
+} from "@/lib/localCloudSync/driveSyncDisabled";
 
 type DecodedState = {
   returnPath?: string;
@@ -45,6 +49,10 @@ export async function GET(req: NextRequest) {
   const decoded: DecodedState | null = state ? safeBase64JsonDecode(state) : null;
 
   if (decoded?.returnPath) returnPath = decoded.returnPath;
+
+  if (isLocalGoogleDriveSyncDisabled()) {
+    return redirectToReturnPath(returnPath, baseUrl, { error: LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE }, encodedState);
+  }
 
   if (oauthError) {
     return redirectToReturnPath(returnPath, baseUrl, { error: oauthError }, encodedState);

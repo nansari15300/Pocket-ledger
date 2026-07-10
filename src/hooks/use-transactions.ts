@@ -13,6 +13,7 @@ import { useDate } from "./useDate";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import { type Context } from "@/components/vouchers/TransactionsTable";
 import { getNoteLinkedEntityLabel, transactionRowHasFileAttachment } from "@/components/vouchers/transactionTableShared";
+import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import {
   getAllocatedByVoucherId,
   getAllocatedByVoucherIdFromPaymentOuts,
@@ -25,6 +26,9 @@ import {
   getPaymentInRemaining,
   getPaymentOutRemaining,
   getAllocationTotal,
+  getNetFromAllocation,
+  getTaxFromAllocation,
+  getTaxableFromAllocation,
   OPENING_BALANCE_VOUCHER_ID,
 } from "@/lib/payment-allocation-utils";
 import { resolveLedgerTransactionUserDisplayName } from "@/lib/ledgerUserColumnDisplay";
@@ -48,13 +52,7 @@ type EntityWithItems = { id: string; items: (Item | Staff | Account | ExpenseAcc
 
 type Entity = Party | Account | Staff | Tax | Item | Group | AccountGroup | StaffGroup | TaxGroup | ItemGroup | ExpenseAccount | ExpenseGroup | EntityWithItems;
 
-const safeToDate = (date: any): Date | null => {
-    if (!date) return null;
-    if (date instanceof Date) return date;
-    if (date.toDate instanceof Function) return date.toDate();
-    const parsed = new Date(date);
-    return isNaN(parsed.getTime()) ? null : parsed;
-};
+const safeToDate = (date: unknown): Date | null => parseFirestoreDateFieldToJsDate(date);
 
 const getParticularsText = (t: any, names: Record<string, string> = {}) => {
     let particulars: string[] = [];
@@ -1157,8 +1155,8 @@ export function useTransactions(
             
             if (dateB !== dateA) return dateA - dateB;
             
-            const creationA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
-            const creationB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+            const creationA = parseFirestoreDateFieldToJsDate(a.createdAt)?.getTime() ?? 0;
+            const creationB = parseFirestoreDateFieldToJsDate(b.createdAt)?.getTime() ?? 0;
             if (creationA !== creationB) return creationA - creationB;
 
             // Final tie-breaker: id (prevents random reordering when timestamps are equal/missing)
@@ -1219,9 +1217,14 @@ export function useTransactions(
         } else if (context === 'item' && entity) {
             // Item context: always compute from openingBalance/openingBalanceRate (handles number, string from Firestore)
             const openingBalanceDate = safeToDate((entity as any).openingBalanceDate);
-            if (openingBalanceDate && dateRange?.from && openingBalanceDate > startOfDay(dateRange.from)) {
-                // Opening balance date is after filter start - not yet applicable
-            } else {
+            const rangeFrom = dateRange?.from ? startOfDay(dateRange.from) : null;
+            const rangeTo = dateRange?.to
+              ? startOfDay(dateRange.to)
+              : rangeFrom;
+            // OB sirf tab skip jab poora filter OB date se pehle khatam ho ("All" from<<OB pe books OB mat hatao).
+            const openingNotInSelectedRange =
+              Boolean(openingBalanceDate && rangeTo && openingBalanceDate > rangeTo);
+            if (!openingNotInSelectedRange) {
                 if (stockView === 'amount') {
                     const obQty = Number((entity as any).openingBalance) || 0;
                     const obRate = Number((entity as any).openingBalanceRate) || 0;
@@ -1255,9 +1258,15 @@ export function useTransactions(
             // Party/Staff (and similar): accept number or string from Firestore so bill-wise opening balance computes and shows
             const obVal = Number((entity as any).openingBalance) || 0;
             const openingBalanceDate = safeToDate((entity as any).openingBalanceDate);
-            if (openingBalanceDate && dateRange?.from && openingBalanceDate > startOfDay(dateRange.from)) {
-                // Opening balance date after filter start – not yet applicable
-            } else {
+            const rangeFrom = dateRange?.from ? startOfDay(dateRange.from) : null;
+            const rangeTo = dateRange?.to
+              ? startOfDay(dateRange.to)
+              : rangeFrom;
+            // "All" preset from = calendar min — OB date > from hota hai; pehle yahan OB 0 ho jata tha
+            // → header closing galat, table Book Opening alag. Skip sirf jab range OB se pehle khatam.
+            const openingNotInSelectedRange =
+              Boolean(openingBalanceDate && rangeTo && openingBalanceDate > rangeTo);
+            if (!openingNotInSelectedRange) {
                 if ('type' in entity && entity.type === 'service' && stockView === 'amount') {
                     initialOpeningBalance = obVal;
                 } else {
@@ -1395,6 +1404,24 @@ export function useTransactions(
             else spendWisePayOutsByLinkedReceiptId.set(rk, [v]);
           }
         }
+
+        const isStaffSalaryBillWiseSource = (v: any) =>
+          v?.type === "payment_out" ||
+          v?.type === "direct_expense" ||
+          (v?.type === "journal" && v?.subType !== "add_salary");
+
+        const getStaffAddSalaryNetAllocated = (salaryVoucherId: string) =>
+          (allocEdgesByTargetId.get(String(salaryVoucherId)) ?? []).reduce((sum, { src, alloc }) => {
+            if (!isStaffSalaryBillWiseSource(src)) return sum;
+            const a = alloc as { taxAmount?: number; netAmount?: number; taxableAmount?: number; amount?: number };
+            return sum + getNetFromAllocation(a as any) + getTaxableFromAllocation(a as any);
+          }, 0);
+
+        const getStaffAddSalaryTaxAllocated = (salaryVoucherId: string) =>
+          (allocEdgesByTargetId.get(String(salaryVoucherId)) ?? []).reduce((sum, { src, alloc }) => {
+            if (!isStaffSalaryBillWiseSource(src)) return sum;
+            return sum + getTaxFromAllocation(alloc as any);
+          }, 0);
 
         const withBalance = transactionsToDisplay
             .map(t => {
@@ -1568,8 +1595,8 @@ export function useTransactions(
                 // Staff ledger: Add Salary behaves like a bill – paid via Payment Out and/or Opening Balance; show Paid/Unpaid/Partial/Overdue.
                 if (isStaffContext && t.type === 'journal' && t.subType === 'add_salary') {
                     const total = getAddSalaryNetTotal(t);
-                    // Include voucher-level openingBalanceAllocated so salary status matches the link dialog when OB is used.
-                    const allocated = (allocatedByPurchase.get(t.id) ?? 0) + (Number((t as any).openingBalanceAllocated) || 0);
+                    // Payment out, direct expense, and manual journal Dr → salary links all reduce outstanding.
+                    const allocated = getStaffAddSalaryNetAllocated(t.id) + (Number((t as any).openingBalanceAllocated) || 0);
                     const result = getPaymentStatusResult(total, allocated, t.dueDate);
                     paymentStatus = result.isOverdue ? 'overdue' : result.status;
                     isOverdue = result.isOverdue;
@@ -1598,7 +1625,7 @@ export function useTransactions(
                 // Tax ledger (single tax details): Add Salary – show Paid/Unpaid/Partial/Overdue same as staff
                 if (isTaxContext && t.type === 'journal' && t.subType === 'add_salary') {
                     const total = getAddSalaryNetTotal(t);
-                    const allocated = allocatedByPurchase.get(t.id) ?? 0;
+                    const allocated = getStaffAddSalaryTaxAllocated(t.id);
                     const result = getPaymentStatusResult(total, allocated, t.dueDate);
                     paymentStatus = result.isOverdue ? 'overdue' : result.status;
                     isOverdue = result.isOverdue;
@@ -1620,6 +1647,10 @@ export function useTransactions(
                 // Staff ledger should show linked voucher detail for both receipt and payment rows.
                 const staffShowLinkDetails = isStaffContext && (
                     (t.type === 'journal' && t.subType === 'add_salary') ||
+                    (t.type === 'journal' &&
+                      Array.isArray((t as any).entries) &&
+                      entityIdForLinks &&
+                      (t as any).entries.some((e: any) => String(e?.accountId ?? '') === String(entityIdForLinks))) ||
                     t.type === 'payment_in' ||
                     t.type === 'direct_income' ||
                     t.type === 'payment_out' ||
@@ -1660,10 +1691,10 @@ export function useTransactions(
                         });
                         // Do NOT set linkedToVoucherNos = [myNo] when no outgoing — avoids self-ref "to Sale Inv - 003"
                     } else if (t.type === 'journal' && t.subType === 'add_salary') {
-                        /** Payment out/expense edges → salary voucher id (`allocEdgesByTargetId`). */
+                        /** Payment out / expense / manual journal edges → salary voucher id. */
                         const seenSalarySources = new Set<string>();
                         for (const { src: v } of allocEdgesByTargetId.get(String(t.id)) ?? []) {
-                            if (v.type !== 'payment_out' && v.type !== 'direct_expense') continue;
+                            if (!isStaffSalaryBillWiseSource(v)) continue;
                             if (seenSalarySources.has(String(v.id ?? ""))) continue;
                             seenSalarySources.add(String(v.id ?? ""));
                             const no = v.voucherNumber ?? v.voucher_number ?? '';

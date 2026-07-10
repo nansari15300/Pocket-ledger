@@ -35,7 +35,7 @@ export function ensureClientRandomUUIDPolyfill(): void {
     });
   } catch {
     try {
-      (c as Crypto & { randomUUID?: () => string }).randomUUID = impl;
+      (c as Crypto).randomUUID = impl as Crypto["randomUUID"];
     } catch {
       /* ignore */
     }

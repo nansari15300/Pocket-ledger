@@ -35,11 +35,13 @@ import { FirstLoginWarmGateProvider } from "@/contexts/FirstLoginWarmGateContext
 import { MobileDetailSummaryCollapseProvider } from "@/contexts/MobileDetailSummaryCollapseContext";
 import { EmbeddedAttachmentPrefetchProvider } from "@/contexts/EmbeddedAttachmentPrefetchContext";
 import { CrossCompanyAttachmentAccessBridge } from "@/components/CrossCompanyAttachmentAccessBridge";
+import { DevPlHostBridgeWorker } from "@/components/DevPlHostBridgeWorker";
 import { ServerShareableCompaniesBridge } from "@/components/ServerShareableCompaniesBridge";
 import { PlServerAccessBootstrap } from "@/components/settings/PlServerAccessBootstrap";
 import { PlRemoteClientLandingBootstrap } from "@/components/settings/PlRemoteClientLandingBootstrap";
 import { PlServerClientMirrorManager } from "@/components/settings/PlServerClientMirrorManager";
 import { PlServerLiveSyncManager } from "@/components/settings/PlServerLiveSyncManager";
+import { LocalServerShareAutoConnectManager } from "@/components/settings/LocalServerShareAutoConnectManager";
 import { PlServerAuthoritativeReplayManager } from "@/components/PlServerAuthoritativeReplayManager";
 
 /** Local-only app start: sql.js init pehle se — refresh par company turant SQLite se load. */
@@ -52,6 +54,8 @@ function SqlitePrewarmBootstrap() {
 import { PlServerGateLedgerBootstrap } from "@/components/settings/PlServerGateLedgerBootstrap";
 import { PlMirrorExportDevBridge } from "@/components/settings/PlMirrorExportDevBridge";
 import { PlServerGateRefreshBootstrap } from "@/components/settings/PlServerGateRefreshBootstrap";
+import { PlServerHostAttachmentMirrorBootstrap } from "@/components/settings/PlServerHostAttachmentMirrorBootstrap";
+import { PlServerCompanyDetectionAuditRunner } from "@/components/PlServerCompanyDetectionAuditRunner";
 import { primeLocalFileRefMetaRuntimeCache } from "@/lib/localPendingFiles";
 import { isPerfDebugEnabled } from "@/lib/perfDebug";
 import { ensureClientRandomUUIDPolyfill } from "@/lib/clientRandomUUID";
@@ -96,17 +100,21 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <ThemeProvider>
         <AuthProvider>
             <FirebaseErrorListener />
+            <PlServerCompanyDetectionAuditRunner />
             <EmbeddedOfflineFirestoreTransport />
             <GateProvider>
             <CompanyProvider>
                 <SqlitePrewarmBootstrap />
                 <CrossCompanyAttachmentAccessBridge />
                 <ServerShareableCompaniesBridge />
+                <DevPlHostBridgeWorker />
+                <PlServerHostAttachmentMirrorBootstrap />
                 <PlServerAccessBootstrap />
                 <PlServerGateRefreshBootstrap />
                 <PlRemoteClientLandingBootstrap />
                 <PlServerClientMirrorManager />
                 <PlServerLiveSyncManager />
+                <LocalServerShareAutoConnectManager />
                 <PlServerAuthoritativeReplayManager />
                 <PlServerGateLedgerBootstrap />
                 <PlMirrorExportDevBridge />

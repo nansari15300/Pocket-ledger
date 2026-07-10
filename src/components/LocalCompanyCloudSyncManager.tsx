@@ -11,6 +11,7 @@ import { isLocalCloudSyncCycleRunning, runLocalCloudSyncCycle } from "@/lib/loca
 import { logLocalCloudSync } from "@/lib/localCloudSync/logger";
 import { MIN_CLOUD_SYNC_TICK_MS } from "@/lib/localCloudSync/types";
 import { hasRealFirebaseAuthSession, waitForFirebaseAuthReady } from "@/lib/firebaseAuthForApi";
+import { isLocalGoogleDriveSyncDisabled } from "@/lib/localCloudSync/driveSyncDisabled";
 
 function isCompanySyncDue(row: LocalCompanyDoc, now: number): boolean {
   const cfg = readCloudSyncConfigFromCompany(row);
@@ -25,6 +26,7 @@ async function runScheduledDriveSyncForCompany(
 ): Promise<void> {
   const cid = String(row.id || "").trim();
   if (!cid) return;
+  if (isLocalGoogleDriveSyncDisabled()) return;
   if (!(await shouldUseLocalCloudSync(cid))) return;
   const cfg = readCloudSyncConfigFromCompany(row);
   if (!cfg.cloudSyncEnabled) return;
@@ -49,6 +51,7 @@ export function LocalCompanyCloudSyncManager() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (isLocalGoogleDriveSyncDisabled()) return;
 
     const tick = async (options?: { forceActive?: boolean }) => {
       if (runningRef.current) return;
@@ -123,6 +126,7 @@ export function LocalCompanyCloudSyncManager() {
   useEffect(() => {
     const cid = String(company?.id || "").trim();
     if (!cid) return;
+    if (isLocalGoogleDriveSyncDisabled()) return;
     void (async () => {
       const reg = await getLocalCompanyById(cid, { includeDeleted: true });
       if (!reg) return;

@@ -84,6 +84,7 @@ import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
+import { isDeviceLocalCompany, isServerGateCompany, stampPureLocalDeviceCompanyRow } from "@/lib/companyStorageKind";
 import { listLocalCompanies } from "@/lib/localCompanyStore";
 import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
 import { highestPlanIdAmongOwnedCompanies, resolveEffectiveAccountPlanId, resolvePlanIdForActiveCompany } from "@/lib/accountPlanForOwner";
@@ -1459,8 +1460,20 @@ export function DesktopAppHeader() {
         if (c?.id) byId.set(c.id, c);
       }
       for (const c of localRows) {
-        if (!c?.id || byId.has(c.id)) continue;
-        byId.set(c.id, c);
+        if (!c?.id) continue;
+        const stamped = stampPureLocalDeviceCompanyRow(c);
+        if (byId.has(c.id)) {
+          const existing = byId.get(c.id)!;
+          if (isDeviceLocalCompany(stamped) && !isServerGateCompany(stamped)) {
+            byId.set(c.id, {
+              ...existing,
+              ...stamped,
+              isOwned: stamped.isOwned ?? existing.isOwned,
+            });
+          }
+          continue;
+        }
+        byId.set(c.id, stamped);
       }
       setUnfilteredHeaderCompanies(Array.from(byId.values()));
       setLoading(false);

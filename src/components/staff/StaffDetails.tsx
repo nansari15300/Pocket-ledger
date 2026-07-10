@@ -538,6 +538,17 @@ export function StaffDetails({
       ),
     [ledgerSourceTransactions, filterByUnapprovedOnly, taxDetailsOpeningForRunning, company]
   );
+
+  /** Top header = table last running balance (Book Opening included). */
+  const headerClosingBalance = useMemo(() => {
+    const list = sortedTransactions as any[];
+    if (list.length > 0) {
+      const last = list[list.length - 1];
+      const bal = last?.balance ?? last?.runningBalance;
+      if (typeof bal === "number" && Number.isFinite(bal)) return bal;
+    }
+    return taxDetailsOpeningForRunning + (Number(periodDr) || 0) - (Number(periodCr) || 0);
+  }, [sortedTransactions, taxDetailsOpeningForRunning, periodDr, periodCr]);
   
   // Statement check mode + desktop tail paging (PartyDetails jaisa)
   const {
@@ -912,7 +923,7 @@ export function StaffDetails({
                   <h1 className="shrink-0 text-base font-bold text-muted-foreground">{reportStickyTitle}</h1>
                   <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>·</span>
                   <span
-                    className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
+                    className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(headerClosingBalance))}
                     title={staff.name}
                   >
                     {staff.name}
@@ -921,10 +932,10 @@ export function StaffDetails({
                 <span
                   className={cn(
                     "shrink-0 text-sm font-bold whitespace-nowrap",
-                    closingBalance >= 0 ? "text-green-600" : "text-red-600"
+                    headerClosingBalance >= 0 ? "text-green-600" : "text-red-600"
                   )}
                 >
-                  {formatCurrency(closingBalance, { showDrCr: true })}
+                  {formatCurrency(headerClosingBalance, { showDrCr: true })}
                 </span>
               </>
             )}
@@ -961,10 +972,10 @@ export function StaffDetails({
       </div>
       {/* Balance - same as bank mobile: amount + Dr/Cr */}
       <div className={mdc.balanceRow}>
-        <p className={cn(mdc.balanceTextCenter, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-          {closingBalance === 0
+        <p className={cn(mdc.balanceTextCenter, headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+          {headerClosingBalance === 0
             ? "Settled Up"
-            : formatCurrency(closingBalance, { showDrCr: true })}
+            : formatCurrency(headerClosingBalance, { showDrCr: true })}
         </p>
       </div>
       {canUseStaffTaxDetails && !isReportMobileChrome && (
@@ -1440,8 +1451,8 @@ export function StaffDetails({
                     <Edit className="h-4 w-4" />
                   </Button>
                 </EditStaffDialog>
-                <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance < 0 ? "text-red-600" : "text-green-600")}>
-                  {formatCurrency(closingBalance, { showDrCr: true })}
+                <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", headerClosingBalance < 0 ? "text-red-600" : "text-green-600")}>
+                  {formatCurrency(headerClosingBalance, { showDrCr: true })}
                 </div>
                 <ReconciliationAccountButton accountId={staff.id} />
               </div>

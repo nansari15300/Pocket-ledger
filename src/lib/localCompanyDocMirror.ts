@@ -34,14 +34,27 @@ import { plPhase1bVerifyHook } from "@/lib/phase1bVerifyCapture";
 /** Notify UI/listeners that local `company_docs` changed (static / APK / Electron). */
 export const BROWSER_DB_COLLECTION_BUMP = "pocket-ledger-browser-db-bump";
 
-export type BrowserDbCollectionBumpDetail = { companyId: string; collection: string };
+export type BrowserDbCollectionBumpDetail = {
+  companyId: string;
+  collection: string;
+  /** User save / refresh: debounce skip — ledger turant merge. */
+  immediate?: boolean;
+};
 
 /** After a Firestore-backed write mirror, allow lists to refresh (same tab). */
-export function notifyBrowserDbCollectionUpdated(companyId: string, collectionName: string): void {
+export function notifyBrowserDbCollectionUpdated(
+  companyId: string,
+  collectionName: string,
+  options?: { immediate?: boolean }
+): void {
   if (typeof window === "undefined" || !companyId || !collectionName) return;
   window.dispatchEvent(
     new CustomEvent<BrowserDbCollectionBumpDetail>(BROWSER_DB_COLLECTION_BUMP, {
-      detail: { companyId, collection: collectionName },
+      detail: {
+        companyId,
+        collection: collectionName,
+        immediate: options?.immediate === true,
+      },
     })
   );
 }
@@ -61,6 +74,9 @@ async function shouldPersistCompanyDocToBrowserDb(
   options?: UpsertCompanyBrowserOptions
 ): Promise<boolean> {
   if (options?.force === true) return true;
+  // Thin staff: user-side SQLite mirror (online company jaisa) — persist allowed.
+  const { isPlServerThinStaffCompany } = await import("@/lib/plServerThinStaffClient");
+  if (await isPlServerThinStaffCompany(companyId)) return true;
   if (shouldMirrorToBrowserDb()) return true;
   const cid = String(companyId || "").trim();
   if (!cid) return false;
@@ -79,6 +95,8 @@ async function canReadCompanyDocsFromBrowserDb(
   options?: { forBackupMerge?: boolean }
 ): Promise<boolean> {
   if (options?.forBackupMerge) return true;
+  const { isPlServerThinStaffCompany } = await import("@/lib/plServerThinStaffClient");
+  if (await isPlServerThinStaffCompany(companyId)) return true;
   if (shouldMirrorToBrowserDb()) return true;
   return shouldPersistCompanyDocToBrowserDb(companyId);
 }
@@ -183,20 +201,46 @@ export async function getCompanyDocFromBrowserDb(
 ): Promise<Record<string, unknown> | null> {
   if (typeof window === "undefined" || !companyId || !collectionName || !docId) return null;
   if (!(await canReadCompanyDocsFromBrowserDb(companyId))) return null;
+  // Thin staff: SQLite-first (mirror). Display cache only if SQLite miss (migration / cold).
+  const { isPlServerThinStaffCompany } = await import("@/lib/plServerThinStaffClient");
+  const thinStaff = await isPlServerThinStaffCompany(companyId);
   try {
     const db = await getBrowserDb();
-    if (!db) return null;
-    const row = db
-      .prepare("SELECT id, data FROM company_docs WHERE company_id = ? AND collection = ? AND id = ?")
-      .get(companyId, collectionName, docId) as { id: string; data: string } | undefined;
-    if (!row?.data) return null;
-    const parsed = JSON.parse(row.data) as Record<string, unknown>;
-    const data = deserializeLocalDbValue(parsed) as Record<string, unknown>;
-    if (!opts?.includeDeleted && data.isDeleted === true) return null;
-    return { ...data, id: row.id };
+    if (db) {
+      const row = db
+        .prepare("SELECT id, data FROM company_docs WHERE company_id = ? AND collection = ? AND id = ?")
+        .get(companyId, collectionName, docId) as { id: string; data: string } | undefined;
+      if (row?.data) {
+        const parsed = JSON.parse(row.data) as Record<string, unknown>;
+        const data = deserializeLocalDbValue(parsed) as Record<string, unknown>;
+        if (!opts?.includeDeleted && data.isDeleted === true) return null;
+        return { ...data, id: row.id };
+      }
+    }
   } catch {
-    return null;
+    /* fall through */
   }
+  if (thinStaff) {
+    const { getPlServerDisplayCacheDoc, ensurePlServerDisplayCacheCollection, hydratePlServerDisplayCacheFromIdb } =
+      await import("@/lib/plServerDisplayCache");
+    let hit = getPlServerDisplayCacheDoc(companyId, collectionName, docId, {
+      includeDeleted: opts?.includeDeleted,
+    });
+    if (!hit) {
+      await hydratePlServerDisplayCacheFromIdb(companyId, collectionName);
+      hit = getPlServerDisplayCacheDoc(companyId, collectionName, docId, {
+        includeDeleted: opts?.includeDeleted,
+      });
+    }
+    if (!hit && typeof navigator !== "undefined" && navigator.onLine) {
+      await ensurePlServerDisplayCacheCollection(companyId, collectionName);
+      hit = getPlServerDisplayCacheDoc(companyId, collectionName, docId, {
+        includeDeleted: opts?.includeDeleted,
+      });
+    }
+    return hit;
+  }
+  return null;
 }
 
 /**
@@ -231,29 +275,49 @@ export async function listCompanyDocsFromBrowserDb(
 ): Promise<any[]> {
   if (typeof window === "undefined" || !companyId || !collectionName) return [];
   if (!(await canReadCompanyDocsFromBrowserDb(companyId, options))) return [];
+  const { isPlServerThinStaffCompany } = await import("@/lib/plServerThinStaffClient");
+  const thinStaff = await isPlServerThinStaffCompany(companyId);
   try {
     const db = await getBrowserDb();
-    if (!db) return [];
-    const rows = db
-      .prepare("SELECT id, data FROM company_docs WHERE company_id = ? AND collection = ?")
-      .all(companyId, collectionName) as Array<{ id: string; data: string }>;
-    const out: any[] = [];
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i]!;
-      try {
-        const parsed = JSON.parse(row.data) as Record<string, unknown>;
-        const data = deserializeLocalDbValue(parsed) as Record<string, unknown>;
-        out.push({ ...data, id: row.id });
-      } catch {
-        // corrupt row skip
+    if (db) {
+      const rows = db
+        .prepare("SELECT id, data FROM company_docs WHERE company_id = ? AND collection = ?")
+        .all(companyId, collectionName) as Array<{ id: string; data: string }>;
+      const out: any[] = [];
+      for (const row of rows) {
+        try {
+          const parsed = JSON.parse(row.data) as Record<string, unknown>;
+          const data = deserializeLocalDbValue(parsed) as Record<string, unknown>;
+          if (!options?.includeSoftDeleted && !options?.forBackupMerge && data.isDeleted === true) {
+            continue;
+          }
+          out.push({ ...data, id: row.id });
+        } catch {
+          /* skip bad row */
+        }
       }
-      if (i > 0 && i % 40 === 0) await yieldToMain();
+      // Mirror-first: SQLite is source of truth (empty = empty). Display cache only if DB unavailable.
+      return out;
     }
-    if (options?.includeSoftDeleted) return out;
-    return out.filter((item: any) => item.isDeleted !== true);
   } catch {
-    return [];
+    /* fall through for thin staff cache */
   }
+  if (thinStaff) {
+    const { listPlServerDisplayCacheDocs, ensurePlServerDisplayCacheCollection, hydratePlServerDisplayCacheFromIdb } =
+      await import("@/lib/plServerDisplayCache");
+    if (listPlServerDisplayCacheDocs(companyId, collectionName, options).length === 0) {
+      await hydratePlServerDisplayCacheFromIdb(companyId, collectionName);
+    }
+    if (
+      listPlServerDisplayCacheDocs(companyId, collectionName, options).length === 0 &&
+      typeof navigator !== "undefined" &&
+      navigator.onLine
+    ) {
+      await ensurePlServerDisplayCacheCollection(companyId, collectionName);
+    }
+    return listPlServerDisplayCacheDocs(companyId, collectionName, options);
+  }
+  return [];
 }
 
 /**
@@ -287,6 +351,24 @@ export async function listVoucherSummaryProjectionFromBrowserDb(
 ): Promise<VoucherProjectionRow[]> {
   if (typeof window === "undefined" || !companyId) return [];
   if (!(await canReadCompanyDocsFromBrowserDb(companyId, options))) return [];
+  const { isPlServerThinStaffCompany } = await import("@/lib/plServerThinStaffClient");
+  if (await isPlServerThinStaffCompany(companyId)) {
+    const vouchers = await listCompanyDocsFromBrowserDb(companyId, "vouchers", options);
+    const mapped = vouchers.map((raw) => {
+      const data = raw as Record<string, unknown>;
+      const docDateMs = parseDateToMsLoose(data.date);
+      return {
+        id: String(data.id || ""),
+        type: typeof data.type === "string" ? data.type : undefined,
+        date: typeof docDateMs === "number" ? new Date(docDateMs) : null,
+        amount: parseAmountLoose(data) ?? 0,
+      };
+    });
+    if (typeof options?.limit === "number" && options.limit > 0) {
+      return mapped.slice(0, Math.max(1, Math.floor(options.limit)));
+    }
+    return mapped;
+  }
   try {
     const db = await getBrowserDb();
     if (!db) return [];
@@ -526,6 +608,8 @@ export async function deleteCompanyDocFromBrowserDb(
 
 export type PerformCompanyDocUpsertResult = {
   written: boolean;
+  /** True when the target row is durably present in SQLite, including no-op unchanged writes. */
+  persisted: boolean;
   stampedData: Record<string, unknown>;
   existingParsed: Record<string, unknown> | null;
 };
@@ -576,7 +660,7 @@ export async function performCompanyDocUpsert(
 ): Promise<PerformCompanyDocUpsertResult> {
   const shouldNotify = options?.shouldNotify !== false;
   const db = await getBrowserDb();
-  if (!db) return { written: false, stampedData: data, existingParsed: null };
+  if (!db) return { written: false, persisted: false, stampedData: data, existingParsed: null };
 
   let hasExistingRow = false;
   try {
@@ -597,7 +681,7 @@ export async function performCompanyDocUpsert(
       .prepare("SELECT data FROM company_docs WHERE company_id = ? AND collection = ? AND id = ?")
       .get(companyId, collectionName, docId) as { data?: string } | undefined;
     if (existing?.data === json) {
-      return { written: false, stampedData, existingParsed: null };
+      return { written: false, persisted: true, stampedData, existingParsed: null };
     }
     if (existing?.data) {
       try {
@@ -614,7 +698,7 @@ export async function performCompanyDocUpsert(
   try {
     await runCompanyDocSqliteUpsertAndProjection(db, companyId, collectionName, docId, stampedData);
     plPhase1bVerifyHook("onCompanyDocUpsert");
-    return { written: true, stampedData, existingParsed };
+    return { written: true, persisted: true, stampedData, existingParsed };
   } catch (e) {
     if (!isSqliteBadParamError(e)) throw e;
     clearBrowserDbCache();
@@ -626,7 +710,7 @@ export async function performCompanyDocUpsert(
     try {
       await runCompanyDocSqliteUpsertAndProjection(retryDb, companyId, collectionName, docId, stampedData);
       plPhase1bVerifyHook("onCompanyDocUpsert");
-      return { written: true, stampedData, existingParsed };
+      return { written: true, persisted: true, stampedData, existingParsed };
     } catch (retryError) {
       markMirrorSqliteErrorAndMaybePauseWrites(retryError);
       throw retryError;
@@ -639,6 +723,57 @@ type CommitCompanyDocSideEffectOpts = {
   skipNotify?: boolean;
 };
 
+type OpeningBalanceMasterCollection =
+  | "parties"
+  | "bank_accounts"
+  | "staff"
+  | "taxes"
+  | "expense_accounts";
+
+const OPENING_BALANCE_MASTER_COLLECTIONS = new Set<string>([
+  "parties",
+  "bank_accounts",
+  "staff",
+  "taxes",
+  "expense_accounts",
+]);
+
+function scheduleOpeningBalanceCapitalBalanceAfterMasterWrite(input: {
+  companyId: string;
+  collectionName: string;
+  docId: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown>;
+  shouldNotify: boolean;
+  skipCloudSyncEnqueue?: boolean;
+}): void {
+  if (!input.shouldNotify || input.skipCloudSyncEnqueue === true) return;
+  if (!OPENING_BALANCE_MASTER_COLLECTIONS.has(input.collectionName)) return;
+  if (input.collectionName === "parties" && input.docId === "opening_balance_ledger") return;
+  if (!Object.prototype.hasOwnProperty.call(input.after, "openingBalance")) return;
+  const oldOpeningBalance = Number(input.before?.openingBalance) || 0;
+  const newOpeningBalance = Number(input.after.openingBalance) || 0;
+  if (Math.abs(newOpeningBalance - oldOpeningBalance) < 0.01) return;
+  void import("@/lib/voucherActionsClient")
+    .then(({ balanceOpeningBalanceWithCapital }) =>
+      balanceOpeningBalanceWithCapital(
+        input.companyId,
+        input.collectionName as OpeningBalanceMasterCollection,
+        input.docId,
+        oldOpeningBalance,
+        newOpeningBalance
+      )
+    )
+    .then((result) => {
+      if (result && result.success === false) {
+        console.warn("[localCompanyDocMirror] opening balance background sync failed", result.error);
+      }
+    })
+    .catch((e) => {
+      console.warn("[localCompanyDocMirror] opening balance background sync failed", e);
+    });
+}
+
 async function commitCompanyDocOnRenderer(
   companyId: string,
   collectionName: string,
@@ -646,10 +781,12 @@ async function commitCompanyDocOnRenderer(
   data: Record<string, unknown>,
   options?: UpsertCompanyBrowserOptions,
   sideEffectOpts?: CommitCompanyDocSideEffectOpts
-): Promise<{ written: boolean }> {
+): Promise<{ written: boolean; persisted: boolean; stampedData: Record<string, unknown> }> {
   const shouldNotify = options?.notify !== false;
   const mutation = await performCompanyDocUpsert(companyId, collectionName, docId, data, { shouldNotify });
-  if (!mutation.written) return { written: false };
+  if (!mutation.written) {
+    return { written: false, persisted: mutation.persisted, stampedData: mutation.stampedData };
+  }
 
   const { stampedData, existingParsed } = mutation;
 
@@ -668,31 +805,65 @@ async function commitCompanyDocOnRenderer(
     }
   }
 
-  await enqueueCloudSyncDeltaAfterMirrorWrite({
+  void enqueueCloudSyncDeltaAfterMirrorWrite({
     companyId,
     collectionName,
     docId,
     data: stampedData,
     skipCloudSyncEnqueue: options?.skipCloudSyncEnqueue,
+  }).catch((e) => {
+    console.warn("[localCompanyDocMirror] cloud sync enqueue skipped", e);
+  });
+
+  scheduleOpeningBalanceCapitalBalanceAfterMasterWrite({
+    companyId,
+    collectionName,
+    docId,
+    before: existingParsed,
+    after: stampedData,
+    shouldNotify,
+    skipCloudSyncEnqueue: options?.skipCloudSyncEnqueue,
   });
 
   if (shouldNotify) {
     if (!sideEffectOpts?.skipNotify) {
-      notifyBrowserDbCollectionUpdated(companyId, collectionName);
+      notifyBrowserDbCollectionUpdated(companyId, collectionName, { immediate: true });
       void maybeQueuePlServerMirrorAfterDocWrite(companyId, collectionName, docId, stampedData);
       plPhase1bVerifyHook("onMirrorQueue");
     }
   }
 
-  const { flushPendingBrowserDbSave } = await import("@/lib/localSqlite");
-  await flushPendingBrowserDbSave();
+  // IndexedDB flush debounced (~250ms) from stmt.run — UI ko full DB export par mat roko.
+  if (shouldNotify) {
+    // User-visible writes flush immediately; silent mirror batches use the SQLite wrapper's debounce.
+    void import("@/lib/localSqlite").then(({ flushPendingBrowserDbSave }) => {
+      flushPendingBrowserDbSave().catch(() => undefined);
+    });
+  }
 
   if (shouldNotify && sideEffectOpts?.skipNotify) {
     const { maybePublishHostMirrorAfterBridgeWrite } = await import("@/lib/plServerHostMirrorPublish");
     void maybePublishHostMirrorAfterBridgeWrite(companyId, collectionName, docId, stampedData);
   }
 
-  return { written: true };
+  return { written: true, persisted: true, stampedData };
+}
+
+function scheduleCompanyDocAuthoritativeDispatchAfterLocalCommit(
+  companyId: string,
+  collectionName: string,
+  docId: string,
+  data: Record<string, unknown>,
+  options?: UpsertCompanyBrowserOptions
+): void {
+  if (options?.notify === false) return;
+  void import("@/lib/plServerAuthoritativeWriteRouting")
+    .then(({ orchestrateCompanyDocBrowserWrite }) =>
+      orchestrateCompanyDocBrowserWrite(companyId, collectionName, docId, data, options)
+    )
+    .catch((e) => {
+      console.warn("[localCompanyDocMirror] background authoritative dispatch failed", collectionName, docId, e);
+    });
 }
 
 /** Hidden bridge renderer: canonical SQLite commit without UI notify (main broadcasts bump). */
@@ -707,14 +878,16 @@ export async function hostBridgeCommitCompanyDoc(
     const out = await commitCompanyDocOnRenderer(companyId, collectionName, docId, data, options, {
       skipNotify: true,
     });
-    return { ok: true, written: out.written };
+    return { ok: out.persisted, written: out.written, ...(out.persisted ? {} : { error: "sqlite_commit_failed" }) };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "commit_failed" };
   }
 }
 
 /**
- * Generic upsert into `company_docs`; swallow errors so the main Firestore flow never fails because of SQLite.
+ * Generic upsert into `company_docs`.
+ * User-visible saves are SQLite-first; server/bridge dispatch happens after local persistence.
+ * Silent mirror batches still soft-fail so Firestore/onSnapshot reads are not blocked by cache issues.
  */
 export async function upsertCompanyDocInBrowserDb(
   companyId: string,
@@ -722,27 +895,87 @@ export async function upsertCompanyDocInBrowserDb(
   docId: string,
   data: Record<string, unknown>,
   options?: UpsertCompanyBrowserOptions
-): Promise<void> {
-  if (!companyId || !collectionName || !docId) return;
-  if (!(await shouldPersistCompanyDocToBrowserDb(companyId, options))) return;
-  if (shouldSkipMirrorWritesNow()) return;
+): Promise<boolean> {
+  if (!companyId || !collectionName || !docId) return false;
+  const shouldNotify = options?.notify !== false;
+  const { isPlServerThinStaffCompany } = await import("@/lib/plServerThinStaffClient");
+  const thinStaff = await isPlServerThinStaffCompany(companyId);
+  if (!thinStaff && !(await shouldPersistCompanyDocToBrowserDb(companyId, options))) return false;
+  if (shouldSkipMirrorWritesNow()) {
+    if (shouldNotify) throw new Error("sqlite_mirror_temporarily_paused");
+    return false;
+  }
   try {
     // User-origin voucher SQLite writes: expired paid / strict JWT gate — mirror/restore paths `skipPlanMutationGate`.
     if (collectionName === "vouchers" && options?.skipPlanMutationGate !== true) {
       await assertCompanyAllowsLedgerMutations(companyId);
     }
 
-    const { orchestrateCompanyDocBrowserWrite } = await import("@/lib/plServerAuthoritativeWriteRouting");
-    const route = await orchestrateCompanyDocBrowserWrite(companyId, collectionName, docId, data, options);
-    if (route.kind === "local_commit") {
-      await commitCompanyDocOnRenderer(companyId, collectionName, docId, data, options);
+    const { recordContainsLocalPendingEntityFileRef, syncEntityAttachmentsAfterSaveAndWait } = await import(
+      "@/lib/entityProfileLocalFiles"
+    );
+    // PL direct writes are guarded in `plServerAuthoritativeWriteRouting`; avoid a duplicate 20s best-effort wait here.
+    if (collectionName !== "vouchers" && recordContainsLocalPendingEntityFileRef(data)) {
+      const { shouldEnqueuePlServerAttachmentUpload } = await import("@/lib/plServerAttachmentUploadQueue");
+      if (!thinStaff && !(await shouldEnqueuePlServerAttachmentUpload(companyId))) {
+        void syncEntityAttachmentsAfterSaveAndWait(companyId).catch((e) => {
+          console.warn("[localCompanyDocMirror] background entity attachment sync skipped", e);
+        });
+      }
     }
+
+    if (thinStaff) {
+      // Staff/client lane: local SQLite first, then Host/server replay in background.
+      const out = await commitCompanyDocOnRenderer(companyId, collectionName, docId, data, options);
+      if (out.persisted) {
+        try {
+          const { patchPlServerDisplayCacheDoc } = await import("@/lib/plServerDisplayCache");
+          patchPlServerDisplayCacheDoc(companyId, collectionName, docId, out.stampedData);
+        } catch {
+          /* optional warm */
+        }
+        if (collectionName === "vouchers") {
+          const { dispatchVoucherLivePatch } = await import("@/lib/voucherFormAttachmentSave");
+          dispatchVoucherLivePatch(companyId, docId, { ...out.stampedData, id: docId });
+        }
+        try {
+          const { markPlServerLocalWrite } = await import("@/lib/plServerClientMirrorPush");
+          markPlServerLocalWrite(companyId);
+        } catch {
+          /* optional */
+        }
+        scheduleCompanyDocAuthoritativeDispatchAfterLocalCommit(
+          companyId,
+          collectionName,
+          docId,
+          out.stampedData,
+          options
+        );
+        return true;
+      }
+      if (shouldNotify) throw new Error("sqlite_commit_failed");
+      return false;
+    }
+
+    const out = await commitCompanyDocOnRenderer(companyId, collectionName, docId, data, options);
+    if (out.persisted) {
+      scheduleCompanyDocAuthoritativeDispatchAfterLocalCommit(
+        companyId,
+        collectionName,
+        docId,
+        out.stampedData,
+        options
+      );
+      return true;
+    }
+    if (shouldNotify) throw new Error("sqlite_commit_failed");
   } catch (e) {
-    if ((e as { plAuthoritativeWriteFailed?: boolean })?.plAuthoritativeWriteFailed) {
+    if (shouldNotify || thinStaff || (e as { plAuthoritativeWriteFailed?: boolean })?.plAuthoritativeWriteFailed) {
       throw e;
     }
     console.warn("[localCompanyDocMirror] upsert failed", collectionName, docId, e);
   }
+  return false;
 }
 
 /**
@@ -865,7 +1098,7 @@ export async function mirrorCollectionDocsToBrowserDbSilent(
       continue;
     }
     incomingIds.add(id);
-    const payload = { ...(row as object), id } as Record<string, unknown>;
+    let payload = { ...(row as object), id } as Record<string, unknown>;
     if (options?.mergePreferNewer) {
       try {
         if (isPlServerMirrorDocPushPending(companyId, collectionName, id)) {
@@ -928,17 +1161,25 @@ export async function mirrorCollectionDocsToBrowserDbSilent(
             });
             continue;
           }
+          if (collectionName === "vouchers") {
+            const { mergeVoucherMirrorPullAttachments } = await import("@/lib/resolveVoucherAttachmentRemoteUrl");
+            payload = mergeVoucherMirrorPullAttachments(existing, payload, {
+              existingEditTimeMs: existingMs,
+              incomingEditTimeMs: incomingMs,
+            });
+          }
         }
       } catch {
         /* compare optional */
       }
     }
-    await upsertCompanyDocInBrowserDb(companyId, collectionName, id, payload, {
+    const written = await upsertCompanyDocInBrowserDb(companyId, collectionName, id, payload, {
       notify: false,
       force: forceUpsert,
       skipPlanMutationGate: collectionName === "vouchers",
     });
-    upserted += 1;
+    if (written) upserted += 1;
+    else skipped += 1;
   }
   if (authoritative) {
     await reconcileAuthoritativeCollectionSnapshot(companyId, collectionName, incomingIds);

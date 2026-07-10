@@ -3,7 +3,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Trash2, CalendarIcon } from "lucide-react";
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   uploadEntityAvatarAndDocumentsRemote,
   syncEntityAttachmentsAfterSave,
@@ -68,6 +68,7 @@ import {
 } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { useVouchers } from "@/hooks/useVouchers";
+import { useLiveEntityDocAttachments } from "@/hooks/useLiveEntityDocAttachments";
 
 /** CreateExpenseAccountDialog jaisa: Ungrouped bucket → form value `ungrouped_expense`. */
 function normalizeExpenseAccountEditGroupId(groupId: string | null | undefined): string {
@@ -114,6 +115,8 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
   const docsInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | string | null>(account.fileUrl || null);
   const [docSlots, setDocSlots] = useState<Array<File | string>>(() => account.documentFileUrls || []);
+  const initialFileRef = useRef<string | null>(account.fileUrl || null);
+  const initialDocUrlsRef = useRef<string[]>(account.documentFileUrls || []);
 
 
   /** Pure-local=outbox lane; APK cloud lists SQLite mirror (`apkCloudEntityMasterReadFromSqliteMirror`). */
@@ -129,6 +132,35 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
     () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
     [company, navigatorOnline]
   );
+  const attachmentsDirty =
+    file instanceof File ||
+    docSlots.some((x) => x instanceof File) ||
+    (typeof file === "string" ? file : null) !== initialFileRef.current ||
+    JSON.stringify(docSlots.filter((x): x is string => typeof x === "string")) !==
+      JSON.stringify(initialDocUrlsRef.current);
+  const onLiveAttachmentFields = useCallback(
+    (fields: { fileUrl?: string | null; documentFileUrls?: string[] }) => {
+      if (fields.fileUrl !== undefined) {
+        const nextFile = fields.fileUrl || null;
+        setFile(nextFile);
+        initialFileRef.current = nextFile;
+      }
+      if (fields.documentFileUrls) {
+        setDocSlots(fields.documentFileUrls);
+        initialDocUrlsRef.current = fields.documentFileUrls;
+      }
+    },
+    []
+  );
+  useLiveEntityDocAttachments({
+    enabled: isOpen,
+    companyId,
+    collection: "expense_accounts",
+    entityId: account.id,
+    attachmentsDirty,
+    preferSqliteMirror: sqliteListsOnlyNoSnapshot,
+    onFields: onLiveAttachmentFields,
+  });
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
@@ -165,6 +197,8 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
       });
       setFile(account.fileUrl || null);
       setDocSlots(account.documentFileUrls || []);
+      initialFileRef.current = account.fileUrl || null;
+      initialDocUrlsRef.current = account.documentFileUrls || [];
     }
   }, [isOpen, account, form]);
   
@@ -296,6 +330,10 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
           await enqueueCompanyDocOutbox(companyId, "expense_accounts", "update", accountRefSnap.id, payload);
           await syncEntityAttachmentsAfterSave(companyId);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+          setFile(fileUrl || null);
+          setDocSlots(documentFileUrls);
+          initialFileRef.current = fileUrl || null;
+          initialDocUrlsRef.current = documentFileUrls;
           onAccountUpdated();
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
             id: toastId,
@@ -320,6 +358,10 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
         }
 
         await syncEntityAttachmentsAfterSave(companyId);
+        setFile(fileUrl || null);
+        setDocSlots(documentFileUrls);
+        initialFileRef.current = fileUrl || null;
+        initialDocUrlsRef.current = documentFileUrls;
         onAccountUpdated();
         sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
       } catch (error) {

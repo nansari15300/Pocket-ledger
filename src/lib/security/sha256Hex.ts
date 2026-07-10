@@ -16,7 +16,7 @@ export async function digestSha256Bytes(input: Uint8Array): Promise<ArrayBuffer>
     return crypto.subtle.digest("SHA-256", input as BufferSource);
   }
   const pure = sha256PureBytes(input);
-  return pure.buffer.slice(pure.byteOffset, pure.byteOffset + pure.byteLength);
+  return pure.slice().buffer;
 }
 
 export async function computeSha256HexFromBytes(bytes: ArrayBuffer): Promise<string> {

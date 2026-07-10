@@ -31,6 +31,7 @@ import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccoun
 import { useDate } from "@/hooks/useDate";
 import usePermissions from "@/hooks/usePermissions";
 import { toast as sonnerToast } from "sonner";
+import { beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
 import BsDatePicker from "../ui/BsDatePicker";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { Staff } from "@/components/staff/types";
@@ -291,7 +292,7 @@ export function CreatePaymentInForm({
         setSavedVoucherId(voucher.id);
         const urls = voucherAttachmentUrlsForFormState(voucher);
         setFiles(urls);
-        initialFilesRef.current = [...urls];
+        initialFilesRef.current = urls.filter((f): f is string => typeof f === "string");
         setSavePdfAsImage(shouldSuggestPdfAsImage(urls));
     }
 }, [voucher, form, isEditingAndConverting]);
@@ -340,7 +341,8 @@ export function CreatePaymentInForm({
       onVoucherUpdated?.();
     }
     
-    const toastId = sonnerToast.loading("Saving income...");
+    const toastId = await beginVoucherSaveLoadingOrBlock(companyId, "Saving income...");
+    if (toastId == null) return;
     setIsLoading(true);
 
     try {
@@ -540,7 +542,7 @@ export function CreatePaymentInForm({
         sonnerToast.error("Voucher limit reached", { id: toastId, description: error.message, action: { label: "Upgrade", onClick: () => window.location.assign("/billing") } });
       } else {
         console.error("Error saving voucher: ", error);
-        sonnerToast.error("Error", { id: toastId, description: "Failed to save voucher." });
+        voucherSaveErrorToast(toastId, error, "Failed to save voucher.");
       }
     } finally {
         setIsLoading(false);

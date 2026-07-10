@@ -39,8 +39,10 @@ if (process.platform === "win32") {
 }
 
 // Do EXE instances = do `localhost` ports = Firebase Auth / IndexedDB alag origin ("login delete") — doosra instance band + pehla focus.
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
 const IS_PHASE1B_RUNTIME_VERIFY = process.env.PL_PHASE1B_RUNTIME_VERIFY === "1";
+const IS_PLSERVER_COMPANY_AUDIT = process.env.PL_PLSERVER_COMPANY_AUDIT === "1";
+// Runtime verify: parallel dev Electron allowed while packaged app open (verify uses isolated userData + port 3901).
+const gotSingleInstanceLock = IS_PHASE1B_RUNTIME_VERIFY || IS_PLSERVER_COMPANY_AUDIT ? true : app.requestSingleInstanceLock();
 const phase1bVerifyStats = {
   bridgeIpc: 0,
   broadcast: 0,
@@ -49,8 +51,8 @@ const phase1bVerifyStats = {
   authoritativeHttp: 0,
 };
 
-if (IS_PHASE1B_RUNTIME_VERIFY && process.env.PL_PHASE1B_VERIFY_USER_DATA) {
-  app.setPath("userData", process.env.PL_PHASE1B_VERIFY_USER_DATA);
+if ((IS_PHASE1B_RUNTIME_VERIFY && process.env.PL_PHASE1B_VERIFY_USER_DATA) || (IS_PLSERVER_COMPANY_AUDIT && process.env.PL_PLSERVER_AUDIT_USER_DATA)) {
+  app.setPath("userData", process.env.PL_PLSERVER_AUDIT_USER_DATA || process.env.PL_PHASE1B_VERIFY_USER_DATA);
 }
 if (!gotSingleInstanceLock) {
   app.quit();
@@ -877,6 +879,56 @@ async function startSharedLocalServer() {
   return port;
 }
 
+/** Packaged boot / app update: sharing resume when operator left it on OR auto-start is enabled. */
+async function ensureHostSharingRunningAfterLaunch(options = {}) {
+  const forceRestart = options?.forceRestart === true;
+  const ud = userDataPath();
+  let cfg = localAppServer.loadConfig(ud);
+  if (!localAppServer.shouldHostLocalServer(cfg) || localAppServer.shouldUseRemoteEntry(cfg)) {
+    return null;
+  }
+  if (!app.isPackaged && !IS_PHASE1B_RUNTIME_VERIFY) return null;
+
+  const shouldShare = cfg.userWantsRunning || cfg.autoStartOnBoot;
+  if (!shouldShare) return null;
+
+  if (cfg.autoStartOnBoot && !cfg.userWantsRunning) {
+    cfg = localAppServer.saveConfig(ud, { userWantsRunning: true });
+  }
+
+  try {
+    if (forceRestart) {
+      const port = await localAppServer.restartSharingServer(ud);
+      if (port != null) void ensureServerDataBridgeWindow().catch(() => {});
+      return port;
+    }
+    const st = localAppServer.getStatus(ud);
+    if (st.sharingActive) {
+      void ensureServerDataBridgeWindow().catch(() => {});
+      return st.port;
+    }
+    const port = await localAppServer.startSharingServer(ud);
+    void ensureServerDataBridgeWindow().catch(() => {});
+    return port;
+  } catch (e) {
+    console.warn("[main] ensure host sharing running failed", e?.message || e);
+    return null;
+  }
+}
+
+/** @deprecated alias — phase1b verify + legacy callers */
+async function resumeHostSharingAfterBootIfConfigured() {
+  return ensureHostSharingRunningAfterLaunch();
+}
+
+function shouldOfferTrayStartSharing(cfg, st) {
+  return (
+    localAppServer.shouldHostLocalServer(cfg) &&
+    !st.sharingActive &&
+    st.appUiServing
+  );
+}
+
 function syncLocalServerTray() {
   if (!app.isPackaged) {
     destroyServerTray();
@@ -917,7 +969,7 @@ function syncLocalServerTray() {
         void stopLocalServerAndPersist();
       },
     });
-  } else if (!st.sharingActive && cfg.userWantsRunning === false && st.appUiServing) {
+  } else if (shouldOfferTrayStartSharing(cfg, st)) {
     template.push({
       label: "Start sharing for others",
       click: () => {
@@ -1767,12 +1819,18 @@ if (gotSingleInstanceLock) {
 
   if (app.isPackaged) {
     try {
-      await appUpgradeCache.runPackagedUpgradeCacheRefresh({
+      const upgradeResult = await appUpgradeCache.runPackagedUpgradeCacheRefresh({
         app,
         session: session.defaultSession,
-        asarOutDir: path.join(__dirname, "out"),
         userDataPath: userDataPath(),
       });
+      if (upgradeResult?.upgraded) {
+        console.info("[main] packaged app upgraded — caches cleared", {
+          from: upgradeResult.previousVersion || "(none)",
+          to: upgradeResult.version,
+        });
+        app.__plDidPackagedUpgrade = true;
+      }
     } catch (e) {
       console.warn("[main] packaged upgrade cache refresh failed", e?.message || e);
     }
@@ -2180,6 +2238,25 @@ if (gotSingleInstanceLock) {
 
   buildAppMenu();
 
+  if (IS_PLSERVER_COMPANY_AUDIT) {
+    const { runPlServerCompanyDetectionAudit } = require("./plServerCompanyDetectionAudit");
+    try {
+      await runPlServerCompanyDetectionAudit({
+        appRoot: __dirname,
+        preloadPath: path.join(__dirname, "app-content-preload.js"),
+        userDataPath: userDataPath(),
+        localAppServer,
+        rewriteReconciliationDocumentUrl,
+        isAllowedFirebaseProxyTarget,
+      });
+      app.exit(0);
+    } catch (e) {
+      process.stderr.write(String(e?.stack || e?.message || e));
+      app.exit(1);
+    }
+    return;
+  }
+
   if (IS_PHASE1B_RUNTIME_VERIFY) {
     const {
       runPhase1bRuntimeVerify,
@@ -2195,6 +2272,8 @@ if (gotSingleInstanceLock) {
       rewriteReconciliationDocumentUrl,
       isAllowedFirebaseProxyTarget,
       startSharedLocalServer,
+      resumeHostSharingAfterBootIfConfigured,
+      shouldOfferTrayStartSharing: (cfg, st) => shouldOfferTrayStartSharing(cfg, st),
       stopSharingOnly: async () => {
         await localAppServer.stopSharingServer();
       },
@@ -2225,6 +2304,9 @@ if (gotSingleInstanceLock) {
   }
 
   await createWindow();
+  await ensureHostSharingRunningAfterLaunch({
+    forceRestart: app.__plDidPackagedUpgrade === true,
+  });
   syncLocalServerTray();
   app.on("activate", () => {
     void focusOrOpenMainWindow();

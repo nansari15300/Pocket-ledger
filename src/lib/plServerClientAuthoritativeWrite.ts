@@ -17,6 +17,7 @@ import {
   resolvePlServerMirrorTransport,
   syncPlServerSharedCompanyLive,
 } from "@/lib/plServerClientMirrorPush";
+import { livePullDevLog } from "@/lib/plServerLivePullDevLog";
 
 export class PlServerAuthoritativeWriteError extends Error {
   readonly plAuthoritativeWriteFailed = true;
@@ -32,7 +33,7 @@ export type PlServerAuthoritativeRouteOptions = {
   simulateLanClient?: boolean;
 };
 
-async function isLocalAuthoritativeHostForCompany(companyId: string): Promise<boolean> {
+export async function isLocalAuthoritativeHostForCompany(companyId: string): Promise<boolean> {
   if (!isLocalAppServerHost()) return false;
   if (typeof window === "undefined") return false;
   const bridge = (window as unknown as { plElectronBridge?: { authoritativeCompanyDocUpsert?: unknown } })
@@ -53,7 +54,6 @@ export async function shouldRoutePlServerAuthoritativeWrite(
 ): Promise<boolean> {
   if (typeof window === "undefined") return false;
   if (options?.notify === false) return false;
-  if (isPlRemoteServerClientMode()) return false;
   if (isCanonicalServerBridgeRenderer()) return false;
   if (!routeOptions?.simulateLanClient && (await isLocalAuthoritativeHostForCompany(companyId))) return false;
   if (!shouldFetchPlServerAccessContext()) return false;
@@ -96,7 +96,7 @@ function parseAuthoritativeUpsertResponse(
   }
 }
 
-/** Online LAN client: POST to Milestone 1 authoritative endpoint; no local SQLite commit. */
+/** Online LAN client: POST to Milestone 1 authoritative endpoint; optimistic local_commit follows in upsert orchestrator. */
 export async function invokePlServerAuthoritativeDocUpsert(
   companyId: string,
   collectionName: string,
@@ -130,7 +130,22 @@ export async function invokePlServerAuthoritativeDocUpsert(
   const skipPullForVerify =
     typeof window !== "undefined" &&
     Boolean((window as unknown as { __plPhase1bVerifyCapture?: unknown }).__plPhase1bVerifyCapture);
-  if (!skipPullForVerify) {
-    await syncPlServerSharedCompanyLive(companyId);
+  const { isPlServerThinStaffClient } = await import("@/lib/plServerThinStaffClient");
+  if (!skipPullForVerify && !isPlServerThinStaffClient()) {
+    // PLServer LAN stability (frozen): save must not block on full ledger pull — UI updates via optimistic local_commit.
+    // Thin staff: display cache pehle se `patchPlServerDisplayCacheDoc` se update — har save par full pull slow hai.
+    void syncPlServerSharedCompanyLive(companyId).then((pull) => {
+      if (!pull.ok) {
+        console.warn(
+          "[plServerAuthoritativeWrite] Host save succeeded but background ledger pull did not complete",
+          { companyId, ok: pull.ok, fullPull: pull.fullPull }
+        );
+        livePullDevLog("pull_after_authoritative_write_incomplete", {
+          companyId,
+          ok: pull.ok,
+          fullPull: pull.fullPull,
+        });
+      }
+    });
   }
 }

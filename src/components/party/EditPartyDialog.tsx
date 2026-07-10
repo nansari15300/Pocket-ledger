@@ -78,6 +78,7 @@ import {
   masterEntityDialogFormWrapperClassName,
   masterEntityDialogHeaderClassName,
 } from "@/lib/masterEntityDialogClasses";
+import { MasterPdfAsImageToggle } from "@/components/common/EntityProfileDocumentsNarrationFields";
 
 /** Create form jaisa: combobox value hamesha `ungrouped_party` ho jab party bucket “Ungrouped” ho (null / legacy empty). */
 function normalizePartyEditGroupId(groupId: string | null | undefined): string {
@@ -150,8 +151,15 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
 
   const onLiveAttachmentFields = React.useCallback(
     (fields: { fileUrl?: string | null; documentFileUrls?: string[] }) => {
-      if (fields.fileUrl !== undefined) setFile(fields.fileUrl || null);
-      if (fields.documentFileUrls) setDocSlots(fields.documentFileUrls);
+      if (fields.fileUrl !== undefined) {
+        const nextFile = fields.fileUrl || null;
+        setFile(nextFile);
+        initialFileRef.current = nextFile;
+      }
+      if (fields.documentFileUrls) {
+        setDocSlots(fields.documentFileUrls);
+        initialDocUrlsRef.current = fields.documentFileUrls;
+      }
     },
     []
   );
@@ -343,6 +351,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
             entityId: partyRefSnap.id,
             avatarFile: needAvatarUpload ? (fileSnap as File) : null,
             documentFiles: needNewDocsUpload ? newDocFiles : [],
+            company,
           });
           if (st.fileUrl) fileUrl = st.fileUrl;
           documentFileUrls = [...keptDocUrls, ...st.documentFileUrls];
@@ -391,7 +400,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           const payload: Record<string, unknown> = { ...base, ...updatePayload, id: partyRefSnap.id, companyId };
           await upsertCompanyDocInBrowserDb(companyId, "parties", partyRefSnap.id, payload);
           await enqueueCompanyDocOutbox(companyId, "parties", "update", partyRefSnap.id, payload);
-          await syncEntityAttachmentsAfterSave(companyId);
+          syncEntityAttachmentsAfterSave(companyId);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onPartyUpdated({
             id: partyRefSnap.id,
@@ -763,7 +772,9 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                     </p>
                   ) : (
                     <div className="flex items-center gap-4 flex-wrap">
-                      {file ? <FilePreview file={file} onRemove={removeAvatar} /> : null}
+                      {file ? (
+                        <FilePreview file={file} attachmentCompanyId={companyId ?? undefined} onRemove={removeAvatar} />
+                      ) : null}
                       {!file ? (
                         <FormControl>
                           <AttachmentHoldPasteSurface
@@ -810,36 +821,40 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                       <Link href="/billing" className="text-primary underline font-medium hover:no-underline">Upgrade</Link>
                     </p>
                   ) : (
-                    <div className="flex flex-wrap items-start gap-2">
-                      {docSlots.map((slot, idx) => (
-                        <FilePreview
-                          key={typeof slot === "string" ? `${slot}-${idx}` : `${slot.name}-${idx}-${slot.size}`}
-                          file={slot}
-                          onRemove={() => removeDocAt(idx)}
-                          size={96}
-                        />
-                      ))}
-                      {docSlots.length < 5 ? (
-                        <FormControl>
-                          <AttachmentHoldPasteSurface
-                            enabled={canAttachDocuments}
-                            onShortActivate={() => docsInputRef.current?.click()}
-                            onPastedFiles={(incoming) => void handleDocsChange(syntheticFileInputChangeEvent(incoming))}
-                            className="relative h-24 w-24 shrink-0 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                          >
-                            <Upload className="h-6 w-6" />
-                            <span className="text-xs mt-1 text-center px-1">PDF / image</span>
-                            <Input
-                              type="file"
-                              className="hidden"
-                              ref={docsInputRef}
-                              onChange={handleDocsChange}
-                              accept="image/*,application/pdf"
-                              multiple
-                            />
-                          </AttachmentHoldPasteSurface>
-                        </FormControl>
-                      ) : null}
+                    <div className="space-y-2">
+                      <MasterPdfAsImageToggle id="edit-party-pdf-as-image" />
+                      <div className="flex flex-wrap items-start gap-2">
+                        {docSlots.map((slot, idx) => (
+                          <FilePreview
+                            key={typeof slot === "string" ? `${slot}-${idx}` : `${slot.name}-${idx}-${slot.size}`}
+                            file={slot}
+                            attachmentCompanyId={companyId ?? undefined}
+                            onRemove={() => removeDocAt(idx)}
+                            size={96}
+                          />
+                        ))}
+                        {docSlots.length < 5 ? (
+                          <FormControl>
+                            <AttachmentHoldPasteSurface
+                              enabled={canAttachDocuments}
+                              onShortActivate={() => docsInputRef.current?.click()}
+                              onPastedFiles={(incoming) => void handleDocsChange(syntheticFileInputChangeEvent(incoming))}
+                              className="relative h-24 w-24 shrink-0 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
+                            >
+                              <Upload className="h-6 w-6" />
+                              <span className="text-xs mt-1 text-center px-1">PDF / image</span>
+                              <Input
+                                type="file"
+                                className="hidden"
+                                ref={docsInputRef}
+                                onChange={handleDocsChange}
+                                accept="image/*,application/pdf"
+                                multiple
+                              />
+                            </AttachmentHoldPasteSurface>
+                          </FormControl>
+                        ) : null}
+                      </div>
                     </div>
                   )}
                 </FormItem>

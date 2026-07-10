@@ -4,16 +4,22 @@
  * Party form jaisa: Profile photo + Documents (96px tiles) + optional narration —
  * bank / staff / tax / expense / item dialogs me reuse.
  */
+import * as React from "react";
 import Link from "next/link";
 import { Upload } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
+import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
 import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
 import { toast as sonnerToast } from "sonner";
 import { FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { Textarea } from "@/components/ui/textarea";
 import type { Control, FieldValues, Path } from "react-hook-form";
+import {
+  MASTER_SAVE_PDF_AS_IMAGE_STORAGE_KEY,
+  readMasterSavePdfAsImagePreference,
+} from "@/lib/entityProfileLocalFiles";
 
 const DOC_SIZE = 96;
 
@@ -24,6 +30,41 @@ function statementFileNote(entityLabel: string) {
       On the {entityLabel} statement they show on the opening balance row under the{" "}
       <span className="font-medium">File</span> column (green tick), like voucher attachments.
     </p>
+  );
+}
+
+export function MasterPdfAsImageToggle({
+  id = "master-save-pdf-as-image",
+  disabled,
+  className,
+}: {
+  id?: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const [checked, setChecked] = React.useState(false);
+
+  React.useEffect(() => {
+    setChecked(readMasterSavePdfAsImagePreference(false));
+  }, []);
+
+  const handleChange = (next: boolean) => {
+    setChecked(next);
+    try {
+      window.localStorage.setItem(MASTER_SAVE_PDF_AS_IMAGE_STORAGE_KEY, next ? "1" : "0");
+    } catch {
+      /* storage optional */
+    }
+  };
+
+  return (
+    <VoucherPdfAsImageToggle
+      id={id}
+      checked={checked}
+      onCheckedChange={handleChange}
+      disabled={disabled}
+      className={className}
+    />
   );
 }
 
@@ -144,42 +185,45 @@ export function EntityDocumentsBlock({
           </Link>
         </p>
       ) : (
-        <div className="flex flex-wrap items-start gap-2">
-          {docSlots.map((slot, idx) => (
-            <FilePreview
-              key={typeof slot === "string" ? `${slot}-${idx}` : `${slot.name}-${idx}-${slot.size}`}
-              file={slot}
-              onRemove={() => onRemoveDoc(idx)}
-              size={DOC_SIZE}
-              attachmentCompanyId={attachmentCompanyId}
-              attachmentGallery={galleryUrls ? { urls: galleryUrls, startIndex: idx } : undefined}
-            />
-          ))}
-          {docSlots.length < 5 ? (
-            <FormControl>
-              <AttachmentHoldPasteSurface
-                enabled={canAttachDocuments}
-                onShortActivate={onAddClick}
-                onPastedFiles={(incoming) => {
-                  if (docSlots.length >= 5) return;
-                  void onDocsChange(syntheticFileInputChangeEvent(incoming));
-                }}
-                className="relative flex h-24 w-24 shrink-0 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed text-muted-foreground transition-colors hover:border-primary"
-              >
-                <Upload className="h-6 w-6" />
-                <span className="mt-1 px-1 text-center text-xs">PDF / image</span>
-                <Input
-                  id={inputId}
-                  type="file"
-                  className="hidden"
-                  ref={docsInputRef}
-                  onChange={onDocsChange}
-                  accept="image/*,application/pdf"
-                  multiple
-                />
-              </AttachmentHoldPasteSurface>
-            </FormControl>
-          ) : null}
+        <div className="space-y-2">
+          <MasterPdfAsImageToggle id={`${inputId}-pdf-as-image`} />
+          <div className="flex flex-wrap items-start gap-2">
+            {docSlots.map((slot, idx) => (
+              <FilePreview
+                key={typeof slot === "string" ? `${slot}-${idx}` : `${slot.name}-${idx}-${slot.size}`}
+                file={slot}
+                onRemove={() => onRemoveDoc(idx)}
+                size={DOC_SIZE}
+                attachmentCompanyId={attachmentCompanyId}
+                attachmentGallery={galleryUrls ? { urls: galleryUrls, startIndex: idx } : undefined}
+              />
+            ))}
+            {docSlots.length < 5 ? (
+              <FormControl>
+                <AttachmentHoldPasteSurface
+                  enabled={canAttachDocuments}
+                  onShortActivate={onAddClick}
+                  onPastedFiles={(incoming) => {
+                    if (docSlots.length >= 5) return;
+                    void onDocsChange(syntheticFileInputChangeEvent(incoming));
+                  }}
+                  className="relative flex h-24 w-24 shrink-0 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed text-muted-foreground transition-colors hover:border-primary"
+                >
+                  <Upload className="h-6 w-6" />
+                  <span className="mt-1 px-1 text-center text-xs">PDF / image</span>
+                  <Input
+                    id={inputId}
+                    type="file"
+                    className="hidden"
+                    ref={docsInputRef}
+                    onChange={onDocsChange}
+                    accept="image/*,application/pdf"
+                    multiple
+                  />
+                </AttachmentHoldPasteSurface>
+              </FormControl>
+            ) : null}
+          </div>
         </div>
       )}
     </FormItem>

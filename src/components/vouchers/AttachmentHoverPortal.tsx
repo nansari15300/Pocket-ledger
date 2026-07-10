@@ -2,15 +2,23 @@
 
 import * as React from "react";
 import { createPortal } from "react-dom";
-import { ZoomIn, ZoomOut } from "lucide-react";
+import { ZoomIn, ZoomOut, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useFileHoverPreview } from "@/contexts/FileHoverPreviewContext";
+import { AttachmentPreviewGalleryContext } from "@/components/vouchers/attachmentPreviewGalleryContext";
 
 /** Tooltip se zyada: fixed portal + solid bg taaki table/parent overflow ya blend se file transparent na dikhe */
 const HOVER_CLOSE_MS = 280;
 const PANEL_Z = 400000;
 const BACKDROP_Z = PANEL_Z - 1;
+const PANEL_MAX_W = 1100;
+const PANEL_MIN_W = 200;
+const PANEL_MIN_H = 220;
+const PANEL_CHROME_H = 92;
+const PANEL_CONTENT_PAD_W = 22;
+const PANEL_CONTENT_PAD_H = 12;
+const PANEL_GALLERY_EXTRA_H = 22;
 
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 3;
@@ -38,6 +46,25 @@ function computeFitWindowZoomFromImages(root: HTMLElement, cw: number, ch: numbe
   const zh = innerH / Math.max(sumNh, 1);
   const z = Math.min(zw, zh);
   return Math.min(ZOOM_MAX, Math.max(FIT_ZOOM_MIN, z));
+}
+
+function clampPanelSize(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.ceil(value)));
+}
+
+function getImageStackNaturalSize(root: HTMLElement): { width: number; height: number } | null {
+  const imgs = [...root.querySelectorAll("img")].filter(
+    (n): n is HTMLImageElement =>
+      n instanceof HTMLImageElement && n.naturalWidth >= 2 && n.naturalHeight >= 1
+  );
+  if (imgs.length === 0) return null;
+  let width = 0;
+  let height = 0;
+  for (const img of imgs) {
+    width = Math.max(width, img.naturalWidth);
+    height += img.naturalHeight;
+  }
+  return { width, height };
 }
 
 /** Multi-attachment preview: pehli decode hui image se zoom ratio (sab img par same factor) */
@@ -94,6 +121,10 @@ type AttachmentHoverPortalProps = {
   triggerClassName?: string;
   /** PDF: nested FilePreview ke canvas par dblclick kabhi img tak nahi — scroll area se open in browser */
   onPreviewDoubleClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
+  /** Entity list avatar: click se preview modal — row Link navigate na ho; hover mode par bhi click preview */
+  clickOpensPreview?: boolean;
+  /** Multi-file: PC modal ke left/right arrows se file badle (preview body context se index leta hai) */
+  galleryUrls?: readonly string[];
 };
 
 export function AttachmentHoverPortal({
@@ -104,20 +135,41 @@ export function AttachmentHoverPortal({
   onRegisterOpen,
   triggerClassName,
   onPreviewDoubleClick,
+  clickOpensPreview = false,
+  galleryUrls,
 }: AttachmentHoverPortalProps) {
   const { mode: globalPreviewMode } = useFileHoverPreview();
   const effectiveDisabled = disabled || globalPreviewMode === "off";
   const useTapMode = useTapInteractionMode();
+  const forceClickPreview = clickOpensPreview && !effectiveDisabled;
+  const globalClickMode = globalPreviewMode === "click" && !effectiveDisabled && openOnHover;
   // `click`: desktop par click/tap modal; `hover`: pointer enter; touch hamesha click.
-  const clickOrTapOpenMode =
-    useTapMode || (globalPreviewMode === "click" && !effectiveDisabled && openOnHover);
+  const clickOrTapOpenMode = useTapMode || forceClickPreview || globalClickMode;
   const [open, setOpen] = React.useState(false);
   const [zoom, setZoom] = React.useState(1);
   /** Neeche Window / Width / Height — `window` default */
   const [fitMode, setFitMode] = React.useState<FitMode>("window");
   /** Ek baar panel andar click → trigger/pointer-leave auto-close band + backdrop se bahar click = close */
   const [stickOpen, setStickOpen] = React.useState(false);
+  const [galleryIndex, setGalleryIndex] = React.useState(0);
+  const [panelWidth, setPanelWidth] = React.useState<number | null>(null);
+  const [panelHeight, setPanelHeight] = React.useState<number | null>(null);
   const [pos, setPos] = React.useState({ top: 0, left: 0 });
+  const normalizedGalleryUrls = React.useMemo(
+    () => (Array.isArray(galleryUrls) ? galleryUrls.map((u) => String(u || "").trim()).filter(Boolean) : []),
+    [galleryUrls]
+  );
+  const galleryActive = normalizedGalleryUrls.length > 1;
+  const galleryState = React.useMemo(
+    () => ({
+      urls: normalizedGalleryUrls,
+      index: Math.min(Math.max(galleryIndex, 0), Math.max(normalizedGalleryUrls.length - 1, 0)),
+      setIndex: setGalleryIndex,
+      goPrev: () => setGalleryIndex((i) => Math.max(0, i - 1)),
+      goNext: () => setGalleryIndex((i) => Math.min(normalizedGalleryUrls.length - 1, i + 1)),
+    }),
+    [normalizedGalleryUrls, galleryIndex]
+  );
   const triggerRef = React.useRef<HTMLSpanElement>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const panRef = React.useRef<PanSession>({
@@ -147,18 +199,81 @@ export function AttachmentHoverPortal({
     if (!el) return;
     const r = el.getBoundingClientRect();
     const margin = 10;
-    const maxPanelW = Math.min(820, window.innerWidth - 2 * margin);
+    const maxPanelW = Math.min(
+      panelWidth ?? PANEL_MAX_W,
+      PANEL_MAX_W,
+      window.innerWidth - 2 * margin
+    );
     let left = r.right + margin;
     if (left + maxPanelW > window.innerWidth - margin) {
       left = Math.max(margin, r.left - maxPanelW - margin);
     }
     let top = r.top;
-    const maxH = window.innerHeight * 0.88;
+    const maxH = Math.min(panelHeight ?? window.innerHeight * 0.88, window.innerHeight * 0.88);
     if (top + maxH > window.innerHeight - margin) {
       top = Math.max(margin, window.innerHeight - maxH - margin);
     }
     setPos({ top, left });
-  }, []);
+  }, [panelWidth, panelHeight]);
+
+  /** Default preview: file ke aspect ratio ke hisaab se panel, viewport ke max size tak clamp. */
+  const syncPanelWidthFromContent = React.useCallback(() => {
+    const root = scrollRef.current;
+    if (!root || typeof window === "undefined") return;
+    const maxW = Math.min(PANEL_MAX_W, Math.max(window.innerWidth - 20, PANEL_MIN_W));
+    const maxH = Math.min(Math.floor(window.innerHeight * 0.88), Math.max(window.innerHeight - 16, PANEL_MIN_H));
+    const galleryExtraH = galleryActive ? PANEL_GALLERY_EXTRA_H : 0;
+    const maxContentW = Math.max(maxW - PANEL_CONTENT_PAD_W, 1);
+    const maxContentH = Math.max(maxH - PANEL_CHROME_H - galleryExtraH, 1);
+
+    const attempt = (n: number) => {
+      if (n > 48) return;
+      const natural = getImageStackNaturalSize(root);
+      if (natural) {
+        const fitWindowScale = Math.min(maxContentW / natural.width, maxContentH / Math.max(natural.height, 1));
+        const fitWidthScale = maxContentW / natural.width;
+        const fitHeightScale = maxContentH / Math.max(natural.height, 1);
+        const scale =
+          fitMode === "width"
+            ? fitWidthScale
+            : fitMode === "height"
+              ? fitHeightScale
+              : fitWindowScale;
+        const safeScale = Math.min(ZOOM_MAX, Math.max(FIT_ZOOM_MIN, scale));
+        const desiredW = natural.width * safeScale + PANEL_CONTENT_PAD_W + (galleryActive ? 20 : 0);
+        const desiredH = natural.height * safeScale + PANEL_CHROME_H + PANEL_CONTENT_PAD_H + galleryExtraH;
+        const nextW = clampPanelSize(desiredW, PANEL_MIN_W, maxW);
+        const nextH = clampPanelSize(desiredH, PANEL_MIN_H, maxH);
+        setPanelWidth((prev) => (prev === nextW ? prev : nextW));
+        setPanelHeight((prev) => (prev === nextH ? prev : nextH));
+        return;
+      }
+
+      let contentW = 0;
+      let contentH = 0;
+      root.querySelectorAll("img, canvas, video").forEach((el) => {
+        const html = el as HTMLElement;
+        const w = html.offsetWidth;
+        const h = html.offsetHeight;
+        if (w > contentW) contentW = w;
+        if (h > contentH) contentH += h;
+      });
+      const inner = root.firstElementChild?.firstElementChild as HTMLElement | null;
+      if (inner && inner.scrollWidth > contentW) contentW = inner.scrollWidth;
+      if (inner && inner.scrollHeight > contentH) contentH = inner.scrollHeight;
+
+      if (contentW < 4 || contentH < 4) {
+        requestAnimationFrame(() => attempt(n + 1));
+        return;
+      }
+
+      const nextW = clampPanelSize(contentW + PANEL_CONTENT_PAD_W + (galleryActive ? 20 : 0), PANEL_MIN_W, maxW);
+      const nextH = clampPanelSize(contentH + PANEL_CHROME_H + PANEL_CONTENT_PAD_H + galleryExtraH, PANEL_MIN_H, maxH);
+      setPanelWidth((prev) => (prev === nextW ? prev : nextW));
+      setPanelHeight((prev) => (prev === nextH ? prev : nextH));
+    };
+    requestAnimationFrame(() => attempt(0));
+  }, [fitMode, galleryActive]);
 
   const applyFitWidth = React.useCallback(() => {
     const root = scrollRef.current;
@@ -300,6 +415,9 @@ export function AttachmentHoverPortal({
       setZoom(1);
       setFitMode("window");
       setStickOpen(false);
+      setGalleryIndex(0);
+      setPanelWidth(null);
+      setPanelHeight(null);
       return;
     }
     if (clickOrTapOpenMode) return;
@@ -312,6 +430,17 @@ export function AttachmentHoverPortal({
       window.removeEventListener("resize", onScrollOrResize);
     };
   }, [open, updatePosition, clickOrTapOpenMode]);
+
+  React.useEffect(() => {
+    setGalleryIndex(0);
+  }, [normalizedGalleryUrls.join("\x1e")]);
+
+  /** Gallery file badalne par dubara fit-to-window */
+  React.useLayoutEffect(() => {
+    if (!open || !galleryActive) return;
+    applyFitWindow();
+    syncPanelWidthFromContent();
+  }, [open, galleryActive, galleryState.index, applyFitWindow, syncPanelWidthFromContent]);
 
   /** Default: fit to window — `preview` dep mat rakho (har render naya ref = loop) */
   React.useLayoutEffect(() => {
@@ -368,6 +497,7 @@ export function AttachmentHoverPortal({
       });
       syncScrollable();
       requestAnimationFrame(syncScrollable);
+      syncPanelWidthFromContent();
     };
 
     const onImgLoad = () => applyLayoutAll();
@@ -405,7 +535,7 @@ export function AttachmentHoverPortal({
       mo?.disconnect();
       window.removeEventListener("resize", syncScrollable);
     };
-  }, [open, zoom]);
+  }, [open, zoom, syncPanelWidthFromContent]);
 
   React.useEffect(() => () => cancelClose(), [cancelClose]);
 
@@ -418,11 +548,22 @@ export function AttachmentHoverPortal({
   React.useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closePanel();
+      if (e.key === "Escape") {
+        closePanel();
+        return;
+      }
+      if (!galleryActive) return;
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        galleryState.goPrev();
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        galleryState.goNext();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, closePanel]);
+  }, [open, closePanel, galleryActive, galleryState]);
 
   /**
    * Dialog open hone par Radix / react-remove-scroll wheel ko lock karta hai; portal `body` par hai isliye
@@ -445,6 +586,8 @@ export function AttachmentHoverPortal({
   /** PC: mouse left = pan (scroll area); capture hata diya — img se bubble yahi aata hai */
   const handleScrollPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.pointerType !== "mouse" || e.button !== 0) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("button, a, input, textarea, select, [data-gallery-nav]")) return;
     const el = scrollRef.current;
     if (!el) return;
     panRef.current = {
@@ -487,13 +630,15 @@ export function AttachmentHoverPortal({
   };
 
   const handleTriggerPointerEnter = () => {
-    if (effectiveDisabled || clickOrTapOpenMode || !openOnHover) return;
+    if (effectiveDisabled || !openOnHover) return;
+    if (useTapMode || globalClickMode) return;
     handleOpen();
   };
 
   /** `openOnHover={false}` par bhi chhodne par delay-close — panel `pointerenter` se cancel (thumb→panel gap safe) */
   const handleTriggerPointerLeave = () => {
-    if (effectiveDisabled || clickOrTapOpenMode || stickOpen) return;
+    if (effectiveDisabled || stickOpen) return;
+    if (useTapMode || globalClickMode) return;
     scheduleClose();
   };
 
@@ -506,7 +651,9 @@ export function AttachmentHoverPortal({
 
   /** Click/tap: toggle khula — desktop par bhi (global preview ON) taaki hover se accidental open na ho */
   const handleTriggerClick = (e: React.MouseEvent) => {
-    if (effectiveDisabled || !clickOrTapOpenMode) return;
+    if (effectiveDisabled) return;
+    const wantClick = useTapMode || forceClickPreview || globalClickMode;
+    if (!wantClick) return;
     e.preventDefault();
     e.stopPropagation();
     setOpen((prev) => {
@@ -519,6 +666,20 @@ export function AttachmentHoverPortal({
       return true;
     });
   };
+
+  const viewportMaxPanelW =
+    typeof window !== "undefined"
+      ? Math.min(PANEL_MAX_W, Math.max(window.innerWidth - 20, PANEL_MIN_W))
+      : PANEL_MAX_W;
+  const viewportMaxPanelH =
+    typeof window !== "undefined"
+      ? Math.min(Math.floor(window.innerHeight * 0.88), Math.max(window.innerHeight - 16, 260))
+      : 720;
+  const effectivePanelW =
+    panelWidth != null ? Math.min(panelWidth, viewportMaxPanelW) : viewportMaxPanelW;
+  const effectivePanelH =
+    panelHeight != null ? Math.min(panelHeight, viewportMaxPanelH) : viewportMaxPanelH;
+  const shouldUseMaxPreviewFrame = clickOrTapOpenMode || fitMode === "window" || fitMode === "height";
 
   const portalTree =
     open &&
@@ -540,7 +701,7 @@ export function AttachmentHoverPortal({
         ) : null}
         <div
           className={cn(
-            "pointer-events-auto fixed flex max-h-[min(88vh,calc(100dvh-16px))] w-[min(820px,calc(100vw-20px))] flex-col overflow-hidden",
+            "pointer-events-auto fixed flex max-h-[min(88vh,calc(100dvh-16px))] flex-col overflow-hidden",
             // reference-other-app (pic 2): mota blue border + barah round + zoom bar same frame
             "border-[3px] border-blue-600 bg-white shadow-2xl dark:bg-zinc-950",
             "isolate [opacity:1]"
@@ -553,8 +714,21 @@ export function AttachmentHoverPortal({
                   transform: "translate(-50%, -50%)",
                   zIndex: PANEL_Z,
                   borderRadius: "15mm",
+                  width: effectivePanelW,
+                  maxWidth: viewportMaxPanelW,
+                  height: shouldUseMaxPreviewFrame ? effectivePanelH : undefined,
+                  maxHeight: viewportMaxPanelH,
                 }
-              : { top: pos.top, left: pos.left, zIndex: PANEL_Z, borderRadius: "15mm" }
+              : {
+                  top: pos.top,
+                  left: pos.left,
+                  zIndex: PANEL_Z,
+                  borderRadius: "15mm",
+                  width: effectivePanelW,
+                  maxWidth: viewportMaxPanelW,
+                  height: shouldUseMaxPreviewFrame ? effectivePanelH : undefined,
+                  maxHeight: viewportMaxPanelH,
+                }
           }
           data-attachment-preview-portal=""
           onPointerEnter={clickOrTapOpenMode ? undefined : cancelClose}
@@ -570,27 +744,71 @@ export function AttachmentHoverPortal({
             <span className="text-xs font-medium text-muted-foreground">Preview</span>
           </div>
 
-          <div
-            ref={scrollRef}
-            className={cn(
-              "min-h-0 flex-1 select-none overflow-auto bg-white px-2 pb-2 pt-1 dark:bg-zinc-950",
-              scrollable ? "cursor-grab active:cursor-grabbing" : "cursor-default"
-            )}
-            style={{ touchAction: "pan-x pan-y" }}
-            onPointerDown={handleScrollPointerDown}
-            onPointerMove={handleScrollPointerMove}
-            onPointerUp={endPan}
-            onPointerCancel={endPan}
-            onDragStart={(e) => e.preventDefault()}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-              onPreviewDoubleClick?.(e);
-            }}
-          >
-            {/* Zoom = img width multiplier — transform scale() hata diya (layout/scroll fix) */}
-            <div className="flex min-w-0 w-full items-start justify-start py-1">
-              <div className="inline-block w-max max-w-none shrink-0">{preview}</div>
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            {galleryActive ? (
+              <>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="icon"
+                  data-gallery-nav=""
+                  className="absolute left-2 top-1/2 z-20 h-10 w-10 -translate-y-1/2 rounded-full border border-border/80 bg-background/90 shadow-md backdrop-blur-sm"
+                  disabled={galleryState.index <= 0}
+                  aria-label="Previous file"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    galleryState.goPrev();
+                  }}
+                >
+                  <ChevronLeft className="h-6 w-6" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="icon"
+                  data-gallery-nav=""
+                  className="absolute right-2 top-1/2 z-20 h-10 w-10 -translate-y-1/2 rounded-full border border-border/80 bg-background/90 shadow-md backdrop-blur-sm"
+                  disabled={galleryState.index >= normalizedGalleryUrls.length - 1}
+                  aria-label="Next file"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    galleryState.goNext();
+                  }}
+                >
+                  <ChevronRight className="h-6 w-6" />
+                </Button>
+              </>
+            ) : null}
+
+            <div
+              ref={scrollRef}
+              className={cn(
+                "min-h-0 flex-1 select-none overflow-auto bg-white px-2 pb-2 pt-1 dark:bg-zinc-950",
+                scrollable ? "cursor-grab active:cursor-grabbing" : "cursor-default"
+              )}
+              style={{ touchAction: "pan-x pan-y" }}
+              onPointerDown={handleScrollPointerDown}
+              onPointerMove={handleScrollPointerMove}
+              onPointerUp={endPan}
+              onPointerCancel={endPan}
+              onDragStart={(e) => e.preventDefault()}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                onPreviewDoubleClick?.(e);
+              }}
+            >
+              <AttachmentPreviewGalleryContext.Provider value={galleryActive ? galleryState : null}>
+                <div className="flex min-w-0 w-full items-start justify-center py-1">
+                  <div className="inline-block w-max max-w-none shrink-0">{preview}</div>
+                </div>
+              </AttachmentPreviewGalleryContext.Provider>
             </div>
+
+            {galleryActive ? (
+              <p className="shrink-0 pb-1 text-center text-xs font-semibold tabular-nums text-muted-foreground">
+                {galleryState.index + 1} / {normalizedGalleryUrls.length}
+              </p>
+            ) : null}
           </div>
 
           {/* PC: zoom +/− neeche; mobile par bhi yahi bar — top se hata diya */}

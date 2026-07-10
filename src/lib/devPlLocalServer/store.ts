@@ -27,6 +27,7 @@ const DEFAULT_CONFIG: LocalAppServerConfig = {
   clientAccessToken: "",
   publicHost: "",
   requireRemoteAccessToken: true,
+  selectedInviteUrls: [],
 };
 
 export function devUserDataDir(): string {
@@ -105,10 +106,21 @@ export function loadDevConfig(): LocalAppServerConfig {
       clientAccessToken: typeof raw.clientAccessToken === "string" ? raw.clientAccessToken.trim() : "",
       publicHost: typeof raw.publicHost === "string" ? raw.publicHost.trim() : "",
       requireRemoteAccessToken: raw.requireRemoteAccessToken !== false,
+      selectedInviteUrls: normalizeSelectedInviteUrls(raw.selectedInviteUrls),
     };
   } catch {
     return { ...DEFAULT_CONFIG };
   }
+}
+
+function normalizeSelectedInviteUrls(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    const s = String(item || "").trim();
+    if (s) out.push(s);
+  }
+  return out;
 }
 
 export function saveDevConfig(partial: Partial<LocalAppServerConfig>): LocalAppServerConfig {
@@ -311,6 +323,31 @@ export function updateAccessToken(
   };
 }
 
+function buildPublicServerListingUrl(publicHostRaw: string, port: number): string | null {
+  const ph = String(publicHostRaw || "").trim();
+  if (!ph || !Number.isFinite(port) || port <= 0) return null;
+  try {
+    let href = ph;
+    if (!/^https?:\/\//i.test(href)) href = `http://${href}`;
+    const u = new URL(href);
+    const hostname = u.hostname;
+    if (!hostname) return null;
+    const portPart = u.port || String(port);
+    return `http://${hostname}:${portPart}/`;
+  } catch {
+    const bare = ph
+      .replace(/^https?:\/\//i, "")
+      .replace(/\/+$/, "")
+      .split("/")[0]
+      ?.trim();
+    if (!bare) return null;
+    if (/^[\d.a-f:[\]-]+:\d+$/i.test(bare) || /^[^:/]+:\d+$/.test(bare)) {
+      return `http://${bare}/`;
+    }
+    return `http://${bare}:${port}/`;
+  }
+}
+
 function listLanUrls(port: number, publicHost: string): string[] {
   const urls = [`http://127.0.0.1:${port}/`, `http://localhost:${port}/`];
   try {
@@ -324,11 +361,8 @@ function listLanUrls(port: number, publicHost: string): string[] {
   } catch {
     /* ignore */
   }
-  const ph = String(publicHost || "").trim();
-  if (ph) {
-    const host = ph.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
-    urls.push(`http://${host}:${port}/`);
-  }
+  const pub = buildPublicServerListingUrl(publicHost, port);
+  if (pub) urls.push(pub);
   return [...new Set(urls)];
 }
 
@@ -339,12 +373,17 @@ function shouldHostLocalServer(cfg: LocalAppServerConfig): boolean {
 export function getDevStatus(): LocalAppServerStatus {
   const cfg = loadDevConfig();
   const rt = readRuntime();
-  const running = rt.running === true && typeof rt.port === "number";
-  const port = running ? rt.port! : null;
+  const processUp = rt.running === true && typeof rt.port === "number";
+  const port = processUp ? rt.port! : null;
   const hosting = shouldHostLocalServer(cfg);
+  const sharingUp = Boolean(port && hosting && cfg.userWantsRunning !== false);
   return {
-    running,
-    port,
+    running: sharingUp,
+    appUiServing: processUp && !sharingUp,
+    sharingActive: sharingUp,
+    port: sharingUp ? port : port,
+    appUiPort: port,
+    sharingPort: sharingUp ? port : null,
     configuredPort: cfg.port,
     bindMode: cfg.bindMode,
     appOnlyAccess: cfg.appOnlyAccess,

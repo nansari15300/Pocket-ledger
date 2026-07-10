@@ -78,6 +78,10 @@ import {
   waitForFirebaseAuthReady,
 } from "@/lib/firebaseAuthForApi";
 import { readLocalFirebaseReconcileConfig } from "@/lib/localFirebaseReconcile";
+import {
+  isLocalGoogleDriveSyncDisabled,
+  LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE,
+} from "@/lib/localCloudSync/driveSyncDisabled";
 
 type Props = {
   companyId: string;
@@ -205,7 +209,9 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
   const settingsDirtyRef = useRef(false);
   // Local unlock synthetic uid — UI signed-in dikhe par Firebase token nahi hota.
   const localSyntheticAuth = isLocalSyntheticAuthUid(user?.uid);
-  const driveConnected = enabled;
+  const driveSyncDisabled = isLocalGoogleDriveSyncDisabled();
+  const driveControlsDisabled = busy || driveSyncDisabled;
+  const driveConnected = enabled && !driveSyncDisabled;
 
   useEffect(() => {
     if (settingsDirtyRef.current) return;
@@ -266,7 +272,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
 
   // Firebase sign-in ke baad purana auth error hatao + ek retry (local unlock ≠ Google sign-in).
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || driveSyncDisabled) return;
     let cancelled = false;
     void (async () => {
       await waitForFirebaseAuthReady();
@@ -283,14 +289,14 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [companyId, enabled, user?.uid, status.lastError, refreshStatus]);
+  }, [companyId, enabled, user?.uid, status.lastError, refreshStatus, driveSyncDisabled]);
 
   // Card me last sync / pending live update — har 5 sec poll jab sync ON ho.
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || driveSyncDisabled) return;
     const id = window.setInterval(() => void refreshStatus(), 5000);
     return () => window.clearInterval(id);
-  }, [enabled, refreshStatus]);
+  }, [enabled, refreshStatus, driveSyncDisabled]);
 
   // Next sync target — last successful sync + interval; interval badle to ab se dubara count.
   useEffect(() => {
@@ -300,7 +306,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
 
   // Live sec countdown — syncing/busy par 0, warna remaining seconds.
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || driveSyncDisabled) return;
     const tick = () => {
       if (status.status === "syncing" || busy) {
         setNextSyncInSec(0);
@@ -311,7 +317,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
     tick();
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
-  }, [enabled, status.status, status.lastSyncAt, syncIntervalSec, busy]);
+  }, [enabled, status.status, status.lastSyncAt, syncIntervalSec, busy, driveSyncDisabled]);
 
   if (!isEligibleLocalDriveSyncCompanyRow(company)) return null;
 
@@ -331,17 +337,20 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
   };
 
   const onToggleEnabled = (checked: boolean) => {
+    if (driveSyncDisabled) return;
     settingsDirtyRef.current = true;
     setEnabled(checked);
   };
 
   const onSyncIntervalChange = async (sec: CloudSyncIntervalSec) => {
+    if (driveSyncDisabled) return;
     setSyncIntervalSec(sec);
     await patchLocalCompanyCloudSyncFields(companyId, { cloudSyncIntervalSec: sec });
     reloadLocalCompanyRegistry();
   };
 
   const saveEncryptionFlags = async (data: boolean, files: boolean, forceReencrypt: boolean) => {
+    if (driveSyncDisabled) return;
     const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
     const salt =
       data || files
@@ -391,6 +400,10 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
   };
 
   const saveAllCloudSyncSettings = async () => {
+    if (driveSyncDisabled) {
+      toast({ title: "Drive sync disabled", description: LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE });
+      return;
+    }
     setBusy(true);
     try {
       const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
@@ -437,6 +450,10 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
   };
 
   const connectDrive = async () => {
+    if (driveSyncDisabled) {
+      toast({ title: "Drive sync disabled", description: LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE });
+      return;
+    }
     setBusy(true);
     try {
       const firebaseUser = await getFirebaseAuthUserForApi();
@@ -464,6 +481,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
   };
 
   const disconnectDrive = async () => {
+    if (driveSyncDisabled) return;
     setBusy(true);
     try {
       await disconnectGoogleDrive();
@@ -481,6 +499,10 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
   };
 
   const forceSync = async () => {
+    if (driveSyncDisabled) {
+      toast({ title: "Drive sync disabled", description: LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE });
+      return;
+    }
     setBusy(true);
     try {
       const backfilled = await backfillLocalDocsToCloudSyncOutbox(companyId, { force: true });
@@ -509,6 +531,10 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
 
   /** Admin / doosre device par data na dikhe — cursor 0 karke saari Drive ops dubara download. */
   const redownloadFromDrive = async () => {
+    if (driveSyncDisabled) {
+      toast({ title: "Drive sync disabled", description: LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE });
+      return;
+    }
     setBusy(true);
     try {
       await setCloudSyncCursor(companyId, { lastSyncedOp: 0, lastError: null, syncStatus: "idle" });
@@ -568,8 +594,12 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
               id="local-company-cloud-sync-enabled"
               checked={enabled}
               onCheckedChange={(v) => onToggleEnabled(v === true)}
+              disabled={driveSyncDisabled}
             />
-            <Label htmlFor="local-company-cloud-sync-enabled" className="text-sm font-normal cursor-pointer">
+            <Label
+              htmlFor="local-company-cloud-sync-enabled"
+              className={cn("text-sm font-normal", driveSyncDisabled ? "cursor-not-allowed opacity-60" : "cursor-pointer")}
+            >
               Enable Drive sync
             </Label>
           </div>
@@ -578,6 +608,11 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-4">
+        {driveSyncDisabled ? (
+          <p className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 dark:border-amber-800 dark:bg-amber-950/35 dark:text-amber-100">
+            {LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE}
+          </p>
+        ) : null}
         {enabled ? (
           <div className="grid min-h-0 grid-cols-1 lg:grid-cols-[minmax(0,7fr)_minmax(0,13fr)] gap-4 items-stretch">
             {/* Left 35% — sync, encrypt, folder options */}
@@ -656,7 +691,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                     id="local-company-cloud-sync-encrypt-data"
                     checked={encryptDriveData}
                     onCheckedChange={(v) => void onToggleEncryptDriveData(v === true)}
-                    disabled={busy}
+                    disabled={driveControlsDisabled}
                   />
                   <Label htmlFor="local-company-cloud-sync-encrypt-data" className="text-sm font-normal cursor-pointer">
                     Encrypt data (JSON)
@@ -667,7 +702,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                     id="local-company-cloud-sync-encrypt-files"
                     checked={encryptDriveFiles}
                     onCheckedChange={(v) => void onToggleEncryptDriveFiles(v === true)}
-                    disabled={busy}
+                    disabled={driveControlsDisabled}
                   />
                   <Label htmlFor="local-company-cloud-sync-encrypt-files" className="text-sm font-normal cursor-pointer">
                     Encrypt files (attachments)
@@ -811,7 +846,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                   </Label>
                   <Select
                     value={String(syncIntervalSec)}
-                    disabled={busy}
+                    disabled={driveControlsDisabled}
                     onValueChange={(v) => void onSyncIntervalChange(Number(v) as CloudSyncIntervalSec)}
                   >
                     <SelectTrigger id="cloud-sync-interval-select" className="h-9 w-full max-w-[10rem] text-sm">
@@ -835,7 +870,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                   companyId={companyId}
                   companyName={typeof company.name === "string" ? company.name : undefined}
                   company={company}
-                  disabled={busy}
+                  disabled={driveControlsDisabled}
                   onUsersChanged={reloadLocalCompanyRegistry}
                 />
             </div>
@@ -859,7 +894,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                 variant="outline"
                 size="sm"
                 className="rounded-full px-4"
-                disabled={busy}
+                disabled={driveControlsDisabled}
                 onClick={() => void connectDrive()}
               >
                 Connect account
@@ -869,7 +904,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                 variant="outline"
                 size="sm"
                 className="rounded-full px-4"
-                disabled={busy}
+                disabled={driveControlsDisabled}
                 onClick={() => void disconnectDrive()}
               >
                 Disconnect
@@ -882,7 +917,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                 type="button"
                 size="sm"
                 className="rounded-full bg-emerald-600 px-4 text-white hover:bg-emerald-700 dark:bg-emerald-700 dark:hover:bg-emerald-600"
-                disabled={busy}
+                disabled={driveControlsDisabled}
                 onClick={() => void forceSync()}
               >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <RefreshCw className="h-4 w-4 mr-1.5" />}
@@ -893,7 +928,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                 variant="outline"
                 size="sm"
                 className="rounded-full px-4"
-                disabled={busy}
+                disabled={driveControlsDisabled}
                 onClick={() => void redownloadFromDrive()}
               >
                 Re-download from Drive
@@ -940,7 +975,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
             variant="outline"
             size="sm"
             className="rounded-full px-4"
-            disabled={busy}
+            disabled={driveControlsDisabled}
             onClick={() => void saveAllCloudSyncSettings()}
           >
             <Save className="h-4 w-4 mr-1.5" />
@@ -952,7 +987,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
             variant="outline"
             size="sm"
             className="rounded-full px-4 ml-auto shrink-0"
-            disabled={busy}
+            disabled={driveControlsDisabled}
             onClick={() => setJoinOpen(true)}
           >
             <Share2 className="mr-2 h-4 w-4" />

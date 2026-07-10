@@ -11,6 +11,7 @@ const {
   consecutivePortCandidates,
 } = require("./plWebPorts.cjs");
 const { packagedStaticServeHeaders } = require("./packagedStaticHeaders.cjs");
+const { fetchPublicIpAddress } = require("./fetchPublicIpAddress");
 
 const CONFIG_FILE = "pl-local-server-config.json";
 const TOKEN_FILE = "pl-local-app-client-token.json";
@@ -33,6 +34,7 @@ const DEFAULT_CONFIG = {
   clientAccessToken: "",
   publicHost: "",
   requireRemoteAccessToken: true,
+  selectedInviteUrls: [],
 };
 
 let appUiServer = null;
@@ -205,6 +207,9 @@ function loadConfig(userDataPath) {
       clientAccessToken: typeof raw.clientAccessToken === "string" ? raw.clientAccessToken.trim() : "",
       publicHost: typeof raw.publicHost === "string" ? raw.publicHost.trim() : "",
       requireRemoteAccessToken: raw.requireRemoteAccessToken !== false,
+      selectedInviteUrls: Array.isArray(raw.selectedInviteUrls)
+        ? raw.selectedInviteUrls.map((u) => String(u || "").trim()).filter(Boolean)
+        : [],
     };
   } catch (_) {
     return { ...DEFAULT_CONFIG };
@@ -216,6 +221,10 @@ function saveConfig(userDataPath, partial) {
   const next = { ...prev, ...partial };
   if (partial && partial.appRole != null) next.appRole = normalizeAppRole(partial.appRole);
   if (partial && partial.bindMode != null) next.bindMode = normalizeBindMode(partial.bindMode);
+  /** Auto-start ON ⇒ har app open / reboot par sharing resume (installer update ke baad bhi). */
+  if (partial && partial.autoStartOnBoot === true) {
+    next.userWantsRunning = true;
+  }
   try {
     fs.mkdirSync(path.dirname(configPath(userDataPath)), { recursive: true });
     fs.writeFileSync(configPath(userDataPath), JSON.stringify(next, null, 2), "utf8");
@@ -248,6 +257,43 @@ function shouldHostLocalServer(cfg) {
 function shouldUseRemoteEntry(cfg) {
   if (cfg.appRole === "client") return Boolean(cfg.remoteServerUrl);
   return false;
+}
+
+let publicHostAutoDetectInflight = null;
+
+function shouldAutoDetectPublicHost(cfg) {
+  if (!shouldHostLocalServer(cfg)) return false;
+  if (String(cfg.publicHost || "").trim()) return false;
+  if (cfg.bindMode === "localhost") return false;
+  return true;
+}
+
+function schedulePublicHostAutoDetect(userDataPath, cfg) {
+  if (!shouldAutoDetectPublicHost(cfg)) return;
+  if (publicHostAutoDetectInflight) return;
+  publicHostAutoDetectInflight = fetchPublicIpAddress()
+    .then((ip) => {
+      if (!ip) return;
+      const latest = loadConfig(userDataPath);
+      if (String(latest.publicHost || "").trim()) return;
+      if (!shouldAutoDetectPublicHost(latest)) return;
+      saveConfig(userDataPath, { publicHost: ip });
+    })
+    .catch(() => {})
+    .finally(() => {
+      publicHostAutoDetectInflight = null;
+    });
+}
+
+async function ensurePublicHostAutoDetected(userDataPath) {
+  const cfg = loadConfig(userDataPath);
+  if (!shouldAutoDetectPublicHost(cfg)) return String(cfg.publicHost || "").trim();
+  const ip = await fetchPublicIpAddress();
+  if (!ip) return "";
+  const latest = loadConfig(userDataPath);
+  if (String(latest.publicHost || "").trim()) return latest.publicHost;
+  saveConfig(userDataPath, { publicHost: ip });
+  return ip;
 }
 
 function resolveAppUiPort(userDataPath, cfg) {
@@ -419,6 +465,30 @@ function blockedAccessTokenHtml(req, userDataPath) {
 </html>`;
 }
 
+function buildPublicServerListingUrl(publicHostRaw, port) {
+  const ph = String(publicHostRaw || "").trim();
+  if (!ph || !Number.isFinite(port) || port <= 0) return null;
+  try {
+    let href = ph;
+    if (!/^https?:\/\//i.test(href)) href = `http://${href}`;
+    const u = new URL(href);
+    const hostname = u.hostname;
+    if (!hostname) return null;
+    const portPart = u.port || String(port);
+    return `http://${hostname}:${portPart}/`;
+  } catch (_) {
+    const bare = ph
+      .replace(/^https?:\/\//i, "")
+      .replace(/\/+$/, "")
+      .split("/")[0];
+    if (!bare) return null;
+    if (/^[\d.a-f:[\]-]+:\d+$/i.test(bare) || /^[^:/]+:\d+$/.test(bare)) {
+      return `http://${bare}/`;
+    }
+    return `http://${bare}:${port}/`;
+  }
+}
+
 function listLanUrls(port, publicHost) {
   const urls = [`http://127.0.0.1:${port}/`, `http://localhost:${port}/`];
   try {
@@ -430,11 +500,8 @@ function listLanUrls(port, publicHost) {
       }
     }
   } catch (_) {}
-  const ph = String(publicHost || "").trim();
-  if (ph) {
-    const host = ph.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
-    urls.push(`http://${host}:${port}/`);
-  }
+  const pub = buildPublicServerListingUrl(publicHost, port);
+  if (pub) urls.push(pub);
   return [...new Set(urls)];
 }
 
@@ -853,6 +920,7 @@ function createRequestHandler(userDataPath) {
           );
           response.setHeader("content-length", String(payload.buffer.length));
           response.setHeader("cache-control", "private, max-age=120");
+          response.setHeader("Access-Control-Expose-Headers", "Content-Type, Content-Length");
           response.end(payload.buffer);
         } catch (_) {
           response.statusCode = 500;
@@ -1319,6 +1387,7 @@ async function restartSharingServer(userDataPath) {
   if (!shouldHostLocalServer(cfg) || !cfg.userWantsRunning) {
     return null;
   }
+  await ensurePublicHostAutoDetected(userDataPath);
   return startSharingServer(userDataPath);
 }
 
@@ -1369,6 +1438,7 @@ async function restartStaticServer(userDataPath, options = {}) {
 
 function getStatus(userDataPath) {
   const cfg = loadConfig(userDataPath);
+  schedulePublicHostAutoDetect(userDataPath, cfg);
   const hosting = shouldHostLocalServer(cfg);
   const appUiUp = Boolean(appUiServer && appUiServerPort);
   const sharingUp = Boolean(sharingServer && sharingServerPort && cfg.userWantsRunning);

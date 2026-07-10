@@ -15,14 +15,14 @@ import {
   getPlServerSharedCompanies,
   readDevClientAccessToken,
   refreshPlServerAccessContext,
-  sharedCompaniesFromAccessPayload,
   shouldFetchPlServerAccessContext,
 } from "@/lib/plServerAccessContext";
 import type { PlServerSharedCompanySummary } from "@/lib/localServerShareableCompanies";
 import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 import { plServerCompanyLedgerNeedsFullPull } from "@/lib/plServerLedgerMirrorGate";
 import { isPlServerPullGenerationStale } from "@/lib/plServerClientMirrorPush";
-import { livePullDevLog } from "@/lib/plServerLivePullDevLog";
+import { livePullBugCatch, livePullDevLog } from "@/lib/plServerLivePullDevLog";
+import { isPlServerThinStaffCompany } from "@/lib/plServerThinStaffClient";
 
 export const PL_SERVER_CLIENT_MIRROR_EVENT = "pl-server-client-mirror-done";
 
@@ -33,8 +33,33 @@ type MirrorBundle = {
   collections?: Record<string, Array<Record<string, unknown>>> | null;
 };
 
+async function applyMirroredCollectionDocsToStaffStore(
+  companyId: string,
+  collection: string,
+  docs: Array<Record<string, unknown>>,
+  options?: { incomingWins?: boolean }
+): Promise<{ upserted: number; skipped: number }> {
+  // Staff + legacy: SQLite is the user-side mirror (EXE/APK/iOS same). Display cache optional warm.
+  if (await isPlServerThinStaffCompany(companyId)) {
+    try {
+      const { mergePlServerDisplayCacheCollection } = await import("@/lib/plServerDisplayCache");
+      mergePlServerDisplayCacheCollection(companyId, collection, docs, {
+        incomingWins: options?.incomingWins !== false,
+      });
+    } catch {
+      /* display cache optional */
+    }
+  }
+  return mirrorCollectionDocsToBrowserDbSilent(companyId, collection, docs, {
+    force: true,
+    mergePreferNewer: true,
+    authoritativeSnapshot: true,
+    mergePreferNewerTieBreak: "incoming",
+  });
+}
+
 /** Server company row se cloud mirror fields hatao — client par Firestore pull na chale. */
-function plServerClientLocalCompanyRow(
+export function plServerClientLocalCompanyRow(
   id: string,
   name: string,
   ownerEmail: string | null | undefined,
@@ -166,12 +191,10 @@ async function mirrorLedgerCollectionsFromServer(
       voucherCount = docs.length;
       livePullDevLog("vouchers_received", { companyId, count: voucherCount });
     }
-    const mirrorStats = await mirrorCollectionDocsToBrowserDbSilent(companyId, col, docs, {
-      force: true,
-      mergePreferNewer: true,
-      authoritativeSnapshot: true,
+    const mirrorStats = await applyMirroredCollectionDocsToStaffStore(companyId, col, docs, {
+      incomingWins: true,
     });
-    notifyBrowserDbCollectionUpdated(companyId, col);
+    if (mirrorStats.upserted > 0) notifyBrowserDbCollectionUpdated(companyId, col);
     livePullDevLog("browser_db_updated", {
       companyId,
       collection: col,
@@ -184,37 +207,87 @@ async function mirrorLedgerCollectionsFromServer(
   return { wrote, voucherCount, vouchersFetchedOk, staleAbort };
 }
 
+async function mirrorFocusCollectionsFromServer(
+  companyId: string,
+  baseUrl: string,
+  accessToken: string,
+  collections: CompanyBackupCollection[],
+  pullGeneration?: number
+): Promise<{ fetched: number; changedCollections: CompanyBackupCollection[]; staleAbort: boolean }> {
+  let fetched = 0;
+  let staleAbort = false;
+  const changedCollections: CompanyBackupCollection[] = [];
+  const unique = [...new Set(collections)];
+  for (const col of unique) {
+    if (pullGeneration != null && isPlServerPullGenerationStale(companyId, pullGeneration)) {
+      staleAbort = true;
+      break;
+    }
+    const docs = await fetchCompanyMirrorCollection(baseUrl, companyId, col, accessToken);
+    if (docs == null) continue;
+    fetched += 1;
+    const mirrorStats = await applyMirroredCollectionDocsToStaffStore(companyId, col, docs, {
+      incomingWins: true,
+    });
+    if (mirrorStats.upserted > 0) {
+      notifyBrowserDbCollectionUpdated(companyId, col, { immediate: true });
+      changedCollections.push(col);
+    }
+    livePullDevLog("focus_collection_updated", {
+      companyId,
+      collection: col,
+      docCount: docs.length,
+      upserted: mirrorStats.upserted,
+      skipped: mirrorStats.skipped,
+    });
+  }
+  return { fetched, changedCollections, staleAbort };
+}
+
 const P2P_LEDGER_COLLECTIONS: CompanyBackupCollection[] = ["vouchers", "recurring_voucher_templates"];
 
 async function mirrorSharedCompanyRows(
   shared: PlServerSharedCompanySummary[],
   baseUrl: string,
   accessToken: string,
-  options?: { pullFullLedger?: boolean; companyIds?: string[]; pullGeneration?: number }
-): Promise<{ mirrored: number; fullPull: number }> {
+  options?: {
+    pullFullLedger?: boolean;
+    companyIds?: string[];
+    pullGeneration?: number;
+    focusCollections?: CompanyBackupCollection[];
+  }
+): Promise<{ mirrored: number; fullPull: number; changedCollections: CompanyBackupCollection[] }> {
   const filterIds = (options?.companyIds || []).map((x) => String(x || "").trim()).filter(Boolean);
   const rows = filterIds.length
     ? shared.filter((row) => filterIds.includes(String(row.id || "").trim()))
     : shared;
   if (!rows.length) {
     livePullDevLog("mirror_rows_empty", {
+      path: "legacy_sqlite_mirror",
       companyIds: filterIds,
       sharedCount: shared.length,
     });
     if (shared.length === 0) {
+      livePullBugCatch("ACCESS_CONTEXT_EMPTY_LEGACY_MIRROR", {
+        companyIds: filterIds,
+        sharedCount: 0,
+        hint: "Call refreshPlServerAccessContext or use thin staff display_cache path",
+      });
       livePullDevLog("waiting_for_access_context", {
         companyIds: filterIds,
         sharedCount: 0,
       });
     }
-    return { mirrored: 0, fullPull: 0 };
+    return { mirrored: 0, fullPull: 0, changedCollections: [] };
   }
 
   let mirrored = 0;
   let fullPull = 0;
+  const changedCollections = new Set<CompanyBackupCollection>();
   const pullFull = options?.pullFullLedger !== false;
   const fullPulledIds: string[] = [];
   const pullGeneration = options?.pullGeneration;
+  const focusCollections = [...new Set((options?.focusCollections || []).filter(Boolean))];
 
   for (const row of rows) {
     const id = String(row.id || "").trim();
@@ -224,6 +297,18 @@ async function mirrorSharedCompanyRows(
       plServerClientLocalCompanyRow(id, String(row.name || id), row.ownerEmail)
     );
     mirrored += 1;
+
+    if (focusCollections.length > 0 && baseUrl && accessToken) {
+      const focus = await mirrorFocusCollectionsFromServer(
+        id,
+        baseUrl,
+        accessToken,
+        focusCollections,
+        pullGeneration
+      );
+      for (const col of focus.changedCollections) changedCollections.add(col);
+      if (focus.staleAbort) break;
+    }
 
     if (!pullFull || !baseUrl || !accessToken) continue;
     if (pullGeneration != null && isPlServerPullGenerationStale(id, pullGeneration)) break;
@@ -245,11 +330,13 @@ async function mirrorSharedCompanyRows(
       if (pullGeneration != null && isPlServerPullGenerationStale(id, pullGeneration)) break;
       const docs = collections[col];
       if (!Array.isArray(docs) || docs.length === 0) continue;
-      await mirrorCollectionDocsToBrowserDbSilent(id, col, docs as Record<string, unknown>[], {
-        force: true,
-        mergePreferNewer: true,
+      const mirrorStats = await applyMirroredCollectionDocsToStaffStore(id, col, docs as Record<string, unknown>[], {
+        incomingWins: true,
       });
-      notifyBrowserDbCollectionUpdated(id, col);
+      if (mirrorStats.upserted > 0) {
+        notifyBrowserDbCollectionUpdated(id, col, { immediate: true });
+        changedCollections.add(col);
+      }
     }
     if (pullFull && baseUrl && accessToken) {
       const ledger = await mirrorLedgerCollectionsFromServer(id, baseUrl, accessToken, bundle, pullGeneration);
@@ -268,7 +355,7 @@ async function mirrorSharedCompanyRows(
       })
     );
   }
-  return { mirrored, fullPull };
+  return { mirrored, fullPull, changedCollections: [...changedCollections] };
 }
 
 /** Token gate add/Test — active gate switch kiye bina saari allowed companies SQLite me. */
@@ -294,19 +381,31 @@ export async function mirrorPlServerGateToLocalSqlite(
     companies: ctx.companies ?? null,
   };
   applyPlServerAccessContextPayload(payload, gate.id);
-  const shared = sharedCompaniesFromAccessPayload(payload);
-  const result = await mirrorSharedCompanyRows(shared, baseUrl, accessToken, options);
+  const result = await mirrorPlServerSharedCompaniesToLocalSqlite(options);
   return { ...result };
 }
 
-/** Single server-gate company: full ledger pull after successful login. */
+/** Single server-gate company: connect/open par cache load (thin) ya legacy SQLite mirror. */
 export async function mirrorPlServerSharedCompanyById(
   companyId: string,
   options?: { pullFullLedger?: boolean }
 ): Promise<{ mirrored: boolean; fullPull: boolean }> {
+  const { preparePlServerStaffCompanyConnect } = await import("@/lib/plServerStaffCompanyConnect");
+  const result = await preparePlServerStaffCompanyConnect(companyId, {
+    pullFullLedger: options?.pullFullLedger !== false,
+    timeoutMs: 60_000,
+  });
+  return { mirrored: result.ok, fullPull: result.fullPull };
+}
+
+/** @internal SQLite mirror pull for one company (staff + legacy). */
+export async function mirrorPlServerSharedCompanyByIdLegacy(
+  companyId: string,
+  options?: { pullFullLedger?: boolean; pullGeneration?: number }
+): Promise<{ mirrored: boolean; fullPull: boolean }> {
   const id = String(companyId || "").trim();
   if (!id) return { mirrored: false, fullPull: false };
-  const result = await mirrorPlServerSharedCompaniesToLocalSqlite({
+  const result = await mirrorPlServerSharedCompaniesToLocalSqliteLegacy({
     ...options,
     companyIds: [id],
   });
@@ -327,14 +426,26 @@ export async function mirrorPlServerSharedCompanyById(
   };
 }
 
-/** Server token companies → client SQLite (root + ledger collections). */
+/** Server token companies → client SQLite mirror (staff + legacy; display cache dual-write on staff). */
 export async function mirrorPlServerSharedCompaniesToLocalSqlite(options?: {
   pullFullLedger?: boolean;
   companyIds?: string[];
   pullGeneration?: number;
-}): Promise<{ mirrored: number; fullPull: number }> {
+  focusCollections?: CompanyBackupCollection[];
+}): Promise<{ mirrored: number; fullPull: number; changedCollections?: CompanyBackupCollection[] }> {
+  // Staff and legacy share the same SQLite mirror pull (EXE/APK/iOS).
+  return mirrorPlServerSharedCompaniesToLocalSqliteLegacy(options);
+}
+
+/** @internal Legacy SQLite mirror pull. */
+export async function mirrorPlServerSharedCompaniesToLocalSqliteLegacy(options?: {
+  pullFullLedger?: boolean;
+  companyIds?: string[];
+  pullGeneration?: number;
+  focusCollections?: CompanyBackupCollection[];
+}): Promise<{ mirrored: number; fullPull: number; changedCollections?: CompanyBackupCollection[] }> {
   if (!shouldFetchPlServerAccessContext()) {
-    return { mirrored: 0, fullPull: 0 };
+    return { mirrored: 0, fullPull: 0, changedCollections: [] };
   }
   if (!options?.companyIds?.length) {
     await refreshPlServerAccessContext();
