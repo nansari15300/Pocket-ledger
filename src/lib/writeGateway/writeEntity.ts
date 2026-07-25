@@ -5,11 +5,10 @@
  * Purane direct `setDoc`/`updateDoc` calls ko dheere-dheere yahan migrate karo (see repo grep).
  */
 
-import { addDoc, collection, deleteDoc, doc, setDoc, updateDoc } from "@/lib/writeGateway/firestoreMutationsInternal";
+import { addDoc, collection, deleteDoc, doc, serverTimestamp, setDoc, updateDoc } from "@/lib/writeGateway/firestoreMutationsInternal";
 import { firestore } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
-import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import {
   deleteCompanyDocFromBrowserDb,
@@ -21,7 +20,10 @@ import { canSyncCompanyToServer, enqueueCompanyDocOutbox, type VoucherOutboxOp }
 import { assertCompanyAllowsLedgerMutations } from "@/lib/security/offlinePlanWriteGate";
 import { isStaticApkLedgerTransportMode } from "@/lib/staticApkLedgerArchitecture";
 import { buildLedgerTombstoneFields } from "@/lib/ledgerTombstone";
-import { shouldForceFirestoreWritesOnStaticOrApk } from "@/lib/apkOnlineFirestoreWritePolicy";
+import {
+  apkEmbeddedSqliteFirstWritesPreferred,
+  shouldForceFirestoreWritesOnStaticOrApk,
+} from "@/lib/apkOnlineFirestoreWritePolicy";
 import type { Company } from "@/hooks/useCompany";
 import {
   displayNameFromRecycleBinPatch,
@@ -33,6 +35,7 @@ import { auth } from "@/lib/firebase";
 import { isSoftDeleteLedgerPatch, purgeGhostLocalCompanyDoc } from "@/lib/purgeGhostLocalCompanyDoc";
 import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
 import { isPureLocalLedgerCompany, companyRowUsesSqliteLedgerWrites } from "@/lib/companyStorageKind";
+import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 
 export type WriteEntityOperation = "create" | "update" | "delete";
 
@@ -61,9 +64,10 @@ async function resolveFirestoreCompanyId(localCompanyId: string): Promise<string
 
 /** Local-first: SQLite UPSERT + sync_outbox — local company web/static par bhi; online Firestore par seedha Firestore. */
 async function shouldWriteLocalLedgerFirst(localCompanyId: string): Promise<boolean> {
+  if (isFirebaseLedgerDataSyncDisabled()) return true;
   if (shouldForceFirestoreWritesOnStaticOrApk()) return false;
   const reg = await getLocalCompanyById(localCompanyId, { includeDeleted: true });
-  if (isEmbeddedOfflinePreloadClient()) return !!reg;
+  if (apkEmbeddedSqliteFirstWritesPreferred()) return !!reg;
   if (isStaticAppBuild() && reg) return companyRowUsesSqliteLedgerWrites(reg);
   if (reg && companyRowUsesSqliteLedgerWrites(reg)) return true;
   if (reg && isPureLocalLedgerCompany(reg)) return true;
@@ -79,6 +83,26 @@ async function mergeWithExistingLocalDoc(
 ): Promise<Record<string, unknown>> {
   const existing = (await getCompanyDocFromBrowserDb(companyId, collectionName, docId)) ?? {};
   return { ...existing, ...patch, id: docId };
+}
+
+async function touchLedgerChangeLog(
+  fsCompanyId: string,
+  collectionName: string,
+  docId: string,
+  op: WriteEntityOperation
+): Promise<void> {
+  const fsId = String(fsCompanyId || "").trim();
+  const coll = String(collectionName || "").trim();
+  const id = String(docId || "").trim();
+  if (!fsId || !coll || !id || coll.startsWith("_")) return;
+  const safe = `${Date.now()}_${coll}_${id}`.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 180);
+  await setDoc(doc(firestore, `companies/${fsId}/_pl_change_log`, safe), {
+    collectionName: coll,
+    docId: id,
+    op,
+    at: serverTimestamp(),
+    source: "writeEntity",
+  });
 }
 
 /**
@@ -204,11 +228,13 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
         if (!isCompanyNotFoundError(e)) throw e;
       }
       await purgeGhostLocalCompanyDoc(companyId, collectionName, effectiveDocId);
+      void touchLedgerChangeLog(fsCompanyId, collectionName, effectiveDocId, "delete");
       return { ok: true, docId: effectiveDocId };
     }
     if (useAutoId && req.operation === "create") {
       const payload = { ...(req.data || {}), companyId: fsCompanyId };
       const ref = await addDoc(colRef, payload);
+      void touchLedgerChangeLog(fsCompanyId, collectionName, ref.id, "create");
       return { ok: true, docId: ref.id };
     }
     if (req.operation === "create" && mergeSetDoc === true) {
@@ -217,13 +243,16 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
         { ...(req.data || {}), id: effectiveDocId, companyId: fsCompanyId },
         { merge: true }
       );
+      void touchLedgerChangeLog(fsCompanyId, collectionName, effectiveDocId, "create");
       return { ok: true, docId: effectiveDocId };
     }
     if (req.operation === "create") {
       await setDoc(docRef, { ...(req.data || {}), id: effectiveDocId, companyId: fsCompanyId });
+      void touchLedgerChangeLog(fsCompanyId, collectionName, effectiveDocId, "create");
       return { ok: true, docId: effectiveDocId };
     }
     await updateDoc(docRef, req.data || {});
+    void touchLedgerChangeLog(fsCompanyId, collectionName, effectiveDocId, "update");
     void notifyRecycleBinAlertAfterWrite(fsCompanyId, companyId, collectionName, effectiveDocId, req.data || {});
     return { ok: true, docId: effectiveDocId };
   } catch (e) {

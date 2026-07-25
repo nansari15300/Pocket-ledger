@@ -1,18 +1,43 @@
 import type { Company } from "@/hooks/useCompany";
 import { isDriveCloudSyncLocalRegistryRow } from "@/lib/driveRestoredLocalCompany";
 import { isCloudLinkedCompanyStorage, isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
+import {
+  getPlServerContextGateId,
+  hasPlServerAuthoritativeShareList,
+  isListedPlServerSharedCompany,
+  isServerTabCompanyRow,
+  isPlServerSharedCompanyRow,
+} from "@/lib/plServerAccessContext";
+import { isPlRemoteServerClientMode, isPlSharingServerPortOrigin } from "@/lib/plRemoteServerClient";
 
 type CompanyStorageRow = {
   id?: string;
   name?: string;
   ownerId?: string;
+  ownerEmail?: string | null;
   storageOption?: string | null;
   syncPolicy?: string | null;
   syncedFromCloud?: boolean;
   isOwned?: boolean;
   plServerShared?: boolean;
+  plServerGateId?: string;
+  plServerGateServerUrl?: string;
+  plServerHostCompanyId?: string;
   authoritativeCompanyId?: string;
+  localOnly?: boolean;
+  firestoreSyncDisabled?: boolean;
+  localPersistence?: string | null;
 };
+
+/** Explicit SQLite-only local company marker. These rows must never be purged/mirrored as Firestore companies. */
+export function isStrictLocalOnlyCompany(c: CompanyStorageRow | null | undefined): boolean {
+  if (!c || isServerGateCompany(c)) return false;
+  if (c.localOnly === true) return true;
+  if (c.firestoreSyncDisabled === true) return true;
+  if (String(c.localPersistence ?? "").toLowerCase().trim() === "sqlite") return true;
+  return false;
+}
 
 /**
  * Device-local / offline company — explicit `storageOption: local` ya `syncPolicy: offline` Firestore mirror se pehle.
@@ -20,6 +45,7 @@ type CompanyStorageRow = {
  */
 export function isDeviceLocalCompany(c: CompanyStorageRow | null | undefined): boolean {
   if (!c) return false;
+  if (isStrictLocalOnlyCompany(c)) return true;
   const so = String(c.storageOption ?? "").toLowerCase().trim();
   if (so === "local") return true;
   if (String(c.syncPolicy ?? "").toLowerCase() === "offline") return true;
@@ -34,6 +60,8 @@ export function isDeviceLocalCompany(c: CompanyStorageRow | null | undefined): b
 export function companyRowUsesSqliteLedgerWrites(
   c: (CompanyStorageRow & { plServerShared?: boolean }) | null | undefined
 ): boolean {
+  // Temporary kill-switch: online company bhi SQLite-first — Firestore ledger upload skip.
+  if (isFirebaseLedgerDataSyncDisabled()) return true;
   if (!c) return false;
   const so = String(c.storageOption ?? "").toLowerCase().trim();
   if (so === "local") return true;
@@ -42,7 +70,57 @@ export function companyRowUsesSqliteLedgerWrites(
   return isOfflineCompanyStorage(c) || isDeviceLocalCompany(c);
 }
 
-/** Company picker Local tab — device-local, Drive folder sync, server gate (Settings drive picker jaisa). */
+/** Host admin on sharing port (`:3001`) — server PC ki native SQLite companies. */
+export function isPlServerOriginHostMode(): boolean {
+  if (typeof window === "undefined") return false;
+  return isPlSharingServerPortOrigin() && !isPlRemoteServerClientMode();
+}
+
+/**
+ * PL server URL origin (`:3001`) par company picker Server tab — Firebase gate → Online jaisa.
+ * Sharing port par jo bhi non-cloud company dikhe, woh Server tab me (Local me nahi).
+ */
+export function isServerOriginSelectorCompanyRow(
+  c: CompanyStorageRow | null | undefined
+): boolean {
+  if (!c || typeof window === "undefined") return false;
+  if (!isPlSharingServerPortOrigin()) return false;
+  if (isCloudLinkedCompanyStorage(c)) return false;
+  return true;
+}
+
+/**
+ * Company picker Server tab — PL server delta mirror / gate share (hub :3000 ya sharing :3001).
+ * Local tab sirf is device par banayi hui company — Firebase Online tab me.
+ */
+export function isServerSelectorCompanyRow(
+  c: CompanyStorageRow | null | undefined,
+  gateId?: string | null
+): boolean {
+  if (!c) return false;
+  if (isCloudLinkedCompanyStorage(c)) return false;
+  if (isServerOriginSelectorCompanyRow(c)) return true;
+  const gid = gateId ?? getPlServerContextGateId();
+  // Restored local backups can retain old PL-server markers. Without an active gate/context,
+  // those SQLite rows are local companies, not server-share rows.
+  if (!gid) return false;
+  if (isServerTabCompanyRow(c, gid)) return true;
+  if (isPlServerSharedCompanyRow(c, gid)) return true;
+  if (c.plServerShared === true) {
+    if (c.syncedFromCloud === true) return false;
+    const so = String(c.storageOption ?? "").toLowerCase().trim();
+    if (so === "firebase" || so === "drive") return false;
+    if (hasPlServerAuthoritativeShareList(gid)) {
+      return isListedPlServerSharedCompany(c, gid);
+    }
+    return true;
+  }
+  const hostCompanyId = String(c.plServerHostCompanyId ?? "").trim();
+  if (hostCompanyId) return true;
+  return false;
+}
+
+/** Company picker Local tab — device-local, Drive folder sync (server URL origin alag tab). */
 export function isLocalSelectorCompanyRow(
   c: (CompanyStorageRow & {
     cloudSyncDriveFolderId?: unknown;
@@ -52,7 +130,10 @@ export function isLocalSelectorCompanyRow(
   }) | null | undefined
 ): boolean {
   if (!c) return false;
-  if (isDeviceLocalCompany(c) || isServerGateCompany(c)) return true;
+  // Firebase / Firestore mirror — kabhi Local tab me mat dikhao (cloud sync off hone par bhi).
+  if (isCloudLinkedCompanyStorage(c)) return false;
+  if (isServerSelectorCompanyRow(c)) return false;
+  if (isDeviceLocalCompany(c)) return true;
   if (isDriveCloudSyncLocalRegistryRow(c as Record<string, unknown>)) return true;
   if (String(c.cloudSyncDriveFolderId ?? "").trim()) return true;
   if ((c as { driveSharedJoin?: unknown }).driveSharedJoin === true) return true;
@@ -61,11 +142,12 @@ export function isLocalSelectorCompanyRow(
 
 /** Handover / Delete dropdown: cloud-synced company (Firestore row as source of truth for handover) */
 export function isOnlineCompanyRow(c: Company): boolean {
-  return !isLocalSelectorCompanyRow(c);
+  return !isLocalSelectorCompanyRow(c) && !isServerSelectorCompanyRow(c);
 }
 
 export function isSharedOnlineCompany(c: CompanyStorageRow | null | undefined): boolean {
   if (!c) return false;
+  if (isServerSelectorCompanyRow(c)) return false;
   return !c.isOwned && !isLocalSelectorCompanyRow(c);
 }
 
@@ -73,15 +155,22 @@ export function isSharedOnlineCompany(c: CompanyStorageRow | null | undefined): 
 export function isSharedLocalCompany(c: CompanyStorageRow | null | undefined): boolean {
   if (!c || c.isOwned) return false;
   if (isSharedOnlineCompany(c)) return false;
-  if (isServerGateCompany(c)) return false;
+  if (isServerSelectorCompanyRow(c)) return false;
   return isLocalSelectorCompanyRow(c);
 }
 
-/** LAN / remote server gate se mirrored ya shared company — Local tab me (Server Gate tab removed). */
+/**
+ * PL server delta-sync mirror — `plServerShared` stamp (gate meta sync timing par optional).
+ */
 export function isServerGateCompany(
   c: (CompanyStorageRow & { plServerShared?: boolean }) | null | undefined
 ): boolean {
-  return c?.plServerShared === true;
+  if (c?.plServerShared !== true) return false;
+  if (c.syncedFromCloud === true) return false;
+  const so = String(c.storageOption ?? "").toLowerCase().trim();
+  if (so === "firebase" || so === "drive") return false;
+  if (isCloudLinkedCompanyStorage(c)) return false;
+  return true;
 }
 
 /**
@@ -93,14 +182,18 @@ export function isPureLocalLedgerCompany(
 ): boolean {
   if (!c) return false;
   if (isServerGateCompany(c)) return true;
+  if (isStrictLocalOnlyCompany(c)) return true;
   if (c.syncedFromCloud === true) return false;
   if (String(c.syncPolicy ?? "").toLowerCase() === "online") return false;
   if (String((c as { authoritativeCompanyId?: string }).authoritativeCompanyId ?? "").trim()) return false;
   return isDeviceLocalCompany(c);
 }
 
-/** Ledger read/write SQLite only — Firestore listeners / pull skip (local restore, device-local). */
-export function shouldReadLedgerFromSqliteOnly(
+/**
+ * SQLite-only ledger by company row shape — selector Local/Online/Server tabs isi se decide hote hain.
+ * Cloud data sync kill-switch is par apply mat karo (warna online companies Local tab me leak ho jati hain).
+ */
+export function isStructuralSqliteOnlyLedgerCompany(
   c: (CompanyStorageRow & { plServerShared?: boolean }) | null | undefined
 ): boolean {
   if (!c) return false;
@@ -108,6 +201,32 @@ export function shouldReadLedgerFromSqliteOnly(
   if (isDriveCloudSyncLocalRegistryRow(c as Record<string, unknown>)) return true;
   if (String(c.syncPolicy ?? "").toLowerCase() === "offline") return true;
   return isPureLocalLedgerCompany(c);
+}
+
+/**
+ * Cross-company voucher copy: masters SQLite se padho (local / PL server / restore / cloud-sync off).
+ * Registry row galat `syncedFromCloud` ho to bhi device ledger read ho.
+ */
+export function companyLedgerMastersReadableFromSqlite(
+  c: (CompanyStorageRow & { plServerShared?: boolean; localRestoredFromBackupAt?: unknown }) | null | undefined
+): boolean {
+  if (!c) return false;
+  if (isOfflineCompanyStorage(c)) return true;
+  if (isStructuralSqliteOnlyLedgerCompany(c)) return true;
+  if (isServerGateCompany(c)) return true;
+  if (isDeviceLocalCompany(c)) return true;
+  const restoredAt = (c as { localRestoredFromBackupAt?: unknown }).localRestoredFromBackupAt;
+  if (typeof restoredAt === "number" && Number.isFinite(restoredAt) && restoredAt > 0) return true;
+  return false;
+}
+
+/** Ledger read/write SQLite only — Firestore listeners / pull skip (local restore, device-local). */
+export function shouldReadLedgerFromSqliteOnly(
+  c: (CompanyStorageRow & { plServerShared?: boolean }) | null | undefined
+): boolean {
+  // Temporary kill-switch: ledger I/O SQLite — company picker tab classification alag (`isStructuralSqliteOnlyLedgerCompany`).
+  if (isFirebaseLedgerDataSyncDisabled()) return true;
+  return isStructuralSqliteOnlyLedgerCompany(c);
 }
 
 export type CompanyListTab = "local" | "online" | "server";
@@ -131,16 +250,59 @@ function dedupeCompaniesById(companies: Company[]): Company[] {
   return Array.from(map.values());
 }
 
+/**
+ * Unlock credential dialog: Local tab me sirf explicit device-local / Drive rows.
+ * Missing `storageOption` wali Firestore mirror rows ko online bucket me rakho.
+ */
+export function isStrictLocalUnlockTabCompany(
+  c: (CompanyStorageRow & { cloudSyncDriveFolderId?: unknown; driveSharedJoin?: unknown }) | null | undefined
+): boolean {
+  if (!c || isCloudLinkedCompanyStorage(c)) return false;
+  if (isServerSelectorCompanyRow(c)) return false;
+  if (isSharedOnlineCompany(c)) return false;
+  if (isStrictLocalOnlyCompany(c)) return true;
+  if (isDriveCloudSyncLocalRegistryRow(c as Record<string, unknown>)) return true;
+  if (String(c.cloudSyncDriveFolderId ?? "").trim()) return true;
+  if ((c as { driveSharedJoin?: unknown }).driveSharedJoin === true) return true;
+  const so = String(c.storageOption ?? "").toLowerCase().trim();
+  if (so === "local") return true;
+  if (String(c.syncPolicy ?? "").toLowerCase() === "offline") return true;
+  return false;
+}
+
+/** Credential popup — strict Local/Online split; company picker partition jaisa hi warna online Local me leak. */
+export function partitionCompaniesForUnlockDialog(companies: Company[]): SelectorCompanyBuckets {
+  const base = partitionCompaniesForSelector(companies);
+  const misplaced = base.localTabCompanies.filter((c) => !isStrictLocalUnlockTabCompany(c));
+  const localTabCompanies = base.localTabCompanies.filter((c) => isStrictLocalUnlockTabCompany(c));
+  const onlineTabCompanies = dedupeCompaniesById([...base.onlineTabCompanies, ...misplaced]);
+  const localOwnedCompanies = localTabCompanies.filter((c) => c.isOwned);
+  const sharedLocalCompanies = localTabCompanies.filter((c) => isSharedLocalCompany(c));
+  return {
+    ...base,
+    localOwnedCompanies,
+    sharedLocalCompanies,
+    localTabCompanies,
+    onlineTabCompanies,
+  };
+}
+
 /** Mutual-exclusive Local vs Online buckets for company picker / settings dropdowns. */
 export function partitionCompaniesForSelector(companies: Company[]): SelectorCompanyBuckets {
   const rows = dedupeCompaniesById(companies.filter((c): c is Company => c != null && Boolean(c?.id)));
+  const gateId = getPlServerContextGateId();
   const owned = rows.filter((c) => c.isOwned);
+  const nonServerRows = rows.filter((c) => !isServerSelectorCompanyRow(c, gateId));
+  const nonServerOwned = owned.filter((c) => !isServerSelectorCompanyRow(c, gateId));
   const localOwnedCompanies = owned.filter((c) => isLocalSelectorCompanyRow(c));
-  const cloudOwnedCompanies = owned.filter((c) => !isLocalSelectorCompanyRow(c));
-  const sharedCloudCompanies = rows.filter((c) => isSharedOnlineCompany(c));
-  const serverSharedCompanies = rows.filter((c) => isServerGateCompany(c));
+  const cloudOwnedCompanies = nonServerOwned.filter((c) => !isLocalSelectorCompanyRow(c));
+  const sharedCloudCompanies = nonServerRows.filter((c) => isSharedOnlineCompany(c));
+  const serverSharedCompanies = rows.filter((c) => isServerSelectorCompanyRow(c, gateId));
   const sharedLocalCompanies = rows.filter((c) => isSharedLocalCompany(c));
-  const localTabCompanies = dedupeCompaniesById([...localOwnedCompanies, ...sharedLocalCompanies]);
+  const localTabCompanies = dedupeCompaniesById([
+    ...localOwnedCompanies.filter((c) => !isServerSelectorCompanyRow(c, gateId)),
+    ...sharedLocalCompanies.filter((c) => !isServerSelectorCompanyRow(c, gateId)),
+  ]);
   const onlineTabCompanies = dedupeCompaniesById([...cloudOwnedCompanies, ...sharedCloudCompanies]);
   const serverTabCompanies = dedupeCompaniesById([...serverSharedCompanies]);
   return {
@@ -165,6 +327,12 @@ export function defaultSelectorTab(
     if (buckets.localTabCompanies.some((c) => c.id === id)) return "local";
     if (buckets.onlineTabCompanies.some((c) => c.id === id)) return "online";
   }
+  if (
+    buckets.serverTabCompanies.length > 0 &&
+    (isPlSharingServerPortOrigin() || isPlRemoteServerClientMode() || getPlServerContextGateId())
+  ) {
+    return "server";
+  }
   if (buckets.localTabCompanies.length > 0) return "local";
   if (buckets.serverTabCompanies.length > 0) return "server";
   return "online";
@@ -182,11 +350,15 @@ export function ensureSelectedInTabList(
   const selected = pool.find((c) => c.id === id);
   if (!selected) return list;
   const isLocalTabRow =
-    isDeviceLocalCompany(selected) ||
-    isSharedLocalCompany(selected);
-  if (tab === "server" && isServerGateCompany(selected)) return [selected, ...list];
+    (isDeviceLocalCompany(selected) || isSharedLocalCompany(selected)) &&
+    !isServerSelectorCompanyRow(selected, getPlServerContextGateId());
+  if (tab === "server" && isServerSelectorCompanyRow(selected, getPlServerContextGateId())) {
+    return [selected, ...list];
+  }
   if (tab === "local" && isLocalTabRow) return [selected, ...list];
-  if (tab === "online" && !isLocalTabRow && !isServerGateCompany(selected)) return [selected, ...list];
+  if (tab === "online" && !isLocalTabRow && !isServerSelectorCompanyRow(selected, getPlServerContextGateId())) {
+    return [selected, ...list];
+  }
   if (tab === "online" && isSharedOnlineCompany(selected)) return [selected, ...list];
   return list;
 }
@@ -197,6 +369,9 @@ export function stampPureLocalDeviceCompanyRow<T extends CompanyStorageRow>(c: T
   if (!isDeviceLocalCompany(c)) return c;
   return {
     ...c,
+    localOnly: true,
+    localPersistence: "sqlite",
+    firestoreSyncDisabled: true,
     storageOption: "local",
     syncedFromCloud: false,
     syncPolicy: "offline",

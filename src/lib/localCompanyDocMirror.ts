@@ -25,9 +25,9 @@ import { PL_CLIENT_OFFLINE_FIRST_PERSIST_MS, stampLocalMirrorBackedByFirestore }
 import { assertCompanyAllowsLedgerMutations } from "@/lib/security/offlinePlanWriteGate";
 import {
   isPlServerLivePullPaused,
-  isPlServerMirrorDocPushPending,
-  maybeQueuePlServerMirrorAfterDocWrite,
-} from "@/lib/plServerClientMirrorPush";
+  isPlServerDeltaDocPushPending,
+  maybeQueuePlServerDeltaAfterDocWrite,
+} from "@/lib/plServerClientDeltaSync";
 import { mirrorMergeSkipLog, serverTimestampTraceLog } from "@/lib/plServerLivePullDevLog";
 import { plPhase1bVerifyHook } from "@/lib/phase1bVerifyCapture";
 
@@ -39,22 +39,50 @@ export type BrowserDbCollectionBumpDetail = {
   collection: string;
   /** User save / refresh: debounce skip — ledger turant merge. */
   immediate?: boolean;
+  source?: "local_write" | "pl_host_remote_write" | "pl_server_pull" | string;
 };
 
 /** After a Firestore-backed write mirror, allow lists to refresh (same tab). */
 export function notifyBrowserDbCollectionUpdated(
   companyId: string,
   collectionName: string,
-  options?: { immediate?: boolean }
+  options?: { immediate?: boolean; source?: BrowserDbCollectionBumpDetail["source"] }
 ): void {
   if (typeof window === "undefined" || !companyId || !collectionName) return;
-  window.dispatchEvent(
-    new CustomEvent<BrowserDbCollectionBumpDetail>(BROWSER_DB_COLLECTION_BUMP, {
-      detail: {
+  const detail: BrowserDbCollectionBumpDetail = {
+    companyId,
+    collection: collectionName,
+    immediate: options?.immediate === true,
+    source: options?.source,
+  };
+  void import("@/lib/plServerLiveChangeTrace")
+    .then(({ plServerLiveChangeTrace }) =>
+      plServerLiveChangeTrace("collection_bump_dispatch", {
         companyId,
         collection: collectionName,
-        immediate: options?.immediate === true,
-      },
+        immediate: detail.immediate === true,
+        source: detail.source ?? "local_write",
+      })
+    )
+    .catch(() => undefined);
+  try {
+    const bridge = (
+      window as Window & {
+        plElectronGate?: {
+          publishBrowserDbCollectionBump?: (payload: BrowserDbCollectionBumpDetail) => void;
+        };
+      }
+    ).plElectronGate;
+    // Remote client push: main.js already broadcasts to all tabs after delta_push.
+    if (detail.source !== "pl_host_remote_write") {
+      bridge?.publishBrowserDbCollectionBump?.(detail);
+    }
+  } catch {
+    /* optional IPC */
+  }
+  window.dispatchEvent(
+    new CustomEvent<BrowserDbCollectionBumpDetail>(BROWSER_DB_COLLECTION_BUMP, {
+      detail,
     })
   );
 }
@@ -197,7 +225,7 @@ export async function getCompanyDocFromBrowserDb(
   collectionName: string,
   docId: string,
   /** Recycle bin view: deleted rows bhi SQLite mirror se padh sakte hain. */
-  opts?: { includeDeleted?: boolean }
+  opts?: { includeDeleted?: boolean; /** Merge/write paths must not treat display cache as a durable SQLite row. */ sqliteOnly?: boolean }
 ): Promise<Record<string, unknown> | null> {
   if (typeof window === "undefined" || !companyId || !collectionName || !docId) return null;
   if (!(await canReadCompanyDocsFromBrowserDb(companyId))) return null;
@@ -220,6 +248,7 @@ export async function getCompanyDocFromBrowserDb(
   } catch {
     /* fall through */
   }
+  if (opts?.sqliteOnly) return null;
   if (thinStaff) {
     const { getPlServerDisplayCacheDoc, ensurePlServerDisplayCacheCollection, hydratePlServerDisplayCacheFromIdb } =
       await import("@/lib/plServerDisplayCache");
@@ -296,8 +325,10 @@ export async function listCompanyDocsFromBrowserDb(
           /* skip bad row */
         }
       }
-      // Mirror-first: SQLite is source of truth (empty = empty). Display cache only if DB unavailable.
-      return out;
+      // Mirror-first for full local SQLite. Thin staff hub/web: empty SQLite → display cache (delta skip path).
+      if (out.length > 0 || !thinStaff) {
+        return out;
+      }
     }
   } catch {
     /* fall through for thin staff cache */
@@ -595,6 +626,19 @@ export async function deleteCompanyDocFromBrowserDb(
   // `force`: delete SQLite mirror row once the authoritative Firestore doc is gone (prevents extras-merge ghosts).
   if (!shouldApplyBrowserCompanyDocMutation(options?.force) || typeof window === "undefined" || !companyId || !collectionName || !docId) return;
   const notify = options?.notify !== false;
+  if (collectionName === "vouchers") {
+    void import("@/lib/plServerLiveChangeTrace")
+      .then(({ plServerVoucherForensicTrace }) =>
+        plServerVoucherForensicTrace("voucher_sqlite_delete_requested", {
+          companyId,
+          voucherId: docId,
+          force: options?.force === true,
+          notify,
+          stack: new Error().stack?.split("\n").slice(1, 5).join(" | ") || "",
+        })
+      )
+      .catch(() => undefined);
+  }
   try {
     const db = await getBrowserDb();
     if (!db) return;
@@ -828,7 +872,7 @@ async function commitCompanyDocOnRenderer(
   if (shouldNotify) {
     if (!sideEffectOpts?.skipNotify) {
       notifyBrowserDbCollectionUpdated(companyId, collectionName, { immediate: true });
-      void maybeQueuePlServerMirrorAfterDocWrite(companyId, collectionName, docId, stampedData);
+      void maybeQueuePlServerDeltaAfterDocWrite(companyId, collectionName, docId, stampedData);
       plPhase1bVerifyHook("onMirrorQueue");
     }
   }
@@ -842,8 +886,8 @@ async function commitCompanyDocOnRenderer(
   }
 
   if (shouldNotify && sideEffectOpts?.skipNotify) {
-    const { maybePublishHostMirrorAfterBridgeWrite } = await import("@/lib/plServerHostMirrorPublish");
-    void maybePublishHostMirrorAfterBridgeWrite(companyId, collectionName, docId, stampedData);
+    const { maybePublishHostDeltaAfterBridgeWrite } = await import("@/lib/plServerHostDeltaPublish");
+    void maybePublishHostDeltaAfterBridgeWrite(companyId, collectionName, docId, stampedData);
   }
 
   return { written: true, persisted: true, stampedData };
@@ -938,11 +982,13 @@ export async function upsertCompanyDocInBrowserDb(
           const { dispatchVoucherLivePatch } = await import("@/lib/voucherFormAttachmentSave");
           dispatchVoucherLivePatch(companyId, docId, { ...out.stampedData, id: docId });
         }
-        try {
-          const { markPlServerLocalWrite } = await import("@/lib/plServerClientMirrorPush");
-          markPlServerLocalWrite(companyId);
-        } catch {
-          /* optional */
+        if (shouldNotify) {
+          try {
+            const { markPlServerLocalWrite } = await import("@/lib/plServerClientDeltaSync");
+            markPlServerLocalWrite(companyId);
+          } catch {
+            /* optional */
+          }
         }
         scheduleCompanyDocAuthoritativeDispatchAfterLocalCommit(
           companyId,
@@ -1019,6 +1065,28 @@ function mirrorDocDeletedFlag(row: Record<string, unknown>): boolean {
   return row.isDeleted === true || row.deleted === true || row.movedToAdminRecycleAt != null;
 }
 
+function stableSerializedMirrorValue(value: unknown): unknown {
+  const serialized = serializeCompanyDocForLocalDb(value);
+  if (Array.isArray(serialized)) return serialized.map(stableSerializedMirrorValue);
+  if (serialized && typeof serialized === "object") {
+    const obj = serialized as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(obj).sort()) {
+      out[key] = stableSerializedMirrorValue(obj[key]);
+    }
+    return out;
+  }
+  return serialized;
+}
+
+function mirrorDocsEqualForTimestampTie(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  try {
+    return JSON.stringify(stableSerializedMirrorValue(a)) === JSON.stringify(stableSerializedMirrorValue(b));
+  } catch {
+    return false;
+  }
+}
+
 export function mirrorDocTimestampFields(row: Record<string, unknown>): {
   lastEditedAt: unknown;
   updatedAt: unknown;
@@ -1055,7 +1123,7 @@ function traceServerDocTimestampLifecycle(
   });
 }
 
-export type MirrorCollectionSilentResult = { upserted: number; skipped: number };
+export type DeltaCollectionSilentResult = { upserted: number; skipped: number };
 
 export async function mirrorCollectionDocsToBrowserDbSilent(
   companyId: string,
@@ -1069,16 +1137,22 @@ export async function mirrorCollectionDocsToBrowserDbSilent(
     authoritativeSnapshot?: boolean;
     /** Push receive on server: tie par incoming (client) win. Pull par default local win. */
     mergePreferNewerTieBreak?: "local" | "incoming";
+    /** P2P reconciliation: local doc newer ho to caller usko remote repair queue me bhej sake. */
+    onLocalNewer?: (
+      docId: string,
+      localDoc: Record<string, unknown>,
+      incomingDoc: Record<string, unknown>
+    ) => void | Promise<void>;
   }
-): Promise<MirrorCollectionSilentResult> {
-  const empty: MirrorCollectionSilentResult = { upserted: 0, skipped: 0 };
+): Promise<DeltaCollectionSilentResult> {
+  const empty: DeltaCollectionSilentResult = { upserted: 0, skipped: 0 };
   if (typeof window === "undefined" || !companyId || !collectionName || !Array.isArray(docs)) return empty;
   const authoritative = options?.authoritativeSnapshot === true;
   if (docs.length === 0 && !authoritative) return empty;
   const persistAllowed =
     shouldMirrorToBrowserDb() || options?.cloudBackedOfflineCache === true || options?.force === true;
   if (!persistAllowed) return empty;
-  /** Web cloud path / P2P mirror: `force` se SQLite upsert jab default mirror guard off ho. */
+  /** Web cloud path / P2P delta: `force` se SQLite upsert jab default mirror guard off ho. */
   const forceUpsert = options?.force === true || !shouldMirrorToBrowserDb();
   const incomingIds = new Set<string>();
   const tiePrefersLocal = options?.mergePreferNewerTieBreak !== "incoming";
@@ -1101,7 +1175,7 @@ export async function mirrorCollectionDocsToBrowserDbSilent(
     let payload = { ...(row as object), id } as Record<string, unknown>;
     if (options?.mergePreferNewer) {
       try {
-        if (isPlServerMirrorDocPushPending(companyId, collectionName, id)) {
+        if (isPlServerDeltaDocPushPending(companyId, collectionName, id)) {
           skipped += 1;
           mirrorMergeSkipLog({
             companyId,
@@ -1113,13 +1187,14 @@ export async function mirrorCollectionDocsToBrowserDbSilent(
           });
           continue;
         }
-        const existing = await getCompanyDocFromBrowserDb(companyId, collectionName, id);
+        const existing = await getCompanyDocFromBrowserDb(companyId, collectionName, id, { sqliteOnly: true });
         if (existing) {
           const existingMs = mirrorDocEditTimeMs(existing);
           const incomingMs = mirrorDocEditTimeMs(payload);
           const localTs = mirrorDocTimestampFields(existing);
           const remoteTs = mirrorDocTimestampFields(payload);
           if (existingMs > incomingMs) {
+            await options?.onLocalNewer?.(id, existing, payload);
             skipped += 1;
             mirrorMergeSkipLog({
               companyId,
@@ -1137,17 +1212,18 @@ export async function mirrorCollectionDocsToBrowserDbSilent(
             });
             continue;
           }
-          if (existingMs === incomingMs && (tiePrefersLocal || isPlServerLivePullPaused(companyId))) {
+          const livePullPaused = isPlServerLivePullPaused(companyId);
+          const incomingWinsTimestampTie = options?.mergePreferNewerTieBreak === "incoming";
+          if (existingMs === incomingMs && incomingWinsTimestampTie && mirrorDocsEqualForTimestampTie(existing, payload)) {
             skipped += 1;
+            if (collectionName === "vouchers") {
+              await upsertVoucherProjection(companyId, collectionName, id, payload);
+            }
             mirrorMergeSkipLog({
               companyId,
               collection: collectionName,
               id,
-              reason: isPlServerLivePullPaused(companyId)
-                ? "timestamp_equal_live_pull_paused"
-                : tiePrefersLocal
-                  ? "timestamp_equal_local_tiebreak"
-                  : "timestamp_equal",
+              reason: "timestamp_equal_same_payload",
               localUpdatedAt: localTs.lastEditedAt ?? localTs.updatedAt ?? localTs.createdAt,
               remoteUpdatedAt: remoteTs.lastEditedAt ?? remoteTs.updatedAt ?? remoteTs.createdAt,
               localEditTimeMs: existingMs,
@@ -1155,7 +1231,27 @@ export async function mirrorCollectionDocsToBrowserDbSilent(
               localDeleted: mirrorDocDeletedFlag(existing),
               remoteDeleted: mirrorDocDeletedFlag(payload),
               tiePrefersLocal,
-              livePullPaused: isPlServerLivePullPaused(companyId),
+              livePullPaused,
+              localOfflineFirstPersistMs: localTs.offlineFirstPersistMs,
+              remoteOfflineFirstPersistMs: remoteTs.offlineFirstPersistMs,
+            });
+            continue;
+          }
+          if (existingMs === incomingMs && !incomingWinsTimestampTie && (tiePrefersLocal || livePullPaused)) {
+            skipped += 1;
+            mirrorMergeSkipLog({
+              companyId,
+              collection: collectionName,
+              id,
+              reason: livePullPaused ? "timestamp_equal_live_pull_paused" : "timestamp_equal_local_tiebreak",
+              localUpdatedAt: localTs.lastEditedAt ?? localTs.updatedAt ?? localTs.createdAt,
+              remoteUpdatedAt: remoteTs.lastEditedAt ?? remoteTs.updatedAt ?? remoteTs.createdAt,
+              localEditTimeMs: existingMs,
+              remoteEditTimeMs: incomingMs,
+              localDeleted: mirrorDocDeletedFlag(existing),
+              remoteDeleted: mirrorDocDeletedFlag(payload),
+              tiePrefersLocal,
+              livePullPaused,
               localOfflineFirstPersistMs: localTs.offlineFirstPersistMs,
               remoteOfflineFirstPersistMs: remoteTs.offlineFirstPersistMs,
             });
@@ -1194,12 +1290,33 @@ async function reconcileAuthoritativeCollectionSnapshot(
   incomingIds: Set<string>
 ): Promise<void> {
   try {
+    const { isPlServerLivePullPaused } = await import("@/lib/plServerClientDeltaSync");
+    if (isPlServerLivePullPaused(companyId)) return;
+
     const existing = await listCompanyDocsFromBrowserDb(companyId, collectionName, { forBackupMerge: true });
+    const alive = existing.filter((row) => !mirrorDocDeletedFlag(row as Record<string, unknown>));
+    if (incomingIds.size === 0 && alive.length > 0) {
+      console.warn(
+        "[localCompanyDocMirror] skip authoritative prune — empty incoming batch with local rows",
+        collectionName,
+        alive.length
+      );
+      return;
+    }
+    if (incomingIds.size > 0 && incomingIds.size < alive.length) {
+      console.warn(
+        "[localCompanyDocMirror] skip authoritative prune — incoming batch is subset of local",
+        collectionName,
+        { incoming: incomingIds.size, localAlive: alive.length }
+      );
+      return;
+    }
     let changed = false;
     for (const row of existing) {
       const id = String((row as { id?: string }).id || "").trim();
       if (!id || incomingIds.has(id)) continue;
-      if (isPlServerMirrorDocPushPending(companyId, collectionName, id)) continue;
+      if (mirrorDocDeletedFlag(row as Record<string, unknown>)) continue;
+      if (isPlServerDeltaDocPushPending(companyId, collectionName, id)) continue;
       await deleteCompanyDocFromBrowserDb(companyId, collectionName, id, { force: true, notify: false });
       changed = true;
     }

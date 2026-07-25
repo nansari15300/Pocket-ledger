@@ -2,8 +2,14 @@
 
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+import { isPlHubServerClientMode } from "@/lib/plRemoteServerClient";
 
 const PL_SERVER_HTTP_RELAY = "/api/pl-server-http-relay";
+
+function isLoopbackHostname(hostname: string): boolean {
+  const host = String(hostname || "").trim().toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+}
 
 /** Browser blocks HTTPS pages from calling HTTP PL servers — relay via same-origin API. */
 export function needsPlServerHttpRelay(targetUrl: string): boolean {
@@ -11,11 +17,26 @@ export function needsPlServerHttpRelay(targetUrl: string): boolean {
   if (isCapacitorNativeApp() || isElectronDesktopApp()) return false;
   try {
     const target = new URL(targetUrl);
+    if (isLoopbackHostname(target.hostname)) return false;
     if (window.isSecureContext && target.protocol === "http:") return true;
   } catch {
     /* ignore */
   }
   return false;
+}
+
+/** Hub (`localhost:3000`) → remote PL server (`110.x:3001`): same-origin relay (OAuth hub path). */
+export function shouldRelayPlServerHttpUrl(targetUrl: string): boolean {
+  if (needsPlServerHttpRelay(targetUrl)) return true;
+  if (typeof window === "undefined") return false;
+  if (isCapacitorNativeApp() || isElectronDesktopApp()) return false;
+  if (!isPlHubServerClientMode()) return false;
+  try {
+    const target = new URL(targetUrl);
+    return target.origin !== window.location.origin;
+  } catch {
+    return false;
+  }
 }
 
 export type PlServerRelayTextResult = { status: number; body: string };

@@ -100,8 +100,8 @@ async function replayOnePendingRow(
       return markPendingReplayFailure(row, e);
     }
 
-    const { flushPlServerMirrorDocPushNow } = await import("@/lib/plServerClientMirrorPush");
-    const mirrorPush = await flushPlServerMirrorDocPushNow(
+    const { flushPlServerDeltaDocPushNow } = await import("@/lib/plServerClientDeltaSync");
+    const mirrorPush = await flushPlServerDeltaDocPushNow(
       row.companyId,
       row.collectionName,
       row.docId,
@@ -163,8 +163,8 @@ async function replayOnePendingRow(
     }
     return "success";
   } catch (e) {
-    const { flushPlServerMirrorDocPushNow } = await import("@/lib/plServerClientMirrorPush");
-    const mirrorPush = await flushPlServerMirrorDocPushNow(
+    const { flushPlServerDeltaDocPushNow } = await import("@/lib/plServerClientDeltaSync");
+    const mirrorPush = await flushPlServerDeltaDocPushNow(
       row.companyId,
       row.collectionName,
       row.docId,
@@ -230,6 +230,25 @@ export async function drainPlServerAuthoritativePendingQueue(
       }
     }
     await recoverStalePendingAuthoritativeSends();
+    // Token-off / gate reopen: revive auth permanent failures so Host sync can finish.
+    try {
+      const { resolvePlServerDeltaTransport } = await import("@/lib/plServerClientDeltaSync");
+      const authFailed = (await listPendingAuthoritativeCompanyDocWrites()).filter(
+        (r) => r.state === "failed_permanent" && r.lastErrorClass === "auth"
+      );
+      for (const row of authFailed) {
+        if (!resolvePlServerDeltaTransport(row.companyId)) continue;
+        await markPendingAuthoritativeWriteState(row, "retry_scheduled", {
+          inFlightSince: null,
+          retryCount: 0,
+          nextAttemptAt: Date.now(),
+          lastError: "resurrect_after_gate_open_access",
+          lastErrorClass: "auth",
+        });
+      }
+    } catch {
+      /* ignore resurrect errors */
+    }
     const due = await listDuePendingAuthoritativeWrites();
 
     for (const row of due) {

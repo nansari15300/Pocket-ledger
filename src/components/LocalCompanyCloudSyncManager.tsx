@@ -13,6 +13,10 @@ import { MIN_CLOUD_SYNC_TICK_MS } from "@/lib/localCloudSync/types";
 import { hasRealFirebaseAuthSession, waitForFirebaseAuthReady } from "@/lib/firebaseAuthForApi";
 import { isLocalGoogleDriveSyncDisabled } from "@/lib/localCloudSync/driveSyncDisabled";
 
+const BACKGROUND_CLOUD_SYNC_TICK_MS = Math.max(MIN_CLOUD_SYNC_TICK_MS, 60_000);
+const DRIVE_PURGE_CHECK_MS = 10 * 60 * 1000;
+const FORCE_ACTIVE_EVENT_COOLDOWN_MS = 60_000;
+
 function isCompanySyncDue(row: LocalCompanyDoc, now: number): boolean {
   const cfg = readCloudSyncConfigFromCompany(row);
   const intervalMs = cfg.cloudSyncIntervalSec * 1000;
@@ -46,8 +50,12 @@ export function LocalCompanyCloudSyncManager() {
   const { toast } = useToast();
   const runningRef = useRef(false);
   const lastDrivePurgeAtRef = useRef(0);
+  const lastForceActiveEventAtRef = useRef(0);
   const activeCompanyIdRef = useRef<string | null>(null);
-  activeCompanyIdRef.current = company?.id ?? null;
+
+  useEffect(() => {
+    activeCompanyIdRef.current = company?.id ?? null;
+  }, [company?.id]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -56,13 +64,20 @@ export function LocalCompanyCloudSyncManager() {
     const tick = async (options?: { forceActive?: boolean }) => {
       if (runningRef.current) return;
       if (typeof navigator !== "undefined" && !navigator.onLine) return;
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState !== "visible" &&
+        options?.forceActive !== true
+      ) {
+        return;
+      }
       await waitForFirebaseAuthReady();
       if (!hasRealFirebaseAuthSession()) return;
 
       runningRef.current = true;
       try {
         const now = Date.now();
-        if (now - lastDrivePurgeAtRef.current >= 60_000) {
+        if (now - lastDrivePurgeAtRef.current >= DRIVE_PURGE_CHECK_MS) {
           lastDrivePurgeAtRef.current = now;
           const purged = await purgeAllLocalCompaniesMissingOnDrive(user?.uid ?? null);
           if (purged.length > 0) {
@@ -101,20 +116,27 @@ export function LocalCompanyCloudSyncManager() {
       }
     };
 
-    void tick();
-    const intervalId = window.setInterval(() => void tick(), MIN_CLOUD_SYNC_TICK_MS);
+    const initialTick = window.setTimeout(() => void tick(), 10_000);
+    const intervalId = window.setInterval(() => void tick(), BACKGROUND_CLOUD_SYNC_TICK_MS);
 
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void tick({ forceActive: true });
+    const requestForceActiveTick = () => {
+      const now = Date.now();
+      if (now - lastForceActiveEventAtRef.current < FORCE_ACTIVE_EVENT_COOLDOWN_MS) return;
+      lastForceActiveEventAtRef.current = now;
+      void tick({ forceActive: true });
     };
-    const onFocus = () => void tick({ forceActive: true });
-    const onOnline = () => void tick({ forceActive: true });
+    const onVisible = () => {
+      if (document.visibilityState === "visible") requestForceActiveTick();
+    };
+    const onFocus = () => requestForceActiveTick();
+    const onOnline = () => requestForceActiveTick();
 
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onFocus);
     window.addEventListener("online", onOnline);
 
     return () => {
+      window.clearTimeout(initialTick);
       window.clearInterval(intervalId);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onFocus);

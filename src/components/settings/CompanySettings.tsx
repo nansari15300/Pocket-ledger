@@ -29,7 +29,7 @@ export function CompanySettings({ readOnly = false }: { readOnly?: boolean }) {
 
   const handleCompanyCreated = (companyId: string) => {
     setCompanyId(companyId);
-    router.push("/dashboard");
+    router.replace("/dashboard");
   };
 
   return (

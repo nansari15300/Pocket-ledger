@@ -10,9 +10,9 @@ import {
 } from "@/lib/plServerAccessContext";
 import { isCompanyAllowedOnActiveServerGate } from "@/lib/plServerRemoteCompanyLogin";
 import { isPlServerSharedCompanyRow } from "@/lib/plServerAccessContext";
-import { resolveLocalServerGateAccessToken } from "@/lib/gates/gateRuntime";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { plServerVoucherForensicTrace } from "@/lib/plServerLiveChangeTrace";
 
 /** Live pull tracing — dev + packaged EXE/APK (public web production me band). */
 function livePullLoggingEnabled(): boolean {
@@ -27,6 +27,16 @@ export function livePullDevLog(message: string, detail?: Record<string, unknown>
     return;
   }
   console.log(`[LivePull] ${message}`);
+}
+
+/** Voucher-only PLServer flow: filter this label when server-added voucher does not reach user UI. */
+export function plServerVoucherFlowLog(message: string, detail?: Record<string, unknown>): void {
+  if (!livePullLoggingEnabled()) return;
+  if (detail && Object.keys(detail).length > 0) {
+    console.log(`[PlServerVoucherFlow] ${message}`, detail);
+    return;
+  }
+  console.log(`[PlServerVoucherFlow] ${message}`);
 }
 
 /** Operator / dev bug catch — failures with actionable root-cause codes (EXE + dev). */
@@ -44,7 +54,15 @@ export function livePullBugCatch(
 /** Per-doc merge skip — EXE + dev (public web production me band). */
 export function mirrorMergeSkipLog(detail: Record<string, unknown>): void {
   if (!livePullLoggingEnabled()) return;
-  console.log("[MirrorMergeSkip]", detail);
+  console.log("[DeltaMergeSkip]", { at: new Date().toISOString(), ...detail });
+  if (detail.collection === "vouchers") {
+    plServerVoucherForensicTrace("client_voucher_merge_skipped", detail);
+  }
+}
+
+export function mirrorMergeApplyLog(detail: Record<string, unknown>): void {
+  if (!livePullLoggingEnabled()) return;
+  console.log("[DeltaMergeApply]", { at: new Date().toISOString(), ...detail });
 }
 
 /** Server-side party/master timestamp lifecycle — verify edit → SQLite → export (merge policy change se pehle). */
@@ -60,7 +78,6 @@ export type LivePullSchedulerSnapshot = {
   activeGateId: string;
   activeGateType: string;
   gateHasServerUrl: boolean;
-  gateHasAccessToken: boolean;
   gateConnected: boolean;
   localAuthTokenPresent: boolean;
   accessContextEnabled: boolean;
@@ -72,7 +89,6 @@ export type LivePullSchedulerSnapshot = {
   blockers: {
     noCompanyId?: boolean;
     accessContextFalse?: boolean;
-    noToken?: boolean;
     noGate?: boolean;
     gateNotLocalServer?: boolean;
     gateNoServerUrl?: boolean;
@@ -84,29 +100,59 @@ export type LivePullSchedulerSnapshot = {
 /** Snapshot scheduler inputs at effect-run time — diagnose stale deps / early exit. */
 export function buildLivePullSchedulerSnapshot(
   companyId: string | null | undefined,
-  company: { plServerShared?: boolean; storageOption?: string } | null | undefined
+  company:
+    | {
+        id?: string;
+        plServerShared?: boolean;
+        storageOption?: string;
+        syncedFromCloud?: boolean;
+        plServerGateId?: string;
+        plServerGateServerUrl?: string;
+        plServerHostCompanyId?: string;
+      }
+    | null
+    | undefined
 ): LivePullSchedulerSnapshot {
   const id = String(companyId || "").trim();
   const gate: GateRecord = getActiveGate();
-  const accessContextEnabled = shouldFetchPlServerAccessContext();
   const localAuthTokenPresent = Boolean(id && getLocalAuthToken(id));
   const gateHasServerUrl = gate.type === "local_server" && Boolean(String(gate.serverUrl || "").trim());
-  const gateHasAccessToken = gate.type === "local_server" && Boolean(resolveLocalServerGateAccessToken(gate));
-  const gateConnected = gateHasServerUrl && gateHasAccessToken;
-  const gateCompanyAllowed = Boolean(id && isCompanyAllowedOnActiveServerGate(id, gate));
+  const rowHasServerUrl = Boolean(String(company?.plServerGateServerUrl || "").trim());
+  const gateConnected = gateHasServerUrl;
+  const storageIsLocal = String(company?.storageOption ?? "").toLowerCase().trim() === "local";
+  const rowLooksServerGate =
+    company?.plServerShared === true ||
+    Boolean(String(company?.plServerGateServerUrl || "").trim()) ||
+    Boolean(String(company?.plServerHostCompanyId || "").trim()) ||
+    (gate.type === "local_server" && storageIsLocal);
+  const accessContextEnabled = shouldFetchPlServerAccessContext() || rowLooksServerGate;
+  const gateCompanyAllowed = Boolean(
+    id && (isCompanyAllowedOnActiveServerGate(id, gate) || (gate.type === "local_server" && rowLooksServerGate))
+  );
   const gatePathOk =
     gate.type === "local_server" && Boolean(gate.serverUrl) && gateCompanyAllowed;
-  const canSync = localAuthTokenPresent || gatePathOk;
+  const canSync =
+    localAuthTokenPresent ||
+    gatePathOk ||
+    Boolean((gateHasServerUrl || rowHasServerUrl) && rowLooksServerGate);
+  const localServerAuthenticatedCompany =
+    gate.type === "local_server" &&
+    localAuthTokenPresent &&
+    String(company?.storageOption ?? "").toLowerCase().trim() === "local";
   const isServerRow =
-    isPlServerSharedCompanyRow(company, gate.id) ||
-    (Boolean(id) && isPlServerSharedCompanyRow({ id }, gate.id));
+    company?.plServerShared === true ||
+    isPlServerSharedCompanyRow(id ? { ...company, id } : company, gate.id) ||
+    (Boolean(id) && isPlServerSharedCompanyRow({ id }, gate.id)) ||
+    localServerAuthenticatedCompany ||
+    Boolean((gateHasServerUrl || rowHasServerUrl) && rowLooksServerGate);
   const preview = readPlServerGatePreviewContext(gate.id);
   const blockers: LivePullSchedulerSnapshot["blockers"] = {};
   if (!id) blockers.noCompanyId = true;
   if (!accessContextEnabled) blockers.accessContextFalse = true;
   if (!canSync) {
-    if (!localAuthTokenPresent) blockers.noToken = true;
-    if (gate.type !== "local_server") {
+    if (rowHasServerUrl) {
+      // Saved server URL on the company row is enough; active gate may be Online/Device in another tab.
+    } else if (gate.type !== "local_server") {
       blockers.gateNotLocalServer = true;
       blockers.noGate = true;
     } else if (!gate.serverUrl) {
@@ -126,7 +172,6 @@ export function buildLivePullSchedulerSnapshot(
     activeGateId: gate.id,
     activeGateType: gate.type,
     gateHasServerUrl,
-    gateHasAccessToken,
     gateConnected,
     localAuthTokenPresent,
     accessContextEnabled,

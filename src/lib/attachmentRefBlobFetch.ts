@@ -27,12 +27,16 @@ export type FetchAttachmentRefBlobOptions = {
   signal?: AbortSignal;
   /** Cloud `drive:` resolve — Google Drive folder path. */
   companyId?: string;
+  /** Local company gallery: HTTPS/Firebase object-path network mat. */
+  localOnly?: boolean;
 };
 
 /** Preview/hover callers — gallery me parallel `local:` match ke liye. */
 export type AttachmentPreviewBlobLoadOptions = {
   galleryUrls?: readonly string[];
   companyId?: string;
+  /** Local company: cache/local bytes ke baad Firebase/network mat. */
+  localLedgerOnly?: boolean;
 };
 
 /**
@@ -127,7 +131,10 @@ export async function fetchAttachmentRefBlob(
     if (embedded && embedded.size > 0) return embedded;
   }
 
-  if (/^https?:\/\//i.test(u) || looksLikeFirebaseStorageObjectPath(u)) {
+  if (
+    !options?.localOnly &&
+    (/^https?:\/\//i.test(u) || looksLikeFirebaseStorageObjectPath(u))
+  ) {
     const { fetchHttpsAttachmentBlobForPrefetchMiss } = await import("@/lib/offlineAttachmentUrlCache");
     const httpsBlob = await fetchHttpsAttachmentBlobForPrefetchMiss(u, options?.signal);
     if (httpsBlob && httpsBlob.size > 0) return httpsBlob;

@@ -11,6 +11,10 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import type { Company } from "@/hooks/useCompany";
 import { useFirstLoginWarmGate } from "@/contexts/FirstLoginWarmGateContext";
+import {
+  clearHeaderAttachmentPrefetchForCompany,
+  reportHeaderAttachmentPrefetchProgress,
+} from "@/contexts/EmbeddedAttachmentPrefetchContext";
 import { COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS } from "@/lib/firestoreToLocalCompanyPull";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { shouldReadLedgerFromSqliteOnly, isDeviceLocalCompany } from "@/lib/companyStorageKind";
@@ -20,6 +24,7 @@ import {
   shouldPrefetchAttachmentsForCompany,
 } from "@/lib/offlineFullWarmSync";
 import { queueAttachmentUrlsWarm } from "@/lib/attachmentLoadReady";
+import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 
 function isLocalSqliteLedgerCompany(c: Company | null | undefined): boolean {
   if (!c) return false;
@@ -56,6 +61,8 @@ export function LocalCompanySqliteWarmBootstrap() {
         )
       );
       if (ac.signal.aborted) return;
+      // EXE/APK: attachment warm OfflineWarmSyncManager / first-login overlay karte hain — duplicate CPU avoid.
+      if (isEmbeddedOfflinePreloadClient()) return;
 
       const urls = [...(await scrapeLocalMirrorAttachmentUrls(cid))];
       if (urls.length > 0) {
@@ -68,12 +75,14 @@ export function LocalCompanySqliteWarmBootstrap() {
           company: c,
           localCompanyId: cid,
           signal: ac.signal,
+          onProgressPercent: (pct) => reportHeaderAttachmentPrefetchProgress(cid, pct),
         });
       }
     })();
 
     return () => {
       ac.abort();
+      clearHeaderAttachmentPrefetchForCompany(cid);
     };
   }, [user, loading, companyId, company, gateActive]);
 

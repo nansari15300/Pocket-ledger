@@ -12,7 +12,6 @@ import { isStaticAppBuild } from '@/lib/isStaticAppBuild';
 import { isCapacitorNativeApp } from '@/lib/isCapacitorNative';
 import { isElectronEnvironment } from '@/hooks/use-mobile';
 import { isEmbeddedLoginAccountSwitchShell } from '@/lib/embeddedLoginAccountSwitchShell';
-import { Button } from '@/components/ui/button';
 
 export default function LoginPage() {
   const { user, loading } = useAuth();
@@ -75,12 +74,9 @@ export default function LoginPage() {
           <SavedAccountsLoginPanel onBack={() => setShowSavedAccounts(false)} />
         ) : (
           <>
-            <LoginForm />
-            {savedAccountsAvailable ? (
-              <Button type="button" variant="outline" className="w-full" onClick={() => setShowSavedAccounts(true)}>
-                Change account
-              </Button>
-            ) : null}
+            <LoginForm
+              onChangeAccount={savedAccountsAvailable ? () => setShowSavedAccounts(true) : undefined}
+            />
           </>
         )}
         <div className="text-center text-sm text-muted-foreground">

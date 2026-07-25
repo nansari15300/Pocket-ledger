@@ -32,6 +32,7 @@ export const config = {
     "/api/billing/:path*",
     "/api/local-cloud-sync/:path*",
     "/api/auth/google/:path*",
+    "/api/auth/pl-firebase-handoff",
     "/api/company/sync-plan",
     "/api/company/downgrade-plan",
     "/api/company/repair-stripe-plan-expiry",

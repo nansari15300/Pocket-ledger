@@ -8,6 +8,8 @@ type PlElectronBackupApi = {
     dirPath: string;
     fileName: string;
     base64: string;
+    /** Electron main: nested `{company}/{timestamp}/` under chosen dir. */
+    relativeSubdir?: string;
   }) => Promise<{ ok?: boolean; error?: string }>;
 };
 
@@ -50,11 +52,17 @@ async function blobToBase64(blob: Blob): Promise<string> {
 export async function writeElectronBackupFile(
   dirPath: string,
   fileName: string,
-  blob: Blob
+  blob: Blob,
+  relativeSubdir?: string
 ): Promise<void> {
   const api = electronBackupApi();
   if (!api) throw new Error("Electron backup folder API not available.");
   const base64 = await blobToBase64(blob);
-  const resp = await api.writeBackupFile({ dirPath, fileName, base64 });
+  const resp = await api.writeBackupFile({
+    dirPath,
+    fileName,
+    base64,
+    relativeSubdir: relativeSubdir?.trim() || undefined,
+  });
   if (!resp.ok) throw new Error(resp.error || "Could not write backup file.");
 }

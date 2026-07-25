@@ -93,15 +93,15 @@ export function computeReceivablesPayablesFinancialSummary(args: {
   } = args;
   if (loading) return { ...EMPTY };
 
-  let filteredVouchers = vouchers;
+  let balanceVouchers = vouchers;
   if (receivablesDateRange?.from) {
-    const fromDate = startOfDay(receivablesDateRange.from);
     const toDate = receivablesDateRange.to
       ? endOfDay(receivablesDateRange.to)
-      : endOfDay(fromDate);
-    filteredVouchers = vouchers.filter((v) => {
+      : endOfDay(startOfDay(receivablesDateRange.from));
+    // Period balance is "as of range end": master opening + all earlier vouchers + range vouchers.
+    balanceVouchers = vouchers.filter((v) => {
       const txDate = safeToDateRp(v.date);
-      return txDate && txDate >= fromDate && txDate <= toDate;
+      return txDate && txDate <= toDate;
     });
   }
 
@@ -125,7 +125,7 @@ export function computeReceivablesPayablesFinancialSummary(args: {
   const processPartyStaffTax = (entity: any, type: "party" | "staff" | "tax") => {
     let balance = Number(entity.openingBalance) || 0;
 
-    filteredVouchers.forEach((v) => {
+    balanceVouchers.forEach((v) => {
       const amount = v.total || v.amount || 0;
 
       if (v.type === "journal") {
@@ -164,7 +164,7 @@ export function computeReceivablesPayablesFinancialSummary(args: {
 
   const processBankAccount = (account: any) => {
     let balance = Number(account.openingBalance) || 0;
-    filteredVouchers.forEach((v) => {
+    balanceVouchers.forEach((v) => {
       const amount = Number(v.total || v.amount || 0);
       if (v.type === "journal") {
         const entry = v.entries?.find((e: any) => e.accountId === account.id);
@@ -193,7 +193,7 @@ export function computeReceivablesPayablesFinancialSummary(args: {
 
   const processIncomeExpenseAccount = (entity: any) => {
     let balance = Number(entity.openingBalance) || 0;
-    filteredVouchers.forEach((v) => {
+    balanceVouchers.forEach((v) => {
       const amount = Number(v.total || v.amount || 0);
       if (v.type === "journal") {
         const entry = v.entries?.find((e: any) => e.accountId === entity.id);

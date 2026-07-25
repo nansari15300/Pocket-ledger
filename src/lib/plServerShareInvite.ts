@@ -27,10 +27,10 @@ export function localServerShareAlertGatePath(n: Record<string, unknown>): strin
   if (stored) return stored.startsWith("/") ? appNavHref(stored) : stored;
   const serverUrl = String(n.serverUrl || "").trim();
   const token = String(n.accessToken || "").trim();
-  if (!serverUrl || !token) return appNavHref("/gate");
+  if (!serverUrl) return appNavHref("/gate");
   const params = new URLSearchParams();
   params.set("pl_gate_server", serverUrl);
-  params.set("pl_gate_token", token);
+  if (token) params.set("pl_gate_token", token);
   const label = String(n.gateLabel || "").trim();
   if (label) params.set("pl_gate_label", label);
   return appNavHref(`/gate?${params.toString()}`);
@@ -99,11 +99,11 @@ export async function sendLocalServerShareInviteAlert(input: {
 
   const inviteLink = buildPlServerGateInviteLink({
     serverUrl: input.serverUrl,
-    accessToken: input.accessToken,
+    accessToken: "",
     gateLabel: input.gateLabel,
   });
   if (!inviteLink) {
-    return { ok: false, reason: "Could not build invite link — check server URL and token." };
+    return { ok: false, reason: "Could not build invite link - check server URL." };
   }
 
   const fromLabel = String(input.senderName || input.senderEmail || "Server owner").trim();
@@ -141,9 +141,9 @@ export async function sendLocalServerShareInviteAlert(input: {
     serverUrl: input.serverUrl,
     serverUrls: allUrls.length ? allUrls : [input.serverUrl],
     serverPort: input.serverPort ?? null,
-    accessToken: input.accessToken,
+    accessToken: "",
     gateLabel: input.gateLabel || null,
-    gateInvitePath: `/gate?pl_gate_server=${encodeURIComponent(input.serverUrl)}&pl_gate_token=${encodeURIComponent(input.accessToken)}${input.gateLabel ? `&pl_gate_label=${encodeURIComponent(input.gateLabel)}` : ""}`,
+    gateInvitePath: `/gate?pl_gate_server=${encodeURIComponent(input.serverUrl)}${input.gateLabel ? `&pl_gate_label=${encodeURIComponent(input.gateLabel)}` : ""}`,
     inviteLink,
     tokenLabel,
     loginUsername: loginHint || null,

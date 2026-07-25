@@ -125,6 +125,25 @@ export function isPlServerInviteUrlSelected(
   );
 }
 
+function listingUrlHostname(url: string): string | null {
+  const norm = normalizePlServerListingUrl(url);
+  if (!norm) return null;
+  try {
+    return new URL(norm).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/** Settings UI: hide loopback — show LAN + public/WAN addresses only. */
+export function filterPlServerInviteUrlsForRemoteListing(urls: string[]): string[] {
+  return dedupePlServerListingUrls(urls).filter((u) => {
+    const host = listingUrlHostname(u);
+    if (!host) return false;
+    return host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]";
+  });
+}
+
 export function normalizePublicHostField(raw: string, port: number): string {
   const ph = String(raw || "").trim();
   if (!ph) return "";

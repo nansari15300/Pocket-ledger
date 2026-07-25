@@ -52,7 +52,7 @@ import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVouch
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import { loadVoucherDataForDeletePreCheck, resolveVoucherDeleteBackdateDate } from "@/lib/voucherDeletePreCheck";
 import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { findVoucherInLocalMirrorByNumberAndType } from "@/lib/localCompanyDocMirror";
 import {
@@ -90,7 +90,7 @@ import type { Staff } from "@/components/staff/types";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
-import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
@@ -327,10 +327,17 @@ export function CreateJournalForm({
   const { toast } = useToast();
   const { user, customUser } = useAuth();
   const { company: ctxCompany, companyId: ctxCompanyId, allCompanies } = useCompany();
-  // Copy-draft mode: journal master lists ko selected target company par hard-pin rakho.
+  /** Cross-company compare / copy-draft: tab hi scoped snapshot — header company = selected company par useVouchers() kaafi hai. */
+  const crossCompanyLedgerScope = useMemo(() => {
+    const scopeId = String(copySaveTargetCompanyId?.trim() || ledgerScopeCompanyId?.trim() || "");
+    const ctx = String(ctxCompanyId || "").trim();
+    if (!scopeId) return false;
+    if (copySaveTargetCompanyId?.trim()) return true;
+    return scopeId !== ctx;
+  }, [copySaveTargetCompanyId, ledgerScopeCompanyId, ctxCompanyId]);
   const forcedLedgerScopeCompanyId = useMemo(
-    () => String(copySaveTargetCompanyId?.trim() || ledgerScopeCompanyId?.trim() || ""),
-    [copySaveTargetCompanyId, ledgerScopeCompanyId]
+    () => (crossCompanyLedgerScope ? String(copySaveTargetCompanyId?.trim() || ledgerScopeCompanyId?.trim() || "") : ""),
+    [crossCompanyLedgerScope, copySaveTargetCompanyId, ledgerScopeCompanyId]
   );
   /** Save + numbering: Compare me jis company ka voucher edit ho raha hai (header company se alag ho sakta hai). */
   const effectiveCompanyId = useMemo(
@@ -360,9 +367,13 @@ export function CreateJournalForm({
     }
     // Copy-draft me sid===ctxCompanyId bhi ho sakta hai; tab bhi explicit snapshot load karke stale old-company lists avoid karo.
     let cancelled = false;
-    void loadJournalLedgerScopeSnapshot(sid).then((snap) => {
-      if (!cancelled) setScopedLedger(snap);
-    });
+    void loadJournalLedgerScopeSnapshot(sid)
+      .then((snap) => {
+        if (!cancelled) setScopedLedger(snap);
+      })
+      .catch(() => {
+        if (!cancelled) setScopedLedger(null);
+      });
     return () => {
       cancelled = true;
     };
@@ -383,26 +394,27 @@ export function CreateJournalForm({
   }, [forcedLedgerScopeCompanyId]);
 
   // Compare / recon sync: scoped company lists load hone tak header company fallback mat dikhao (galat id → blank combobox)
-  const useScopedLedgerLists = Boolean(copySaveTargetCompanyId || forcedLedgerScopeCompanyId);
+  const useScopedLedgerLists = crossCompanyLedgerScope && Boolean(forcedLedgerScopeCompanyId);
   const pParties = useScopedLedgerLists
     ? (scopedLedger?.processedPartiesForSelection ?? [])
-    : (scopedLedger?.processedPartiesForSelection ?? processedPartiesForSelection);
+    : processedPartiesForSelection;
   const pStaff = useScopedLedgerLists
     ? (scopedLedger?.processedStaff ?? [])
-    : (scopedLedger?.processedStaff ?? processedStaff);
+    : processedStaff;
   const pAccounts = useScopedLedgerLists
     ? (scopedLedger?.processedAccounts ?? [])
-    : (scopedLedger?.processedAccounts ?? processedAccounts);
+    : processedAccounts;
   const pExpense = useScopedLedgerLists
     ? (scopedLedger?.expenseAccounts ?? [])
-    : (scopedLedger?.expenseAccounts ?? expenseAccounts);
+    : expenseAccounts;
   const pTaxes = useScopedLedgerLists
     ? (scopedLedger?.processedTaxes ?? [])
-    : (scopedLedger?.processedTaxes ?? processedTaxes);
+    : processedTaxes;
 
   const isMobile = useIsMobile();
 
   const [isLoading, setIsLoading] = useState(false);
+  const isAttachmentProcessing = useVoucherAttachmentProcessing();
   const [isCreatePartyOpen, setIsCreatePartyOpen] = React.useState(false);
   const [isCreateAccountOpen, setIsCreateAccountOpen] = React.useState(false);
   const [isCreateStaffOpen, setIsCreateStaffOpen] = React.useState(false);
@@ -1698,16 +1710,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
         if (isMounted.current) setIsLoading(false);
 
+        if (!saveAndNew) {
+          onVoucherAction?.("saved", false, docId);
+        }
+
         if (companyId && docId) {
-          const persistedUrls = await applyVoucherAttachmentsAfterFormSave({
+          void applyVoucherAttachmentsAfterFormSave({
             companyId,
             voucherId: docId,
             rawFileUrls: fileUrls,
             storageFolder: "journal",
+          }).then((persistedUrls) => {
+            if (!isMounted.current) return;
+            savedFileUrlsSnapshotRef.current = [...persistedUrls];
+            setFiles(persistedUrls);
+            initialFilesRef.current = [...persistedUrls];
           });
-          savedFileUrlsSnapshotRef.current = [...persistedUrls];
-          setFiles(persistedUrls);
-          initialFilesRef.current = [...persistedUrls];
         }
 
         const postSaveTail = async () => {
@@ -1770,7 +1788,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         };
 
         if (!saveAndNew) {
-          onVoucherAction?.("saved", false, docId);
           void postSaveTail().catch((err) => {
             console.error("[CreateJournalForm] post-save tail", err);
             sonnerToast.error("Journal saved — finishing steps pending", {
@@ -1804,21 +1821,35 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   processAndSaveRef.current = processAndSave;
 
   const handleDelete = async () => {
-    if (!savedVoucherId || !companyId) return;
+    const voucherIdToDelete = savedVoucherId || voucher?.id || null;
+    if (!voucherIdToDelete || !companyId) return;
     
     try {
-      // Permission check: delete
       assertCan(can, "delete_records");
-      
-      // Get voucher date for backdate limit check
-      const voucherDoc = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, savedVoucherId));
-      const voucherData = voucherDoc.exists() ? voucherDoc.data() : null;
+      const { voucherData, exists: voucherDocExists } = await loadVoucherDataForDeletePreCheck({
+        companyId,
+        voucherId: voucherIdToDelete,
+        company,
+        fallbackVoucher: (voucher as Record<string, unknown> | null) ?? null,
+        vouchers: vouchers as Array<{ id?: string } & Record<string, unknown>> | null,
+      });
+      if (!canDeleteVoucher(voucherData)) {
+        throw new PermissionDeniedError(
+          (voucherData as any)?.isApproved
+            ? "You do not have permission to delete approved vouchers."
+            : "You do not have permission to delete records."
+        );
+      }
       if (voucherData && hasPaymentLinks(voucherData)) {
         toast({ variant: "destructive", title: "Cannot Delete", description: "First unlink linked transactions." });
         return;
       }
-      if (voucherDoc.exists()) {
-        const voucherDate = voucherData!.date?.toDate ? voucherData!.date.toDate() : new Date(voucherData!.date);
+      if (voucherDocExists && voucherData) {
+        const voucherDate = resolveVoucherDeleteBackdateDate(voucherData, {
+          form: "journal",
+          companyId,
+          voucherId: voucherIdToDelete,
+        });
         assertCanPerformBackdated(canPerformBackdatedAction, "delete", voucherDate);
       }
     } catch (error) {
@@ -1841,7 +1872,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     setIsLoading(true);
     try {
         // Delete action local-first helper ke through run karo.
-        await softDeleteVoucherMoveToRecycleBin(companyId, savedVoucherId, user?.uid || "");
+        await softDeleteVoucherMoveToRecycleBin(companyId, voucherIdToDelete, user?.uid || "");
         toast({ title: "Voucher Moved to Bin" });
         onVoucherAction?.('cancelled');
     } catch (error) {
@@ -2058,6 +2089,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const handleAmountChange = (index: number, value: number) => {
     // Add-row flow removed: rebalance only within the existing journal rows.
     const updatedLines = form.getValues("lines");
+    if (updatedLines.length === 2) {
+      const pairedIndex = index === 0 ? 1 : 0;
+      form.setValue(`lines.${pairedIndex}.amount`, value, {
+        shouldDirty: true,
+        shouldValidate: true,
+      });
+      return;
+    }
     let totalDebit = 0;
     let totalCredit = 0;
 
@@ -2924,7 +2963,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
                   History
                 </Button>
-                <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
+                <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || isAttachmentProcessing || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
                   Save & Print
                 </Button>
                 {/* Row 1: Cancel | Save | Approve (right) */}
@@ -2932,15 +2971,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   Cancel
                 </Button>
                 {/* Pehle save ke baad `savedVoucherId` — tab bhi bina change Save band */}
-                <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherId) && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherId) && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
                   {isLoading ? "..." : "Save"}
                 </Button>
                 {voucher?.id ? (
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
                   </Button>
                 ) : showSaveAndApproveOnCreate ? (
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={isLoading || editingDisabled} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={isLoading || isAttachmentProcessing || editingDisabled} className={cn("w-full", BTN_APPROVE_CLASS)}>
                     {isLoading ? "..." : "Save & Approve"}
                   </Button>
                 ) : (
@@ -2977,25 +3016,25 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
                     Cancel
                   </Button>
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={!!voucher || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={!!voucher || isLoading || isAttachmentProcessing || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save & New
                   </Button>
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || isAttachmentProcessing || editingDisabled} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}>
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherId) && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherId) && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>
                   {voucher?.id ? (
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                       {isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                   ) : (
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!showSaveAndApproveOnCreate || isLoading || isAttachmentProcessing || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       Save & Approve
                     </Button>
@@ -3103,4 +3142,3 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     </>
   );
 }
-

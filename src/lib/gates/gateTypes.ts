@@ -10,7 +10,7 @@ export type GateRecord = {
   /** local_server only — http://192.168.1.5:3000 */
   serverUrl?: string;
   /** local_server only — from server owner */
-  accessToken?: string;
+  accessToken?: string; // Legacy only; PLServer gates are token-free.
   createdAtMs: number;
   lastTestedAtMs?: number;
   lastStatus?: GateStatus;

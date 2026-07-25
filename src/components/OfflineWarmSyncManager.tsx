@@ -23,10 +23,14 @@ import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 import { useFirstLoginWarmGate } from "@/contexts/FirstLoginWarmGateContext";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import {
+  clearHeaderAttachmentPrefetchForCompany,
+  reportHeaderAttachmentPrefetchProgress,
+} from "@/contexts/EmbeddedAttachmentPrefetchContext";
 
 const WARM_DEBOUNCE_MS = 2_200;
 /** EXE: startup par turant file open (HTTPS) — attachment bytes background me baad me (bandwidth clash avoid). */
-const EMBEDDED_MULTI_WALK_START_MS_ELECTRON = 45_000;
+const EMBEDDED_MULTI_WALK_START_MS_ELECTRON = 90_000;
 /** Doosri company ka warm overlap na ho selected company ke debounced run se (`WARM_DEBOUNCE_MS` ke baad shuru). */
 const EMBEDDED_MULTI_WALK_START_MS = 200;
 /** Har company warm ke beech thoda gap — APK memory / bandwidth. */
@@ -34,7 +38,7 @@ const EMBEDDED_MULTI_GAP_MS = 750;
 /** User se bina click: online rehne par periodic resweep se missed/failing attachments bhi dheere-dheere cache ho jayein. */
 const EMBEDDED_MULTI_RESWEEP_MS = 8 * 60 * 1000;
 /** EXE desktop: ledger detail scroll jump avoid — background resweep kam frequent. */
-const EMBEDDED_MULTI_RESWEEP_MS_ELECTRON = 25 * 60 * 1000;
+const EMBEDDED_MULTI_RESWEEP_MS_ELECTRON = 6 * 60 * 60 * 1000;
 import { backgroundWarmSyncEnabled } from "@/lib/firebaseBillingOptimization";
 
 const BACKGROUND_WARM_SYNC_ENABLED = backgroundWarmSyncEnabled();
@@ -78,8 +82,13 @@ export function OfflineWarmSyncManager() {
   const embeddedWalkAbortRef = useRef<AbortController | null>(null);
   const embeddedWalkTimerRef = useRef<number | null>(null);
 
-  allCompaniesLatestRef.current = allCompanies;
-  companyIdLatestRef.current = companyId;
+  useEffect(() => {
+    allCompaniesLatestRef.current = allCompanies;
+  }, [allCompanies]);
+
+  useEffect(() => {
+    companyIdLatestRef.current = companyId;
+  }, [companyId]);
 
   /** Shared schedule + cancel — multiple triggers same debounce funnel */
   const scheduleWarmFullSync = useCallback(() => {
@@ -101,8 +110,11 @@ export function OfflineWarmSyncManager() {
         localCompanyId: companyId.trim(),
         signal: c.signal,
         prefetchOverrides: EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
+        onAttachmentProgressPercent: (pct) =>
+          reportHeaderAttachmentPrefetchProgress(companyId.trim(), pct),
       }).finally(() => {
         if (!c.signal.aborted) lastWarmCompletedAtRef.current = Date.now();
+        else clearHeaderAttachmentPrefetchForCompany(companyId);
       });
     }, WARM_DEBOUNCE_MS);
   }, [user, loading, companyId, company, gateActive]);
@@ -142,6 +154,7 @@ export function OfflineWarmSyncManager() {
   useEffect(() => {
     return () => {
       runAbortRef.current?.abort();
+      clearHeaderAttachmentPrefetchForCompany(companyId);
     };
   }, [companyId]);
 
@@ -186,6 +199,8 @@ export function OfflineWarmSyncManager() {
               localCompanyId: rowId,
               signal: ac.signal,
               prefetchOverrides: EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
+              onAttachmentProgressPercent: (pct) =>
+                reportHeaderAttachmentPrefetchProgress(rowId, pct),
             });
           } catch {
             /* per-row network failure: continue with next company */
@@ -193,7 +208,7 @@ export function OfflineWarmSyncManager() {
           await new Promise((r) => setTimeout(r, EMBEDDED_MULTI_GAP_MS));
         }
       } finally {
-        /* silent background warm — no header progress */
+        clearHeaderAttachmentPrefetchForCompany(companyIdLatestRef.current);
       }
     };
 
@@ -207,6 +222,14 @@ export function OfflineWarmSyncManager() {
 
     const runPeriodicPassLoop = async () => {
       if (ac.signal.aborted || typeof navigator === "undefined") return;
+      if (
+        isElectronDesktopApp() &&
+        typeof document !== "undefined" &&
+        document.visibilityState !== "visible"
+      ) {
+        scheduleNextPass(5 * 60 * 1000);
+        return;
+      }
       if (!navigator.onLine) {
         scheduleNextPass(30_000);
         return;

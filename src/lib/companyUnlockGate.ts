@@ -134,6 +134,8 @@ export function shouldPromptCompanyUnlock(
   firebaseUid?: string | null
 ): boolean {
   if (isServerGateCompany(company)) {
+    const explicit = (company as { requiresLogin?: boolean }).requiresLogin;
+    if (explicit === false) return false;
     return companyDocRequiresUnlock(company, userEmail, firebaseUid, company.isOwned);
   }
   if (isOnlineSharedCompany(company)) {
@@ -293,15 +295,15 @@ export function verifyCompanyUnlock(
 /** Bina password/local users — SQLite se seedha open; vouchers ke liye lightweight session. */
 export function grantOpenLocalCompanySession(
   companyId: string,
-  options?: { role?: "owner" | "viewer" }
+  options?: { role?: "owner" | "viewer" | "manager" }
 ): void {
   const id = String(companyId || "").trim();
   if (!id || getLocalAuthToken(id)) return;
-  const role = options?.role === "owner" ? "owner" : "viewer";
+  const role = options?.role === "owner" ? "owner" : options?.role === "manager" ? "manager" : "viewer";
   setLocalAuthToken(id, `local_open_${id}_${Date.now()}`, {
     id: role === "owner" ? "local_open_owner" : "local_open",
-    username: role === "owner" ? "owner" : "viewer",
-    displayName: role === "owner" ? "Owner" : "Viewer",
+    username: role === "owner" ? "owner" : role,
+    displayName: role === "owner" ? "Owner" : role === "manager" ? "Manager" : "Viewer",
     role,
   });
 }

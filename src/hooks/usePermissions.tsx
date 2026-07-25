@@ -2,7 +2,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { startOfDay, differenceInCalendarDays } from "date-fns";
+import {
+  evaluateBackdatePermission,
+  formatBackdatePermissionDeniedMessage,
+  type CanPerformBackdatedFn,
+} from "@/lib/permissions/enforcePermission";
 import { useAuth } from "./useAuth";
 import { useCompany } from "./useCompany";
 import { Permission, PermissionGroups } from "@/lib/permissions";
@@ -13,7 +17,41 @@ import { resolvePlanIdForActiveCompany } from "@/lib/accountPlanForOwner";
 import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 import { companyRowUsesSqliteLedgerWrites, isServerGateCompany } from "@/lib/companyStorageKind";
 import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
+import { PL_SERVER_COMPANY_META_UPDATED_EVENT } from "@/lib/plServerCompanyMetaSync";
 
+/** Offline company SQLite session — ye role Firebase owner se alag ho sakta hai (same email owner + staff login). */
+function isLocalStorageCompany(c: { storageOption?: string } | null | undefined): boolean {
+  return String(c?.storageOption || "local").toLowerCase() === "local";
+}
+
+/** PL server staff / gate mirror: local username session + host permissionConfig. */
+function companyUsesLocalStaffPermissions(
+  c: ({ storageOption?: string; plServerShared?: boolean } & Record<string, unknown>) | null | undefined
+): boolean {
+  if (!c) return isPlServerThinStaffClient();
+  return (
+    isLocalStorageCompany(c) ||
+    isServerGateCompany(c) ||
+    companyRowUsesSqliteLedgerWrites(c) ||
+    isPlServerThinStaffClient()
+  );
+}
+
+export function roleCanPermission(
+  role: UserRole,
+  permission: Permission,
+  config: PermissionConfig = initialPermissionConfig
+): boolean {
+  if (role === "owner") return true;
+  const index = flattenedPermissions.indexOf(permission);
+  if (index === -1) return false;
+  const storedRolePerms = config.roles[role] || [];
+  const defaultRolePerms = initialPermissionConfig.roles[role] || [];
+  const rolePermissions = flattenedPermissions.map((_, i) =>
+    i < storedRolePerms.length ? !!storedRolePerms[i] : !!defaultRolePerms[i]
+  );
+  return rolePermissions[index] || false;
+}
 
 export type UserRole = "viewer" | "data-entry" | "accountant" | "editor" | "manager" | "owner";
 
@@ -78,11 +116,72 @@ export const initialPermissionConfig: PermissionConfig = {
   allowAttachments: true,
 };
 
-
-/** Offline company SQLite session — ye role Firebase owner se alag ho sakta hai (same email owner + staff login). */
-function isLocalStorageCompany(c: { storageOption?: string } | null | undefined): boolean {
-  return String(c?.storageOption || "local").toLowerCase() === "local";
+function permissionRoleKey(raw: unknown): UserRole | null {
+    const n = String(raw ?? "")
+        .toLowerCase()
+        .trim()
+        .replace(/_/g, "-")
+        .replace(/\s+/g, "-");
+    if (n === "admin" || n === "administrator" || n === "admin-role") return "manager";
+    if (n === "super-admin" || n === "superadmin") return "owner";
+    if (["viewer", "data-entry", "accountant", "editor", "manager", "owner"].includes(n)) {
+        return n as UserRole;
+    }
+    return null;
 }
+
+/** Canonicalize legacy role names and deep-merge each role's persisted settings. */
+export function normalizePermissionConfig(
+    raw: PermissionConfig | Record<string, unknown> | null | undefined
+): PermissionConfig {
+    const source = raw && typeof raw === "object" ? raw as Partial<PermissionConfig> : {};
+    const result = JSON.parse(JSON.stringify(initialPermissionConfig)) as PermissionConfig;
+    result.permissions = {
+        ...initialPermissionConfig.permissions,
+        ...(source.permissions && typeof source.permissions === "object" ? source.permissions : {}),
+    };
+    result.allowAttachments = source.allowAttachments !== undefined
+        ? source.allowAttachments !== false
+        : initialPermissionConfig.allowAttachments;
+
+    for (const [storedRole, storedPermissions] of Object.entries(source.roles || {})) {
+        const role = permissionRoleKey(storedRole);
+        if (!role || !Array.isArray(storedPermissions)) continue;
+        const defaults = initialPermissionConfig.roles[role] || [];
+        result.roles[role] = flattenedPermissions.map((_, index) =>
+            index < storedPermissions.length ? !!storedPermissions[index] : !!defaults[index]
+        );
+    }
+    result.roles.owner = Array(flattenedPermissions.length).fill(true);
+
+    for (const [storedRole, storedLimits] of Object.entries(source.dateLimits || {})) {
+        const role = permissionRoleKey(storedRole);
+        if (!role || !storedLimits || typeof storedLimits !== "object") continue;
+        const limits = storedLimits as Partial<{ entryDays: number; editDays: number; deleteDays: number }>;
+        const defaults = initialPermissionConfig.dateLimits[role] || { entryDays: 0, editDays: 0, deleteDays: 0 };
+        result.dateLimits[role] = {
+            entryDays: Number.isFinite(Number(limits.entryDays)) ? Number(limits.entryDays) : defaults.entryDays,
+            editDays: Number.isFinite(Number(limits.editDays)) ? Number(limits.editDays) : defaults.editDays,
+            deleteDays: Number.isFinite(Number(limits.deleteDays)) ? Number(limits.deleteDays) : defaults.deleteDays,
+        };
+    }
+
+    for (const [storedRole, storedLimits] of Object.entries(source.fileAttachmentLimits || {})) {
+        const role = permissionRoleKey(storedRole);
+        if (!role || !storedLimits || typeof storedLimits !== "object") continue;
+        const limits = storedLimits as Partial<{ maxFileCount: number; allowImage: boolean; allowPDF: boolean; allowDelete: boolean }>;
+        const defaults = initialPermissionConfig.fileAttachmentLimits?.[role] || { maxFileCount: 0, allowImage: false, allowPDF: false, allowDelete: false };
+        if (!result.fileAttachmentLimits) result.fileAttachmentLimits = {};
+        result.fileAttachmentLimits[role] = {
+            maxFileCount: Number.isFinite(Number(limits.maxFileCount)) ? Number(limits.maxFileCount) : defaults.maxFileCount,
+            allowImage: limits.allowImage !== undefined ? limits.allowImage === true : defaults.allowImage,
+            allowPDF: limits.allowPDF !== undefined ? limits.allowPDF === true : defaults.allowPDF,
+            allowDelete: limits.allowDelete !== undefined ? limits.allowDelete === true : defaults.allowDelete,
+        };
+    }
+    return result;
+}
+
 
 /** Local / server-gate / SQLite ledger — plan cache miss par bhi profile + doc attachments khulen. */
 function localLikeCompanyForAttachments(c: { storageOption?: string; plServerShared?: boolean } | null | undefined): boolean {
@@ -95,18 +194,64 @@ function localLikeCompanyForAttachments(c: { storageOption?: string; plServerSha
 
 const usePermissions = () => {
     const { customUser } = useAuth();
-    const { company, allCompanies } = useCompany();
+    const { company, allCompanies, localCompanyRegistryEpoch } = useCompany();
     const livePlans = useLivePlans();
     /** Local unlock ke baad localStorage role turant useMemo me aaye (same-tab me storage event nahi aata). */
     const [localAuthEpoch, setLocalAuthEpoch] = useState(0);
+    const [plServerMetaEpoch, setPlServerMetaEpoch] = useState(0);
+    /** PL server staff: `company` context row me permissionConfig na ho to bhi SQLite se load. */
+    const [sqlitePermissionConfig, setSqlitePermissionConfig] = useState<PermissionConfig | null>(null);
     useEffect(() => {
       const onAuth = () => setLocalAuthEpoch((n) => n + 1);
       window.addEventListener(LOCAL_AUTH_CHANGED_EVENT, onAuth);
       return () => window.removeEventListener(LOCAL_AUTH_CHANGED_EVENT, onAuth);
     }, []);
+    useEffect(() => {
+      const onMeta = (event: Event) => {
+        const detail = (event as CustomEvent<{ companyId?: string }>).detail;
+        if (detail?.companyId && company?.id && detail.companyId !== company.id) return;
+        setPlServerMetaEpoch((n) => n + 1);
+      };
+      window.addEventListener(PL_SERVER_COMPANY_META_UPDATED_EVENT, onMeta);
+      return () => window.removeEventListener(PL_SERVER_COMPANY_META_UPDATED_EVENT, onMeta);
+    }, [company?.id]);
+
+    useEffect(() => {
+      const cid = String(company?.id || "").trim();
+      if (!cid || !companyUsesLocalStaffPermissions(company)) {
+        setSqlitePermissionConfig(null);
+        return;
+      }
+      let cancelled = false;
+      void (async () => {
+        try {
+          const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
+          const row = await getLocalCompanyById(cid, { includeDeleted: true });
+          if (cancelled) return;
+          const cfg = (row as { permissionConfig?: PermissionConfig } | null)?.permissionConfig;
+          setSqlitePermissionConfig(cfg && typeof cfg === "object" ? cfg : null);
+        } catch {
+          if (!cancelled) setSqlitePermissionConfig(null);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [
+      company?.id,
+      company?.storageOption,
+      company?.plServerShared,
+      localAuthEpoch,
+      localCompanyRegistryEpoch,
+      plServerMetaEpoch,
+    ]);
 
     const permissions = useMemo(() => {
-        const config: PermissionConfig = company?.permissionConfig || initialPermissionConfig;
+        // Company context receives the just-saved local/host config first. SQLite is the
+        // durable fallback for thin PL clients; an older async SQLite read must not mask it.
+        const config = normalizePermissionConfig(
+          company?.permissionConfig || sqlitePermissionConfig || initialPermissionConfig
+        );
         
         let role: UserRole = 'viewer'; 
 
@@ -164,64 +309,42 @@ const usePermissions = () => {
             }
         }
 
-        // Local company: effective role = local unlock (username/password), NOT only Firebase owner email.
-        // `local_admin_fallback` = Admin username + company password → owner-level settings.
-        if (customUser && company && isLocalStorageCompany(company) && company.id && getLocalAuthToken(company.id)) {
+        // Local / PL server staff: effective role = local unlock (username/password), NOT only Firebase owner email.
+        if (
+          customUser &&
+          company &&
+          company.id &&
+          getLocalAuthToken(company.id) &&
+          companyUsesLocalStaffPermissions(company)
+        ) {
           const localUser = getLocalAuthUser(company.id);
           const roleBeforeLocalSession = role;
           if (localUser?.id) {
-            if (localUser.id === "local_admin_fallback") {
+            // Company creator/owner always keeps full owner permissions. A local/PLServer
+            // credential row such as "Admin" must not downgrade owner to manager (7-day defaults).
+            if (roleBeforeLocalSession === "owner" || localUser.id === "local_admin_fallback") {
               role = "owner";
             } else if (localUser.id === "local_open" || localUser.id === "local_open_owner") {
               // Password-free open: Firebase owner ko viewer mat banao (header buttons / create_records).
-              role =
-                roleBeforeLocalSession === "owner"
-                  ? "owner"
-                  : normalizeStaffRoleString(localUser.role);
+              role = normalizeStaffRoleString(localUser.role);
             } else if (localUser.role) {
-              const normalizedRole = String(localUser.role)
-                .toLowerCase()
-                .trim()
-                .replace(/_/g, "-")
-                .replace(/\s+/g, "-");
-              if (["viewer", "data-entry", "accountant", "editor", "manager", "owner"].includes(normalizedRole)) {
-                role = normalizedRole as UserRole;
-              }
+              role = normalizeStaffRoleString(localUser.role);
             }
           }
         }
         
-        // Firestore may have shorter boolean[] than current PermissionGroups (new keys appended); pad from defaults so can() stays aligned.
-        const storedRolePerms = config.roles[role] || [];
-        const defaultRolePerms = initialPermissionConfig.roles[role] || [];
-        const rolePermissions = flattenedPermissions.map((_, i) =>
-            i < storedRolePerms.length ? !!storedRolePerms[i] : !!defaultRolePerms[i]
-        );
         const dateLimits = config.dateLimits?.[role] || { entryDays: 0, editDays: 0, deleteDays: 0 };
         
-        const can = (permissionName: Permission): boolean => {
-            if (role === 'owner') return true;
-            const index = flattenedPermissions.indexOf(permissionName);
-            if (index === -1) return false;
-            return rolePermissions[index] || false;
-        };
+        const can = (permissionName: Permission): boolean => roleCanPermission(role, permissionName, config);
         
-        const canPerformBackdatedAction = (action: 'entry' | 'edit' | 'delete', recordDate?: Date): boolean => {
-            if (role === 'owner') return true;
-            if (!recordDate) return true;
+        const canPerformBackdatedAction = ((action: 'entry' | 'edit' | 'delete', recordDate?: Date): boolean => {
+            return evaluateBackdatePermission(action, recordDate, dateLimits, role).allowed;
+        }) as CanPerformBackdatedFn;
 
-            const limit = dateLimits[`${action}Days`];
-            // 9999+ = unlimited (allow any backdate)
-            if (limit >= 9999) return true;
-
-            const today = startOfDay(new Date());
-            const recordDay = startOfDay(recordDate instanceof Date ? recordDate : new Date(recordDate));
-            const ageInDays = differenceInCalendarDays(today, recordDay);
-
-            // 0 = disabled: no backdate (only today allowed)
-            if (limit === 0) return ageInDays === 0;
-            // Positive limit: allow records from today (0) up to limit days in the past
-            return ageInDays >= 0 && ageInDays <= limit;
+        canPerformBackdatedAction.explain = (action, recordDate) => {
+            const evaluation = evaluateBackdatePermission(action, recordDate, dateLimits, role);
+            const verb = action === "entry" ? "create" : action;
+            return formatBackdatePermissionDeniedMessage(evaluation, verb, role);
         };
 
         const canEditRecord = (isOwnRecord: boolean, voucher?: { isApproved?: boolean } | null): boolean => {
@@ -301,22 +424,13 @@ const usePermissions = () => {
             canAddFileImagePdf,
         };
 
-    }, [customUser, company, allCompanies, livePlans, localAuthEpoch]);
+    }, [customUser, company, allCompanies, livePlans, localAuthEpoch, localCompanyRegistryEpoch, plServerMetaEpoch, sqlitePermissionConfig]);
 
     return permissions;
 };
 
 function normalizeStaffRoleString(raw: string | undefined): UserRole {
-    if (!raw) return "viewer";
-    const n = String(raw)
-        .toLowerCase()
-        .trim()
-        .replace(/_/g, "-")
-        .replace(/\s+/g, "-");
-    if (["viewer", "data-entry", "accountant", "editor", "manager", "owner"].includes(n)) {
-        return n as UserRole;
-    }
-    return "viewer";
+    return permissionRoleKey(raw) || "viewer";
 }
 
 type RecycleBinCompanyOwnerPick = { ownerId?: string; ownerEmail?: string };
@@ -356,14 +470,11 @@ export function canForRecycleBinLocalCompany(
     row: RecycleBinCompanyOwnerPick | undefined,
     firebaseUid: string | undefined,
     firebaseEmail: string | null | undefined,
-    permission: Permission
+    permission: Permission,
+    permissionConfig?: PermissionConfig | null
 ): boolean {
     const role = getLocalSessionRoleForRecycleBinCompany(companyId, row, firebaseUid, firebaseEmail);
-    if (role === "owner") return true;
-    const idx = flattenedPermissions.indexOf(permission);
-    if (idx === -1) return false;
-    const arr = initialPermissionConfig.roles[role] || [];
-    return !!arr[idx];
+    return roleCanPermission(role, permission, permissionConfig || initialPermissionConfig);
 }
 
 export default usePermissions;

@@ -22,7 +22,7 @@ import {
   shouldFetchPlServerAccessContext,
   isPlServerSharedCompanyRow,
 } from "@/lib/plServerAccessContext";
-import { resolvePlServerMirrorTransport } from "@/lib/plServerClientMirrorPush";
+import { resolvePlServerDeltaTransport } from "@/lib/plServerClientDeltaSync";
 import { PlServerAuthoritativeWriteError } from "@/lib/plServerClientAuthoritativeWrite";
 
 export const RETRY_BASE_MS = 5_000;
@@ -73,19 +73,37 @@ export async function isAuthoritativeLanClientWriteEligible(
   if (!ctx?.simulateLanClient && (await isLocalAuthoritativeHostForCompany(companyId))) return false;
   if (!shouldFetchPlServerAccessContext()) return false;
 
-  const transport = resolvePlServerMirrorTransport(companyId);
+  const transport = resolvePlServerDeltaTransport(companyId);
   if (!transport) return false;
-  if (!transport.gateAllowed && !transport.unlockedLocally) return false;
 
   const id = String(companyId || "").trim();
+  let gateOk = transport.gateAllowed || transport.unlockedLocally;
+  if (!gateOk) {
+    try {
+      const row = await getLocalCompanyById(id, { includeDeleted: true });
+      if (row && isServerGateCompany(row)) gateOk = true;
+    } catch {
+      /* keep */
+    }
+  }
+  if (!gateOk) return false;
   try {
     const row = await getLocalCompanyById(id, { includeDeleted: true });
     if (row && isLocalServerShareableCompany(row)) return true;
+    if (row && isServerGateCompany(row)) return true;
   } catch {
     /* fall through */
   }
 
-  return isPlServerSharedCompanyRow({ id }, transport.gate.id);
+  if (isPlServerSharedCompanyRow({ id }, transport.gate.id)) return true;
+  try {
+    const { matchPlServerSharedCompanyForLocalId } = await import("@/lib/plServerHostCompanyId");
+    const { getPlServerSharedCompanies } = await import("@/lib/plServerAccessContext");
+    if (matchPlServerSharedCompanyForLocalId(id, getPlServerSharedCompanies())) return true;
+  } catch {
+    /* ignore */
+  }
+  return false;
 }
 
 function canonicalPayloadJson(
@@ -161,7 +179,7 @@ export async function enqueuePendingAuthoritativeCompanyDocWrite(
   data: Record<string, unknown>,
   options?: UpsertCompanyBrowserOptions
 ): Promise<PendingAuthoritativeCompanyDocWrite> {
-  const transport = resolvePlServerMirrorTransport(companyId);
+  const transport = resolvePlServerDeltaTransport(companyId);
   if (!transport) {
     throw new PlServerAuthoritativeWriteError("authoritative_pending_transport_unavailable");
   }
@@ -242,6 +260,18 @@ export async function countPendingAuthoritativeCompanyDocWrites(companyId?: stri
   if (!companyId) return active.length;
   const id = String(companyId || "").trim();
   return active.filter((r) => r.companyId === id).length;
+}
+
+/** Background poll sirf tab — queue me drain-worthy row ho (idle CPU save). */
+export async function authoritativePendingQueueNeedsReplayDrain(): Promise<boolean> {
+  const rows = await listPendingAuthoritativeCompanyDocWrites();
+  return rows.some(
+    (r) =>
+      r.state === "queued" ||
+      r.state === "retry_scheduled" ||
+      r.state === "sending" ||
+      (r.state === "failed_permanent" && r.lastErrorClass === "auth")
+  );
 }
 
 export async function listPendingAuthoritativeCompanyDocWrites(): Promise<PendingAuthoritativeCompanyDocWrite[]> {

@@ -93,6 +93,30 @@ export function canPickWebBackupFolder(): boolean {
   return !isNativeRuntime() && isWebDirectoryPickerSupported();
 }
 
+/** Auto backup / scheduled backup ke liye location save honi chahiye. */
+export function isBackupSaveLocationConfigured(): boolean {
+  const prefs = readBackupSaveLocationPrefs();
+  if (isNativeRuntime()) {
+    return Boolean(String(prefs.nativeFolderPath || "").trim());
+  }
+  if (!prefs.webUseSelectedFolder) return false;
+  if (prefs.webFolderDisplayPath?.trim()) return true;
+  if (prefs.webFolderLabel?.trim()) return true;
+  return false;
+}
+
+/** Web Chromium: handle bhi chahiye jab sirf label ho (EXE path alag). */
+export async function isBackupSaveLocationReady(): Promise<boolean> {
+  if (!isBackupSaveLocationConfigured()) return false;
+  const prefs = readBackupSaveLocationPrefs();
+  if (isNativeRuntime()) return true;
+  const { isElectronDesktopApp } = await import("@/lib/isElectronDesktop");
+  if (isElectronDesktopApp() && prefs.webFolderDisplayPath?.trim()) return true;
+  if (!prefs.webUseSelectedFolder) return false;
+  const handle = await readWebBackupDirectoryHandle();
+  return handle != null;
+}
+
 /**
  * Static/native backup writes: ask storage permission up-front when platform requires it.
  * Returns true if permission is already granted or successfully granted.

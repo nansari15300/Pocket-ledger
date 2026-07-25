@@ -12,14 +12,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
+import { useEmbeddedDeviceLockSession } from "@/contexts/EmbeddedDeviceLockSessionContext";
 import { cn } from "@/lib/utils";
 import {
   embeddedPinLength,
   getEmbeddedLockShellKind,
   hasEmbeddedLockConfigured,
-  hasEmbeddedLockSetupSkipped,
   hasEmbeddedPinConfigured,
   hasUserChosenEmbeddedPin,
+  isEmbeddedDeviceLockGateBlocking,
   isEmbeddedDeviceLockShell,
   isEmbeddedSessionUnlocked,
   isSixDigitNumericPin,
@@ -40,6 +41,7 @@ import {
 export function EmbeddedDeviceLockGate() {
   const { user, loading } = useAuth();
   const { toast } = useToast();
+  const { unlockedNow, markUnlockedNow, clearUnlockedNow } = useEmbeddedDeviceLockSession();
   const shellKind = useMemo(() => getEmbeddedLockShellKind(), []);
   const isApk = shellKind === "apk";
   const [pin, setPin] = useState("");
@@ -50,25 +52,19 @@ export function EmbeddedDeviceLockGate() {
   const [showOptionalPinUnlock, setShowOptionalPinUnlock] = useState(false);
   /** `sessionStorage` / localStorage change par React dubara paint kare — unlock ke baad overlay hataane ke liye. */
   const [unlockBump, setUnlockBump] = useState(0);
-  /** Biometric success ke turant baad overlay hatao — async storage + auth `loading` flicker se pehle. */
-  const [unlockedNow, setUnlockedNow] = useState(false);
 
+  const pinInputRef = useRef<HTMLInputElement>(null);
   const uid = user?.uid ?? "";
   const localSynthetic = uid.startsWith("local:");
   const sessionUnlocked = unlockedNow || isEmbeddedSessionUnlocked();
-  const setupSkipped = hasEmbeddedLockSetupSkipped(uid);
   const needsGate = useMemo(() => {
     void unlockBump;
-    const lockConfigured = hasEmbeddedLockConfigured(uid);
-    return (
-      !loading &&
-      Boolean(user) &&
-      !localSynthetic &&
-      isEmbeddedDeviceLockShell() &&
-      // Setup-mode only: user ne skip choose kiya ho to gate force mat karo; lock configured ho to unlock required rahe.
-      (lockConfigured ? !sessionUnlocked : !setupSkipped)
-    );
-  }, [loading, user, localSynthetic, uid, unlockBump, sessionUnlocked, setupSkipped]);
+    return isEmbeddedDeviceLockGateBlocking({
+      authLoading: loading,
+      firebaseUid: uid,
+      sessionUnlocked,
+    });
+  }, [loading, uid, unlockBump, sessionUnlocked]);
 
   const setupMode = !hasEmbeddedLockConfigured(uid);
   const bioEnabled = uid ? readBiometricUnlockEnabled(uid) : false;
@@ -92,23 +88,23 @@ export function EmbeddedDeviceLockGate() {
   }, [uid, localSynthetic]);
 
   const finishUnlock = useCallback(() => {
-    setUnlockedNow(true);
+    markUnlockedNow();
     markEmbeddedSessionUnlocked();
     setPin("");
     setPin2("");
     setUnlockBump((b) => b + 1);
-  }, []);
+  }, [markUnlockedNow]);
 
   /** Account / cold resume: pehle se unlock ho to overlay mat dikhao. */
   useEffect(() => {
     if (!uid || localSynthetic) {
-      setUnlockedNow(false);
+      clearUnlockedNow();
       return;
     }
     if (isEmbeddedSessionUnlocked()) {
-      setUnlockedNow(true);
+      markUnlockedNow();
     }
-  }, [uid, localSynthetic]);
+  }, [uid, localSynthetic, markUnlockedNow, clearUnlockedNow]);
 
   /** EXE multi-tab: pehle wale tab me unlock hone par nayi / khuli tab bhi gate hata de. */
   useEffect(() => {
@@ -116,13 +112,13 @@ export function EmbeddedDeviceLockGate() {
     const onStorage = (e: StorageEvent) => {
       if (e.key !== "pl_embedded_unlock_exe_boot_v1") return;
       if (isEmbeddedSessionUnlocked()) {
-        setUnlockedNow(true);
+        markUnlockedNow();
         setUnlockBump((b) => b + 1);
       }
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
-  }, [shellKind, uid, localSynthetic]);
+  }, [shellKind, uid, localSynthetic, markUnlockedNow]);
 
   useEffect(() => {
     if (!isApk || !uid || localSynthetic) return;
@@ -130,7 +126,7 @@ export function EmbeddedDeviceLockGate() {
     void import("@capacitor/app").then(({ App }) => {
       void App.addListener("resume", () => {
         if (isEmbeddedSessionUnlocked()) {
-          setUnlockedNow(true);
+          markUnlockedNow();
           setUnlockBump((b) => b + 1);
         }
       }).then((h) => {
@@ -138,7 +134,7 @@ export function EmbeddedDeviceLockGate() {
       });
     });
     return () => remove?.();
-  }, [isApk, uid, localSynthetic]);
+  }, [isApk, uid, localSynthetic, markUnlockedNow]);
 
   const bioUnlockInFlightRef = useRef(false);
 
@@ -207,6 +203,12 @@ export function EmbeddedDeviceLockGate() {
     }, 400);
     return () => window.clearTimeout(t);
   }, [needsGate, setupMode, isApk, bioEnabled, busy, uid, onUnlockBiometric]);
+
+  useEffect(() => {
+    if (!needsGate || setupMode) return;
+    const t = window.setTimeout(() => pinInputRef.current?.focus(), 80);
+    return () => window.clearTimeout(t);
+  }, [needsGate, setupMode]);
 
   /** APK: pehle user PIN verify, phir biometric keystore — bina PIN ke fingerprint/face band. */
   const validateSetupPinFields = (): boolean => {
@@ -352,14 +354,19 @@ export function EmbeddedDeviceLockGate() {
   return (
     <div
       className={cn(
-        "fixed inset-0 z-[10050] flex items-center justify-center bg-background/95 p-4 backdrop-blur-sm",
+        "fixed inset-0 z-[10100] isolate flex items-center justify-center bg-background p-4",
       )}
       role="dialog"
       aria-modal="true"
       aria-label="App lock"
     >
       {/* APK: card ko screen center se ~20vh neeche — one-hand thumb reach */}
-      <Card className={cn("w-full max-w-md shadow-lg", isApk && "translate-y-[20vh]")}>
+      <Card
+        className={cn(
+          "relative z-[1] w-full max-w-md shadow-lg pointer-events-auto touch-manipulation",
+          isApk && "translate-y-[20vh]",
+        )}
+      >
         <CardHeader>
           <CardTitle>{setupMode ? (isApk ? "Set up app lock" : "Set app PIN") : "Unlock app"}</CardTitle>
           <CardDescription>
@@ -480,6 +487,7 @@ export function EmbeddedDeviceLockGate() {
                     <Label htmlFor="pl-embed-unlock">{isApk ? "Backup PIN (optional)" : "PIN"}</Label>
                     <Input
                       id="pl-embed-unlock"
+                      ref={pinInputRef}
                       type="password"
                       inputMode="numeric"
                       autoComplete="one-time-code"

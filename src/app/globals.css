@@ -596,17 +596,25 @@ body.theme-colorfull [data-theme-table="transactions"] table tfoot td {
   box-shadow: inset 0 -1px 0 0 #000;
 }
 
-/* Transaction row horizontal separators — box-shadow (zoom par 1px border kabhi gayab na ho) */
+/* Transaction row horizontal separators — inset shadow, pseudo overlay nahi.
+   Stack above the next row so selected/hover top chrome cannot hide the line
+   (especially on narration-less rows where the separator lives on the main row). */
+[data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]),
+[data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) {
+  position: relative;
+  z-index: 1;
+  border-bottom-width: 0 !important;
+  border-bottom-color: transparent !important;
+}
 [data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td,
 [data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td {
   border-bottom-width: 0 !important;
   border-bottom-color: transparent !important;
-  box-shadow: inset 0 -1px 0 0 #000;
+  box-shadow: inset 0 -1.5px 0 0 #000;
 }
-[data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]),
-[data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) {
-  border-bottom-width: 0 !important;
-  border-bottom-color: transparent !important;
+/* Narration-less: keep content clear of the bottom separator / next-row chrome */
+[data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td {
+  padding-bottom: 0.25rem !important;
 }
 
 /* Spend-wise group card: cards ke beech line nahi — sirf card ke andar txn separator row se */
@@ -1753,10 +1761,18 @@ button.day_selected.is-today.has-transactions {
     border-right-width: 0 !important;
   }
   /* 4K: zoom-stable txn row separators (td inset shadow, not 3px border-bottom) */
+  [data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]),
+  [data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) {
+    position: relative;
+    z-index: 1;
+  }
   [data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td,
   [data-theme-table="transactions"] tbody tr.transaction-main-row + tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td {
     border-bottom-width: 0 !important;
     box-shadow: inset 0 -1px 0 0 #000;
+  }
+  [data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td {
+    padding-bottom: 0.25rem !important;
   }
   [data-pl-spend-group-card] tbody tr.spend-wise-inner-txn-sep > td {
     padding: 0 !important;
@@ -4441,7 +4457,8 @@ body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.narration-
   background-color: rgb(67 20 7 / 0.35) !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td {
-  box-shadow: inset 0 2px 0 0 #fb923c !important;
+  /* Black hairline above orange so previous row's separator isn't eaten by selection chrome */
+  box-shadow: inset 0 1.5px 0 0 #000, inset 0 3.5px 0 0 #fb923c !important;
   border-radius: 0 !important;
   overflow: visible !important;
 }
@@ -4452,21 +4469,21 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-mai
   border-top-width: 0 !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not(:has(+ .narration-row)) > td {
-  box-shadow: inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+  box-shadow: inset 0 1.5px 0 0 #000, inset 0 3.5px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td:first-child {
-  box-shadow: inset 2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c !important;
+  box-shadow: inset 2px 0 0 0 #fb923c, inset 0 1.5px 0 0 #000, inset 0 3.5px 0 0 #fb923c !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not(:has(+ .narration-row)) > td:first-child {
-  box-shadow: inset 2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+  box-shadow: inset 2px 0 0 0 #fb923c, inset 0 1.5px 0 0 #000, inset 0 3.5px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
   border-top-left-radius: 0.75rem !important;
   border-bottom-left-radius: 0.75rem !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td:last-child {
-  box-shadow: inset -2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c !important;
+  box-shadow: inset -2px 0 0 0 #fb923c, inset 0 1.5px 0 0 #000, inset 0 3.5px 0 0 #fb923c !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not(:has(+ .narration-row)) > td:last-child {
-  box-shadow: inset -2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+  box-shadow: inset -2px 0 0 0 #fb923c, inset 0 1.5px 0 0 #000, inset 0 3.5px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
   border-top-right-radius: 0.75rem !important;
   border-bottom-right-radius: 0.75rem !important;
 }
@@ -4484,7 +4501,12 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-mai
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:has(+ .narration-row[data-pl-txn-selected]) > td:not(:first-child):not(:last-child) {
   border-radius: 0 !important;
-  box-shadow: inset 0 2px 0 0 #fb923c !important;
+  box-shadow: inset 0 1.5px 0 0 #000, inset 0 3.5px 0 0 #fb923c !important;
+}
+/* Avoid double line: previous txn separator off when next main is selected (line is on selected top) */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not(:has(+ .narration-row)):not([data-pl-txn-selected]):has(+ .transaction-main-row[data-pl-txn-selected]) > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row:not([data-pl-txn-selected]):has(+ .transaction-main-row[data-pl-txn-selected]) > td {
+  box-shadow: none !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td {
   box-shadow: inset 0 -2px 0 0 #fb923c !important;
@@ -4969,6 +4991,123 @@ body.theme-pro main .pl-dashboard-tone-card.rounded-lg.border.bg-card.pl-dashboa
 .dark body[class*="theme-"] main .pl-dashboard-tone-card.rounded-lg.border.bg-card.pl-dashboard-ribbon-indigo,
 .dark body.theme-pro main .pl-dashboard-tone-card.rounded-lg.border.bg-card.pl-dashboard-ribbon-indigo {
   border-color: rgb(129 140 248 / 0.7) !important;
+}
+
+/* Backup & Restore — inner boxes + file/select controls: border card hue se match. */
+body[class*="theme-"] main .pl-backup-soft-box-emerald,
+body.theme-pro main .pl-backup-soft-box-emerald {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(16 185 129 / 0.85) !important;
+  background-color: rgba(236, 253, 245, 0.45) !important;
+}
+body[class*="theme-"] main .pl-backup-soft-box-sky,
+body.theme-pro main .pl-backup-soft-box-sky {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(14 165 233 / 0.85) !important;
+  background-color: rgba(224, 242, 254, 0.45) !important;
+}
+body[class*="theme-"] main select.pl-backup-control-sky,
+body.theme-pro main select.pl-backup-control-sky,
+body[class*="theme-"] main input.pl-backup-control-emerald,
+body.theme-pro main input.pl-backup-control-emerald {
+  border-width: 1px !important;
+  border-style: solid !important;
+}
+body[class*="theme-"] main select.pl-backup-control-sky,
+body.theme-pro main select.pl-backup-control-sky {
+  border-color: rgb(14 165 233 / 0.85) !important;
+}
+body[class*="theme-"] main input.pl-backup-control-emerald,
+body.theme-pro main input.pl-backup-control-emerald {
+  border-color: rgb(16 185 129 / 0.85) !important;
+}
+
+/* Backup & Restore / Server — pills, fields, checkboxes under green / sky tone cards. */
+body[class*="theme-"] main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald select,
+body[class*="theme-"] main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald select,
+body[class*="theme-"] main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+body[class*="theme-"] main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+body[class*="theme-"] main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald textarea,
+body[class*="theme-"] main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald textarea,
+body[class*="theme-"] main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald .pl-chrome-btn-drop,
+body[class*="theme-"] main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald .pl-chrome-btn-drop,
+body.theme-pro main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald select,
+body.theme-pro main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald select,
+body.theme-pro main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+body.theme-pro main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+body.theme-pro main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald textarea,
+body.theme-pro main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald textarea,
+body.theme-pro main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald .pl-chrome-btn-drop,
+body.theme-pro main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald .pl-chrome-btn-drop {
+  border-color: rgb(16 185 129 / 0.85) !important;
+}
+body[class*="theme-"] main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky select,
+body[class*="theme-"] main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky select,
+body[class*="theme-"] main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+body[class*="theme-"] main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+body[class*="theme-"] main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky textarea,
+body[class*="theme-"] main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky textarea,
+body[class*="theme-"] main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky .pl-chrome-btn-drop,
+body[class*="theme-"] main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky .pl-chrome-btn-drop,
+body.theme-pro main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky select,
+body.theme-pro main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky select,
+body.theme-pro main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+body.theme-pro main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+body.theme-pro main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky textarea,
+body.theme-pro main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky textarea,
+body.theme-pro main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky .pl-chrome-btn-drop,
+body.theme-pro main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky .pl-chrome-btn-drop {
+  border-color: rgb(14 165 233 / 0.85) !important;
+}
+body[class*="theme-"] main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald button.pl-chrome-btn-drop:not(.bg-primary):not(.bg-destructive),
+body[class*="theme-"] main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald button.pl-chrome-btn-drop:not(.bg-primary):not(.bg-destructive),
+body.theme-pro main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald button.pl-chrome-btn-drop:not(.bg-primary):not(.bg-destructive),
+body.theme-pro main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald button.pl-chrome-btn-drop:not(.bg-primary):not(.bg-destructive) {
+  border-color: rgb(16 185 129 / 0.85) !important;
+}
+body[class*="theme-"] main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky button.pl-chrome-btn-drop:not(.bg-primary):not(.bg-destructive),
+body[class*="theme-"] main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky button.pl-chrome-btn-drop:not(.bg-primary):not(.bg-destructive),
+body.theme-pro main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky button.pl-chrome-btn-drop:not(.bg-primary):not(.bg-destructive),
+body.theme-pro main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky button.pl-chrome-btn-drop:not(.bg-primary):not(.bg-destructive) {
+  border-color: rgb(14 165 233 / 0.85) !important;
+}
+body[class*="theme-"] main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald .pl-backup-checkbox-emerald,
+body[class*="theme-"] main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald .pl-backup-checkbox-emerald,
+body.theme-pro main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald .pl-backup-checkbox-emerald,
+body.theme-pro main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-emerald .pl-backup-checkbox-emerald {
+  border-color: rgb(16 185 129 / 0.85) !important;
+}
+body[class*="theme-"] main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky .pl-backup-checkbox-sky,
+body[class*="theme-"] main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky .pl-backup-checkbox-sky,
+body.theme-pro main [data-pl-backup-restore] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky .pl-backup-checkbox-sky,
+body.theme-pro main [data-pl-server-settings] .pl-dashboard-tone-card.pl-dashboard-ribbon-sky .pl-backup-checkbox-sky {
+  border-color: rgb(14 165 233 / 0.85) !important;
+}
+body[class*="theme-"] [data-pl-backup-dialog="emerald"] input:not([type="checkbox"]):not([type="radio"]),
+body[class*="theme-"] [data-pl-backup-dialog="emerald"] select,
+body[class*="theme-"] [data-pl-backup-dialog="emerald"] textarea,
+body.theme-pro [data-pl-backup-dialog="emerald"] input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro [data-pl-backup-dialog="emerald"] select,
+body.theme-pro [data-pl-backup-dialog="emerald"] textarea {
+  border-color: rgb(16 185 129 / 0.85) !important;
+}
+body[class*="theme-"] [data-pl-backup-dialog="sky"] input:not([type="checkbox"]):not([type="radio"]),
+body[class*="theme-"] [data-pl-backup-dialog="sky"] select,
+body[class*="theme-"] [data-pl-backup-dialog="sky"] textarea,
+body.theme-pro [data-pl-backup-dialog="sky"] input:not([type="checkbox"]):not([type="radio"]),
+body.theme-pro [data-pl-backup-dialog="sky"] select,
+body.theme-pro [data-pl-backup-dialog="sky"] textarea {
+  border-color: rgb(14 165 233 / 0.85) !important;
+}
+body[class*="theme-"] [data-pl-backup-dialog="emerald"] button.pl-chrome-btn-drop:not(.bg-primary):not(.bg-destructive),
+body.theme-pro [data-pl-backup-dialog="emerald"] button.pl-chrome-btn-drop:not(.bg-primary):not(.bg-destructive) {
+  border-color: rgb(16 185 129 / 0.85) !important;
+}
+body[class*="theme-"] [data-pl-backup-dialog="sky"] button.pl-chrome-btn-drop:not(.bg-primary):not(.bg-destructive),
+body.theme-pro [data-pl-backup-dialog="sky"] button.pl-chrome-btn-drop:not(.bg-primary):not(.bg-destructive) {
+  border-color: rgb(14 165 233 / 0.85) !important;
 }
 
 /* App chrome (header / sidebar / dashboard footer shell) — border card ke hue se match. */

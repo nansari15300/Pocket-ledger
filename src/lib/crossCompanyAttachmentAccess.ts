@@ -190,11 +190,14 @@ export function filterVoucherAttachmentsForCompanyContext<T extends Record<strin
 ): T {
   const policy = accessibleCompanyIds ?? getCrossCompanyAttachmentAccessPolicy().accessibleCompanyIds;
   const out: Record<string, unknown> = { ...voucher };
-  const raw = normalizeFileUrlsField(out.fileUrls);
   if (out.fileUrls !== undefined && out.fileUrls !== null) {
-    out.fileUrls = raw.filter(
-      (u) => typeof u !== "string" || isCrossCompanyAttachmentVisibleToUser(u, activeCompanyId, policy)
-    );
+    const raw = Array.isArray(out.fileUrls)
+      ? out.fileUrls
+      : normalizeFileUrlsField(out.fileUrls);
+    out.fileUrls = raw.filter((u) => {
+      if (typeof File !== "undefined" && u instanceof File) return true;
+      return typeof u === "string" && isCrossCompanyAttachmentVisibleToUser(u, activeCompanyId, policy);
+    });
   }
   const uf = out.unassignedFile;
   if (uf && typeof uf === "object") {

@@ -147,6 +147,16 @@ export function CreateTaxForm({
   }, [prefillName, form]);
 
   React.useEffect(() => {
+    const handlePrefillName = (event: Event) => {
+      const ce = event as CustomEvent<string>;
+      const name = String(ce.detail || "").trim();
+      if (name) form.setValue("name", name, { shouldDirty: true, shouldValidate: true });
+    };
+    document.addEventListener("prefill-create-tax-name", handlePrefillName as EventListener);
+    return () => document.removeEventListener("prefill-create-tax-name", handlePrefillName as EventListener);
+  }, [form]);
+
+  React.useEffect(() => {
     let alive = true;
     (async () => {
       if (!companyId || !user?.uid) return;

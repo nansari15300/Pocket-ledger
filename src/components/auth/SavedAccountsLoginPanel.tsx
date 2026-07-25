@@ -80,7 +80,7 @@ export function SavedAccountsLoginPanel({ onBack }: Props) {
   const signInWithAnotherGoogleAccount = async () => {
     setBusyOther(true);
     try {
-      const result = await signInWithGoogleForApp();
+      const result = await signInWithGoogleForApp({ forceAccountPicker: true });
       if (result?.user) {
         navigateAfterAuth(result.user.uid, result.user.email);
       }

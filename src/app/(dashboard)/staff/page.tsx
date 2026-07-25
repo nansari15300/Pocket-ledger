@@ -561,7 +561,7 @@ function StaffPageContent() {
             // Typically: Cr (Payable) = Red, Dr (Advance) = Green
             totalBalance >= 0 ? "text-green-600" : "text-red-600"
         )}>
-            {formatCurrency(totalBalance, { showDrCr: true, noAnimation: true })}
+            {formatCurrency(totalBalance, { showDrCr: true })}
         </span>
       }
       tabs={isMobile ? undefined : staffTabsEl}
@@ -593,4 +593,3 @@ export default function StaffPage() {
   );
 }
 
-    

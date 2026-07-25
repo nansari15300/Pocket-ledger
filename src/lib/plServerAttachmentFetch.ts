@@ -9,15 +9,51 @@ import {
   getLocalFileRefMetaSync,
   isLocalFileRef,
   LOCAL_FILE_PREFIX,
+  putPendingFile,
 } from "@/lib/localPendingFiles";
-import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
-import { readDevClientAccessToken } from "@/lib/plServerAccessContext";
+import { isPlRemoteServerClientMode, isPlSharingServerPortOrigin } from "@/lib/plRemoteServerClient";
 import { normalizeAttachmentUrlForDevicePreview } from "@/lib/attachmentHoldClipboard";
 import { usesEmbeddedNativeAttachmentStorage } from "@/lib/usesEmbeddedNativeAttachmentStorage";
 import { getBlobFromAttachmentRefPreferLocalFirst } from "@/lib/attachmentPreviewResolve";
 import { sniffBlobKindForPreview } from "@/lib/attachmentFormatLabel";
 import { isLocalAppServerHost } from "@/lib/localAppServerDevPreview";
-import { resolvePlServerHostLoopbackTransport } from "@/lib/plServerHostMirrorPublish";
+import { resolvePlServerHostLoopbackTransport } from "@/lib/plServerHostDeltaPublish";
+
+const PL_SERVER_ATTACHMENT_FETCH_CONCURRENCY = 3;
+let activePlServerAttachmentFetches = 0;
+const plServerAttachmentFetchQueue: Array<() => void> = [];
+const inFlightPlServerAttachmentFetches = new Map<string, Promise<Blob | null>>();
+
+function runWithPlServerAttachmentFetchSlot<T>(task: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const run = () => {
+      activePlServerAttachmentFetches += 1;
+      task()
+        .then(resolve, reject)
+        .finally(() => {
+          activePlServerAttachmentFetches = Math.max(0, activePlServerAttachmentFetches - 1);
+          const next = plServerAttachmentFetchQueue.shift();
+          if (next) next();
+        });
+    };
+    if (activePlServerAttachmentFetches < PL_SERVER_ATTACHMENT_FETCH_CONCURRENCY) run();
+    else plServerAttachmentFetchQueue.push(run);
+  });
+}
+
+async function waitForPlServerAttachmentFetch(
+  task: Promise<Blob | null>,
+  signal?: AbortSignal
+): Promise<Blob | null> {
+  if (!signal) return task;
+  if (signal.aborted) return null;
+  return Promise.race([
+    task,
+    new Promise<Blob | null>((resolve) => {
+      signal.addEventListener("abort", () => resolve(null), { once: true });
+    }),
+  ]);
+}
 
 /** LAN `/__pl_attachment` kabhi `application/octet-stream` bhejta hai — PDF.js / sniff branch ke liye type fix. */
 async function normalizePlServerAttachmentBlob(blob: Blob, contentType?: string | null): Promise<Blob> {
@@ -38,6 +74,50 @@ async function normalizePlServerAttachmentBlob(blob: Blob, contentType?: string 
     return new Blob([await blob.arrayBuffer()], { type: mime });
   }
   return blob;
+}
+
+async function seedPlServerAttachmentUiCaches(localRef: string, blob: Blob): Promise<void> {
+  if (!localRef || !blob?.size) return;
+  await import("@/lib/offlineAttachmentUrlCache")
+    .then((m) => m.seedOfflineAttachmentCacheFromBlob(localRef, blob))
+    .catch(() => false);
+  try {
+    const objectUrl = URL.createObjectURL(blob);
+    const { rememberHoverBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
+    rememberHoverBlobUrl(localRef, objectUrl);
+    rememberHoverBlobUrl(`${localRef}::cell-thumb`, objectUrl);
+    const { markAttachmentUrlReady } = await import("@/lib/attachmentLoadReady");
+    markAttachmentUrlReady(localRef);
+  } catch {
+    /* preview seed optional */
+  }
+}
+
+async function persistFetchedPlServerAttachmentRef(
+  companyId: string,
+  ref: string,
+  blob: Blob
+): Promise<void> {
+  const cid = String(companyId || "").trim();
+  const id = String(ref || "").replace(/^local:/, "").trim();
+  if (!cid || !id || !blob?.size) return;
+  try {
+    await putPendingFile(
+      {
+        id,
+        blob,
+        contentType: blob.type || "application/octet-stream",
+        docPath: `companies/${cid}/vouchers/${id}`,
+        field: "fileUrls",
+        storagePathPrefix: `voucher-files/${cid}/pl-server`,
+        fileName: id,
+        requireSqliteIndex: usesEmbeddedNativeAttachmentStorage(),
+      },
+      { skipPlServerAttachmentUploadEnqueue: true }
+    );
+  } catch {
+    /* offline cache above is enough for preview; pending-file hydration is best-effort */
+  }
 }
 
 /** Staff preview/open: pehle local bytes (host), phir `/__pl_attachment` se server fetch. */
@@ -76,6 +156,27 @@ export async function resolvePlServerStaffAttachmentPreviewBlob(
       /* cache optional */
     }
 
+    /** Staff / gate tab: bytes host par — local SQLite/disk scan slow + spinner loop; server pehle. */
+    if ((isPlRemoteServerClientMode() || isPlSharingServerPortOrigin()) && cid) {
+      const remoteEarly = await fetchPlServerAttachmentBlob(cid, u, linked);
+      if (remoteEarly && remoteEarly.size > 0) {
+        void import("@/lib/offlineAttachmentUrlCache").then((m) =>
+          m.seedOfflineAttachmentCacheFromBlob(u, remoteEarly)
+        );
+        try {
+          const objectUrl = URL.createObjectURL(remoteEarly);
+          const { rememberHoverBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
+          rememberHoverBlobUrl(u, objectUrl);
+          rememberHoverBlobUrl(`${u}::cell-thumb`, objectUrl);
+          const { markAttachmentUrlReady } = await import("@/lib/attachmentLoadReady");
+          markAttachmentUrlReady(u);
+        } catch {
+          /* preview seed optional */
+        }
+        return remoteEarly;
+      }
+    }
+
     if (usesEmbeddedNativeAttachmentStorage()) {
       const meta = getLocalFileRefMetaSync(u) ?? (await getLocalFileRefMeta(u));
       if (meta?.filePath || meta?.fileUri) {
@@ -92,7 +193,23 @@ export async function resolvePlServerStaffAttachmentPreviewBlob(
 
     if (cid) {
       const remote = await fetchPlServerAttachmentBlob(cid, u, linked);
-      if (remote && remote.size > 0) return remote;
+      if (remote && remote.size > 0) {
+        // Next open / tile: host re-fetch skip — staff device pe cache seed.
+        void import("@/lib/offlineAttachmentUrlCache").then((m) =>
+          m.seedOfflineAttachmentCacheFromBlob(u, remote)
+        );
+        try {
+          const objectUrl = URL.createObjectURL(remote);
+          const { rememberHoverBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
+          rememberHoverBlobUrl(u, objectUrl);
+          rememberHoverBlobUrl(`${u}::cell-thumb`, objectUrl);
+          const { markAttachmentUrlReady } = await import("@/lib/attachmentLoadReady");
+          markAttachmentUrlReady(u);
+        } catch {
+          /* preview seed optional */
+        }
+        return remote;
+      }
     }
     return null;
   };
@@ -115,16 +232,14 @@ function plServerAttachmentRefFromUrl(rawUrl: string): string | null {
 
 function resolvePlServerAttachmentEndpointFromGate(): { baseUrl: string; accessToken: string } | null {
   if (typeof window === "undefined") return null;
-  if (isPlRemoteServerClientMode()) {
-    const token = readDevClientAccessToken();
-    if (!token) return null;
-    return { baseUrl: normalizeServerUrl(window.location.origin), accessToken: token };
+  // Staff thin client OR browser tab on PL sharing port (`:3001`) — same-origin `/__pl_attachment`.
+  if (isPlRemoteServerClientMode() || isPlSharingServerPortOrigin()) {
+    return { baseUrl: normalizeServerUrl(window.location.origin), accessToken: "" };
   }
   const gate = getActiveGate();
   if (gate.type !== "local_server" || !gate.serverUrl) return null;
   const accessToken = resolveLocalServerGateAccessToken(gate);
-  if (!accessToken) return null;
-  return { baseUrl: normalizeServerUrl(gate.serverUrl), accessToken };
+  return { baseUrl: normalizeServerUrl(gate.serverUrl), accessToken: accessToken || "" };
 }
 
 async function resolvePlServerAttachmentEndpoint(
@@ -153,21 +268,38 @@ export async function fetchPlServerAttachmentBlob(
   const endpoint = await resolvePlServerAttachmentEndpoint(cid);
   if (!endpoint?.baseUrl) return null;
 
+  const { resolvePlServerHostCompanyId } = await import("@/lib/plServerHostCompanyId");
+  const hostCompanyId = (await resolvePlServerHostCompanyId(cid)) || cid;
+
   const url = `${endpoint.baseUrl.replace(/\/$/, "")}/__pl_attachment?${new URLSearchParams({
-    companyId: cid,
+    companyId: hostCompanyId,
     ref,
   }).toString()}`;
+  const fetchKey = `${endpoint.baseUrl}|${endpoint.accessToken}|${hostCompanyId}|${ref}`;
 
-  try {
-    const { status, blob, contentType } = await gateHttpFetchBlob(url, endpoint.accessToken, signal);
-    if (status >= 400 || !blob || blob.size <= 0) return null;
-    return await normalizePlServerAttachmentBlob(blob, contentType);
-  } catch {
-    return null;
+  let shared = inFlightPlServerAttachmentFetches.get(fetchKey);
+  if (!shared) {
+    shared = runWithPlServerAttachmentFetchSlot(async () => {
+      try {
+        const { status, blob, contentType } = await gateHttpFetchBlob(url, endpoint.accessToken);
+        if (status >= 400 || !blob || blob.size <= 0) return null;
+        const normalized = await normalizePlServerAttachmentBlob(blob, contentType);
+        await seedPlServerAttachmentUiCaches(`${LOCAL_FILE_PREFIX}${ref}`, normalized);
+        await persistFetchedPlServerAttachmentRef(cid, ref, normalized);
+        return normalized;
+      } catch {
+        return null;
+      }
+    }).finally(() => {
+      inFlightPlServerAttachmentFetches.delete(fetchKey);
+    });
+    inFlightPlServerAttachmentFetches.set(fetchKey, shared);
   }
+  return waitForPlServerAttachmentFetch(shared, signal);
 }
 
 export function canFetchPlServerAttachmentForCompany(companyId?: string | null): boolean {
   if (!String(companyId || "").trim()) return false;
+  if (isPlSharingServerPortOrigin() || isPlRemoteServerClientMode()) return true;
   return resolvePlServerAttachmentEndpointFromGate() != null || isLocalAppServerHost();
 }

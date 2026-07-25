@@ -14,9 +14,9 @@ import {
   isPlServerSharedCompanyRow,
 } from "@/lib/plServerAccessContext";
 import {
-  resolvePlServerMirrorTransport,
+  resolvePlServerDeltaTransport,
   syncPlServerSharedCompanyLive,
-} from "@/lib/plServerClientMirrorPush";
+} from "@/lib/plServerClientDeltaSync";
 import { livePullDevLog } from "@/lib/plServerLivePullDevLog";
 
 export class PlServerAuthoritativeWriteError extends Error {
@@ -59,19 +59,40 @@ export async function shouldRoutePlServerAuthoritativeWrite(
   if (!shouldFetchPlServerAccessContext()) return false;
   if (typeof navigator !== "undefined" && !navigator.onLine) return false;
 
-  const transport = resolvePlServerMirrorTransport(companyId);
+  const transport = resolvePlServerDeltaTransport(companyId);
   if (!transport) return false;
-  if (!transport.gateAllowed && !transport.unlockedLocally) return false;
 
   const id = String(companyId || "").trim();
+  let gateOk = transport.gateAllowed || transport.unlockedLocally;
+  if (!gateOk) {
+    // Staff local id allow-list miss (host id alag) — server_gate company phir bhi Host pe likhe.
+    try {
+      const row = await getLocalCompanyById(id, { includeDeleted: true });
+      if (row && isServerGateCompany(row)) gateOk = true;
+    } catch {
+      /* keep gateOk */
+    }
+  }
+  if (!gateOk) return false;
+
   try {
     const row = await getLocalCompanyById(id, { includeDeleted: true });
     if (row && isLocalServerShareableCompany(row)) return true;
+    // Thin staff / gate-joined company — Host authoritative write (shareable host-only list me nahi hota).
+    if (row && isServerGateCompany(row)) return true;
   } catch {
     /* fall through to shared-company check */
   }
 
   if (isPlServerSharedCompanyRow({ id }, transport.gate.id)) return true;
+
+  try {
+    const { matchPlServerSharedCompanyForLocalId } = await import("@/lib/plServerHostCompanyId");
+    const { getPlServerSharedCompanies } = await import("@/lib/plServerAccessContext");
+    if (matchPlServerSharedCompanyForLocalId(id, getPlServerSharedCompanies())) return true;
+  } catch {
+    /* ignore */
+  }
 
   return false;
 }
@@ -104,13 +125,16 @@ export async function invokePlServerAuthoritativeDocUpsert(
   data: Record<string, unknown>,
   options?: UpsertCompanyBrowserOptions
 ): Promise<void> {
-  const transport = resolvePlServerMirrorTransport(companyId);
+  const transport = resolvePlServerDeltaTransport(companyId);
   if (!transport) {
     throw new PlServerAuthoritativeWriteError("authoritative_transport_unavailable");
   }
 
+  const { resolvePlServerHostCompanyId } = await import("@/lib/plServerHostCompanyId");
+  const hostCompanyId = (await resolvePlServerHostCompanyId(companyId)) || companyId;
+
   const payload = {
-    companyId,
+    companyId: hostCompanyId,
     collectionName,
     docId,
     data: serializeCompanyDocForLocalDb({ ...data, id: docId }),
@@ -121,7 +145,7 @@ export async function invokePlServerAuthoritativeDocUpsert(
   };
 
   const url = `${transport.baseUrl.replace(/\/$/, "")}/__pl_authoritative_company_doc_upsert`;
-  const { status, body } = await gateHttpPost(url, transport.accessToken, payload);
+  const { status, body } = await gateHttpPost(url, transport.accessToken, payload, { timeoutMs: 6_000 });
   const parsed = parseAuthoritativeUpsertResponse(status, body);
   if (!parsed.ok) {
     throw new PlServerAuthoritativeWriteError(parsed.error || "authoritative_upsert_failed");

@@ -5,59 +5,49 @@ import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import {
-  isAutoBackupDue,
+  isAutoBackupDueForCompany,
   readAutoBackupPrefs,
-  saveAutoBackupPrefs,
-  type AutoBackupPrefs,
 } from "@/lib/autoBackupPrefs";
-import {
-  dismissCompanyBackupRunLater,
-  isCompanyBackupRunning,
-  startCompanyBackupRun,
-} from "@/lib/companyBackupRunner";
-import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
+import { runAutoBackupQueue } from "@/lib/autoBackupRunner";
+import { isCompanyBackupRunning } from "@/lib/companyBackupRunner";
 
-/** Dashboard layout — device prefs ke hisaab se scheduled backup (same runner, background). */
+/** Dashboard layout — scheduled auto backup for ticked companies at chosen time. */
 export function AutoBackupScheduler() {
-  const { company, companyId, allCompanies } = useCompany();
+  const { allCompanies } = useCompany();
   const { user } = useAuth();
   const ticking = useRef(false);
 
   useEffect(() => {
-    // Auto backup — device prefs se scheduled backup (web + static/APK/Electron).
     const tick = async () => {
       if (ticking.current || isCompanyBackupRunning()) return;
       const prefs = readAutoBackupPrefs();
-      if (!isAutoBackupDue(prefs)) return;
-      if (!user?.uid || !companyId || !company?.password || !company.isOwned) return;
+      if (!prefs.enabled || prefs.frequency === "off") return;
+      if (!user?.uid) return;
+      if (prefs.companyIds.length === 0) return;
+
+      const dueIds = prefs.companyIds.filter((id) => isAutoBackupDueForCompany(prefs, id));
+      if (dueIds.length === 0) return;
 
       ticking.current = true;
       try {
-        const accountPlanId = resolveEffectiveAccountPlanId(allCompanies, user.uid, company.planId);
-        const result = await startCompanyBackupRun({
-          company,
-          companyId,
+        await runAutoBackupQueue({
+          companyIds: dueIds,
+          allCompanies,
           ownerUid: user.uid,
-          accountPlanId,
-          includeAttachments: isEmbeddedOfflinePreloadClient() && prefs.includeAttachments,
+          ownerEmail: user.email ?? null,
+          resolveAccountPlanId: (c) =>
+            resolveEffectiveAccountPlanId(allCompanies, user.uid, c.planId),
+          markRunsInPrefs: true,
         });
-        if (result.ok) {
-          const next: AutoBackupPrefs = {
-            ...prefs,
-            lastRunAt: Date.now(),
-          };
-          saveAutoBackupPrefs(next);
-          dismissCompanyBackupRunLater(10000);
-        }
       } finally {
         ticking.current = false;
       }
     };
 
     void tick();
-    const id = window.setInterval(() => void tick(), 60 * 60 * 1000);
+    const id = window.setInterval(() => void tick(), 60 * 1000);
     return () => window.clearInterval(id);
-  }, [allCompanies, company, companyId, user?.uid]);
+  }, [allCompanies, user?.uid]);
 
   return null;
 }

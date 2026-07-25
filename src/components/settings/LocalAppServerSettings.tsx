@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,29 +17,35 @@ import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { resolveLocalAppServerAllowed } from "@/lib/localAppServerEntitlement";
 import {
   getElectronLocalServerApi,
-  isElectronLocalServerApiAvailable,
   resolveLocalAppServerSharingPort,
   type LocalAppServerConfig,
   type LocalAppServerRole,
   type LocalAppServerStatus,
 } from "@/lib/electronLocalServer";
 import { LocalPlServerSharePanel } from "@/components/settings/LocalPlServerSharePanel";
-import { isLocalAppServerDevPreview } from "@/lib/localAppServerDevPreview";
+import { LocalPlServerSharedCompaniesPicker } from "@/components/settings/LocalPlServerSharedCompaniesPicker";
+import { SettingsInfoTip, SettingsLabelWithInfo } from "@/components/settings/SettingsInfoTip";
+import { isLocalAppServerDevPreview, isBrowserLoopbackDevHost } from "@/lib/localAppServerDevPreview";
 import {
   buildPlServerInviteUrlList,
   effectiveSelectedInviteUrls,
+  filterPlServerInviteUrlsForRemoteListing,
   isPlServerInviteUrlSelected,
   normalizePlServerListingUrl,
   normalizePublicHostField,
 } from "@/lib/plServerPublicHostUrl";
 import { fetchPublicIpAddress } from "@/lib/fetchPublicIpAddress";
-import { getEmbeddedLockShellKind } from "@/lib/embeddedDeviceLock";
-import { persistDevClientAccessToken, readDevClientAccessToken } from "@/lib/plServerAccessContext";
-import { Copy, Loader2, RefreshCw, Server, Wifi } from "lucide-react";
-import Link from "next/link";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { persistDevClientAccessToken } from "@/lib/plServerAccessContext";
+import { rememberPlServerPortsFromStatus } from "@/lib/plSharingPortRegistry";
+import { normalizeSharedLocalCompanyIds } from "@/lib/plServerHostSharedCompanyIds";
+import { Copy, Loader2, RefreshCw, Server } from "lucide-react";
+import { cn } from "@/lib/utils";
 
-const APK_REMOTE_SERVER_URL_KEY = "pl_apk_client_remote_server_url";
+/** Server page — Backup & Restore jaisa green / sky tone cards. */
+const serverCardSoftSkyBorderCn = "pl-backup-soft-box pl-backup-soft-box-sky rounded-lg";
+const serverCardSoftGreenBorderCn = "pl-backup-soft-box pl-backup-soft-box-emerald rounded-lg";
+const serverCardToneGreenCn = "pl-dashboard-tone-card pl-dashboard-ribbon-emerald shadow-none";
+const serverCardToneSkyCn = "pl-dashboard-tone-card pl-dashboard-ribbon-sky shadow-none";
 
 export function LocalAppServerSettings() {
   const { toast } = useToast();
@@ -49,7 +56,6 @@ export function LocalAppServerSettings() {
   const [draft, setDraft] = useState<LocalAppServerConfig | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [settingsTab, setSettingsTab] = useState<"server" | "client">("server");
   const [publicIpDetecting, setPublicIpDetecting] = useState(false);
   const publicHostUserEditedRef = useRef(false);
   const publicHostDetectGenRef = useRef(0);
@@ -62,84 +68,58 @@ export function LocalAppServerSettings() {
     customUser: customUser as Record<string, unknown> | null,
   });
   const devMode = isLocalAppServerDevPreview();
-  const [isApkShell, setIsApkShell] = useState(false);
-  const [apiAvailable, setApiAvailable] = useState(() => isElectronLocalServerApiAvailable());
-
-  useLayoutEffect(() => {
-    setIsApkShell(getEmbeddedLockShellKind() === "apk");
-  }, []);
+  const loopbackWeb = isBrowserLoopbackDevHost();
+  const [apiAvailable, setApiAvailable] = useState(false);
+  const [apiProbing, setApiProbing] = useState(true);
+  const [plServerUsersCompanyId, setPlServerUsersCompanyId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isApkShell) return;
-    setSettingsTab("client");
-    let remoteServerUrl = "";
-    try {
-      remoteServerUrl = localStorage.getItem(APK_REMOTE_SERVER_URL_KEY) || "";
-    } catch {
-      /* ignore */
-    }
-    setDraft({
-      port: 37123,
-      bindMode: "localhost",
-      appOnlyAccess: true,
-      autoStartOnBoot: false,
-      userWantsRunning: false,
-      appRole: "client",
-      remoteServerUrl,
-      clientAccessToken: readDevClientAccessToken(),
-      publicHost: "",
-      requireRemoteAccessToken: true,
-      selectedInviteUrls: [],
-    });
-    setLoading(false);
-  }, [isApkShell]);
-
-  useEffect(() => {
-    if (isApkShell) return;
-    if (isElectronLocalServerApiAvailable()) {
-      setApiAvailable(true);
-      return;
-    }
     let cancelled = false;
     void (async () => {
+      if (typeof window !== "undefined" && (window as unknown as { plElectronLocalServer?: unknown }).plElectronLocalServer) {
+        if (!cancelled) {
+          setApiAvailable(true);
+          setApiProbing(false);
+        }
+        return;
+      }
+      if (process.env.NODE_ENV === "development" || process.env.NEXT_PUBLIC_PL_DEV_LOCAL_SERVER === "1") {
+        if (!cancelled) {
+          setApiAvailable(true);
+          setApiProbing(false);
+        }
+        return;
+      }
+      if (!loopbackWeb) {
+        if (!cancelled) setApiProbing(false);
+        return;
+      }
       try {
         const res = await fetch("/api/dev-pl-local-server", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "getStatus" }),
         });
-        if (!cancelled && res.ok) setApiAvailable(true);
+        if (!cancelled) setApiAvailable(res.ok);
       } catch {
-        /* dev API not running */
+        if (!cancelled) setApiAvailable(false);
+      } finally {
+        if (!cancelled) setApiProbing(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [isApkShell]);
-
-  const saveApkClientConnect = () => {
-    if (!draft) return;
-    setBusy(true);
-    try {
-      persistDevClientAccessToken(draft.clientAccessToken);
-      try {
-        const url = draft.remoteServerUrl.trim();
-        if (url) localStorage.setItem(APK_REMOTE_SERVER_URL_KEY, url);
-        else localStorage.removeItem(APK_REMOTE_SERVER_URL_KEY);
-      } catch {
-        /* ignore */
-      }
-      toast({
-        title: "Saved",
-        description: "Open Gate to connect and pick a company from the server.",
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
+  }, [loopbackWeb]);
 
   const isServerRole = draft?.appRole === "server" || draft?.appRole === "both";
+
+  const plServerUsersCompanyName = useMemo(() => {
+    if (!plServerUsersCompanyId) return "";
+    return (
+      allCompaniesRegistry.find((c) => c.id === plServerUsersCompanyId)?.name || plServerUsersCompanyId
+    );
+  }, [allCompaniesRegistry, plServerUsersCompanyId]);
 
   const inviteUrlOptions = useMemo(() => {
     if (!status || !draft || !isServerRole) return [] as string[];
@@ -151,6 +131,11 @@ export function LocalAppServerSettings() {
       port,
     });
   }, [status, draft, isServerRole]);
+
+  const inviteUrlDisplayOptions = useMemo(
+    () => filterPlServerInviteUrlsForRemoteListing(inviteUrlOptions),
+    [inviteUrlOptions]
+  );
 
   const toggleInviteUrlSelection = useCallback(
     (url: string, checked: boolean) => {
@@ -211,8 +196,11 @@ export function LocalAppServerSettings() {
     if (loading || !draft || !isServerRole) return;
     if (draft.bindMode === "localhost") return;
     if (draft.publicHost.trim()) return;
-    void autoDetectPublicHost();
-  }, [loading, draft?.bindMode, draft?.appRole, draft?.publicHost, isServerRole, autoDetectPublicHost]);
+    const timer = window.setTimeout(() => {
+      void autoDetectPublicHost();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loading, draft, isServerRole, autoDetectPublicHost]);
 
   const refresh = useCallback(async () => {
     const api = getElectronLocalServerApi();
@@ -222,6 +210,7 @@ export function LocalAppServerSettings() {
     }
     try {
       const [st, cfg] = await Promise.all([api.getStatus(), api.getConfig()]);
+      rememberPlServerPortsFromStatus(st);
       setStatus(st);
       setDraft(cfg);
       publicHostUserEditedRef.current = Boolean(cfg.publicHost?.trim());
@@ -237,9 +226,11 @@ export function LocalAppServerSettings() {
   }, [toast]);
 
   useEffect(() => {
-    if (isApkShell) return;
-    void refresh();
-  }, [refresh, isApkShell]);
+    const timer = window.setTimeout(() => {
+      void refresh();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [refresh]);
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -260,7 +251,27 @@ export function LocalAppServerSettings() {
     }
   };
 
-  if (!apiAvailable && !isApkShell) {
+  if (apiProbing) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Server className="h-5 w-5" />
+            Server
+          </CardTitle>
+          <CardDescription>Checking local server bridge…</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading…
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!apiAvailable) {
     return (
       <Card>
         <CardHeader>
@@ -269,10 +280,9 @@ export function LocalAppServerSettings() {
             Server
           </CardTitle>
           <CardDescription>
-            Browser dev: run <code className="text-xs">npm run dev</code> (not only the static server on port 3000), then
-            refresh. Packaged app: use Pocket Ledger EXE / Linux. If you opened{" "}
-            <code className="text-xs">http://localhost:3000</code> from an old side-server, stop it with{" "}
-            <code className="text-xs">npm run dev:server:stop</code> and use Next dev instead.
+            Browser web dev: run <code className="text-xs">npm run dev</code> on this PC (Next.js with API routes),
+            then open <code className="text-xs">http://localhost:3000</code> — static-only side servers cannot host
+            Settings → Server. Packaged app: use Pocket Ledger EXE / Linux.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -301,158 +311,180 @@ export function LocalAppServerSettings() {
     );
   }
 
-  if (isApkShell) {
-    if (loading || !draft) {
-      return (
-        <Card>
-          <CardContent className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading…
-          </CardContent>
-        </Card>
-      );
-    }
-    return (
-      <div className="space-y-4">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Server className="h-5 w-5" />
-              Server
-            </CardTitle>
-            <CardDescription>
-              Connect this device to a Pocket Ledger server on your office PC. Hosting a server is available on desktop
-              (EXE), not on mobile.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-4 rounded-lg border border-dashed p-4">
-              <p className="text-sm font-medium flex items-center gap-2">
-                <Wifi className="h-4 w-4" />
-                Connect to a remote server
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Open Messages when the server owner shares with you — the app connects automatically. Or use Gate to
-                pick a company manually.
-              </p>
-              <div className="space-y-2">
-                <Label htmlFor="pl-apk-remote-url">Server address (optional override)</Label>
-                <Input
-                  id="pl-apk-remote-url"
-                  placeholder="Usually filled from Messages invite"
-                  value={draft.remoteServerUrl}
-                  onChange={(e) => setDraft((d) => (d ? { ...d, remoteServerUrl: e.target.value } : d))}
-                />
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" disabled={busy} onClick={saveApkClientConnect}>
-                  {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Save address
-                </Button>
-                <Button type="button" variant="outline" size="sm" asChild>
-                  <Link href="/messages">Messages</Link>
-                </Button>
-                <Button type="button" variant="outline" size="sm" asChild>
-                  <Link href="/gate">Gate</Link>
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   const saveAndRestart = () =>
     void run(async () => {
       const api = getElectronLocalServerApi();
       if (!api || !draft) return;
       if (devMode) {
-        persistDevClientAccessToken(draft.clientAccessToken);
+        persistDevClientAccessToken("");
       }
       let publicHost = normalizePublicHostField(draft.publicHost, draft.port);
       if (!publicHost && draft.bindMode !== "localhost") {
         const detected = await fetchPublicIpAddress();
         if (detected) publicHost = detected;
       }
-      await api.restart({
+      const result = (await api.restart({
         port: draft.port,
         bindMode: draft.bindMode,
-        appOnlyAccess: draft.appOnlyAccess,
         autoStartOnBoot: draft.autoStartOnBoot,
-        userWantsRunning: draft.autoStartOnBoot ? true : undefined,
+        userWantsRunning: true,
         appRole: draft.appRole,
         remoteServerUrl: draft.remoteServerUrl,
-        clientAccessToken: draft.clientAccessToken,
+        clientAccessToken: "",
         publicHost,
-        requireRemoteAccessToken: draft.requireRemoteAccessToken,
+        requireRemoteAccessToken: false,
+        selectedInviteUrls: draft.selectedInviteUrls,
+        sharedLocalCompanyIds: normalizeSharedLocalCompanyIds(draft.sharedLocalCompanyIds),
+        showServerSwitchInHeader: draft.showServerSwitchInHeader === true,
+      })) as { status?: LocalAppServerStatus };
+      if (result?.status) {
+        setStatus(result.status);
+      }
+      window.dispatchEvent(new Event("pl-server-header-switch-config-changed"));
+      toast({
+        title: "Saved",
+        description: "Reload tabs if pages do not refresh.",
+      });
+    });
+
+  const saveNetworkAndBootSettings = () =>
+    void run(async () => {
+      const api = getElectronLocalServerApi();
+      if (!api || !draft) return;
+      let publicHost = normalizePublicHostField(draft.publicHost, draft.port);
+      if (!publicHost && draft.bindMode !== "localhost") {
+        const detected = await fetchPublicIpAddress();
+        if (detected) {
+          publicHost = detected;
+          setDraft((d) => (d ? { ...d, publicHost: detected } : d));
+        }
+      }
+      await api.setConfig({
+        autoStartOnBoot: draft.autoStartOnBoot,
+        publicHost,
         selectedInviteUrls: draft.selectedInviteUrls,
       });
       toast({
         title: "Saved",
-        description:
-          draft.appRole === "client"
-            ? "Restart the app (close all windows) to connect to the remote server."
-            : "Reload tabs if pages do not refresh.",
+        description: draft.autoStartOnBoot
+          ? "Public address and auto-start on PC restart are saved."
+          : "Public address saved. Auto-start on PC restart is off.",
       });
     });
 
+  const saveServerSetupSettings = () =>
+    void run(async () => {
+      const api = getElectronLocalServerApi();
+      if (!api || !draft) return;
+      const result = await api.restart({
+        appRole: draft.appRole,
+        port: draft.port,
+        bindMode: draft.bindMode,
+        showServerSwitchInHeader: draft.showServerSwitchInHeader === true,
+      });
+      if (result.status) setStatus(result.status);
+      window.dispatchEvent(new Event("pl-server-header-switch-config-changed"));
+      toast({ title: "Server setup saved" });
+    });
+
+  const serverSharingButtons = isServerRole ? (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-9"
+        disabled={busy || (status?.sharingActive ?? status?.running)}
+        onClick={() =>
+          void run(async () => {
+            const api = getElectronLocalServerApi();
+            if (!api) return;
+            await api.start();
+            toast({ title: "Server started" });
+          })
+        }
+      >
+        Start server
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-9"
+        disabled={busy || !(status?.sharingActive ?? status?.running)}
+        onClick={() =>
+          void run(async () => {
+            const api = getElectronLocalServerApi();
+            if (!api) return;
+            await api.stop();
+            toast({ title: "Server stopped" });
+          })
+        }
+      >
+        Stop sharing
+      </Button>
+    </>
+  ) : null;
+
+  const saveSettingsButton = (
+    <Button type="button" disabled={busy} onClick={saveAndRestart}>
+      {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+      Save settings{isServerRole ? " & restart server" : ""}
+    </Button>
+  );
+
+  const topBottomActionBar =
+    !loading && draft ? (
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+        {isServerRole ? (
+          <label className="flex h-9 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm">
+            <Checkbox
+              checked={draft.showServerSwitchInHeader === true}
+              onCheckedChange={(checked) =>
+                setDraft((current) =>
+                  current ? { ...current, showServerSwitchInHeader: checked === true } : current
+                )
+              }
+            />
+            <span>Add switch on header</span>
+          </label>
+        ) : null}
+        {serverSharingButtons}
+        {saveSettingsButton}
+      </div>
+    ) : null;
+
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+    <div className="space-y-4" data-pl-server-settings>
+      <div className="hidden max-md:sr-only md:flex md:flex-wrap md:items-start md:justify-between md:gap-x-4 md:gap-y-3">
+        <div className="min-w-0 space-y-1.5">
+          <h2 className="flex items-center gap-2 text-lg font-semibold leading-none tracking-tight">
             <Server className="h-5 w-5" />
             Server
-          </CardTitle>
-          <CardDescription>
-            <strong>Server settings</strong> — host local companies and share users by Gmail.{" "}
-            <strong>Client connect</strong> — open companies from another PC via Messages invite.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {loading || !draft ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Loading…
-            </div>
-          ) : (
-            <>
-              <Tabs
-                value={settingsTab}
-                onValueChange={(v) => setSettingsTab(v as "server" | "client")}
-                className="w-full"
-              >
-                <TabsList className="grid w-full max-w-md grid-cols-2">
-                  <TabsTrigger value="server" className="gap-1.5">
-                    <Server className="h-3.5 w-3.5" />
-                    Server settings
-                  </TabsTrigger>
-                  <TabsTrigger value="client" className="gap-1.5">
-                    <Wifi className="h-3.5 w-3.5" />
-                    Client connect
-                  </TabsTrigger>
-                </TabsList>
+            <SettingsInfoTip
+              label="Server"
+              description="Host local companies from this PC and share users by Gmail."
+            />
+          </h2>
+        </div>
+        {!loading && draft ? topBottomActionBar : null}
+      </div>
 
-                <TabsContent value="server" className="mt-4 space-y-4">
-              <div className="space-y-2">
-                <Label>This app runs as</Label>
-                <select
-                  className="flex h-9 w-full max-w-md rounded-md border border-input bg-transparent px-3 py-1 text-sm"
-                  value={draft.appRole === "client" ? "server" : draft.appRole}
-                  onChange={(e) =>
-                    setDraft((d) =>
-                      d ? { ...d, appRole: e.target.value as LocalAppServerRole } : d
-                    )
-                  }
-                >
-                  <option value="server">Server only (host for others)</option>
-                  <option value="both">Server + can connect elsewhere</option>
-                </select>
-              </div>
-
-              {isServerRole ? (
-                <div className="space-y-4 rounded-lg border p-4">
+      {loading || !draft ? (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading…
+        </div>
+      ) : (
+        <div className="flex min-w-0 flex-col gap-8">
+          <div className="grid min-w-0 grid-cols-1 gap-8 md:grid-cols-2 md:items-stretch md:gap-6">
+            <Card className={cn("flex h-full min-w-0 flex-col overflow-hidden", serverCardToneGreenCn)}>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Server setup</CardTitle>
+                <CardDescription>Role, port, and listen mode for this PC.</CardDescription>
+              </CardHeader>
+              <CardContent className="min-w-0 space-y-3">
+                {isServerRole ? (
                   <div className="flex flex-wrap items-center gap-2">
                     <span
                       className={
@@ -475,299 +507,310 @@ export function LocalAppServerSettings() {
                         restart again after freeing {status.configuredPort})
                       </span>
                     ) : null}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={busy || (status?.sharingActive ?? status?.running)}
-                      onClick={() =>
-                        void run(async () => {
-                          const api = getElectronLocalServerApi();
-                          if (!api) return;
-                          await api.start();
-                          toast({ title: "Server started" });
-                        })
-                      }
-                    >
-                      Start server
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={busy || !(status?.sharingActive ?? status?.running)}
-                      onClick={() =>
-                        void run(async () => {
-                          const api = getElectronLocalServerApi();
-                          if (!api) return;
-                          await api.stop();
-                          toast({ title: "Server stopped" });
-                        })
-                      }
-                    >
-                      Stop sharing
-                    </Button>
                   </div>
+                ) : null}
 
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-2">
-                      <Label htmlFor="pl-server-port">Port</Label>
-                      <Input
-                        id="pl-server-port"
-                        type="number"
-                        min={1024}
-                        max={65535}
-                        value={draft.port}
-                        onChange={(e) =>
-                          setDraft((d) =>
-                            d ? { ...d, port: Math.min(65535, Math.max(1, Number(e.target.value) || 3000)) } : d
-                          )
-                        }
+                <div className={cn(serverCardSoftGreenBorderCn, "space-y-3 p-3 sm:p-4")}>
+                  <div className="flex flex-wrap items-end gap-x-3 gap-y-4">
+                    <div className="flex w-fit max-w-full shrink-0 flex-col gap-1.5">
+                      <SettingsLabelWithInfo
+                        label="This app runs as"
+                        infoLabel="This app runs as"
+                        infoDescription="Choose Server only or Server + normal app to host companies on this PC."
+                        labelClassName="whitespace-nowrap text-xs sm:text-sm"
                       />
-                      <p className="text-xs text-muted-foreground">
-                        Change here, then <strong>Save settings &amp; restart server</strong> below. Status badge
-                        shows the real listening port (use that in Gate / APK).
-                      </p>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Listen on</Label>
                       <select
-                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
-                        value={draft.bindMode}
+                        className="h-9 w-max max-w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+                        value={draft.appRole === "client" ? "server" : draft.appRole}
                         onChange={(e) =>
                           setDraft((d) =>
-                            d
-                              ? {
-                                  ...d,
-                                  bindMode:
-                                    e.target.value === "lan"
-                                      ? "lan"
-                                      : e.target.value === "internet"
-                                        ? "internet"
-                                        : "localhost",
-                                }
-                              : d
+                            d ? { ...d, appRole: e.target.value as LocalAppServerRole } : d
                           )
                         }
                       >
-                        <option value="localhost">This PC only</option>
-                        <option value="lan">LAN (same network)</option>
-                        <option value="internet">Internet (LAN + port forward)</option>
+                        <option value="server">Server only (host for others)</option>
+                        <option value="both">Server + normal app</option>
                       </select>
                     </div>
-                  </div>
 
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <Label htmlFor="pl-public-host">Public hostname or IP (port forward)</Label>
-                      {draft.bindMode !== "localhost" ? (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 gap-1 text-xs"
-                          disabled={busy || publicIpDetecting}
-                          onClick={() => {
-                            publicHostUserEditedRef.current = false;
-                            setDraft((d) => (d ? { ...d, publicHost: "" } : d));
-                            void autoDetectPublicHost({ force: true });
-                          }}
-                        >
-                          {publicIpDetecting ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <RefreshCw className="h-3 w-3" />
-                          )}
-                          {publicIpDetecting ? "Detecting…" : "Detect public IP"}
-                        </Button>
-                      ) : null}
-                    </div>
-                    <Input
-                      id="pl-public-host"
-                      placeholder={
-                        draft.bindMode === "localhost"
-                          ? "Enable LAN or Internet listen mode for auto-detect"
-                          : publicIpDetecting
-                            ? "Detecting your public IP…"
-                            : "Auto-detected when empty — or enter DDNS hostname"
-                      }
-                      value={draft.publicHost}
-                      onChange={(e) => {
-                        publicHostUserEditedRef.current = true;
-                        setDraft((d) => (d ? { ...d, publicHost: e.target.value } : d));
-                      }}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      {draft.bindMode === "localhost"
-                        ? "Choose LAN or Internet above to auto-fill your public IP for remote share invites."
-                        : publicIpDetecting
-                          ? "Looking up your public IPv4 (ipify / AWS checkip)…"
-                          : draft.publicHost.trim()
-                            ? "Used in share invites. Edit only if you use DDNS instead of raw IP."
-                            : "Will auto-detect on save when this field is empty."}
-                    </p>
-                    {status?.portForwardHint ? (
-                      <p className="text-xs text-muted-foreground">{status.portForwardHint}</p>
+                    {isServerRole ? (
+                      <>
+                        <div className="min-w-[min(100%,5.5rem)] flex-1 basis-[5.5rem] space-y-1.5 sm:max-w-[7rem]">
+                          <SettingsLabelWithInfo
+                            htmlFor="pl-server-port"
+                            label="Port"
+                            infoLabel="Port"
+                            infoDescription={
+                              <>
+                                Change port here, then <strong>Save settings &amp; restart server</strong> below. Status
+                                badge shows the real listening port (use that in Gate / APK).
+                              </>
+                            }
+                            labelClassName="text-xs sm:text-sm"
+                          />
+                          <Input
+                            id="pl-server-port"
+                            type="number"
+                            min={1024}
+                            max={65535}
+                            className="h-9"
+                            value={draft.port}
+                            onChange={(e) =>
+                              setDraft((d) =>
+                                d ? { ...d, port: Math.min(65535, Math.max(1, Number(e.target.value) || 3000)) } : d
+                              )
+                            }
+                          />
+                        </div>
+
+                        <div className="min-w-[min(100%,10rem)] flex-1 basis-[10rem] space-y-1.5 sm:max-w-[14rem]">
+                          <Label className="text-xs sm:text-sm">Listen on</Label>
+                          <select
+                            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+                            value={draft.bindMode}
+                            onChange={(e) =>
+                              setDraft((d) =>
+                                d
+                                  ? {
+                                      ...d,
+                                      bindMode:
+                                        e.target.value === "lan"
+                                          ? "lan"
+                                          : e.target.value === "internet"
+                                            ? "internet"
+                                            : "localhost",
+                                    }
+                                  : d
+                              )
+                            }
+                          >
+                            <option value="localhost">This PC only</option>
+                            <option value="lan">LAN (same network)</option>
+                            <option value="internet">Internet (LAN + port forward)</option>
+                          </select>
+                        </div>
+                      </>
                     ) : null}
                   </div>
-
-                  <div className="flex items-center justify-between rounded-md border p-3">
-                    <div>
-                      <Label htmlFor="pl-require-token">Require access token (remote users)</Label>
-                      <p className="text-xs text-muted-foreground">
-                        Anyone outside this PC must send a token — unknown IPs cannot open company data. Browser
-                        users see a token paste page (or use{" "}
-                        <code className="text-[11px]">?pl_access=YOUR_TOKEN</code> in the URL).
-                      </p>
-                    </div>
-                    <Switch
-                      id="pl-require-token"
-                      checked={draft.requireRemoteAccessToken}
-                      onCheckedChange={(v) => setDraft((d) => (d ? { ...d, requireRemoteAccessToken: v } : d))}
-                    />
+                  <div className="flex justify-end">
+                    <Button type="button" size="sm" className="h-9" disabled={busy} onClick={saveServerSetupSettings}>
+                      {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      Save
+                    </Button>
                   </div>
+                </div>
+              </CardContent>
+            </Card>
 
-                  <div className="flex items-center justify-between rounded-md border p-3">
-                    <div>
-                      <Label htmlFor="pl-app-only">App-only (block browsers)</Label>
-                      <p className="text-xs text-muted-foreground">
-                        When on, Chrome / Edge cannot open the server URL. When off, browsers can open the server after
-                        entering an access token.
-                      </p>
-                    </div>
-                    <Switch
-                      id="pl-app-only"
-                      checked={draft.appOnlyAccess}
-                      onCheckedChange={(v) => setDraft((d) => (d ? { ...d, appOnlyAccess: v } : d))}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between rounded-md border p-3">
-                    <div>
-                      <Label htmlFor="pl-auto-start">Auto-start when PC restarts</Label>
-                      <p className="text-xs text-muted-foreground">
-                        App opens at Windows login and the local sharing server starts automatically after each app
-                        launch (including after installing a new build). Code and disk caches reset on version update.
-                      </p>
-                    </div>
-                    <Switch
-                      id="pl-auto-start"
-                      checked={draft.autoStartOnBoot}
-                      onCheckedChange={(v) =>
-                        setDraft((d) => (d ? { ...d, autoStartOnBoot: v, ...(v ? { userWantsRunning: true } : {}) } : d))
-                      }
-                    />
-                  </div>
-
-                  {inviteUrlOptions.length > 0 ? (
-                    <div className="space-y-2 text-xs">
-                      <div>
-                        <p className="font-medium text-foreground">Server addresses (sent in share invites)</p>
-                        <p className="text-muted-foreground">
-                          Tick the addresses to include in Messages — unticked URLs are not sent.
-                        </p>
-                      </div>
-                      <ul className="space-y-1.5">
-                        {inviteUrlOptions.map((u) => (
-                          <li key={u} className="flex items-start gap-2 rounded-md border bg-background/60 px-2 py-1.5">
-                            <Checkbox
-                              id={`pl-invite-url-${u}`}
-                              className="mt-0.5"
-                              checked={isPlServerInviteUrlSelected(u, inviteUrlOptions, draft?.selectedInviteUrls)}
-                              onCheckedChange={(v) => toggleInviteUrlSelection(u, v === true)}
-                            />
-                            <label
-                              htmlFor={`pl-invite-url-${u}`}
-                              className="min-w-0 flex-1 cursor-pointer break-all font-mono text-muted-foreground"
-                            >
-                              {u}
-                            </label>
+            {isServerRole ? (
+              <Card className={cn("flex h-full min-w-0 flex-col overflow-hidden", serverCardToneSkyCn)}>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Network &amp; access</CardTitle>
+                  <CardDescription>Public address, auto-start, and share invite URLs.</CardDescription>
+                </CardHeader>
+                <CardContent className="min-w-0 space-y-3">
+                  <div className={cn(serverCardSoftSkyBorderCn, "space-y-4 p-3 sm:p-4")}>
+                    <div className="flex flex-wrap items-end gap-x-3 gap-y-4">
+                      <div className="min-w-[min(100%,12rem)] flex-1 basis-0 space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <SettingsLabelWithInfo
+                            htmlFor="pl-public-host"
+                            label="Public hostname or IP (port forward)"
+                            infoLabel="Public hostname or IP"
+                            infoDescription={
+                              <>
+                                <p>Used in share invites. Edit only if you use DDNS instead of raw IP.</p>
+                                {status?.portForwardHint ? (
+                                  <p className="mt-2">{status.portForwardHint}</p>
+                                ) : (
+                                  <p className="mt-2">
+                                    Router me TCP port forward: external port → this PC LAN IP + server port. Firewall me
+                                    port allow karein.
+                                  </p>
+                                )}
+                                {draft.bindMode === "localhost" ? (
+                                  <p className="mt-2">
+                                    Choose LAN or Internet above to auto-fill your public IP for remote share invites.
+                                  </p>
+                                ) : null}
+                                {!draft.publicHost.trim() && draft.bindMode !== "localhost" ? (
+                                  <p className="mt-2">Will auto-detect on save when this field is empty.</p>
+                                ) : null}
+                              </>
+                            }
+                          />
+                          {draft.bindMode !== "localhost" ? (
                             <Button
                               type="button"
                               variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 shrink-0"
-                              onClick={() => void copyText(u, "URL")}
+                              size="sm"
+                              className="h-7 gap-1 text-xs"
+                              disabled={busy || publicIpDetecting}
+                              onClick={() => {
+                                publicHostUserEditedRef.current = false;
+                                setDraft((d) => (d ? { ...d, publicHost: "" } : d));
+                                void autoDetectPublicHost({ force: true });
+                              }}
                             >
-                              <Copy className="h-3 w-3" />
+                              {publicIpDetecting ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <RefreshCw className="h-3 w-3" />
+                              )}
+                              {publicIpDetecting ? "Detecting…" : "Detect public IP"}
                             </Button>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
+                          ) : null}
+                        </div>
+                        <Input
+                          id="pl-public-host"
+                          className="h-9"
+                          placeholder={
+                            draft.bindMode === "localhost"
+                              ? "Enable LAN or Internet listen mode for auto-detect"
+                              : publicIpDetecting
+                                ? "Detecting your public IP…"
+                                : "Auto-detected when empty — or enter DDNS hostname"
+                          }
+                          value={draft.publicHost}
+                          onChange={(e) => {
+                            publicHostUserEditedRef.current = true;
+                            setDraft((d) => (d ? { ...d, publicHost: e.target.value } : d));
+                          }}
+                        />
+                        {publicIpDetecting ? (
+                          <p className="text-xs text-muted-foreground">
+                            Looking up your public IPv4 (ipify / AWS checkip)…
+                          </p>
+                        ) : null}
+                      </div>
 
-                  <div className="border-t pt-4">
-                    <LocalPlServerSharePanel
-                      allCompaniesRegistry={allCompaniesRegistry}
-                      serverStatus={status}
-                      disabled={busy}
-                      variant="settings"
-                    />
-                  </div>
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  Choose <strong>Server only</strong> or <strong>Server + can connect elsewhere</strong> above to host
-                  companies on this PC.
-                </p>
-              )}
-                </TabsContent>
-
-                <TabsContent value="client" className="mt-4 space-y-4">
-                  <div className="space-y-4 rounded-lg border border-dashed p-4">
-                    <p className="text-sm font-medium">Connect to a remote server</p>
-                    <p className="text-xs text-muted-foreground">
-                      When another PC shares with your Gmail, open Messages — the app auto-connects. Use this tab only
-                      to override the server address manually.
-                    </p>
-                    <div className="space-y-2">
-                      <Label htmlFor="pl-remote-url">Server address (optional override)</Label>
-                      <Input
-                        id="pl-remote-url"
-                        placeholder="http://203.0.113.10:37123"
-                        value={draft.remoteServerUrl}
-                        onChange={(e) =>
-                          setDraft((d) =>
-                            d
-                              ? {
-                                  ...d,
-                                  remoteServerUrl: e.target.value,
-                                  appRole:
-                                    d.appRole === "server" && e.target.value.trim()
-                                      ? "both"
-                                      : e.target.value.trim()
-                                        ? "client"
-                                        : d.appRole === "both"
-                                          ? "server"
-                                          : d.appRole,
-                                }
-                              : d
-                          )
-                        }
-                      />
+                      <div className="flex min-w-[min(100%,12rem)] flex-1 basis-0 flex-col gap-1.5">
+                        <SettingsLabelWithInfo
+                          htmlFor="pl-auto-start"
+                          label="Auto-start when PC restarts"
+                          infoLabel="Auto-start when PC restarts"
+                          infoDescription="App opens at Windows login and the local sharing server starts automatically after each app launch (including after installing a new build). Code and disk caches reset on version update."
+                          labelClassName="text-xs sm:text-sm"
+                        />
+                        <div className="flex h-9 w-full items-center justify-center rounded-md border px-3">
+                          <Switch
+                            id="pl-auto-start"
+                            checked={draft.autoStartOnBoot}
+                            onCheckedChange={(v) =>
+                              setDraft((d) =>
+                                d ? { ...d, autoStartOnBoot: v, ...(v ? { userWantsRunning: true } : {}) } : d
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button type="button" variant="outline" size="sm" asChild>
-                        <Link href="/messages">Messages — invites</Link>
+
+                    {inviteUrlDisplayOptions.length > 0 ? (
+                      <div className="space-y-2 text-xs">
+                        <div className="flex items-center gap-1">
+                          <p className="font-medium text-foreground">Server addresses</p>
+                          <SettingsInfoTip
+                            label="Server addresses"
+                            description={
+                              <>
+                                <p>LAN and public IP addresses (sent in share invites).</p>
+                                <p className="mt-1.5">
+                                  Tick the addresses to include in Messages — unticked URLs are not sent.
+                                </p>
+                              </>
+                            }
+                          />
+                        </div>
+                        <ul className="flex flex-wrap gap-2">
+                          {inviteUrlDisplayOptions.map((u) => (
+                            <li
+                              key={u}
+                              className="flex min-w-[min(100%,14rem)] flex-1 items-start gap-2 rounded-md border border-sky-200/70 bg-sky-50/40 px-2 py-1.5"
+                            >
+                              <Checkbox
+                                id={`pl-invite-url-${u}`}
+                                className="pl-backup-checkbox-sky mt-0.5"
+                                checked={isPlServerInviteUrlSelected(u, inviteUrlOptions, draft?.selectedInviteUrls)}
+                                onCheckedChange={(v) => toggleInviteUrlSelection(u, v === true)}
+                              />
+                              <label
+                                htmlFor={`pl-invite-url-${u}`}
+                                className="min-w-0 flex-1 cursor-pointer break-all font-mono text-muted-foreground"
+                              >
+                                {u}
+                              </label>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 shrink-0"
+                                onClick={() => void copyText(u, "URL")}
+                              >
+                                <Copy className="h-3 w-3" />
+                              </Button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+
+                    <div className="flex justify-end pt-1">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-9"
+                        disabled={busy || publicIpDetecting}
+                        onClick={saveNetworkAndBootSettings}
+                      >
+                        {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        Save
                       </Button>
-                      <Button type="button" variant="outline" size="sm" asChild>
-                        <Link href="/gate">Open Gate</Link>
-                      </Button>
                     </div>
                   </div>
-                </TabsContent>
-              </Tabs>
+                </CardContent>
+              </Card>
+            ) : null}
+          </div>
 
-              <Button type="button" disabled={busy} onClick={saveAndRestart}>
-                {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                Save settings
-                {settingsTab === "server" && isServerRole ? " & restart server" : ""}
-              </Button>
+          {isServerRole ? (
+            <>
+              <LocalPlServerSharedCompaniesPicker
+                allCompaniesRegistry={allCompaniesRegistry}
+                configuredIds={draft.sharedLocalCompanyIds}
+                onConfiguredIdsChange={(ids) =>
+                  setDraft((d) => (d ? { ...d, sharedLocalCompanyIds: ids } : d))
+                }
+                selectedCompanyId={plServerUsersCompanyId}
+                onSelectedCompanyIdChange={setPlServerUsersCompanyId}
+                disabled={busy}
+              />
+
+              <Card className={cn("flex h-full min-w-0 flex-col overflow-hidden", serverCardToneSkyCn)}>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Shared users</CardTitle>
+                  <CardDescription>People who can open shared companies on this server.</CardDescription>
+                </CardHeader>
+                <CardContent className="min-w-0">
+                  <LocalPlServerSharePanel
+                    companyId={plServerUsersCompanyId}
+                    companyName={plServerUsersCompanyName}
+                    allCompaniesRegistry={allCompaniesRegistry}
+                    serverStatus={status}
+                    sharedLocalCompanyIds={draft.sharedLocalCompanyIds}
+                    onCompanySelect={setPlServerUsersCompanyId}
+                    disabled={busy}
+                    variant="settings"
+                  />
+                </CardContent>
+              </Card>
             </>
-          )}
-        </CardContent>
-      </Card>
+          ) : null}
+
+          <div className="pt-1">{topBottomActionBar}</div>
+        </div>
+      )}
     </div>
   );
 }

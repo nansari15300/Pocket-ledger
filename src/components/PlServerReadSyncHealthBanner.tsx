@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useCompany } from "@/hooks/useCompany";
+import { useGate } from "@/contexts/GateContext";
 import { isServerGateCompany } from "@/lib/companyStorageKind";
+import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 import {
   getPlServerReadSyncHealth,
   PL_SERVER_READ_SYNC_HEALTH_EVENT,
@@ -62,6 +64,7 @@ function bannerLabel(snap: PlServerReadSyncHealthSnapshot): string | null {
 /** Read-path operator visibility — live pull health only (not pending write queue). */
 export function PlServerReadSyncHealthBanner() {
   const { companyId, company } = useCompany();
+  const { activeGate } = useGate();
   const [snap, setSnap] = useState<PlServerReadSyncHealthSnapshot | null>(null);
 
   const refresh = useCallback(() => {
@@ -83,7 +86,8 @@ export function PlServerReadSyncHealthBanner() {
   const id = String(companyId || "").trim();
   const isServerRow =
     company?.plServerShared === true || (company != null && isServerGateCompany(company));
-  if (!id || !isServerRow || !snap) return null;
+  const serverGateActive = activeGate.type === "local_server" || isPlRemoteServerClientMode();
+  if (!id || !isServerRow || !serverGateActive || !snap) return null;
 
   const label = bannerLabel(snap);
   if (!label) return null;

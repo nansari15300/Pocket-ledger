@@ -2,7 +2,6 @@
 
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { getEmbeddedLockShellKind } from "@/lib/embeddedDeviceLock";
-import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 
 function isElectronPackagedShell(): boolean {
   if (typeof window === "undefined") return false;
@@ -28,15 +27,22 @@ export function isLocalAppServerHost(): boolean {
   return h === "localhost" || h === "127.0.0.1" || h === "[::1]";
 }
 
+/**
+ * Chrome/Edge at localhost — web dev (`npm run dev`) ya `next start` on loopback.
+ * Packaged EXE/APK native bridge use karte hain, is path par nahi.
+ */
+export function isBrowserLoopbackDevHost(): boolean {
+  if (typeof window === "undefined") return false;
+  if (isCapacitorNativeApp() || getEmbeddedLockShellKind() === "exe") return false;
+  if (isElectronPackagedShell()) return false;
+  return isLocalAppServerHost();
+}
+
 /** `npm run dev` — dev-stable sets NEXT_PUBLIC_PL_DEV_LOCAL_SERVER=1 for reliable client detection. */
 export function isLocalhostDevPreview(): boolean {
   if (process.env.NEXT_PUBLIC_PL_DEV_LOCAL_SERVER === "1") return true;
   if (process.env.NODE_ENV === "development") return true;
-  if (typeof window === "undefined") return false;
-  if (isCapacitorNativeApp() || getEmbeddedLockShellKind() === "exe") return false;
-  if (isElectronPackagedShell()) return false;
-  // Next dev on loopback (not static `out/` served by side server)
-  return !isStaticAppBuild() && isLocalAppServerHost();
+  return isBrowserLoopbackDevHost();
 }
 
 export function isLocalAppServerDevPreview(): boolean {

@@ -2,6 +2,8 @@
 
 import { isDeviceLocalCompany } from "@/lib/companyStorageKind";
 import { normalizePlanIdForClient, type PlanId, planTierIndex } from "@/config/plans";
+import { readAccountPlanLocalCache } from "@/lib/accountPlanLocalCache";
+import { resolvePlServerSharedOwnerPlanId } from "@/lib/plServerAccessContext";
 
 /**
  * Account-level plan: highest tier among companies the Firebase user owns.
@@ -37,15 +39,21 @@ export function resolveEffectiveAccountPlanId(
   activeCompanyPlanId: string | undefined | null
 ): PlanId {
   const fromOwned = highestPlanIdAmongOwnedCompanies(allCompanies, firebaseUid);
-  if (fromOwned) return fromOwned;
-  return normalizePlanIdForClient(activeCompanyPlanId);
+  const active = normalizePlanIdForClient(activeCompanyPlanId);
+  const cachedAccount = readAccountPlanLocalCache(firebaseUid);
+  const fromAccount = cachedAccount?.planId ?? null;
+  let best = fromOwned ?? active;
+  if (fromAccount && planTierIndex(fromAccount) > planTierIndex(best)) best = fromAccount;
+  return best;
 }
 
 type CompanyPlanRow = {
+  id?: string;
   planId?: string | null | undefined;
   isOwned?: boolean;
   ownerId?: string;
   ownerEmail?: string | null;
+  plServerShared?: boolean;
 };
 
 /** Firebase user is owner of this company row (billing / account SKU). */
@@ -85,7 +93,12 @@ export function resolvePlanIdForActiveCompany(
   if (isCompanyOwnedByFirebaseUser(company, firebaseUid, firebaseEmail)) {
     return resolveEffectiveAccountPlanId(allCompanies, firebaseUid, company.planId);
   }
-  return normalizePlanIdForClient(company.planId);
+  const rowPlan = normalizePlanIdForClient(company.planId);
+  const fromPlServer = company.id ? resolvePlServerSharedOwnerPlanId(String(company.id)) : null;
+  if (fromPlServer && planTierIndex(fromPlServer) > planTierIndex(rowPlan)) {
+    return fromPlServer;
+  }
+  return rowPlan;
 }
 
 /** Device-local owned row: Firebase account plan overlay (SQLite basic + online Pro). */

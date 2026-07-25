@@ -11,6 +11,10 @@ import {
   IN_APP_ATTACHMENT_PREVIEW_CLICK_SHIELD,
   isInAppAttachmentPreviewOpen,
 } from "@/lib/inAppAttachmentPreviewOpen"
+import {
+  installNativeFilePickerListeners,
+  isNativeFilePickerLikelyOpen,
+} from "@/lib/nativeFilePickerDialogGuard"
 
 /** Radix outside events: target in-app preview / ghost-shield ho ki grace/DOM khula — Edit Transaction dismiss roknu */
 function shouldBlockDismissForInAppAttachmentPreview(ev: { detail?: { originalEvent?: Event } }): boolean {
@@ -84,7 +88,9 @@ const DialogContent = React.forwardRef<
     preventDefault: () => void
   }) => {
     if (shouldBlockDismissForInAppAttachmentPreview(e)) e.preventDefault()
+    if (isNativeFilePickerLikelyOpen()) e.preventDefault()
   }
+  installNativeFilePickerListeners()
   return (
     <DialogPortal>
       {/* overlayClassName: Copy ledger jaise dialogs pe kam blur / halka dim — background party dikhe */}

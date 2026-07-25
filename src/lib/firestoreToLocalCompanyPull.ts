@@ -6,7 +6,7 @@
  * Har change ke saath: yahan se pull = local DB me rows guarantee (decrypt + upsert).
  */
 
-import { collection, getDocs, query } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import type { Company } from "@/hooks/useCompany";
 import {
@@ -221,6 +221,46 @@ export async function pullCompanySubcollectionFromFirestoreToLocalDb(
 
 /** Saari listed subcollections ek baar — manual “download / refresh local cache” ya health check ke liye. */
 /** Full warm sync: parallel pulls — optional progress har subcollection complete par (overlay % ke liye). */
+export async function pullCompanyDocFromFirestoreToLocalDb(
+  fsCompanyId: string,
+  localCompanyId: string,
+  collectionPath: string,
+  docId: string,
+  company: Company | null,
+  options?: { op?: string }
+): Promise<Record<string, unknown> | null> {
+  const fsId = String(fsCompanyId || "").trim();
+  const localId = String(localCompanyId || "").trim();
+  const path = String(collectionPath || "").trim();
+  const id = String(docId || "").trim();
+  if (!fsId || !localId || !path || !id) return null;
+
+  const op = String(options?.op || "").toLowerCase();
+  if (op === "delete" || op === "deleted" || op === "remove" || op === "removed") {
+    await deleteCompanyDocFromBrowserDb(localId, path, id, { force: true, notify: true });
+    return null;
+  }
+
+  const cryptoCtx: ServerBackupCryptoContext | null = company
+    ? { encryptServerBackupSalt: company.encryptServerBackupSalt }
+    : null;
+  const snap = await getDoc(doc(firestore, `companies/${fsId}/${path}`, id));
+  if (!snap.exists()) {
+    await deleteCompanyDocFromBrowserDb(localId, path, id, { force: true, notify: true });
+    return null;
+  }
+  const raw = { ...snap.data(), id: snap.id } as Record<string, unknown> & { id: string };
+  const decrypted = await decryptFirestoreCompanyDocIfNeeded(raw, cryptoCtx, localId);
+  if (!decrypted || (decrypted as { isDeleted?: unknown }).isDeleted === true) {
+    await deleteCompanyDocFromBrowserDb(localId, path, id, { force: true, notify: true });
+    return null;
+  }
+  await mirrorCollectionDocsToBrowserDbSilent(localId, path, [decrypted as Record<string, unknown>], {
+    cloudBackedOfflineCache: !isLocalOnlyMode(),
+  });
+  return decrypted as Record<string, unknown>;
+}
+
 export async function pullAllCompanySubcollectionsFromFirestoreToLocalDb(
   fsCompanyId: string,
   localCompanyId: string,

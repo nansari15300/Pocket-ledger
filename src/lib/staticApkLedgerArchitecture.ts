@@ -2,6 +2,7 @@
 
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
+import { isFirebaseLedgerLocalDeltaMode } from "@/lib/firebaseLedgerSyncMode";
 
 /**
  * Static/APK/EXE embedded shell: ledger reads SQLite-first,
@@ -9,5 +10,5 @@ import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadCl
  * Normal web (`npm run dev` / cloud) par false — hybrid/live Firestore wahi rehta hai.
  */
 export function isStaticApkLedgerTransportMode(): boolean {
-  return isStaticAppBuild() || isEmbeddedOfflinePreloadClient();
+  return isFirebaseLedgerLocalDeltaMode() && (isStaticAppBuild() || isEmbeddedOfflinePreloadClient());
 }

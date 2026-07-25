@@ -9,6 +9,47 @@ import { format, getYear, getMonth, endOfMonth, startOfDay, endOfDay } from "dat
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { adToBs, bsToAd, getBSMonthDays } from "@/lib/bs-date";
 
+export type MonthYearFilterMode = "current" | "all" | "custom";
+
+const bsMonths = ["Baisakh", "Jestha", "Ashadh", "Shrawan", "Bhadra", "Ashwin", "Kartik", "Mangsir", "Poush", "Magh", "Falgun", "Chaitra"];
+
+function sameDay(a: Date | undefined, b: Date | undefined) {
+    if (!a || !b) return false;
+    return startOfDay(a).getTime() === startOfDay(b).getTime();
+}
+
+function isBsMode(dateSystem: string) {
+    return dateSystem === "BS";
+}
+
+export function getCurrentMonthDateRange(dateSystem: string, baseDate = new Date()): DateRange {
+    if (isBsMode(dateSystem)) {
+        const currentBs = adToBs(baseDate);
+        const startAd = bsToAd({ y: currentBs.y, m: currentBs.m, d: 1 });
+        const daysInMonth = getBSMonthDays(currentBs.y)[currentBs.m - 1];
+        const endAd = bsToAd({ y: currentBs.y, m: currentBs.m, d: daysInMonth });
+        return { from: startOfDay(startAd), to: endOfDay(endAd) };
+    }
+    const start = new Date(getYear(baseDate), getMonth(baseDate), 1);
+    return { from: startOfDay(start), to: endOfDay(endOfMonth(start)) };
+}
+
+export function isCurrentMonthDateRange(dateRange: DateRange | undefined, dateSystem: string, baseDate = new Date()) {
+    if (!dateRange?.from) return false;
+    const current = getCurrentMonthDateRange(dateSystem, baseDate);
+    return sameDay(dateRange.from, current.from) && sameDay(dateRange.to ?? dateRange.from, current.to);
+}
+
+export function formatMonthYearRangeLabel(dateRange: DateRange | undefined, dateSystem: string, baseDate = new Date()) {
+    if (!dateRange?.from) return "All Time";
+    if (isCurrentMonthDateRange(dateRange, dateSystem, baseDate)) return "Current Month";
+    if (isBsMode(dateSystem)) {
+        const bs = adToBs(dateRange.from);
+        return `${bsMonths[bs.m - 1]} ${bs.y}`;
+    }
+    return format(dateRange.from, "MMM yyyy");
+}
+
 export function MonthYearFilter({ 
     dateRange, 
     setDateRange, 
@@ -19,10 +60,10 @@ export function MonthYearFilter({
     dateSystem: string 
 }) {
     const [isOpen, setIsOpen] = useState(false);
-    const [mode, setMode] = useState<'all' | 'custom'>('all');
+    const [mode, setMode] = useState<MonthYearFilterMode>('all');
     
     // Current Date Infos
-    const today = new Date();
+    const today = useMemo(() => new Date(), []);
     const currentBs = adToBs(today);
     
     // Selection State
@@ -32,8 +73,6 @@ export function MonthYearFilter({
     const [selectedAdMonth, setSelectedAdMonth] = useState(getMonth(today)); // 0-11
 
     const bsYears = Array.from({length: 10}, (_, i) => currentBs.y - 5 + i);
-    const bsMonths = ["Baisakh", "Jestha", "Ashadh", "Shrawan", "Bhadra", "Ashwin", "Kartik", "Mangsir", "Poush", "Magh", "Falgun", "Chaitra"];
-    
     const adYears = Array.from({length: 10}, (_, i) => getYear(today) - 5 + i);
     const adMonths = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -42,8 +81,8 @@ export function MonthYearFilter({
         if (!dateRange?.from) {
             setMode('all');
         } else {
-            setMode('custom');
-            if (dateSystem === 'BS') {
+            setMode(isCurrentMonthDateRange(dateRange, dateSystem, today) ? 'current' : 'custom');
+            if (isBsMode(dateSystem)) {
                 const bs = adToBs(dateRange.from);
                 setSelectedBsYear(bs.y);
                 setSelectedBsMonth(bs.m);
@@ -55,10 +94,12 @@ export function MonthYearFilter({
     }, [dateRange, dateSystem]);
 
     const applyFilter = () => {
-        if (mode === 'all') {
+        if (mode === 'current') {
+            setDateRange(getCurrentMonthDateRange(dateSystem, today));
+        } else if (mode === 'all') {
             setDateRange(undefined);
         } else {
-            if (dateSystem === 'BS') {
+            if (isBsMode(dateSystem)) {
                 const startAd = bsToAd({ y: selectedBsYear, m: selectedBsMonth, d: 1 });
                 const daysInMonth = getBSMonthDays(selectedBsYear)[selectedBsMonth - 1];
                 const endAd = bsToAd({ y: selectedBsYear, m: selectedBsMonth, d: daysInMonth });
@@ -81,13 +122,8 @@ export function MonthYearFilter({
     };
 
     const displayText = useMemo(() => {
-        if (!dateRange?.from) return "All Time";
-        if (dateSystem === 'BS') {
-           const bs = adToBs(dateRange.from);
-           return `${bsMonths[bs.m - 1]} ${bs.y}`;
-        }
-        return format(dateRange.from, 'MMM yyyy');
-    }, [dateRange, dateSystem]);
+        return formatMonthYearRangeLabel(dateRange, dateSystem, today);
+    }, [dateRange, dateSystem, today]);
 
     return (
         <Popover open={isOpen} onOpenChange={setIsOpen} modal={false}>
@@ -130,8 +166,9 @@ export function MonthYearFilter({
                                 <SelectValue />
                             </SelectTrigger>
                             <SelectContent className="z-[99999]">
-                                <SelectItem value="custom">Select Month/Year</SelectItem>
+                                <SelectItem value="current">Current Month</SelectItem>
                                 <SelectItem value="all">All Time</SelectItem>
+                                <SelectItem value="custom">Custom Month</SelectItem>
                             </SelectContent>
                         </Select>
                     </div>

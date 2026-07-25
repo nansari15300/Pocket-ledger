@@ -3,17 +3,17 @@
 import * as React from "react";
 import { Suspense } from "react";
 import { Button } from "@/components/ui/button";
-import { useCompany } from "@/hooks/useCompany";
 import usePermissions from "@/hooks/usePermissions";
+import { useCompanyVoucherFeatureSettings } from "@/hooks/useCompanyVoucherFeatureSettings";
 import { CopyLedgerDialog } from "@/components/ledger/CopyLedgerDialog";
 import { RefreshCw } from "lucide-react";
 
 /** Setting ON + permission — hover preview switch ke baayein (code order me pehle) */
 export function CopyLedgerHeaderButton() {
   const [open, setOpen] = React.useState(false);
-  const { company } = useCompany();
   const { can } = usePermissions();
-  if (!can("copy_ledger_cross_company") || company?.enableCrossCompanyLedgerCopy !== true) return null;
+  const { enableCrossCompanyLedgerCopy } = useCompanyVoucherFeatureSettings();
+  if (!can("copy_ledger_cross_company") || enableCrossCompanyLedgerCopy !== true) return null;
   return (
     <Suspense fallback={null}>
       <Button

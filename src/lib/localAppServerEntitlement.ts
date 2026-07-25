@@ -4,7 +4,7 @@ import type { Plan, PlanId } from "@/config/plans";
 import { getPlan } from "@/config/plans";
 import { planAllowsLocalAppServer } from "@/lib/planSyncEntitlements";
 import { getEmbeddedLockShellKind } from "@/lib/embeddedDeviceLock";
-import { isLocalhostDevPreview } from "@/lib/localAppServerDevPreview";
+import { isBrowserLoopbackDevHost } from "@/lib/localAppServerDevPreview";
 
 /** Admin `users` doc override — undefined = follow plan only. */
 export function readUserLocalAppServerOverride(
@@ -21,16 +21,24 @@ export function resolveLocalAppServerAllowed(input: {
   livePlan?: Plan | null;
   customUser?: Record<string, unknown> | null;
 }): boolean {
-  if (isLocalhostDevPreview()) return true;
-  const kind = getEmbeddedLockShellKind();
-  if (kind === "apk") {
-    const override = readUserLocalAppServerOverride(input.customUser);
-    if (override === false) return false;
-    return true;
-  }
-  if (kind !== "exe") return false;
   const override = readUserLocalAppServerOverride(input.customUser);
   if (override === false) return false;
   if (override === true) return true;
-  return planAllowsLocalAppServer(input.planId, input.livePlan ?? getPlan((input.planId as PlanId) || "basic"));
+
+  const planOk = planAllowsLocalAppServer(
+    input.planId,
+    input.livePlan ?? getPlan((input.planId as PlanId) || "basic")
+  );
+
+  if (process.env.NODE_ENV === "development" || process.env.NEXT_PUBLIC_PL_DEV_LOCAL_SERVER === "1") {
+    return true;
+  }
+
+  /** Web browser on localhost — EXE jaisa plan gate (Pro+). */
+  if (isBrowserLoopbackDevHost()) return planOk;
+
+  const kind = getEmbeddedLockShellKind();
+  if (kind === "apk") return true;
+  if (kind !== "exe") return false;
+  return planOk;
 }

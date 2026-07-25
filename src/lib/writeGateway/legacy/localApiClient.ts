@@ -183,6 +183,7 @@ export function getLocalApiClientForWrite(): LocalApiClient | null {
 
 const LOCAL_AUTH_TOKEN_KEY = "localAuthToken_";
 const LOCAL_AUTH_USER_KEY = "localAuthUser_";
+const LOCAL_AUTH_ACCOUNT_KEY = "localAuthAccount_";
 
 /** Offline company unlock same-tab me — React hooks (permissions / voucher load) dubara chalane ke liye. */
 export const LOCAL_AUTH_CHANGED_EVENT = "pocketledgerLocalAuthChanged";
@@ -198,12 +199,19 @@ function notifyLocalAuthChanged(companyId: string) {
 
 export function getLocalAuthToken(companyId: string): string | null {
   if (typeof window === "undefined" || !companyId) return null;
+  const currentAccount = localStorage.getItem("pl_app_account_identity_v1") || "";
+  const tokenAccount = localStorage.getItem(LOCAL_AUTH_ACCOUNT_KEY + companyId) || "";
+  if (!currentAccount || tokenAccount !== currentAccount) return null;
   return localStorage.getItem(LOCAL_AUTH_TOKEN_KEY + companyId);
 }
 
 export function setLocalAuthToken(companyId: string, token: string, user?: { id: string; username: string; displayName?: string; role?: string }): void {
   if (typeof window === "undefined") return;
   localStorage.setItem(LOCAL_AUTH_TOKEN_KEY + companyId, token);
+  localStorage.setItem(
+    LOCAL_AUTH_ACCOUNT_KEY + companyId,
+    localStorage.getItem("pl_app_account_identity_v1") || ""
+  );
   if (user) localStorage.setItem(LOCAL_AUTH_USER_KEY + companyId, JSON.stringify(user));
   notifyLocalAuthChanged(companyId);
 }
@@ -212,10 +220,26 @@ export function clearLocalAuth(companyId: string): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(LOCAL_AUTH_TOKEN_KEY + companyId);
   localStorage.removeItem(LOCAL_AUTH_USER_KEY + companyId);
+  localStorage.removeItem(LOCAL_AUTH_ACCOUNT_KEY + companyId);
   if (companyId && typeof window !== "undefined") {
     void import("@/lib/serverBackupEncryption").then((m) => m.clearBackupEncryptionSession(companyId)).catch(() => {});
   }
   notifyLocalAuthChanged(companyId);
+}
+
+export function clearAllLocalAuthSessions(): void {
+  if (typeof window === "undefined") return;
+  const companyIds = new Set<string>();
+  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+    const key = localStorage.key(index) || "";
+    for (const prefix of [LOCAL_AUTH_TOKEN_KEY, LOCAL_AUTH_USER_KEY, LOCAL_AUTH_ACCOUNT_KEY]) {
+      if (!key.startsWith(prefix)) continue;
+      companyIds.add(key.slice(prefix.length));
+      localStorage.removeItem(key);
+      break;
+    }
+  }
+  companyIds.forEach(notifyLocalAuthChanged);
 }
 
 export function getLocalAuthUser(companyId: string): { id: string; username: string; displayName?: string; role?: string } | null {

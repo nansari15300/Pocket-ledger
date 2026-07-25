@@ -23,6 +23,7 @@ import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
+import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 
 /**
  * Legacy rollback: `NEXT_PUBLIC_VOUCHER_ATTACHMENT_FIRESTORE_IMMEDIATE_UPLOAD=1` → purana flow (online + Firestore-first par form `uploadBytes` await).
@@ -75,26 +76,50 @@ export async function appendLocalOnlyVoucherFilesToUrls(params: {
   existingVoucherId: string | null;
 }): Promise<{ fileUrls: string[]; preGeneratedVoucherId?: string }> {
   const { companyId, storageFolder, existingFileUrls, newFiles, maxFileCount, existingVoucherId } = params;
-  let out = [...existingFileUrls];
+  const out = [...existingFileUrls];
   if (newFiles.length === 0) return { fileUrls: out };
 
   const fsCompanyId = await resolveAuthoritativeFirestoreCompanyId(companyId);
+  // PL staff: pending docPath local company id pe rakho — upload queue flush key mismatch (host id vs local id) avoid.
+  let docCompanyId = fsCompanyId || companyId;
+  try {
+    const { isPlServerThinStaffCompany } = await import("@/lib/plServerThinStaffClient");
+    if (await isPlServerThinStaffCompany(companyId)) docCompanyId = companyId;
+  } catch {
+    /* keep fsCompanyId */
+  }
   const voucherIdForDoc = existingVoucherId || generateLocalVoucherIdForCreate();
   const preGeneratedVoucherId = existingVoucherId ? undefined : voucherIdForDoc;
 
   for (const file of newFiles) {
     if (out.length >= maxFileCount) break;
     const localFileId = generateLocalFileId();
-    await putPendingFile({
+    const pendingFile = {
       id: localFileId,
       blob: file,
       contentType: file.type || "application/octet-stream",
-      docPath: `companies/${fsCompanyId}/vouchers/${voucherIdForDoc}`,
+      docPath: `companies/${docCompanyId}/vouchers/${voucherIdForDoc}`,
       field: "fileUrls",
       storagePathPrefix: `voucher-files/${companyId}/${storageFolder}`,
       fileName: file.name,
-    });
-    out.push(`${LOCAL_FILE_PREFIX}${localFileId}`);
+    };
+    await putPendingFile(pendingFile);
+    const localRef = `${LOCAL_FILE_PREFIX}${localFileId}`;
+    let stagedBlob = await getBlobFromLocalFileRef(localRef);
+    if (!stagedBlob || stagedBlob.size <= 0) {
+      await putPendingFile(pendingFile);
+      stagedBlob = await getBlobFromLocalFileRef(localRef);
+    }
+    if (!stagedBlob || stagedBlob.size <= 0) {
+      console.warn("[voucherLocalAttachmentUpload] pending file bytes missing after stage", {
+        companyId,
+        storageFolder,
+        fileName: file.name,
+        size: file.size,
+      });
+      continue;
+    }
+    out.push(localRef);
   }
   return { fileUrls: out, preGeneratedVoucherId };
 }
@@ -105,6 +130,8 @@ export async function appendLocalOnlyVoucherFilesToUrls(params: {
  * Legacy env `NEXT_PUBLIC_VOUCHER_ATTACHMENT_FIRESTORE_IMMEDIATE_UPLOAD=1` par sirf offline / sqlite-first par stage (purana UX).
  */
 export async function shouldStageNewVoucherFilesAsLocalPending(companyId: string): Promise<boolean> {
+  // Cloud data sync off: Firebase Storage mat chhedo — nayi files `local:` pending stage.
+  if (isFirebaseLedgerDataSyncDisabled()) return true;
   // PL staff writes are server-authoritative, but bytes must travel via `/__pl_attachment`, not Firebase Storage.
   if (isPlServerThinStaffClient()) return true;
   // Offline client: stage in IndexedDB (`local:`) so user can still save and sync later.
@@ -125,6 +152,7 @@ export async function shouldStageNewVoucherFilesAsLocalPending(companyId: string
  * save ke waqt `incrementCompanyStorage` await se "Saving…" mat atkao.
  */
 export function shouldDeferStorageIncrementUntilPendingUpload(): boolean {
+  if (isFirebaseLedgerDataSyncDisabled()) return true;
   if (isPlServerThinStaffClient()) return true;
   // Web online immediate upload (cloud Firestore company only): increment right away.
   if (typeof navigator !== "undefined" && navigator.onLine && !isElectronDesktopApp() && !isCapacitorNativeApp() && !isStaticAppBuild()) {

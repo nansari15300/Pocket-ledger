@@ -75,6 +75,7 @@ const child = spawn(process.execPath, args, {
   env: {
     ...process.env,
     PORT: devPort,
+    PL_PROJECT_ROOT: projectRoot,
     /** Browser Settings → Server: dev API (`/api/dev-pl-local-server`) — client bundle me inline */
     NEXT_PUBLIC_PL_DEV_LOCAL_SERVER: "1",
   },

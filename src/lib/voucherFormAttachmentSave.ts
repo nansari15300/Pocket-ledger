@@ -16,6 +16,10 @@ import {
   dedupeVoucherAttachmentUrlList,
   getVoucherAttachmentUrlsForUi,
 } from "@/lib/voucherAttachmentNormalize";
+import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
+import {
+  isFirebaseLedgerCompanyAttachmentSyncEnabled,
+} from "@/lib/firebaseLedgerCompanySyncPrefs";
 
 /**
  * Form `files` state me `PL_ATTACH_V1:local:uuid` clipboard marker strings ho sakti hain (paste / Reuse).
@@ -41,6 +45,8 @@ export function isStandardWebBrowserClient(): boolean {
 
 /** Local / Drive sync company — web par Firebase materialize mat karo (syncPendingFiles / Drive cycle). */
 async function shouldSkipWebFirebaseMaterializeForCompany(companyId: string): Promise<boolean> {
+  if (isFirebaseLedgerDataSyncDisabled()) return true;
+  if (!isFirebaseLedgerCompanyAttachmentSyncEnabled(companyId)) return true;
   const cid = String(companyId || "").trim();
   if (!cid) return true;
   const { apkCloudCompanyUsesSqliteFirstWrites } = await import("@/lib/apkOnlineFirestoreWritePolicy");
@@ -59,10 +65,12 @@ export async function materializeVoucherAttachmentsInSavePayload(params: {
   voucherId?: string | null;
   data: Record<string, unknown>;
 }): Promise<void> {
-  if (!isStandardWebBrowserClient()) return;
-  if (typeof navigator !== "undefined" && !navigator.onLine) return;
+  if (isFirebaseLedgerDataSyncDisabled()) return;
   const cid = String(params.companyId || "").trim();
   if (!cid) return;
+  if (!isFirebaseLedgerCompanyAttachmentSyncEnabled(cid)) return;
+  if (!isStandardWebBrowserClient()) return;
+  if (typeof navigator !== "undefined" && !navigator.onLine) return;
   const rawUrls = Array.isArray(params.data.fileUrls)
     ? params.data.fileUrls.filter((u): u is string => typeof u === "string")
     : [];
@@ -134,6 +142,7 @@ async function uploadLocalRefToFirebaseIfWebOnline(
   localUrl: string,
   storageFolder: string
 ): Promise<string | null> {
+  if (isFirebaseLedgerDataSyncDisabled()) return null;
   if (isElectronDesktopApp() || isCapacitorNativeApp() || isStaticAppBuild()) return null;
   if (typeof navigator !== "undefined" && !navigator.onLine) return null;
   try {

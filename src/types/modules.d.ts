@@ -19,5 +19,6 @@ declare module '@codetrix-studio/capacitor-google-auth' {
       grantOfflineAccess?: boolean;
     }) => Promise<void>;
     signIn: () => Promise<{ authentication?: { idToken?: string } }>;
+    signOut: () => Promise<void>;
   };
 }

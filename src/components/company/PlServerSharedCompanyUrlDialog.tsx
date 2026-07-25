@@ -14,12 +14,13 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2, Server } from "lucide-react";
 import { toast } from "sonner";
-import { getActiveGate, listGates, normalizeServerUrl, updateLocalServerGate } from "@/lib/gates/gateStore";
+import { getActiveGate, listGates, normalizeServerUrl, updateLocalServerGate, writeGateTransportUrl } from "@/lib/gates/gateStore";
 import { refreshActiveLocalServerGateContext, dispatchGateChanged } from "@/lib/gates/gateRuntime";
 import { applyPlServerAccessContextPayload } from "@/lib/plServerAccessContext";
 import { isServerGateCompany } from "@/lib/companyStorageKind";
 import type { Company } from "@/hooks/useCompany";
 import { tryPlServerUrlsUntilConnected } from "@/lib/plServerShareInviteFlow";
+import { resolvePlSharingTransportUrl } from "@/lib/gates/gateServerFetch";
 
 type Props = {
   company: Company | null;
@@ -56,21 +57,22 @@ export function PlServerSharedCompanyUrlDialog({ company, open, onOpenChange }: 
     }
     setBusy(true);
     try {
-      const accessToken = (gate.accessToken || "").trim();
       let targetUrl = normalizeServerUrl(trimmed);
-      if (accessToken) {
-        const hit = await tryPlServerUrlsUntilConnected([targetUrl], accessToken);
-        if (!hit) {
-          toast.error("Could not reach server at this address");
-          return;
-        }
-        targetUrl = hit.serverUrl;
+      const hit = await tryPlServerUrlsUntilConnected([targetUrl], "", targetUrl);
+      if (!hit) {
+        toast.error("Could not reach server at this address");
+        return;
       }
       const updated = updateLocalServerGate(gate.id, {
         label: gate.label,
         serverUrl: targetUrl,
-        accessToken: gate.accessToken,
+        accessToken: "",
       });
+      writeGateTransportUrl(
+        updated.id,
+        resolvePlSharingTransportUrl({ url: targetUrl, transportUrl: hit.serverUrl, rewritten: false, capable: true, accessContext: hit.context }, targetUrl) ||
+          hit.serverUrl
+      );
       const ctx = await refreshActiveLocalServerGateContext(updated);
       if (ctx.error) {
         toast.error(ctx.error);

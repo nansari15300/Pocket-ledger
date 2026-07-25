@@ -26,6 +26,10 @@ function thumbCacheKey(url: string): string {
   return `${url}::cell-thumb`;
 }
 
+function isInlineImagePreviewUrl(raw: string): boolean {
+  return /^data:image\//i.test(String(raw || "").trim()) || /^blob:/i.test(String(raw || "").trim());
+}
+
 export function invalidateAttachmentThumbDisplayUrl(
   rawUrl: string | undefined | null,
   displayUrl?: string | null
@@ -56,6 +60,7 @@ export function useAttachmentThumbDisplayUrl(
 
   const [thumb, setThumb] = useState<string | null>(() => {
     if (!url) return null;
+    if (isInlineImagePreviewUrl(url)) return url;
     return peekHoverCachedBlobUrl(thumbCacheKey(url)) ?? peekHoverCachedBlobUrl(url);
   });
 
@@ -67,7 +72,9 @@ export function useAttachmentThumbDisplayUrl(
       return;
     }
     const readCached = () =>
-      peekHoverCachedBlobUrl(thumbCacheKey(url)) ?? peekHoverCachedBlobUrl(url);
+      isInlineImagePreviewUrl(url)
+        ? url
+        : peekHoverCachedBlobUrl(thumbCacheKey(url)) ?? peekHoverCachedBlobUrl(url);
 
     const applyCached = () => {
       setUiRefreshTick(getAttachmentUiRefreshTick());
@@ -101,8 +108,12 @@ export function useAttachmentThumbDisplayUrl(
           markAttachmentUrlReady(url);
           return;
         }
+        // PDF native displayUrl ko `<img>` mat — pehle sniff/raster path (neeche ready effect).
+        if (isLocalFileRef(url)) return;
         const native = await getOfflineCachedAttachmentNativeRef(url);
         if (cancelled || !native?.displayUrl?.trim()) return;
+        const ct = String(native.contentType || "").toLowerCase();
+        if (ct.includes("pdf")) return;
         rememberHoverBlobUrl(url, native.displayUrl);
         rememberHoverBlobUrl(thumbCacheKey(url), native.displayUrl);
         markAttachmentUrlReady(url);
@@ -133,7 +144,18 @@ export function useAttachmentThumbDisplayUrl(
     void (async () => {
       try {
         let blob: Blob | null = null;
-        if (isLocalFileRef(url) && companyId) {
+        if (/^(data:|blob:)/i.test(url) && !isInlineImagePreviewUrl(url)) {
+          try {
+            blob = await fetch(url).then((res) => (res.ok ? res.blob() : null));
+          } catch {
+            blob = null;
+          }
+        }
+        if (!blob?.size && isLocalFileRef(url)) {
+          const { getBlobFromLocalFileRef } = await import("@/lib/localPendingFiles");
+          blob = await getBlobFromLocalFileRef(url, { companyId: companyId ?? undefined });
+        }
+        if (!blob?.size && isLocalFileRef(url) && companyId) {
           const { resolvePlServerStaffAttachmentPreviewBlob } = await import("@/lib/plServerAttachmentFetch");
           blob = await resolvePlServerStaffAttachmentPreviewBlob(url, { companyId });
         }

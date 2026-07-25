@@ -19,6 +19,10 @@ import { looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloa
 import { backupPrefersLocalSnapshot } from "@/lib/backupLocalFirst";
 import { normalizeAttachmentUrlForDevicePreview } from "@/lib/attachmentHoldClipboard";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
+import {
+  inferAttachmentContentTypeFromName,
+  sniffBlobKindForPreview,
+} from "@/lib/attachmentFormatLabel";
 
 /** `.plbp` JSON ke andar attachment bytes — Option A embed (URLs alag fields me rehti hain). */
 export type AttachmentBundleEntry = {
@@ -54,18 +58,33 @@ const HTTPS_REF = /^https?:\/\//i;
 /** Parallel attachment read — backup tez; EXE/APK par zyada workers. */
 const BACKUP_ATTACH_CONCURRENCY = backupPrefersLocalSnapshot() ? 10 : 4;
 
-/** String attachment ref — local pending, HTTPS signed URL, ya Firebase object-path. */
+export type AttachmentBackupResolveOptions = {
+  skipDiskWrite?: boolean;
+  localOnly?: boolean;
+  /** Gallery/preview jaisa `local:`/`drive:` pairing + PL Server fetch. */
+  companyId?: string;
+  /** Saari company attachment refs — `drive:` ↔ `local:` gallery match ke liye. */
+  galleryUrls?: readonly string[];
+};
+
+/** String attachment ref — local pending, `drive:`, HTTPS signed URL, ya Firebase object-path. */
 export function isAttachmentRefString(v: unknown): v is string {
   if (typeof v !== "string" || !v.trim()) return false;
-  const s = v.trim();
-  return isLocalFileRef(s) || HTTPS_REF.test(s) || looksLikeFirebaseStorageObjectPath(s);
+  const s = normalizeAttachmentUrlForDevicePreview(v.trim());
+  return (
+    isLocalFileRef(s) ||
+    isDriveFileRef(s) ||
+    HTTPS_REF.test(s) ||
+    looksLikeFirebaseStorageObjectPath(s)
+  );
 }
 
 /** Backup JSON me saari unique attachment refs collect — nested doc fields scan. */
 export function collectAttachmentRefsFromValue(val: unknown, out: Set<string>): void {
   if (val == null) return;
   if (typeof val === "string") {
-    if (isAttachmentRefString(val)) out.add(val);
+    const ref = normalizeAttachmentUrlForDevicePreview(val.trim());
+    if (ref && isAttachmentRefString(ref)) out.add(ref);
     return;
   }
   if (Array.isArray(val)) {
@@ -117,21 +136,34 @@ function base64ToBlob(base64: string, contentType: string): Blob {
   return new Blob([bytes], { type: contentType || "application/octet-stream" });
 }
 
-/** Backup embed: device cache / `local:` pehle; online par tez fetch (preview wala 22s timeout nahi). */
+/**
+ * Backup embed: gallery/fullscreen jaisa local-first resolve (cache, pending, drive pairing),
+ * phir online par embed fetch — taaki device par dikhti files backup me bhi aayein.
+ */
 async function resolveAttachmentBlobForBackup(
   ref: string,
   signal?: AbortSignal,
-  options?: { skipDiskWrite?: boolean }
+  options?: AttachmentBackupResolveOptions
 ): Promise<Blob | null> {
   if (signal?.aborted) return null;
-  if (isLocalFileRef(ref)) {
-    const item = await getPendingPayloadForLocalRef(ref);
+  const normalized = normalizeAttachmentUrlForDevicePreview(ref.trim()) || ref.trim();
+  const { getBlobFromAttachmentRefPreferLocalFirst } = await import("@/lib/attachmentPreviewResolve");
+  const localFirst = await getBlobFromAttachmentRefPreferLocalFirst(normalized, {
+    companyId: options?.companyId,
+    galleryUrls: options?.galleryUrls,
+    localLedgerOnly: options?.localOnly === true,
+  });
+  if (localFirst && localFirst.size > 0) return localFirst;
+  if (options?.localOnly) return null;
+  if (isLocalFileRef(normalized)) {
+    const item = await getPendingPayloadForLocalRef(normalized);
     if (item?.blob && item.blob.size > 0) return item.blob;
-    return await getBlobFromLocalFileRef(ref);
+    return await getBlobFromLocalFileRef(normalized, { companyId: options?.companyId });
   }
-  return getAttachmentBlobForBackupEmbed(ref, {
+  return getAttachmentBlobForBackupEmbed(normalized, {
     signal,
     skipDiskWrite: options?.skipDiskWrite,
+    localOnly: options?.localOnly,
   });
 }
 
@@ -190,9 +222,13 @@ async function mapWithConcurrency<T, R>(
 }
 
 /** Backup preflight: ref resolve ho sakta hai ya nahi (bytes > 0). */
-export async function probeAttachmentRefForBackup(ref: string, signal?: AbortSignal): Promise<boolean> {
+export async function probeAttachmentRefForBackup(
+  ref: string,
+  signal?: AbortSignal,
+  options?: Pick<AttachmentBackupResolveOptions, "localOnly" | "companyId" | "galleryUrls">
+): Promise<boolean> {
   try {
-    const blob = await resolveAttachmentBlobForBackup(ref, signal);
+    const blob = await resolveAttachmentBlobForBackup(ref, signal, options);
     return !!(blob && blob.size > 0);
   } catch {
     return false;
@@ -204,7 +240,7 @@ export async function buildAttachmentBundleFromRefs(
   refs: string[],
   onProgress?: (done: number, total: number, bytesAdded: number) => void,
   signal?: AbortSignal,
-  options?: { skipDiskWrite?: boolean }
+  options?: Pick<AttachmentBackupResolveOptions, "skipDiskWrite" | "companyId" | "galleryUrls">
 ): Promise<AttachmentBundle> {
   const entries: AttachmentBundleEntry[] = [];
   const total = refs.length;
@@ -215,7 +251,11 @@ export async function buildAttachmentBundleFromRefs(
     try {
       let blob: Blob | null = null;
       let fileName: string | undefined;
-      blob = await resolveAttachmentBlobForBackup(key, signal, { skipDiskWrite: options?.skipDiskWrite });
+      blob = await resolveAttachmentBlobForBackup(key, signal, {
+        skipDiskWrite: options?.skipDiskWrite,
+        companyId: options?.companyId,
+        galleryUrls: options?.galleryUrls ?? refs,
+      });
       if (blob && blob.size > 0) {
         if (isLocalFileRef(key)) {
           const item = await getPendingPayloadForLocalRef(key);
@@ -250,6 +290,8 @@ export type BuildAttachmentZipFromRefsOptions = {
   previousCache?: Map<string, { entry: AttachmentZipManifestEntry; fileBytes: Uint8Array }>;
   /** Collect phase: disk par dubara mat likho — zip me embed karna kaafi. */
   skipDiskWrite?: boolean;
+  companyId?: string;
+  galleryUrls?: readonly string[];
 };
 
 /** v3 zip backup: sirf `refs` list (current company snapshot) — deleted refs purane cache se add nahi hote. */
@@ -278,6 +320,8 @@ export async function buildAttachmentZipFromRefs(
         } else {
           const blob = await resolveAttachmentBlobForBackup(key, signal, {
             skipDiskWrite: options?.skipDiskWrite,
+            companyId: options?.companyId,
+            galleryUrls: options?.galleryUrls ?? refs,
           });
           if (blob && blob.size > 0) {
             let fileName: string | undefined;
@@ -352,6 +396,7 @@ const BACKUP_META_KEYS = new Set([
   "includesAttachments",
   "backupVersion",
   "backupOfflineFiles",
+  "backupIntent",
   "companyDetails",
 ]);
 
@@ -410,6 +455,13 @@ export function prepareBackupDataForOfflineFileBackup(
 
   for (const entry of manifest.entries || []) {
     if (!entry?.key || !entry.zipPath) continue;
+    // Pending / device `local:` refs — backup me same pending key rakho (plbk_ remap mat).
+    if (isLocalFileRef(entry.key)) {
+      embeddedOfflineRefs.add(entry.key);
+      registerOfflineBackupRefAlias(refMap, entry.key, entry.key);
+      newEntries.push({ ...entry });
+      continue;
+    }
     fileIndex += 1;
     const offlineKey = offlineEmbeddedAttachmentRef(fileIndex);
     embeddedOfflineRefs.add(offlineKey);
@@ -424,7 +476,7 @@ export function prepareBackupDataForOfflineFileBackup(
     if (BACKUP_META_KEYS.has(k)) {
       if (k === "companyDetails") {
         out.companyDetails = sanitizeCompanyDetailsForOfflineFileBackup(mapped.companyDetails);
-      } else if (k !== "backupOfflineFiles") {
+      } else if (k !== "backupOfflineFiles" && k !== "backupIntent") {
         out[k] = mapped[k];
       }
       continue;
@@ -434,6 +486,7 @@ export function prepareBackupDataForOfflineFileBackup(
   out.includesAttachments = true;
   out.backupVersion = mapped.backupVersion ?? 3;
   out.backupOfflineFiles = true;
+  out.backupIntent = "for_offline";
   if (out.companyDetails === undefined && mapped.companyDetails !== undefined) {
     out.companyDetails = sanitizeCompanyDetailsForOfflineFileBackup(mapped.companyDetails);
   }
@@ -442,6 +495,44 @@ export function prepareBackupDataForOfflineFileBackup(
     backupData: out,
     manifest: { version: 1, entries: newEntries },
   };
+}
+
+/**
+ * Offline-intent backup (data-only ya final pass): HTTPS/Firebase/Drive refs hatao,
+ * company row local/offline mark — restore SQLite-only + read/write local.
+ */
+export function prepareBackupDataForOfflineIntent(
+  backupData: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(backupData)) {
+    if (k === "attachmentBundle" || k === "attachmentZipManifest") continue;
+    if (BACKUP_META_KEYS.has(k)) {
+      if (k === "companyDetails") {
+        out.companyDetails = sanitizeCompanyDetailsForOfflineFileBackup(backupData.companyDetails);
+      } else if (k !== "backupOfflineFiles" && k !== "backupIntent") {
+        out[k] = backupData[k];
+      }
+      continue;
+    }
+    out[k] = stripRemoteAttachmentRefsInValue(backupData[k]);
+  }
+  out.backupVersion = backupData.backupVersion ?? 3;
+  out.includesAttachments = backupData.includesAttachments === true;
+  out.backupOfflineFiles = true;
+  out.backupIntent = "for_offline";
+  if (out.companyDetails === undefined && backupData.companyDetails !== undefined) {
+    out.companyDetails = sanitizeCompanyDetailsForOfflineFileBackup(backupData.companyDetails);
+  }
+  return out;
+}
+
+/** `.plbp` offline-portable? — restore destination SQLite force + company offline mark. */
+export function isOfflineIntentBackupData(data: Record<string, unknown> | null | undefined): boolean {
+  if (!data || typeof data !== "object") return false;
+  if (data.backupIntent === "for_offline") return true;
+  if (data.backupOfflineFiles === true) return true;
+  return false;
 }
 
 function inferRestoreStoragePathPrefix(
@@ -610,6 +701,48 @@ function resolveZipEntryBytes(
   return null;
 }
 
+/** fflate Uint8Array → Blob (copy) + magic-byte sniff taaki restore preview FILE icon na rahe. */
+async function blobFromRestoredZipBytes(
+  bytes: Uint8Array,
+  contentType?: string,
+  fileName?: string
+): Promise<{ blob: Blob; contentType: string; fileName?: string }> {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  let ct = inferAttachmentContentTypeFromName(fileName, contentType);
+  let name = fileName;
+  let blob = new Blob([copy], { type: ct || "application/octet-stream" });
+  const kind = await sniffBlobKindForPreview(blob);
+  if (kind === "pdf" && !String(ct || "").toLowerCase().includes("pdf")) {
+    ct = "application/pdf";
+    blob = new Blob([copy], { type: ct });
+    if (!name || !/\.pdf$/i.test(name)) name = `${name || "restored"}.pdf`.replace(/\.pdf\.pdf$/i, ".pdf");
+  } else if (kind === "image") {
+    const lower = String(ct || "").toLowerCase();
+    if (!lower.startsWith("image/")) {
+      // JPEG magic is most common for voucher photos; sniff already confirmed image.
+      const u8 = copy;
+      if (u8[0] === 0x89 && u8[1] === 0x50) ct = "image/png";
+      else if (u8[0] === 0x47 && u8[1] === 0x49) ct = "image/gif";
+      else if (u8[0] === 0x52 && u8[1] === 0x49) ct = "image/webp";
+      else ct = "image/jpeg";
+      blob = new Blob([copy], { type: ct });
+    }
+    const ext =
+      ct === "image/png"
+        ? ".png"
+        : ct === "image/gif"
+          ? ".gif"
+          : ct === "image/webp"
+            ? ".webp"
+            : ".jpg";
+    if (!name || !/\.(jpe?g|png|gif|webp|bmp)$/i.test(name)) {
+      name = `${String(name || "restored").replace(/\.[a-z0-9]{1,8}$/i, "")}${ext}`;
+    }
+  }
+  return { blob, contentType: ct || blob.type || "application/octet-stream", fileName: name };
+}
+
 async function persistRestoredAttachmentEntry(
   entryKey: string,
   blob: Blob,
@@ -690,18 +823,18 @@ export async function restoreAttachmentZipToLocalRefs(
     try {
       const bytes = resolveZipEntryBytes(filesByPath, entry.zipPath);
       if (!bytes?.length) throw new Error(`zip entry missing: ${entry.zipPath}`);
-      const blob = new Blob([bytes as BlobPart], { type: entry.contentType || "application/octet-stream" });
+      const typed = await blobFromRestoredZipBytes(bytes, entry.contentType, entry.fileName);
       await persistRestoredAttachmentEntry(
         entry.key,
-        blob,
-        entry.contentType || blob.type || "application/octet-stream",
-        entry.fileName,
+        typed.blob,
+        typed.contentType,
+        typed.fileName,
         targetCompanyId,
         targets,
         map
       );
       done += 1;
-      onProgress?.(done, total, entry.size ?? blob.size);
+      onProgress?.(done, total, entry.size ?? typed.blob.size);
     } catch (e) {
       console.warn("[attachmentRestoreZip] skip entry", entry.key, entry.zipPath, e);
       done += 1;
@@ -867,9 +1000,12 @@ export function prepareBackupDataForLocalCompanyRestore(
       if (isLocalFileRef(nextRef)) restoredLocalRefs.add(nextRef);
     }
   }
+  const offlineSanitized = isOfflineIntentBackupData(backupData)
+    ? backupData
+    : prepareBackupDataForOfflineIntent(backupData);
   const mapped = attachmentRefMap?.size
-    ? applyAttachmentRefMapToBackupData(backupData, attachmentRefMap)
-    : backupData;
+    ? applyAttachmentRefMapToBackupData(offlineSanitized, attachmentRefMap)
+    : offlineSanitized;
   const out: Record<string, unknown> = {};
   for (const k of Object.keys(mapped)) {
     if (k === "attachmentBundle" || k === "attachmentZipManifest" || k === "backupOfflineFiles") continue;
@@ -877,7 +1013,9 @@ export function prepareBackupDataForLocalCompanyRestore(
   }
   out.includesAttachments = mapped.includesAttachments;
   out.backupVersion = mapped.backupVersion;
-  if (mapped.companyDetails !== undefined) out.companyDetails = mapped.companyDetails;
+  if (mapped.companyDetails !== undefined) {
+    out.companyDetails = sanitizeCompanyDetailsForOfflineFileBackup(mapped.companyDetails);
+  }
   return out;
 }
 
@@ -903,6 +1041,70 @@ export function rewriteAttachmentRefsInValue(val: unknown, map: Map<string, stri
     return out;
   }
   return val;
+}
+
+/** SQLite-only backup: missing file URLs / dead refs hatao — available + pending refs rehne do. */
+function stripListedAttachmentRefString(raw: string, remove: Set<string>): string | null {
+  const t = String(raw || "").trim();
+  if (!t) return null;
+  if (remove.has(t)) return null;
+  const norm = normalizeAttachmentUrlForDevicePreview(t);
+  if (norm && remove.has(norm)) return null;
+  if (t.startsWith("http://") || t.startsWith("https://")) {
+    try {
+      const u = new URL(t);
+      if (remove.has(`${u.origin}${u.pathname}`)) return null;
+    } catch {
+      /* ignore */
+    }
+  }
+  return t;
+}
+
+function stripListedAttachmentRefsInValue(val: unknown, remove: Set<string>, depth = 0): unknown {
+  if (depth > 32) return val;
+  if (val == null) return val;
+  if (typeof val === "string") return stripListedAttachmentRefString(val, remove);
+  if (Array.isArray(val)) {
+    return val
+      .map((item) => stripListedAttachmentRefsInValue(item, remove, depth + 1))
+      .filter((item) => item != null && item !== "");
+  }
+  if (typeof val === "object") {
+    const o = val as Record<string, unknown>;
+    if (typeof o.seconds === "number" && "nanoseconds" in o) return val;
+    if (o.__fsTs === true) return val;
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(o)) {
+      out[k] = stripListedAttachmentRefsInValue(o[k], remove, depth + 1);
+    }
+    return out;
+  }
+  return val;
+}
+
+export function stripListedAttachmentRefsFromBackupData(
+  backupData: Record<string, unknown>,
+  refsToRemove: Iterable<string>
+): Record<string, unknown> {
+  const remove = new Set<string>();
+  for (const r of refsToRemove) {
+    const t = String(r || "").trim();
+    if (!t) continue;
+    remove.add(t);
+    const norm = normalizeAttachmentUrlForDevicePreview(t);
+    if (norm) remove.add(norm);
+  }
+  if (remove.size === 0) return backupData;
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(backupData)) {
+    if (k === "attachmentBundle" || k === "attachmentZipManifest") {
+      out[k] = backupData[k];
+      continue;
+    }
+    out[k] = stripListedAttachmentRefsInValue(backupData[k], remove);
+  }
+  return out;
 }
 
 export function applyAttachmentRefMapToBackupData(

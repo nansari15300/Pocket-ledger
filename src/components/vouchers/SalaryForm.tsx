@@ -56,6 +56,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
 import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
+import { loadVoucherDataForDeletePreCheck, resolveVoucherDeleteBackdateDate } from "@/lib/voucherDeletePreCheck";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
@@ -97,7 +98,7 @@ import type { Tax, TaxGroup } from "@/components/tax/types";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
-import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
@@ -402,6 +403,7 @@ export function SalaryForm({
   const [isVoucherOpen, setIsVoucherOpen] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
+  const isAttachmentProcessing = useVoucherAttachmentProcessing();
   const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachFileInputId = useId();
@@ -1828,21 +1830,35 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
 }
 
   const handleDelete = async () => {
-    if (!savedVoucherIdRef || !companyId) return;
+    const voucherIdToDelete = savedVoucherIdRef || voucher?.id || null;
+    if (!voucherIdToDelete || !companyId) return;
     
     try {
-      // Permission check: delete
       assertCan(can, "delete_records");
-      
-      // Get voucher date for backdate limit check
-      const voucherDoc = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, savedVoucherIdRef));
-      const voucherData = voucherDoc.exists() ? voucherDoc.data() : null;
+      const { voucherData, exists: voucherDocExists } = await loadVoucherDataForDeletePreCheck({
+        companyId,
+        voucherId: voucherIdToDelete,
+        company,
+        fallbackVoucher: (voucher as Record<string, unknown> | null) ?? null,
+        vouchers: allVouchers as Array<{ id?: string } & Record<string, unknown>> | null,
+      });
+      if (!canDeleteVoucher(voucherData)) {
+        throw new PermissionDeniedError(
+          (voucherData as any)?.isApproved
+            ? "You do not have permission to delete approved vouchers."
+            : "You do not have permission to delete records."
+        );
+      }
       if (voucherData && hasPaymentLinks(voucherData)) {
         toast({ variant: "destructive", title: "Cannot Delete", description: "First unlink linked transactions." });
         return;
       }
-      if (voucherDoc.exists() && voucherData) {
-        const voucherDate = voucherData.date?.toDate ? voucherData.date.toDate() : new Date(voucherData.date);
+      if (voucherDocExists && voucherData) {
+        const voucherDate = resolveVoucherDeleteBackdateDate(voucherData, {
+          form: "salary",
+          companyId,
+          voucherId: voucherIdToDelete,
+        });
         assertCanPerformBackdated(canPerformBackdatedAction, "delete", voucherDate);
       }
     } catch (error) {
@@ -1865,7 +1881,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
     setIsLoading(true);
     try {
         // Delete action local-first helper ke through run karo.
-        await softDeleteVoucherMoveToRecycleBin(companyId, savedVoucherIdRef, user?.uid || "");
+        await softDeleteVoucherMoveToRecycleBin(companyId, voucherIdToDelete, user?.uid || "");
         toast({ title: "Voucher Moved to Bin" });
         onVoucherAction?.('cancelled');
     } catch (error) {
@@ -2878,10 +2894,10 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                 <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
                 </Button>
-                <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherIdRef) && !isAnyDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherIdRef) && !isAnyDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
                   {isLoading ? "..." : "Save"}
                 </Button>
-                <Button type="button" onClick={async (e) => { e.preventDefault(); if (showSaveAndApproveOnCreate && !voucher?.id) { await handleFormSubmit(e, { approveAfterSave: true }); } else if (isAnyDirty) { await handleFormSubmit(e, { approveAfterSave: true }); } else { onApprove?.(); } }} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled || recurringVoucherSaveBlocked) : (editingDisabled || !showApproveButton || !onApprove || isApproving || recurringVoucherSaveBlocked || (!!voucher?.isApproved && !isAnyDirty))} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                <Button type="button" onClick={async (e) => { e.preventDefault(); if (showSaveAndApproveOnCreate && !voucher?.id) { await handleFormSubmit(e, { approveAfterSave: true }); } else if (isAnyDirty) { await handleFormSubmit(e, { approveAfterSave: true }); } else { onApprove?.(); } }} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isAttachmentProcessing || isApproving || editingDisabled || recurringVoucherSaveBlocked) : (isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || recurringVoucherSaveBlocked || (!!voucher?.isApproved && !isAnyDirty))} className={cn("w-full", BTN_APPROVE_CLASS)}>
                   {isApproving ? "..." : "Save & Approve"}
                 </Button>
               </div>
@@ -2915,19 +2931,19 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                   <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
                     Cancel
                   </Button>
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={!!voucher || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={!!voucher || isLoading || isAttachmentProcessing || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save & New
                   </Button>
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || isAttachmentProcessing || editingDisabled} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}>
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherIdRef) && !isAnyDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherIdRef) && !isAnyDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (showSaveAndApproveOnCreate && !voucher?.id) { await handleFormSubmit(e, { approveAfterSave: true }); } else if (isAnyDirty) { await handleFormSubmit(e, { approveAfterSave: true }); } else { onApprove?.(); } }} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled || recurringVoucherSaveBlocked) : (editingDisabled || !showApproveButton || !onApprove || isApproving || recurringVoucherSaveBlocked || (!!voucher?.isApproved && !isAnyDirty))} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (showSaveAndApproveOnCreate && !voucher?.id) { await handleFormSubmit(e, { approveAfterSave: true }); } else if (isAnyDirty) { await handleFormSubmit(e, { approveAfterSave: true }); } else { onApprove?.(); } }} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isAttachmentProcessing || isApproving || editingDisabled || recurringVoucherSaveBlocked) : (isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || recurringVoucherSaveBlocked || (!!voucher?.isApproved && !isAnyDirty))} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                     Save & Approve
                   </Button>

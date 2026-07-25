@@ -182,11 +182,17 @@ export function useCollectionFromSource<T = Record<string, unknown>>(
     const onBump = (ev: Event) => {
       const d = (ev as CustomEvent<BrowserDbCollectionBumpDetail>).detail;
       if (!d || d.companyId !== companyId || d.collection !== collectionName) return;
-      listCompanyDocsFromBrowserDb(companyId, collectionName).then((cached) => {
+      const remoteIncoming = d.source === "pl_host_remote_write";
+      void (async () => {
+        if (remoteIncoming) {
+          const { reloadBrowserDbFromIndexedDB } = await import("@/lib/localSqlite");
+          await reloadBrowserDbFromIndexedDB();
+        }
+        const cached = await listCompanyDocsFromBrowserDb(companyId, collectionName);
         if (!cached.length) return;
         const filtered = cached.filter((item: any) => item.isDeleted !== true);
         setData((prev) => mergeCollectionById<T & { id: string }>(prev, filtered, options?.orderByField));
-      });
+      })();
     };
     window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
     return () => window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const RELAY_TIMEOUT_MS = 30_000;
+const RELAY_TIMEOUT_MS = 180_000;
 const MAX_BINARY_BYTES = 12 * 1024 * 1024;
 
 const ALLOWED_PATH_PREFIXES = ["/__pl_", "/__firebase_blob_proxy"];

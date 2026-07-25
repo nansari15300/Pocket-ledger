@@ -131,6 +131,10 @@ import {
 import { useServerReceivablesPayablesSummary } from "@/hooks/useServerReceivablesPayablesSummary";
 import { RecurringAutoSummaryCard } from "@/components/dashboard/RecurringAutoSummaryCard";
 import { DashboardWelcomeClockLine } from "@/components/dashboard/DashboardWelcomeClockLine";
+import {
+  getCurrentMonthDateRange,
+  MonthYearFilter as DashboardMonthYearFilter,
+} from "@/components/dashboard/MonthYearFilter";
 
 // Type definitions
 type Voucher = {
@@ -351,12 +355,13 @@ const [mode, setMode] = useState<'all' | 'custom'>('all');
 const BankCashSummary = () => {
     const { processedAccounts, vouchers } = useVouchers();
     const { dateSystem, formatCurrency } = useDate();
-    const [bankCashDateRange, setBankCashDateRange] = React.useState<DateRange | undefined>(undefined);
+    const [bankCashDateRange, setBankCashDateRange] = React.useState<DateRange | undefined>(() =>
+      getCurrentMonthDateRange(dateSystem)
+    );
 
-    // NEW (BankCashSummary - default All Time)
-useEffect(() => {
-  setBankCashDateRange(undefined);
-}, [dateSystem]);
+    useEffect(() => {
+      setBankCashDateRange((range) => (range?.from ? getCurrentMonthDateRange(dateSystem) : range));
+    }, [dateSystem]);
 
 
     const bankCashSummary = React.useMemo(() => {
@@ -447,10 +452,10 @@ useEffect(() => {
                       <CardTitle className="text-sm font-medium">Bank/Cash Summary</CardTitle>
                       {/* Show combined closing balance (Bank + Cash) beside summary title. */}
                       <span className={cn("text-xs sm:text-sm font-semibold whitespace-nowrap", bankCashSummary.totalClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                        Closing: {formatCurrency(bankCashSummary.totalClosingBalance, { showDrCr: true, noAnimation: true })}
+                        Closing: {formatCurrency(bankCashSummary.totalClosingBalance, { showDrCr: true })}
                       </span>
                     </div>
-                    <MonthYearFilter dateRange={bankCashDateRange} setDateRange={setBankCashDateRange} dateSystem={dateSystem} />
+                    <DashboardMonthYearFilter dateRange={bankCashDateRange} setDateRange={setBankCashDateRange} dateSystem={dateSystem} />
                 </div>
             </CardHeader>
             <CardContent className="flex-1 flex flex-col min-h-0 p-0">

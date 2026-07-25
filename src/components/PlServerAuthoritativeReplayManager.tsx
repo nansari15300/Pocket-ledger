@@ -10,6 +10,7 @@ import {
   schedulePlServerAuthoritativeReplayDrain,
 } from "@/lib/plServerAuthoritativeReplay";
 import { PL_AUTHORITATIVE_PENDING_QUEUE_CHANGED } from "@/lib/plServerAuthoritativePendingTypes";
+import { authoritativePendingQueueNeedsReplayDrain } from "@/lib/plServerAuthoritativePendingQueue";
 
 const REPLAY_POLL_MS = 30_000;
 
@@ -29,7 +30,10 @@ export function PlServerAuthoritativeReplayManager() {
     window.addEventListener(PL_AUTHORITATIVE_PENDING_QUEUE_CHANGED, onQueue);
 
     const poll = window.setInterval(() => {
-      void drainPlServerAuthoritativePendingQueue("poll");
+      void (async () => {
+        if (!(await authoritativePendingQueueNeedsReplayDrain())) return;
+        await drainPlServerAuthoritativePendingQueue("poll");
+      })();
     }, REPLAY_POLL_MS);
 
     return () => {

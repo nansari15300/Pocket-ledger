@@ -6,8 +6,16 @@ import {
   type DevHostBridgeJobType,
 } from "@/lib/devPlHostBridge/queue";
 
-function isDevHostBridgeEnabled(): boolean {
-  return process.env.NODE_ENV === "development";
+function isDevHostBridgeEnabled(req?: Request): boolean {
+  if (process.env.NODE_ENV === "development" || process.env.NEXT_PUBLIC_PL_DEV_LOCAL_SERVER === "1") {
+    return true;
+  }
+  if (!req) return false;
+  const host = (req.headers.get("host") || "").split(":")[0]?.toLowerCase();
+  const fwd = (req.headers.get("x-forwarded-for") || "").split(",")[0]?.trim().toLowerCase();
+  const loopback = (h: string) =>
+    h === "127.0.0.1" || h === "localhost" || h === "[::1]" || h === "::1";
+  return loopback(host) || loopback(fwd);
 }
 
 function isLoopbackRequest(req: Request): boolean {
@@ -20,7 +28,7 @@ function isLoopbackRequest(req: Request): boolean {
 }
 
 export async function GET(req: Request) {
-  if (!isDevHostBridgeEnabled()) {
+  if (!isDevHostBridgeEnabled(req)) {
     return NextResponse.json({ error: "Not available outside development" }, { status: 403 });
   }
   const url = new URL(req.url);
@@ -32,7 +40,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  if (!isDevHostBridgeEnabled()) {
+  if (!isDevHostBridgeEnabled(req)) {
     return NextResponse.json({ error: "Not available outside development" }, { status: 403 });
   }
   const body = (await req.json().catch(() => ({}))) as {

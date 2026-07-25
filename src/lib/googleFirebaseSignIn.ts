@@ -12,12 +12,17 @@ import { auth, FIREBASE_WEB_OAUTH_CLIENT_ID } from "@/lib/firebase";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 
 type PlElectronAuthBridge = {
-  signInWithGoogleExternal?: (options?: { loginHint?: string }) => Promise<{ idToken: string }>;
+  signInWithGoogleExternal?: (options?: {
+    loginHint?: string;
+    forceAccountPicker?: boolean;
+  }) => Promise<{ idToken: string }>;
 };
 
 export type GoogleSignInForAppOptions = {
   /** Saved account email — EXE browser OAuth me hint; empty = account chooser. */
   loginHint?: string;
+  /** "Choose another Google account" — cached session hata ke chooser kholo. */
+  forceAccountPicker?: boolean;
 };
 
 function getElectronAuthBridge(): PlElectronAuthBridge | null {
@@ -30,14 +35,29 @@ export async function signInWithGoogleForApp(
   options?: GoogleSignInForAppOptions
 ): Promise<UserCredential | null> {
   const loginHint = options?.loginHint?.trim() || undefined;
+  const forceAccountPicker = options?.forceAccountPicker ?? !loginHint;
+
+  if (forceAccountPicker) {
+    try {
+      if (auth.currentUser) await auth.signOut();
+    } catch {
+      /* ignore */
+    }
+  }
+
   const provider = new GoogleAuthProvider();
   provider.addScope("email");
   provider.addScope("profile");
-  // User ne dusra Google account choose karna ho to chooser force karo; last signed account auto-select na ho.
-  provider.setCustomParameters({
+  const customParameters: Record<string, string> = {
     prompt: "select_account",
-    ...(loginHint ? { login_hint: loginHint } : {}),
-  });
+  };
+  if (loginHint) {
+    customParameters.login_hint = loginHint;
+  } else if (forceAccountPicker) {
+    // Google default account auto-select na kare — account list dikhaye.
+    customParameters.authuser = "-1";
+  }
+  provider.setCustomParameters(customParameters);
 
   if (Capacitor.isNativePlatform()) {
     const { GoogleAuth } = await import("@codetrix-studio/capacitor-google-auth");
@@ -47,6 +67,13 @@ export async function signInWithGoogleForApp(
       throw new Error("Google Web client ID missing for native GoogleAuth.initialize");
     }
     await GoogleAuth.initialize({ clientId, scopes: ["profile", "email"], grantOfflineAccess: false });
+    if (forceAccountPicker) {
+      try {
+        await GoogleAuth.signOut();
+      } catch {
+        /* ignore — chooser ke liye best-effort cached account clear */
+      }
+    }
     const nativeUser = await GoogleAuth.signIn();
     const idToken = nativeUser.authentication?.idToken;
     if (!idToken) throw new Error("Google idToken missing from native sign-in");
@@ -61,7 +88,7 @@ export async function signInWithGoogleForApp(
       throw new Error("EXE Google browser sign-in is not available. Rebuild the desktop app.");
     }
     const { idToken } = await bridge.signInWithGoogleExternal(
-      loginHint ? { loginHint } : undefined
+      loginHint ? { loginHint } : { forceAccountPicker: true }
     );
     if (!idToken?.trim()) throw new Error("Google idToken missing from browser sign-in");
     return signInWithCredential(auth, GoogleAuthProvider.credential(idToken));

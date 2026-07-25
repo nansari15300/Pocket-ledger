@@ -51,9 +51,9 @@ import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { getBillWiseAllocatedToTarget, getPaymentStatus as getPaymentStatusResult, isSaleOrPurchaseBillVoucherType } from "@/lib/payment-allocation-utils";
 import { shouldSuppressTransientCompanyClear } from "@/lib/apkLedgerRouteShield";
 import {
-  PL_SERVER_CLIENT_MIRROR_EVENT,
-  type PlServerClientMirrorEventDetail,
-} from "@/lib/plServerClientCompanyMirror";
+  PL_SERVER_CLIENT_DELTA_EVENT,
+  type PlServerClientDeltaEventDetail,
+} from "@/lib/plServerClientCompanyDelta";
 import {
   companyRowUsesSqliteLedgerWrites,
   isPureLocalLedgerCompany,
@@ -529,7 +529,7 @@ export const VoucherProvider = ({
   const isServerGateCompanyContext =
     isPlServerSharedCompanyRow(company, null) ||
     (!!companyId && isPlServerSharedCompanyRow({ id: companyId }, null));
-  // Selected company may be local even when user is online; server-gate mirrored rows bhi SQLite ledger.
+  // Selected company may be local even when user is online; server-gate delta rows bhi SQLite ledger.
   const isLocalCompanySelected =
     isLocalOnlyMode() ||
     companyRowUsesSqliteLedgerWrites(company) ||
@@ -580,6 +580,28 @@ export const VoucherProvider = ({
 
   const [vouchers, setVouchers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const voucherForensicPrevRef = useRef<{ companyId: string; rows: any[] }>({ companyId: "", rows: [] });
+
+  useEffect(() => {
+    const id = String(companyId || "").trim();
+    const prev = voucherForensicPrevRef.current;
+    if (id && prev.companyId === id && prev.rows.length > vouchers.length) {
+      void import("@/lib/plServerLiveChangeTrace")
+        .then(({ plServerVoucherForensicTrace, voucherIdFingerprint }) =>
+          plServerVoucherForensicTrace("ui_voucher_state_shrank", {
+            companyId: id,
+            beforeCount: prev.rows.length,
+            beforeFingerprint: voucherIdFingerprint(prev.rows),
+            afterCount: vouchers.length,
+            afterFingerprint: voucherIdFingerprint(vouchers),
+            pathname,
+            loading,
+          })
+        )
+        .catch(() => undefined);
+    }
+    voucherForensicPrevRef.current = { companyId: id, rows: vouchers };
+  }, [companyId, loading, pathname, vouchers]);
 
   // Apply View Own / View All Records: show only own vouchers when user doesn't have view_all_records
   const viewAllRecords = can("view_all_records");
@@ -1472,72 +1494,113 @@ export const VoucherProvider = ({
       if (shouldSkipHeavyVoucherBootstrap(pathname)) return;
     if (!shouldListenSqliteBump) return;
 
-    const mergeCollectionFromSqliteBump = (coll: string) => {
-      livePullDevLog("react_refresh", { companyId, collection: coll, pathname });
-      listCompanyDocsFromBrowserDb(companyId, coll, { forBackupMerge: true })
-        .then((cached) => {
-          if (!cached.length) return;
+    const mergeCollectionFromSqliteBump = (coll: string, opts?: { remoteIncoming?: boolean }) => {
+      livePullDevLog("react_refresh", {
+        companyId,
+        collection: coll,
+        pathname,
+        remoteIncoming: opts?.remoteIncoming === true,
+      });
+      void (async () => {
+        try {
+          if (opts?.remoteIncoming) {
+            const { reloadBrowserDbFromIndexedDB } = await import("@/lib/localSqlite");
+            await reloadBrowserDbFromIndexedDB();
+          }
+          const cached = await listCompanyDocsFromBrowserDb(companyId, coll, { forBackupMerge: true });
+          if (!cached.length) {
+            if (opts?.remoteIncoming) {
+              void import("@/lib/plServerLiveChangeTrace").then(({ plServerLiveChangeTrace }) =>
+                plServerLiveChangeTrace("ui_merge_remote_empty", { companyId, collection: coll })
+              );
+            }
+            return;
+          }
           const aliveCached = (cached as any[]).filter(isAliveDoc);
+          const mergeRows = (prev: any[], rows: any[], orderByField?: string) =>
+            opts?.remoteIncoming
+              ? mergeEntityListsById(prev.filter(isAliveDoc), rows, orderByField).filter(isAliveDoc)
+              : mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), rows, orderByField);
           switch (coll) {
             case "vouchers":
-              setVouchers((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached, "date"));
+              setVouchers((prev) => mergeRows(prev, aliveCached, "date"));
               break;
             case "parties":
-              setParties((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached));
+              setParties((prev) => mergeRows(prev, aliveCached));
               break;
             case "staff":
-              setStaff((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached));
+              setStaff((prev) => mergeRows(prev, aliveCached));
               break;
             case "bank_accounts":
               setAccounts((prev) =>
-                mergeEntityListsByIdOrKeepPrev(
-                  prev.filter(isAliveDoc),
+                mergeRows(
+                  prev,
                   aliveCached.map((row) => normalizeBankAccountRow(row as Record<string, unknown>))
                 )
               );
               break;
             case "taxes":
-              setTaxes((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached));
+              setTaxes((prev) => mergeRows(prev, aliveCached));
               break;
             case "expense_accounts":
-              setUnprocessedExpenseAccounts((prev) =>
-                mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached)
-              );
+              setUnprocessedExpenseAccounts((prev) => mergeRows(prev, aliveCached));
               break;
             case "items":
-              setItems((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached));
+              setItems((prev) => mergeRows(prev, aliveCached));
               break;
             case "item_groups":
-              setItemGroups((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached));
+              setItemGroups((prev) => mergeRows(prev, aliveCached));
               break;
             case "groups":
-              setGroups((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached));
+              setGroups((prev) => mergeRows(prev, aliveCached));
               break;
             case "account_groups":
-              setAccountGroups((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached));
+              setAccountGroups((prev) => mergeRows(prev, aliveCached));
               break;
             case "staff_groups":
-              setStaffGroups((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached));
+              setStaffGroups((prev) => mergeRows(prev, aliveCached));
               break;
             case "tax_groups":
-              setTaxGroups((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached));
+              setTaxGroups((prev) => mergeRows(prev, aliveCached));
               break;
             case "expense_groups":
-              setExpenseGroups((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached));
+              setExpenseGroups((prev) => mergeRows(prev, aliveCached));
               break;
             default:
               break;
           }
-        })
-        .catch(() => {});
+          if (opts?.remoteIncoming) {
+            void import("@/lib/plServerLiveChangeTrace").then(({ plServerLiveChangeTrace }) =>
+              plServerLiveChangeTrace("ui_merge_remote_applied", {
+                companyId,
+                collection: coll,
+                rowCount: aliveCached.length,
+              })
+            );
+          }
+        } catch {
+          /* optional merge */
+        }
+      })();
     };
 
     const onBump = (ev: Event) => {
       const d = (ev as CustomEvent<BrowserDbCollectionBumpDetail>).detail;
       if (!d || d.companyId !== companyId || !d.collection) return;
       const coll = d.collection;
-      if (isServerGateCompanyContext || d.immediate === true) {
-        mergeCollectionFromSqliteBump(coll);
+      const remoteHostWrite = d.source === "pl_host_remote_write";
+      if (remoteHostWrite) {
+        void import("@/lib/plServerLiveChangeTrace")
+          .then(({ plServerLiveChangeTrace }) =>
+            plServerLiveChangeTrace("ui_merge_remote_bump", {
+              companyId,
+              collection: coll,
+            })
+          )
+          .catch(() => undefined);
+      }
+      if (isServerGateCompanyContext || d.immediate === true || remoteHostWrite) {
+        mergeCollectionFromSqliteBump(coll, { remoteIncoming: remoteHostWrite });
         return;
       }
       // Active page ke bahar collection bump ignore — unnecessary background merge avoid.
@@ -1561,37 +1624,37 @@ export const VoucherProvider = ({
       }
       mergeCollectionFromSqliteBump(coll);
     };
-    const mergeActiveCollectionsFromServerMirror = () => {
+    const mergeActiveCollectionsFromServerDelta = () => {
       const paths = activeMasterCollectionPathsForRoute(pathname, voucherFormMasterScope);
       for (const coll of paths) mergeCollectionFromSqliteBump(coll);
     };
 
-    const onServerMirror = (ev: Event) => {
-      const d = (ev as CustomEvent<PlServerClientMirrorEventDetail>).detail;
+    const onServerDelta = (ev: Event) => {
+      const d = (ev as CustomEvent<PlServerClientDeltaEventDetail>).detail;
       if (!d?.companyIds?.includes(companyId)) return;
       const refreshPlServerLive = () => {
         mergeCollectionFromSqliteBump("vouchers");
-        mergeActiveCollectionsFromServerMirror();
+        mergeActiveCollectionsFromServerDelta();
       };
       if (isServerGateCompanyContext) {
         refreshPlServerLive();
         return;
       }
       if (embeddedClientPrefersQuietBackgroundSync()) {
-        const key = `${companyId}::server-mirror`;
+        const key = `${companyId}::server-delta`;
         const prevTimer = sqliteBumpMergeTimersRef.current[key];
         if (prevTimer) clearTimeout(prevTimer);
         sqliteBumpMergeTimersRef.current[key] = setTimeout(() => {
           delete sqliteBumpMergeTimersRef.current[key];
-          mergeActiveCollectionsFromServerMirror();
+          mergeActiveCollectionsFromServerDelta();
         }, embeddedSqliteBumpDebounceMs(pathname));
         return;
       }
-      mergeActiveCollectionsFromServerMirror();
+      mergeActiveCollectionsFromServerDelta();
     };
 
     window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
-    window.addEventListener(PL_SERVER_CLIENT_MIRROR_EVENT, onServerMirror);
+    window.addEventListener(PL_SERVER_CLIENT_DELTA_EVENT, onServerDelta);
     const onRestoreVouchersRefresh = (ev: Event) => {
       const d = (ev as CustomEvent<{ companyId?: string }>).detail;
       if (!d?.companyId || d.companyId !== companyId) return;
@@ -1606,7 +1669,7 @@ export const VoucherProvider = ({
     window.addEventListener(RESTORE_CLOUD_VOUCHERS_REFRESH_EVENT, onRestoreVouchersRefresh);
     return () => {
       window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
-      window.removeEventListener(PL_SERVER_CLIENT_MIRROR_EVENT, onServerMirror);
+      window.removeEventListener(PL_SERVER_CLIENT_DELTA_EVENT, onServerDelta);
       window.removeEventListener(RESTORE_CLOUD_VOUCHERS_REFRESH_EVENT, onRestoreVouchersRefresh);
       for (const t of Object.values(sqliteBumpMergeTimersRef.current)) clearTimeout(t);
       sqliteBumpMergeTimersRef.current = {};

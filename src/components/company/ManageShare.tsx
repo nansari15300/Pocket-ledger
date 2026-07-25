@@ -41,7 +41,7 @@ import { Checkbox } from "../ui/checkbox";
 import { Switch } from "../ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Permission, PermissionGroups } from "@/lib/permissions";
-import usePermissions, { type PermissionConfig, type UserRole, initialPermissionConfig } from "@/hooks/usePermissions";
+import usePermissions, { type PermissionConfig, type UserRole, initialPermissionConfig, normalizePermissionConfig } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
@@ -133,49 +133,13 @@ const flattenedPermissions = PermissionGroups.flatMap(g => g.permissions.map(p =
 
 /** Firestore / local company doc se aayi `permissionConfig` ko UI shape me merge — ek hi function dono path. */
 function buildMergedPermissionConfig(currentConfig: PermissionConfig | undefined | null): PermissionConfig {
-  const needsReset = !currentConfig || !currentConfig.roles || !currentConfig.dateLimits;
-  const base = needsReset ? initialPermissionConfig : currentConfig;
-  const merged: PermissionConfig = {
-    ...initialPermissionConfig,
-    ...base,
-    fileAttachmentLimits: {
-      ...initialPermissionConfig.fileAttachmentLimits,
-      ...(base.fileAttachmentLimits || {}),
-    },
-    allowAttachments:
-      base.allowAttachments !== undefined ? base.allowAttachments : initialPermissionConfig.allowAttachments,
-  };
-  if (merged.roles.owner) {
-    merged.roles.owner = Array(flattenedPermissions.length).fill(true);
-  }
+  return normalizePermissionConfig(currentConfig);
   // Har role ki boolean[] ko current PermissionGroups length tak pad — naye recurring keys align rahein.
-  const roleKeys = Object.keys(merged.roles) as UserRole[];
-  for (const roleKey of roleKeys) {
-    if (roleKey === "owner") continue;
-    const defaultArr = initialPermissionConfig.roles[roleKey] || [];
-    const stored = merged.roles[roleKey] || [];
-    merged.roles[roleKey] = flattenedPermissions.map((_, i) =>
-      i < stored.length ? !!stored[i] : !!defaultArr[i],
-    );
-  }
-  return merged;
 }
 
 /** Save se pehle har role array ko full length par normalize — sparse index bug avoid. */
 function normalizePermissionConfigForSave(config: PermissionConfig): PermissionConfig {
-  const out = JSON.parse(JSON.stringify(config)) as PermissionConfig;
-  if (out.roles.owner) {
-    out.roles.owner = Array(flattenedPermissions.length).fill(true);
-  }
-  for (const roleKey of Object.keys(out.roles) as UserRole[]) {
-    if (roleKey === "owner") continue;
-    const defaultArr = initialPermissionConfig.roles[roleKey] || [];
-    const stored = out.roles[roleKey] || [];
-    out.roles[roleKey] = flattenedPermissions.map((_, i) =>
-      i < stored.length ? !!stored[i] : !!defaultArr[i],
-    );
-  }
-  return out;
+  return normalizePermissionConfig(config);
 }
 
 export function ManageShare() {
@@ -205,11 +169,16 @@ export function ManageShare() {
   const [optimisticRevokedEmails, setOptimisticRevokedEmails] = useState<string[]>([]);
   const [plServerHostShareable, setPlServerHostShareable] = useState(false);
   const [plServerHostShareableResolved, setPlServerHostShareableResolved] = useState(false);
+  const hostShareableCompanyIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setPlServerHostShareableResolved(false);
     const cid = String(companyId || "").trim();
+    const companyChanged = hostShareableCompanyIdRef.current !== cid;
+    if (companyChanged) {
+      hostShareableCompanyIdRef.current = cid;
+      setPlServerHostShareableResolved(false);
+    }
     if (!cid || !companyData || !isOfflineCompanyStorage(companyData)) {
       setPlServerHostShareable(false);
       setPlServerHostShareableResolved(true);
@@ -246,7 +215,7 @@ export function ManageShare() {
       companyData.ownerEmail,
       ...(companyData.sharedWith || []).map((u: any) => u.email),
     ].filter(Boolean).map((e: string) => normalizeEmail(e));
-    
+
     const uniqueEmails = [...new Set(emails)];
 
     const chunk = (arr: string[], size: number) =>
@@ -499,12 +468,21 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
         setEditablePermissionConfig(saved);
       };
       
-      if (companyData && isOfflineCompanyStorage(companyData)) {
+      const { shouldPersistPermissionConfigViaPlServerHost, notifyPlServerHostCompanyMetaSaved } = await import(
+        "@/lib/plServerCompanyMetaSync"
+      );
+      const saveViaPlServerHost = await shouldPersistPermissionConfigViaPlServerHost(companyId, companyData);
+
+      if (saveViaPlServerHost) {
         const localOk = await updateCompanyDocRoot(companyId, { permissionConfig: configToSave });
         if (localOk) {
           reloadLocalCompanyRegistry();
           commitSavedPermissionConfig(configToSave);
-          toast({ title: "Success", description: "Permissions have been saved." });
+          void notifyPlServerHostCompanyMetaSaved(companyId, { permissionConfig: configToSave });
+          toast({
+            title: "Success",
+            description: "Permissions saved on this PC — staff clients sync via PL server.",
+          });
           return;
         }
         try {
@@ -518,7 +496,11 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
             } as LocalCompanyDoc);
             reloadLocalCompanyRegistry();
             commitSavedPermissionConfig(configToSave);
-            toast({ title: "Success", description: "Permissions have been saved (this device)." });
+            void notifyPlServerHostCompanyMetaSaved(companyId, { permissionConfig: configToSave });
+            toast({
+              title: "Success",
+              description: "Permissions saved (this device) — turn sharing ON so staff receive live updates.",
+            });
             return;
           }
         } catch (e) {
@@ -901,10 +883,6 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                 companyName={companyData.name}
                 allCompaniesRegistry={allCompaniesRegistry?.length ? allCompaniesRegistry : allCompanies}
                 variant="manageShare"
-                onUsersChanged={() => {
-                  void reloadLocalCompanyRegistry();
-                  triggerSync();
-                }}
               />
             </CardContent>
           </Card>
@@ -1367,5 +1345,3 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
     </div>
   );
 }
-
-    

@@ -5,14 +5,19 @@ import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { isServerGateCompany } from "@/lib/companyStorageKind";
 import { isLocalServerShareableCompany } from "@/lib/localServerShareableCompanies";
 import { isLocalAppServerHost } from "@/lib/localAppServerDevPreview";
-import { getElectronLocalServerApi } from "@/lib/electronLocalServer";
+import {
+  getElectronLocalServerApi,
+  isLocalAppServerSharingActive,
+  resolveLocalAppServerSharingPort,
+} from "@/lib/electronLocalServer";
 import { gateHttpPost } from "@/lib/gates/gateServerFetch";
 import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 import { isCanonicalServerBridgeRenderer } from "@/lib/hostBridgeWrite";
 import { PL_MIRROR_PROTOCOL_VERSION } from "@/lib/plMirrorProtocol";
 import { outboxJsonParse, outboxJsonStringify } from "@/lib/localVoucherOutbox";
 import { plPhase1bVerifyHook } from "@/lib/phase1bVerifyCapture";
-import { parseMirrorPushResponseOk } from "@/lib/plServerClientMirrorPush";
+import { parseDeltaPushResponseOk } from "@/lib/plServerClientDeltaSync";
+import { plServerVoucherFlowLog } from "@/lib/plServerLivePullDevLog";
 
 const PUBLISH_DEBOUNCE_MS = 400;
 const PUBLISH_RETRY_MS = 4_000;
@@ -30,8 +35,26 @@ function pushKey(companyId: string, collection: string, docId: string): string {
   return `${companyId}::${collection}::${docId}`;
 }
 
-function serializeMirrorDoc(doc: Record<string, unknown>): Record<string, unknown> {
+function serializeDeltaDoc(doc: Record<string, unknown>): Record<string, unknown> {
   return outboxJsonParse(outboxJsonStringify(doc));
+}
+
+/** Host PC par shareable local company — staff client / remote gate nahi. */
+export async function isPlServerShareableHostWriter(companyId: string): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+  if (isPlRemoteServerClientMode()) return false;
+  if (isCanonicalServerBridgeRenderer()) return false;
+  if (!isLocalAppServerHost()) return false;
+  const { isPlServerThinStaffClient } = await import("@/lib/plServerThinStaffClient");
+  if (isPlServerThinStaffClient()) return false;
+  const id = String(companyId || "").trim();
+  if (!id) return false;
+  try {
+    const row = await getLocalCompanyById(id, { includeDeleted: true });
+    return Boolean(row && isLocalServerShareableCompany(row) && !isServerGateCompany(row));
+  } catch {
+    return false;
+  }
 }
 
 /** Host PC loopback HTTP — main window + bridge dono se (attachment mirror / mirror publish). */
@@ -58,8 +81,9 @@ export async function resolvePlServerHostLoopbackTransport(
   let sharingPort: number | null = null;
   try {
     const status = await api.getStatus();
-    if (!status?.sharingActive || !status.sharingPort) return null;
-    sharingPort = status.sharingPort;
+    if (!isLocalAppServerSharingActive(status)) return null;
+    sharingPort = resolveLocalAppServerSharingPort(status);
+    if (!sharingPort) return null;
   } catch {
     return null;
   }
@@ -76,16 +100,16 @@ export async function resolvePlServerHostLoopbackTransport(
 export async function resolvePlServerHostPublishTransport(
   companyId: string
 ): Promise<HostPublishTransport | null> {
-  if (!isCanonicalServerBridgeRenderer()) return null;
+  if (!isCanonicalServerBridgeRenderer() && !isLocalAppServerHost()) return null;
   return resolvePlServerHostLoopbackTransport(companyId);
 }
 
-async function shouldPublishHostMirrorAfterBridgeWrite(companyId: string): Promise<boolean> {
+async function shouldPublishHostDeltaAfterBridgeWrite(companyId: string): Promise<boolean> {
   const transport = await resolvePlServerHostPublishTransport(companyId);
   return transport != null;
 }
 
-function scheduleHostMirrorPublishRetry(companyId: string, collection: string): void {
+function scheduleHostDeltaPublishRetry(companyId: string, collection: string): void {
   const debounceKey = `${String(companyId || "").trim()}::${String(collection || "").trim()}`;
   if (!debounceKey || debounceKey === "::") return;
   if (retryByKey.has(debounceKey)) return;
@@ -93,16 +117,16 @@ function scheduleHostMirrorPublishRetry(companyId: string, collection: string): 
     debounceKey,
     setTimeout(() => {
       retryByKey.delete(debounceKey);
-      void flushHostMirrorPublishQueue(companyId, collection);
+      void flushHostDeltaPublishQueue(companyId, collection);
     }, PUBLISH_RETRY_MS)
   );
 }
 
-async function flushHostMirrorPublishQueue(companyId: string, collection: string): Promise<void> {
+async function flushHostDeltaPublishQueue(companyId: string, collection: string): Promise<void> {
   const cid = String(companyId || "").trim();
   const col = String(collection || "").trim();
   if (!cid || !col || !(COLLECTIONS_TO_BACKUP as readonly string[]).includes(col)) return;
-  if (!(await shouldPublishHostMirrorAfterBridgeWrite(cid))) return;
+  if (!(await shouldPublishHostDeltaAfterBridgeWrite(cid))) return;
 
   const transport = await resolvePlServerHostPublishTransport(cid);
   if (!transport) return;
@@ -116,8 +140,18 @@ async function flushHostMirrorPublishQueue(companyId: string, collection: string
   }
   if (!docs.length) return;
 
-  const url = `${transport.baseUrl.replace(/\/$/, "")}/__pl_company_mirror_push`;
+  const url = `${transport.baseUrl.replace(/\/$/, "")}/__pl_company_delta_push`;
   try {
+    await import("@/lib/localSqlite")
+      .then(({ flushPendingBrowserDbSave }) => flushPendingBrowserDbSave())
+      .catch(() => undefined);
+    if (col === "vouchers") {
+      plServerVoucherFlowLog("host_publish_start", {
+        companyId: cid,
+        count: docs.length,
+        ids: docs.map((doc) => String(doc.id || "")).filter(Boolean).slice(0, 10),
+      });
+    }
     const { status, body } = await gateHttpPost(url, transport.accessToken, {
       companyId: cid,
       collection: col,
@@ -125,27 +159,51 @@ async function flushHostMirrorPublishQueue(companyId: string, collection: string
       mirrorProtocol: PL_MIRROR_PROTOCOL_VERSION,
       hostSelfPublish: true,
     });
-    const parsed = parseMirrorPushResponseOk(status, body, docs.length);
+    const parsed = parseDeltaPushResponseOk(status, body, docs.length);
     if (!parsed.ok) {
-      console.warn("[plServerHostMirrorPublish] publish failed", {
+      console.warn("[plServerHostDeltaPublish] publish failed", {
         status,
         error: parsed.error || body,
         sent: docs.length,
       });
       if (!parsed.protocolReject) {
-        scheduleHostMirrorPublishRetry(cid, col);
+        scheduleHostDeltaPublishRetry(cid, col);
+      }
+      if (col === "vouchers") {
+        plServerVoucherFlowLog("host_publish_failed", {
+          companyId: cid,
+          status,
+          sent: docs.length,
+          error: parsed.error || body,
+        });
       }
       return;
     }
     for (const key of keysToFlush) queuedDocs.delete(key);
     plPhase1bVerifyHook("onHostPublishSuccess");
+    if (col === "vouchers") {
+      plServerVoucherFlowLog("host_publish_done", {
+        companyId: cid,
+        status,
+        sent: docs.length,
+        applied: parsed.applied,
+        hostSelfPublish: true,
+      });
+    }
   } catch (e) {
-    console.warn("[plServerHostMirrorPublish] publish error", { error: e });
-    scheduleHostMirrorPublishRetry(cid, col);
+    console.warn("[plServerHostDeltaPublish] publish error", { error: e });
+    if (col === "vouchers") {
+      plServerVoucherFlowLog("host_publish_error", {
+        companyId: cid,
+        sent: docs.length,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+    scheduleHostDeltaPublishRetry(cid, col);
   }
 }
 
-function queueHostMirrorPublishDoc(
+function queueHostDeltaPublishDoc(
   companyId: string,
   collection: string,
   docId: string,
@@ -155,7 +213,16 @@ function queueHostMirrorPublishDoc(
   const col = String(collection || "").trim();
   const id = String(docId || "").trim();
   if (!cid || !col || !id) return;
-  queuedDocs.set(pushKey(cid, col, id), serializeMirrorDoc({ ...doc, id }));
+  queuedDocs.set(pushKey(cid, col, id), serializeDeltaDoc({ ...doc, id }));
+  if (col === "vouchers") {
+    plServerVoucherFlowLog("host_publish_queued", {
+      companyId: cid,
+      voucherId: id,
+      type: String(doc.type || ""),
+      voucherNumber: String(doc.voucherNumber || ""),
+      queueSize: [...queuedDocs.keys()].filter((key) => key.startsWith(`${cid}::${col}::`)).length,
+    });
+  }
   const debounceKey = `${cid}::${col}`;
   const prev = pendingByKey.get(debounceKey);
   if (prev) clearTimeout(prev);
@@ -163,19 +230,19 @@ function queueHostMirrorPublishDoc(
     debounceKey,
     setTimeout(() => {
       pendingByKey.delete(debounceKey);
-      void flushHostMirrorPublishQueue(cid, col as CompanyBackupCollection);
+      void flushHostDeltaPublishQueue(cid, col as CompanyBackupCollection);
     }, PUBLISH_DEBOUNCE_MS)
   );
 }
 
 /** After bridge-authoritative commit + flush — Host publishes to PlServer once (no duplicate SQLite apply). */
-export async function maybePublishHostMirrorAfterBridgeWrite(
+export async function maybePublishHostDeltaAfterBridgeWrite(
   companyId: string,
   collection: string,
   docId: string,
   doc: Record<string, unknown>
 ): Promise<void> {
-  if (!(await shouldPublishHostMirrorAfterBridgeWrite(companyId))) return;
+  if (!(await shouldPublishHostDeltaAfterBridgeWrite(companyId))) return;
   plPhase1bVerifyHook("onHostPublishQueue");
-  queueHostMirrorPublishDoc(companyId, collection, docId, doc);
+  queueHostDeltaPublishDoc(companyId, collection, docId, doc);
 }

@@ -32,7 +32,7 @@ import { useDate } from "@/hooks/useDate";
 import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import { loadVoucherDataForDeletePreCheck, resolveVoucherDeleteBackdateDate } from "@/lib/voucherDeletePreCheck";
 import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { findVoucherInLocalMirrorByNumberAndType } from "@/lib/localCompanyDocMirror";
 import {
@@ -52,7 +52,7 @@ import {
 import BsDatePicker from "../ui/BsDatePicker";
 import { Combobox } from "@/components/ui/combobox";
 import { FilePreview } from "../vouchers/FilePreview";
-import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
@@ -164,6 +164,7 @@ export function CreateContraForm({
   const isMobile = useIsMobile();
 
   const [isLoading, setIsLoading] = useState(false);
+  const isAttachmentProcessing = useVoucherAttachmentProcessing();
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [targetFieldForNewAccount, setTargetFieldForNewAccount] = useState<'fromAccountId' | 'toAccountId' | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1258,21 +1259,35 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   processAndSaveRef.current = processAndSave;
 
   const handleDelete = async () => {
-    if (!savedVoucherId || !companyId) return;
+    const voucherIdToDelete = savedVoucherId || voucher?.id || null;
+    if (!voucherIdToDelete || !companyId) return;
     
     try {
-      // Permission check: delete
       assertCan(can, "delete_records");
-      
-      // Get voucher date for backdate limit check
-      const voucherDoc = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, savedVoucherId));
-      const voucherData = voucherDoc.exists() ? voucherDoc.data() : null;
+      const { voucherData, exists: voucherDocExists } = await loadVoucherDataForDeletePreCheck({
+        companyId,
+        voucherId: voucherIdToDelete,
+        company,
+        fallbackVoucher: (voucher as Record<string, unknown> | null) ?? null,
+        vouchers: allVouchers as Array<{ id?: string } & Record<string, unknown>> | null,
+      });
+      if (!canDeleteVoucher(voucherData)) {
+        throw new PermissionDeniedError(
+          (voucherData as any)?.isApproved
+            ? "You do not have permission to delete approved vouchers."
+            : "You do not have permission to delete records."
+        );
+      }
       if (voucherData && hasPaymentLinks(voucherData)) {
         toast({ variant: "destructive", title: "Cannot Delete", description: "First unlink linked transactions." });
         return;
       }
-      if (voucherDoc.exists() && voucherData) {
-        const voucherDate = voucherData.date?.toDate ? voucherData.date.toDate() : new Date(voucherData.date);
+      if (voucherDocExists && voucherData) {
+        const voucherDate = resolveVoucherDeleteBackdateDate(voucherData, {
+          form: "contra",
+          companyId,
+          voucherId: voucherIdToDelete,
+        });
         assertCanPerformBackdated(canPerformBackdatedAction, "delete", voucherDate);
       }
     } catch (error) {
@@ -1295,7 +1310,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     setIsLoading(true);
     try {
         // Delete action local-first helper ke through run karo.
-        await softDeleteVoucherMoveToRecycleBin(companyId, savedVoucherId, user?.uid || "");
+        await softDeleteVoucherMoveToRecycleBin(companyId, voucherIdToDelete, user?.uid || "");
         toast({ title: "Voucher Moved to Bin" });
         onVoucherAction?.('cancelled', false, savedVoucherId);
     } catch (error) {
@@ -2077,22 +2092,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher?.id || linkPayOthersDisabled || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
                   History
                 </Button>
-                <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
+                <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={linkPayOthersDisabled || isLoading || isAttachmentProcessing || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
                   Save & Print
                 </Button>
                 {/* Row 1: Cancel (left) | Save (middle) | Approve (right) — Link spend-wise ab To Voucher card mein */}
                 <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
                 </Button>
-                <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                <Button type="submit" disabled={linkPayOthersDisabled || isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
                   {isLoading ? "..." : "Save"}
                 </Button>
                 {voucher?.id ? (
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
                   </Button>
                 ) : showSaveAndApproveOnCreate ? (
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || isLoading || isAttachmentProcessing || editingDisabled} className={cn("w-full", BTN_APPROVE_CLASS)}>
                     {isLoading ? "..." : "Save & Approve"}
                   </Button>
                 ) : (
@@ -2129,25 +2144,25 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
                     Cancel
                   </Button>
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={linkPayOthersDisabled || !!voucher || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={linkPayOthersDisabled || !!voucher || isLoading || isAttachmentProcessing || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save & New
                   </Button>
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={linkPayOthersDisabled || isLoading || isAttachmentProcessing || editingDisabled} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}>
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={linkPayOthersDisabled || isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>
                   {voucher?.id ? (
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                       {isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                   ) : (
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || !showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || !showSaveAndApproveOnCreate || isLoading || isAttachmentProcessing || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       Save & Approve
                     </Button>

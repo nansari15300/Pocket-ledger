@@ -6,7 +6,7 @@ import type {
 
 /** Drive transport — primary DB nahi, sirf delta JSON + attachment bytes. */
 export interface SyncProvider {
-  readonly providerId: "google_drive";
+  readonly providerId: "google_drive" | "dropbox";
 
   uploadOperation(ref: CloudSyncCompanyRef, op: LocalCloudSyncOperation): Promise<void>;
 

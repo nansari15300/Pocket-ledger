@@ -53,7 +53,7 @@ import {
 } from "@/lib/voucherAttachmentPdfAsImage";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { Upload } from "lucide-react";
-import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
@@ -177,6 +177,7 @@ export function CreateProductionForm({
   const { processedItems } = useVouchers();
   const [items, setItems] = useState<Item[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const isAttachmentProcessing = useVoucherAttachmentProcessing();
   const [isCreateItemOpen, setIsCreateItemOpen] = useState(false);
   const [pendingItemIndex, setPendingItemIndex] = useState<{ type: 'raw' | 'finished', index: number } | null>(null);
   const [prefillFinishedGoodName, setPrefillFinishedGoodName] = useState("");
@@ -1269,15 +1270,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+              <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
                 {isLoading ? "..." : "Save"}
               </Button>
               {voucher?.id ? (
-                <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) { approveAfterSaveRef.current = true; form.handleSubmit(onSubmit)(); } else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) { approveAfterSaveRef.current = true; form.handleSubmit(onSubmit)(); } else onApprove?.(); }} disabled={isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
                   {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
                 </Button>
               ) : showSaveAndApproveOnCreate ? (
-                <Button type="button" onClick={(e) => { e.preventDefault(); approveAfterSaveRef.current = true; form.handleSubmit(onSubmit)(); }} disabled={isLoading || editingDisabled} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                <Button type="button" onClick={(e) => { e.preventDefault(); approveAfterSaveRef.current = true; form.handleSubmit(onSubmit)(); }} disabled={isLoading || isAttachmentProcessing || editingDisabled} className={cn("w-full", BTN_APPROVE_CLASS)}>
                   {isLoading ? "..." : "Save & Approve"}
                 </Button>
               ) : null}
@@ -1312,17 +1313,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 </Button>
                 <Button type="button" disabled className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>
                 <Button type="button" disabled className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}><Printer className="mr-2 h-4 w-4" /> Save & Print</Button>
-                <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save
                 </Button>
                 {voucher?.id ? (
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) { approveAfterSaveRef.current = true; form.handleSubmit(onSubmit)(); } else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) { approveAfterSaveRef.current = true; form.handleSubmit(onSubmit)(); } else onApprove?.(); }} disabled={isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                     {isFormDirty ? "Save & Approve" : "Approve"}
                   </Button>
                 ) : showSaveAndApproveOnCreate ? (
-                  <Button type="button" onClick={(e) => { e.preventDefault(); approveAfterSaveRef.current = true; form.handleSubmit(onSubmit)(); }} disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={(e) => { e.preventDefault(); approveAfterSaveRef.current = true; form.handleSubmit(onSubmit)(); }} disabled={isLoading || isAttachmentProcessing || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                     {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                     Save & Approve
                   </Button>

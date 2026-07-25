@@ -32,7 +32,12 @@ import {
 } from "date-fns";
 import { adToBs, bsToAd, getBSMonthDays, NEPALI_MONTHS, addBsMonths } from "@/lib/bs-date";
 import type { DateRange } from "@/components/ui/ad-calendar";
-import { MonthYearFilter } from "@/components/dashboard/MonthYearFilter";
+import {
+    formatMonthYearRangeLabel,
+    getCurrentMonthDateRange,
+    isCurrentMonthDateRange,
+    MonthYearFilter,
+} from "@/components/dashboard/MonthYearFilter";
 import { openPrintDirect } from "@/lib/printDirect";
 import { orderedCashFlowCategories } from "@/lib/cashFlowCategoryOrder";
 import {
@@ -469,8 +474,13 @@ export function FinancialSummaryCards({
     const getTaxTotalLabel = (taxName: string) =>
         taxName === "VAT / Sales Tax" ? "VAT / Sales, purchage Tax" : taxName;
 
-    // Date ranges for filtering
-    const [receivablesDateRange, setReceivablesDateRange] = useState<DateRange | undefined>(undefined);
+    const currentDashboardMonthRange = React.useCallback(
+        () => getCurrentMonthDateRange(dateSystem),
+        [dateSystem]
+    );
+
+    // Dashboard cards default to current month. Opening-style cards still roll older vouchers into the range opening.
+    const [receivablesDateRange, setReceivablesDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
 
     /** Cloud: R/P totals server aggregation — vouchers par local reduce tabhi jab API use nahi ho sakti. */
     const {
@@ -485,10 +495,32 @@ export function FinancialSummaryCards({
         enabled: true,
     });
 
-    const [cashFlowDateRange, setCashFlowDateRange] = useState<DateRange | undefined>(undefined);
-    const [taxDateRange, setTaxDateRange] = useState<DateRange | undefined>(undefined);
-    const [stockDateRange, setStockDateRange] = useState<DateRange | undefined>(undefined);
-    const [bankCashDateRange, setBankCashDateRange] = useState<DateRange | undefined>(undefined);
+    const [cashFlowDateRange, setCashFlowDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
+    const [taxDateRange, setTaxDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
+    const [stockDateRange, setStockDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
+    const [bankCashDateRange, setBankCashDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
+    const [voucherStatsDateRange, setVoucherStatsDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
+
+    const previousDateSystemRef = useRef(dateSystem);
+    useEffect(() => {
+        const previousDateSystem = previousDateSystemRef.current;
+        if (previousDateSystem === dateSystem) return;
+        const nextCurrentRange = getCurrentMonthDateRange(dateSystem);
+        const keepCurrentMonthMode = (
+            setRange: React.Dispatch<React.SetStateAction<DateRange | undefined>>
+        ) => {
+            setRange((range) =>
+                isCurrentMonthDateRange(range, previousDateSystem) ? nextCurrentRange : range
+            );
+        };
+        keepCurrentMonthMode(setReceivablesDateRange);
+        keepCurrentMonthMode(setCashFlowDateRange);
+        keepCurrentMonthMode(setTaxDateRange);
+        keepCurrentMonthMode(setStockDateRange);
+        keepCurrentMonthMode(setBankCashDateRange);
+        keepCurrentMonthMode(setVoucherStatsDateRange);
+        previousDateSystemRef.current = dateSystem;
+    }, [dateSystem]);
 
     // Dialog states
     const [receivablesPayablesOpen, setReceivablesPayablesOpen] = useState(false);
@@ -1936,11 +1968,26 @@ export function FinancialSummaryCards({
         return { debit, credit };
     };
 
+    const voucherStatsRangeLabel = useMemo(
+        () => formatMonthYearRangeLabel(voucherStatsDateRange, dateSystem),
+        [voucherStatsDateRange, dateSystem]
+    );
+
+    const voucherStatsFilteredVouchers = useMemo(() => {
+        if (!voucherStatsDateRange?.from) return vouchers || [];
+        const fromDate = startOfDay(voucherStatsDateRange.from);
+        const toDate = voucherStatsDateRange.to ? endOfDay(voucherStatsDateRange.to) : endOfDay(fromDate);
+        return (vouchers || []).filter((v) => {
+            const txDate = safeToDate(v.date);
+            return txDate && txDate >= fromDate && txDate <= toDate;
+        });
+    }, [vouchers, voucherStatsDateRange]);
+
     const stats = useMemo(() => {
         if (!vouchers) return { otherStats: statCardData.map(s => ({ ...s, total: 0, count: 0 })) };
 
         const otherStats = statCardData.map((card) => {
-            const filteredVouchers = vouchers.filter((v) => {
+            const filteredVouchers = voucherStatsFilteredVouchers.filter((v) => {
                 if (card.type === 'journal') return v.type === 'journal' && !v.subType;
                 if (card.type === 'add_salary') return v.type === 'journal' && v.subType === 'add_salary';
                 if (card.type === 'pay_salary') return voucherCountsAsDashboardPaySalary(v);
@@ -1959,7 +2006,7 @@ export function FinancialSummaryCards({
         });
 
         return { otherStats };
-    }, [vouchers]);
+    }, [vouchers, voucherStatsFilteredVouchers]);
 
     /** Desktop: Stock Summary height = right voucher-stats column (3/4/5 rows — screen par). */
     const voucherStatsColRef = useRef<HTMLDivElement>(null);
@@ -1991,7 +2038,7 @@ export function FinancialSummaryCards({
 
     // Chart tab: har voucher-type card ke liye din (AD calendar day) par total amount — dashboard totals se same filter/amount rules.
     const voucherStatDateChartData = useMemo(() => {
-        if (!showVoucherDateCharts || !vouchers?.length) return {} as Record<string, { name: string; amount: number }[]>;
+        if (!showVoucherDateCharts || !voucherStatsFilteredVouchers.length) return {} as Record<string, { name: string; amount: number }[]>;
         const matchCard = (v: any, cardType: string) => {
             if (cardType === "journal") return v.type === "journal" && !v.subType;
             if (cardType === "add_salary") return v.type === "journal" && v.subType === "add_salary";
@@ -2007,7 +2054,7 @@ export function FinancialSummaryCards({
         };
         const out: Record<string, { name: string; amount: number }[]> = {};
         for (const card of statCardData) {
-            const filtered = vouchers.filter((v) => matchCard(v, card.type));
+            const filtered = voucherStatsFilteredVouchers.filter((v) => matchCard(v, card.type));
             const dayMap = new Map<string, number>();
             for (const v of filtered) {
                 const d = safeToDate(v.date);
@@ -2024,7 +2071,7 @@ export function FinancialSummaryCards({
             });
         }
         return out;
-    }, [showVoucherDateCharts, vouchers, dateSystem, formatDate, formatDateBS]);
+    }, [showVoucherDateCharts, voucherStatsFilteredVouchers, dateSystem, formatDate, formatDateBS]);
 
     // Chart tab: Cash Flow card — voucher date + card wala month filter; 3 mini bars (in / out / net).
     const dashboardCashFlowDailyTri = useMemo(() => {
@@ -2218,10 +2265,9 @@ export function FinancialSummaryCards({
             const dk = format(startOfDay(day), "yyyy-MM-dd");
             let slice: any[];
             if (receivablesDateRange?.from) {
-                const fromDate = startOfDay(receivablesDateRange.from);
                 slice = vouchers.filter((v) => {
                     const tx = safeToDate(v.date);
-                    return tx && tx >= fromDate && tx <= endD;
+                    return tx && tx <= endD;
                 });
             } else {
                 slice = vouchers.filter((v) => {
@@ -2326,21 +2372,21 @@ export function FinancialSummaryCards({
     /** Total Vouchers card: voucher `date` par din-wise count (mini chart). */
     const entityChartVouchersDaily = useMemo(() => {
         if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
-        const dates = (vouchers || []).map((v: any) => safeToDate(v.date)).filter(Boolean) as Date[];
+        const dates = voucherStatsFilteredVouchers.map((v: any) => safeToDate(v.date)).filter(Boolean) as Date[];
         return buildDailyCountChart(dates, dateSystem, formatDate, formatDateBS);
-    }, [showVoucherDateCharts, vouchers, dateSystem, formatDate, formatDateBS]);
+    }, [showVoucherDateCharts, voucherStatsFilteredVouchers, dateSystem, formatDate, formatDateBS]);
 
     const entityChartVouchersCountPointsByDay = useMemo(() => {
         if (!showVoucherDateCharts) return [] as ChartDayPoint[];
-        const dates = (vouchers || []).map((v: any) => safeToDate(v.date)).filter(Boolean) as Date[];
+        const dates = voucherStatsFilteredVouchers.map((v: any) => safeToDate(v.date)).filter(Boolean) as Date[];
         return buildDailyCountPointsByDay(dates);
-    }, [showVoucherDateCharts, vouchers]);
+    }, [showVoucherDateCharts, voucherStatsFilteredVouchers]);
 
     /** View full popup: us din sab vouchers ka total amount (`total`/`amount`). */
     const voucherAmountPointsByDay = useMemo(() => {
         if (!showVoucherDateCharts) return [] as ChartDayPoint[];
         const dayMap = new Map<string, number>();
-        for (const v of vouchers || []) {
+        for (const v of voucherStatsFilteredVouchers) {
             const d = safeToDate(v.date);
             if (!d) continue;
             const k = format(startOfDay(d), "yyyy-MM-dd");
@@ -2350,7 +2396,7 @@ export function FinancialSummaryCards({
         return Array.from(dayMap.entries())
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([dayKey, amount]) => ({ dayKey, amount }));
-    }, [showVoucherDateCharts, vouchers]);
+    }, [showVoucherDateCharts, voucherStatsFilteredVouchers]);
 
     // Chart tab: Stock — item master create date se daily add count.
     const dashboardStockItemAdds = useMemo(() => {
@@ -2598,9 +2644,26 @@ export function FinancialSummaryCards({
                 key={stat.type}
                 className={`hover:bg-muted/50 transition-colors self-start ${dashboardCardRibbonClass} ${ribbonTone(idx + 5)}`}
             >
-                <CardHeader className="p-3 flex-row items-center justify-between">
-                    <CardTitle className="text-sm whitespace-nowrap">{stat.title}</CardTitle>
-                    <stat.icon className="h-5 w-5 text-muted-foreground" />
+                <CardHeader className="p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                        <CardTitle className="min-w-0 truncate text-sm whitespace-nowrap">{stat.title}</CardTitle>
+                        <stat.icon className="h-5 w-5 shrink-0 text-muted-foreground" />
+                    </div>
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                        <span
+                            className="min-w-0 truncate text-[11px] font-medium text-muted-foreground"
+                            title={`Range: ${voucherStatsRangeLabel}`}
+                        >
+                            Range: {voucherStatsRangeLabel}
+                        </span>
+                        <div className="shrink-0 [&_button]:h-7 [&_button]:max-w-[7.5rem] [&_button]:px-2 [&_button]:text-[11px]">
+                            <MonthYearFilter
+                                dateRange={voucherStatsDateRange}
+                                setDateRange={setVoucherStatsDateRange}
+                                dateSystem={dateSystem}
+                            />
+                        </div>
+                    </div>
                 </CardHeader>
                 <CardContent className="p-3 pt-0">
                     {stat.type === "journal" || stat.type === "add_salary" || stat.type === "contra" ? (
@@ -4202,7 +4265,7 @@ export function FinancialSummaryCards({
                         },
                         {
                             title: "Total Vouchers",
-                            value: vouchers.length,
+                            value: voucherStatsFilteredVouchers.length,
                             chart: showVoucherDateCharts ? entityChartVouchersDaily : null,
                             chartLabel: "Vouchers added/day (count)",
                             chartColor: "#6366f1",
@@ -4222,6 +4285,11 @@ export function FinancialSummaryCards({
                             </CardHeader>
                             <CardContent className="p-3 pt-0">
                                 <div className="text-2xl font-bold">{item.value}</div>
+                                {item.title === "Total Vouchers" && (
+                                    <p className="mt-0.5 truncate text-[11px] font-medium text-muted-foreground" title={`Range: ${voucherStatsRangeLabel}`}>
+                                        Range: {voucherStatsRangeLabel}
+                                    </p>
+                                )}
                                 {item.chart && (
                                     <div className="mt-2 border-t border-border/50 pt-2">
                                         {renderDashboardMiniBar(

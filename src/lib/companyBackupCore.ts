@@ -15,9 +15,11 @@ import {
 import type { QueryDocumentSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { encryptData, encryptBytes } from "@/lib/encryption";
+import { normalizeRestoreAllowedGmailList } from "@/lib/backupRestoreAccess";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { packPlbpZipBackup } from "@/lib/plbpBackupZip";
+import { resolveWebBackupDirectoryForRelativePath } from "@/lib/autoBackupPath";
 import {
   readBackupSaveLocationPrefs,
   readWebBackupDirectoryHandle,
@@ -31,7 +33,14 @@ import {
   buildAttachmentZipFromRefs,
   collectAttachmentRefsFromBackupData,
   prepareBackupDataForOfflineFileBackup,
+  prepareBackupDataForOfflineIntent,
+  stripListedAttachmentRefsFromBackupData,
 } from "@/lib/attachmentBackupBundle";
+import {
+  formatBackupAttachmentPreflightError,
+  preflightBackupAttachmentsBeforeEmbed,
+  scanLocalAttachmentAvailabilityForBackup,
+} from "@/lib/backupAttachmentPreflight";
 import {
   bytesPerSecToMbps,
   estimateRemainingFromFilePace,
@@ -41,10 +50,6 @@ import {
   checkAttachmentBackupAllowed,
   incrementAttachmentBackupUsage,
 } from "@/lib/attachmentBackupUsage";
-import {
-  formatBackupAttachmentPreflightError,
-  preflightBackupAttachmentsBeforeEmbed,
-} from "@/lib/backupAttachmentPreflight";
 import {
   loadIncrementalAttachmentCacheFromBackupLocation,
   refsMissingFromIncrementalCache,
@@ -83,8 +88,19 @@ async function blobToBase64DataUrl(blob: Blob): Promise<string> {
   });
 }
 
-export async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string): Promise<{ where: string }> {
+export async function saveBackupBlobWithBestEffort(
+  blob: Blob,
+  fileName: string,
+  opts?: { relativeDir?: string | null }
+): Promise<{ where: string }> {
   const savePrefs = readBackupSaveLocationPrefs();
+  const relativeDir = String(opts?.relativeDir || "")
+    .trim()
+    .replace(/^[\\/]+|[\\/]+$/g, "");
+  const joinRel = (base: string, sep: string) =>
+    relativeDir ? `${base.replace(/[/\\]+$/, "")}${sep}${relativeDir.replace(/\\/g, "/")}${sep}${fileName}` : `${base.replace(/[/\\]+$/, "")}${sep}${fileName}`;
+  const safFileName = relativeDir ? `${relativeDir.replace(/\\/g, "/")}/${fileName}` : fileName;
+
   if (Capacitor.isNativePlatform()) {
     try {
       const dataUrl = await blobToBase64DataUrl(blob);
@@ -93,8 +109,8 @@ export async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string)
       if (treeUri.startsWith("content://")) {
         try {
           const { BackupSaf } = await import("@/lib/capacitorBackupSaf");
-          await BackupSaf.writeToTreeUri({ treeUri, fileName, data: base64 });
-          return { where: "Selected folder (device)" };
+          await BackupSaf.writeToTreeUri({ treeUri, fileName: safFileName, data: base64 });
+          return { where: relativeDir ? `Selected folder/${relativeDir}` : "Selected folder (device)" };
         } catch {
           /* fall through */
         }
@@ -112,7 +128,7 @@ export async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string)
           ? ((Directory as unknown as Record<string, unknown>).ExternalStorage ?? Directory.Documents)
           : Directory.Documents;
       const rawSubfolder = String(savePrefs.nativeSubfolder || "").trim();
-      const safeSubfolder = rawSubfolder.replace(/^[\\/]+|[\\/]+$/g, "");
+      const safeSubfolder = [rawSubfolder, relativeDir].filter(Boolean).join("/").replace(/^[\\/]+|[\\/]+$/g, "");
       const finalPath = safeSubfolder ? `${safeSubfolder}/${fileName}` : fileName;
       if (safeSubfolder) {
         await Filesystem.mkdir({
@@ -142,16 +158,13 @@ export async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string)
   let webPreferredFolderFailed = false;
   if (typeof window !== "undefined") {
     try {
-      // Web + static: saved DirectoryHandle par direct save (Chromium File System Access).
       if (!isNativeRuntime() && savePrefs.webUseSelectedFolder) {
-        // Electron EXE: stored absolute path — poora D:\… path par likho (handle optional).
         if (isElectronDesktopApp() && savePrefs.webFolderDisplayPath) {
           try {
             const { writeElectronBackupFile } = await import("@/lib/electronBackupFolder");
-            await writeElectronBackupFile(savePrefs.webFolderDisplayPath, fileName, blob);
-            const dir = savePrefs.webFolderDisplayPath.replace(/[/\\]+$/, "");
+            await writeElectronBackupFile(savePrefs.webFolderDisplayPath, fileName, blob, relativeDir || undefined);
             const sep = savePrefs.webFolderDisplayPath.includes("\\") ? "\\" : "/";
-            return { where: `${dir}${sep}${fileName}` };
+            return { where: joinRel(savePrefs.webFolderDisplayPath, sep) };
           } catch {
             /* fall through to DirectoryHandle / Save As */
           }
@@ -177,14 +190,15 @@ export async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string)
           }
           if (!webPreferredFolderFailed) {
             try {
-              const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+              const targetDir = await resolveWebBackupDirectoryForRelativePath(dirHandle, relativeDir);
+              const fileHandle = await targetDir.getFileHandle(fileName, { create: true });
               const writable = await fileHandle.createWritable();
               await writable.write(blob);
               await writable.close();
               const label =
                 savePrefs.webFolderDisplayPath || savePrefs.webFolderLabel || "Selected folder";
               const sep = label.includes("\\") ? "\\" : "/";
-              return { where: `${label.replace(/[/\\]+$/, "")}${sep}${fileName}` };
+              return { where: joinRel(label, sep) };
             } catch (e) {
               if (e instanceof DOMException && e.name === "NotAllowedError") {
                 webPreferredFolderFailed = true;
@@ -410,8 +424,29 @@ async function buildCompanyDetailsForBackup(input: {
   return [base as Record<string, unknown>];
 }
 
+function applyBackupRestoreGmailsToCompanyDetails(
+  companyDetails: Array<Record<string, unknown>>,
+  backupRestoreGmails?: string[] | null
+): Array<Record<string, unknown>> {
+  const emails = normalizeRestoreAllowedGmailList(backupRestoreGmails);
+  if (!emails.length || !companyDetails.length) return companyDetails;
+  const row: Record<string, unknown> = { ...companyDetails[0], backupRestoreEmails: emails };
+  if (emails.length === 1) row.backupRestoreGmail = emails[0];
+  return [row, ...companyDetails.slice(1)];
+}
+
 /** `local_only` = sirf is device ka SQLite; Firestore / online sync skip (offline recovery). */
 export type CompanyBackupSourceMode = "local_only" | "online_merge";
+
+/** Backup purpose: offline portable (no HTTPS) vs online/cloud-restorable (keep remote URLs). */
+export type CompanyBackupIntent = "for_online" | "for_offline";
+
+/**
+ * Missing attachment files on device:
+ * - `download_missing` — cloud se download karke embed
+ * - `local_only` — missing URLs hatao; sirf local/pending bytes embed
+ */
+export type CompanyBackupAttachmentMissingPolicy = "download_missing" | "local_only";
 
 export type ExecuteCompanyBackupInput = {
   company: Company;
@@ -421,6 +456,14 @@ export type ExecuteCompanyBackupInput = {
   includeAttachments: boolean;
   /** Default: static/APK/EXE → local_only behaviour jab set na ho; explicit choice UI se aata hai. */
   backupSourceMode?: CompanyBackupSourceMode;
+  /** Default: local_only → for_offline; online_merge → for_online. */
+  backupIntent?: CompanyBackupIntent;
+  /** With attachments: missing files download vs strip + continue. Default download when online merge. */
+  attachmentMissingPolicy?: CompanyBackupAttachmentMissingPolicy;
+  /** Auto backup: `{company}/{timestamp}` under saved backup location. */
+  backupRelativeDir?: string | null;
+  /** Gmail list allowed to restore this backup file (stored in companyDetails). */
+  backupRestoreGmails?: string[] | null;
   onProgress: (p: CompanyBackupProgress) => void;
   signal?: AbortSignal;
 };
@@ -446,13 +489,23 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
     accountPlanId,
     includeAttachments,
     backupSourceMode = backupPrefersLocalSnapshot() ? "local_only" : "online_merge",
+    backupIntent: backupIntentInput,
+    attachmentMissingPolicy: attachmentMissingPolicyInput,
+    backupRelativeDir,
+    backupRestoreGmails,
     onProgress,
     signal,
   } = input;
   const localOnlySource = backupSourceMode === "local_only";
-  if (!company.password) return { ok: false, error: "Company password required." };
+  const backupIntent: CompanyBackupIntent =
+    backupIntentInput ?? (localOnlySource ? "for_offline" : "for_online");
+  const offlineIntent = backupIntent === "for_offline";
+  const attachmentMissingPolicy: CompanyBackupAttachmentMissingPolicy =
+    attachmentMissingPolicyInput ??
+    (localOnlySource ? "local_only" : "download_missing");
+  const encryptionPassword = String(company.password || "").trim();
 
-  if (includeAttachments && !localOnlySource) {
+  if (includeAttachments && !localOnlySource && !offlineIntent) {
     const gate = await checkAttachmentBackupAllowed(ownerUid, accountPlanId);
     if (!gate.allowed) return { ok: false, error: gate.message || "Attachment backup not allowed." };
   }
@@ -470,13 +523,16 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
     const onlineForBackup = typeof navigator !== "undefined" && navigator.onLine;
     const preferLocalSnapshot = backupPrefersLocalSnapshot() || localOnlySource;
 
-    const companyDetails = await buildCompanyDetailsForBackup({
-      company,
-      companyId,
-      fsCompanyId,
-      preferLocalSnapshot,
-      onlineForBackup,
-    });
+    const companyDetails = applyBackupRestoreGmailsToCompanyDetails(
+      await buildCompanyDetailsForBackup({
+        company,
+        companyId,
+        fsCompanyId,
+        preferLocalSnapshot,
+        onlineForBackup,
+      }),
+      backupRestoreGmails
+    );
 
     // Nayi `.plbp` = abhi ka snapshot; static/EXE/APK par SQLite primary, web par Firestore merge.
     const backupData: Record<string, unknown> = {
@@ -495,10 +551,10 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
         forBackupMerge: true,
       })) as Array<Record<string, unknown> & { id: string }>;
 
-      // Local-only / static: device SQLite primary. Online ho to Firestore se gaps bharo
-      // (opening balance mirror me na ho / recurring templates SQLite me na hon).
+      // Local-only / static: device SQLite primary. Firestore supplement sirf online_merge pe.
       if (preferLocalSnapshot) {
         const needsFirestoreSupplement =
+          !localOnlySource &&
           onlineForBackup &&
           Boolean(fsCompanyId) &&
           (FIRESTORE_SUPPLEMENT_COLLECTIONS.has(colName) || MASTER_COLLECTIONS_WITH_OPENING.has(colName));
@@ -544,7 +600,8 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
     let attachmentRefCount = 0;
     let attachmentEmbeddedCount = 0;
     if (includeAttachments) {
-      const refs = collectAttachmentRefsFromBackupData(backupData);
+      let workingData: Record<string, unknown> = backupData;
+      let refs = collectAttachmentRefsFromBackupData(workingData);
       attachmentRefCount = refs.length;
 
       throwIfAborted();
@@ -554,7 +611,7 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
       });
       const incremental = await loadIncrementalAttachmentCacheFromBackupLocation({
         companyId,
-        companyPassword: company.password,
+        companyPassword: encryptionPassword,
         companyName: company.name,
       });
       const mergeSummary = summarizeIncrementalAttachmentMerge(refs, incremental.cache);
@@ -571,40 +628,73 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
         });
       }
 
-      // Local-only: slow double-pass preflight skip — ek hi "Collecting attachments" pass (device cache + online fetch).
-      if (!localOnlySource && refsNeedingDownload.length > 0) {
-        const preferLocal = backupPrefersLocalSnapshot();
-        onProgress({
-          phase: preferLocal ? "Checking attachments" : onlineForBackup ? "Syncing with server" : "Checking attachments",
-          detail: preferLocal
-            ? "Checking local attachment files…"
-            : "Checking attachment files…",
-          done: 0,
-          total: refs.length,
-        });
-        const preflight = await preflightBackupAttachmentsBeforeEmbed({
-          backupData,
-          incrementalCache: incremental.cache,
-          signal,
-          skipOnlineAttachmentFetch: false,
-          onProgress: ({ done, total, detail }) => {
+      const wantDownload = attachmentMissingPolicy === "download_missing";
+      if (refsNeedingDownload.length > 0) {
+        if (wantDownload) {
+          const preferLocal = backupPrefersLocalSnapshot();
+          onProgress({
+            phase: onlineForBackup ? "Syncing with server" : "Checking attachments",
+            detail: onlineForBackup
+              ? "Downloading missing attachment files…"
+              : "Checking attachment files…",
+            done: 0,
+            total: refs.length,
+          });
+          const preflight = await preflightBackupAttachmentsBeforeEmbed({
+            backupData: workingData,
+            incrementalCache: incremental.cache,
+            signal,
+            skipOnlineAttachmentFetch: !onlineForBackup,
+            companyId,
+            onProgress: ({ done, total, detail }) => {
+              onProgress({
+                phase: onlineForBackup ? "Syncing with server" : "Checking attachments",
+                detail,
+                done,
+                total,
+              });
+            },
+          });
+          if (preflight.missingRefs.length > 0) {
+            return {
+              ok: false,
+              error: formatBackupAttachmentPreflightError(
+                preflight.missingRefs.length,
+                preflight.totalRefs,
+                preferLocal || !onlineForBackup
+              ),
+            };
+          }
+        } else {
+          // local_only policy: device pe jo hai (pending + cache) woh; missing URLs strip.
+          onProgress({
+            phase: "Checking attachments",
+            detail: "Checking local / pending attachment files…",
+            done: 0,
+            total: refs.length,
+          });
+          const localScan = await scanLocalAttachmentAvailabilityForBackup(
+            workingData,
+            signal,
+            (done, total) => {
+              onProgress({
+                phase: "Checking attachments",
+                detail: "Checking local / pending attachment files…",
+                done,
+                total,
+              });
+            },
+            { companyId }
+          );
+          if (localScan.missing.length > 0) {
+            workingData = stripListedAttachmentRefsFromBackupData(workingData, localScan.missing);
+            refs = collectAttachmentRefsFromBackupData(workingData);
+            attachmentRefCount = localScan.total;
             onProgress({
-              phase: preferLocal ? "Checking attachments" : onlineForBackup ? "Syncing with server" : "Checking attachments",
-              detail,
-              done,
-              total,
+              phase: "Checking attachments",
+              detail: `Continuing with ${localScan.available.length} local file(s); removed ${localScan.missing.length} missing link(s).`,
             });
-          },
-        });
-        if (preflight.missingRefs.length > 0) {
-          return {
-            ok: false,
-            error: formatBackupAttachmentPreflightError(
-              preflight.missingRefs.length,
-              preflight.totalRefs,
-              preferLocal
-            ),
-          };
+          }
         }
       }
 
@@ -612,25 +702,25 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
       let attachmentBytesTotal = 0;
       let lastSpeedSampleMs = attachmentStartedMs;
       let lastSpeedSampleBytes = 0;
-        onProgress({
-          phase: "Collecting attachments",
-          detail:
-            localOnlySource
-              ? mergeSummary.reusedCount > 0
-                ? `Local device: reusing ${mergeSummary.reusedCount} file(s) from previous backup folder…`
-                : refs.length
-                  ? "Reading attachment files from this device only…"
-                  : "No attachment refs found"
-              : mergeSummary.reusedCount > 0 || mergeSummary.excludedRemovedCount > 0
-                ? formatIncrementalMergeProgressDetail({
-                    sourceFileName: incremental.sourceFileName,
-                    reusedCount: mergeSummary.reusedCount,
-                    newDownloadCount: mergeSummary.newDownloadCount,
-                    excludedRemovedCount: mergeSummary.excludedRemovedCount,
-                  })
-                : refs.length
-                  ? "Starting…"
-                  : "No attachment refs found",
+      onProgress({
+        phase: "Collecting attachments",
+        detail:
+          !wantDownload || localOnlySource
+            ? mergeSummary.reusedCount > 0
+              ? `Local device: reusing ${mergeSummary.reusedCount} file(s) from previous backup folder…`
+              : refs.length
+                ? "Reading local / pending attachment files…"
+                : "No local attachment files to embed"
+            : mergeSummary.reusedCount > 0 || mergeSummary.excludedRemovedCount > 0
+              ? formatIncrementalMergeProgressDetail({
+                  sourceFileName: incremental.sourceFileName,
+                  reusedCount: mergeSummary.reusedCount,
+                  newDownloadCount: mergeSummary.newDownloadCount,
+                  excludedRemovedCount: mergeSummary.excludedRemovedCount,
+                })
+              : refs.length
+                ? "Starting…"
+                : "No attachment refs found",
         done: 0,
         total: refs.length,
         speedMbps: 0,
@@ -639,56 +729,92 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
       const bundle = await buildAttachmentZipFromRefs(
         refs,
         (done, total, bytesAdded) => {
-        attachmentBytesTotal += bytesAdded;
-        const now = Date.now();
-        const elapsedMs = now - attachmentStartedMs;
-        const windowMs = now - lastSpeedSampleMs;
-        const windowBytes = attachmentBytesTotal - lastSpeedSampleBytes;
-        const instantMbps =
-          windowMs >= 80 && windowBytes > 0 ? bytesPerSecToMbps(windowBytes, windowMs) : undefined;
-        const speedMbps = bytesPerSecToMbps(attachmentBytesTotal, elapsedMs);
-        const speedLabel = formatBackupThroughputLabel({
-          bytesTotal: attachmentBytesTotal,
-          elapsedMs,
-          filesDone: done,
-          instantMbps,
-        });
-        lastSpeedSampleMs = now;
-        lastSpeedSampleBytes = attachmentBytesTotal;
-        const remainingLabel = estimateRemainingFromFilePace(done, total, elapsedMs);
-        onProgress({
-          phase: "Collecting attachments",
-          detail: "",
-          done,
-          total,
-          speedMbps,
-          speedLabel,
-          remainingLabel,
-        });
-      },
+          attachmentBytesTotal += bytesAdded;
+          const now = Date.now();
+          const elapsedMs = now - attachmentStartedMs;
+          const windowMs = now - lastSpeedSampleMs;
+          const windowBytes = attachmentBytesTotal - lastSpeedSampleBytes;
+          const instantMbps =
+            windowMs >= 80 && windowBytes > 0 ? bytesPerSecToMbps(windowBytes, windowMs) : undefined;
+          const speedMbps = bytesPerSecToMbps(attachmentBytesTotal, elapsedMs);
+          const speedLabel = formatBackupThroughputLabel({
+            bytesTotal: attachmentBytesTotal,
+            elapsedMs,
+            filesDone: done,
+            instantMbps,
+          });
+          lastSpeedSampleMs = now;
+          lastSpeedSampleBytes = attachmentBytesTotal;
+          const remainingLabel = estimateRemainingFromFilePace(done, total, elapsedMs);
+          onProgress({
+            phase: "Collecting attachments",
+            detail: "",
+            done,
+            total,
+            speedMbps,
+            speedLabel,
+            remainingLabel,
+          });
+        },
         signal,
-        { previousCache: incremental.cache, skipDiskWrite: !usesEmbeddedNativeAttachmentStorage() }
+        {
+          previousCache: incremental.cache,
+          skipDiskWrite: !usesEmbeddedNativeAttachmentStorage(),
+          companyId,
+          galleryUrls: refs,
+        }
       );
-      backupData.backupVersion = 3;
+      workingData.backupVersion = 3;
       attachmentEmbeddedCount = bundle.manifest.entries.length;
+      Object.assign(backupData, workingData);
+
       if (bundle.manifest.entries.length) {
-        const offlinePrepared = prepareBackupDataForOfflineFileBackup(backupData, bundle.manifest);
+        let payloadData: Record<string, unknown>;
+        if (offlineIntent) {
+          const offlinePrepared = prepareBackupDataForOfflineFileBackup(workingData, bundle.manifest);
+          payloadData = {
+            ...offlinePrepared.backupData,
+            attachmentZipManifest: offlinePrepared.manifest,
+            includesAttachments: true,
+          };
+        } else {
+          payloadData = {
+            ...workingData,
+            attachmentZipManifest: bundle.manifest,
+            includesAttachments: true,
+            backupIntent: "for_online",
+            backupOfflineFiles: false,
+          };
+        }
         savedWithAttachments = true;
 
         throwIfAborted();
         onProgress({ phase: "Compressing", detail: "Building compressed zip…" });
-        const zipBytes = packPlbpZipBackup(offlinePrepared.backupData, bundle.files);
+        const zipBytes = packPlbpZipBackup(
+          { ...payloadData, backupEncrypted: Boolean(encryptionPassword) },
+          bundle.files
+        );
 
-        onProgress({ phase: "Encrypting", detail: "Securing backup with company password…" });
-        const finalDataString = await encryptBytes(zipBytes, company.password);
+        let blob: Blob;
+        if (encryptionPassword) {
+          onProgress({ phase: "Encrypting", detail: "Securing backup with company password…" });
+          const finalDataString = await encryptBytes(zipBytes, encryptionPassword);
+          blob = new Blob([finalDataString], { type: "application/octet-stream" });
+        } else {
+          onProgress({ phase: "Saving", detail: "Writing unencrypted backup…" });
+          const zipBlobBytes = new ArrayBuffer(zipBytes.byteLength);
+          new Uint8Array(zipBlobBytes).set(zipBytes);
+          blob = new Blob([zipBlobBytes], { type: "application/zip" });
+        }
 
         const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
         const fileName = `pocket-ledger_backup_${company.name.replace(/\s+/g, "_")}_${timestamp}.plbp`;
-        const blob = new Blob([finalDataString], { type: "application/octet-stream" });
         onProgress({ phase: "Saving", detail: "Writing backup file…" });
-        const saved = await saveBackupBlobWithBestEffort(blob, fileName);
+        const saved = await saveBackupBlobWithBestEffort(blob, fileName, {
+          relativeDir: backupRelativeDir,
+        });
 
-        if (!localOnlySource) {
+        if (!localOnlySource && !offlineIntent) {
           await incrementAttachmentBackupUsage(ownerUid);
         }
 
@@ -701,7 +827,12 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
           attachmentEmbeddedCount,
         };
       }
-      if (refs.length > 0) {
+
+      // local_only continue: sab missing strip ho gaye / koi bytes nahi — data-only with stripped URLs OK.
+      if (!wantDownload) {
+        workingData.includesAttachments = false;
+        Object.assign(backupData, workingData);
+      } else if (refs.length > 0) {
         return {
           ok: false,
           error: formatBackupAttachmentPreflightError(
@@ -710,32 +841,47 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
             backupPrefersLocalSnapshot() || localOnlySource
           ),
         };
+      } else {
+        // download path, no refs — allow data-only
+        backupData.includesAttachments = false;
       }
-      backupData.includesAttachments = false;
     } else {
       backupData.backupVersion = 3;
       backupData.includesAttachments = false;
     }
 
+    const backupPayload = offlineIntent
+      ? prepareBackupDataForOfflineIntent(backupData)
+      : { ...backupData, backupIntent: "for_online" as const, backupOfflineFiles: false };
+    backupPayload.backupEncrypted = Boolean(encryptionPassword);
+
     throwIfAborted();
     onProgress({ phase: "Preparing file", detail: "Serializing backup data…" });
     let jsonData: string;
     try {
-      jsonData = JSON.stringify(backupData);
+      jsonData = JSON.stringify(backupPayload);
     } catch {
       return { ok: false, error: "Data too large or invalid to prepare for backup." };
     }
 
-    onProgress({ phase: "Encrypting", detail: "Securing backup with company password…" });
-    const finalDataString = await encryptData(jsonData, company.password);
+    let blob: Blob;
+    if (encryptionPassword) {
+      onProgress({ phase: "Encrypting", detail: "Securing backup with company password…" });
+      const finalDataString = await encryptData(jsonData, encryptionPassword);
+      blob = new Blob([finalDataString], { type: "application/octet-stream" });
+    } else {
+      onProgress({ phase: "Saving", detail: "Writing unencrypted backup…" });
+      blob = new Blob([jsonData], { type: "application/json" });
+    }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const fileName = `pocket-ledger_backup_${company.name.replace(/\s+/g, "_")}_${timestamp}.plbp`;
-    const blob = new Blob([finalDataString], { type: "application/octet-stream" });
     onProgress({ phase: "Saving", detail: "Writing backup file…" });
-    const saved = await saveBackupBlobWithBestEffort(blob, fileName);
+    const saved = await saveBackupBlobWithBestEffort(blob, fileName, {
+      relativeDir: backupRelativeDir,
+    });
 
-    if (savedWithAttachments && !localOnlySource) {
+    if (savedWithAttachments && !localOnlySource && !offlineIntent) {
       await incrementAttachmentBackupUsage(ownerUid);
     }
 
@@ -753,4 +899,31 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
     }
     return { ok: false, error: e instanceof Error ? e.message : "Unexpected backup error." };
   }
+}
+
+/** Backup UI: SQLite snapshot pe local/pending vs missing attachment scan (network bina). */
+export async function scanSqliteBackupAttachmentGaps(options: {
+  companyId: string;
+  signal?: AbortSignal;
+  onProgress?: (done: number, total: number) => void;
+}): Promise<{ total: number; availableCount: number; missingCount: number; missing: string[] }> {
+  const backupData: Record<string, unknown> = {};
+  for (const colName of COLLECTIONS_TO_BACKUP) {
+    if (options.signal?.aborted) throw new DOMException("Backup cancelled", "AbortError");
+    backupData[colName] = (await listCompanyDocsFromBrowserDb(options.companyId, colName, {
+      forBackupMerge: true,
+    })) as Array<Record<string, unknown> & { id: string }>;
+  }
+  const scan = await scanLocalAttachmentAvailabilityForBackup(
+    backupData,
+    options.signal,
+    options.onProgress,
+    { companyId: options.companyId }
+  );
+  return {
+    total: scan.total,
+    availableCount: scan.available.length,
+    missingCount: scan.missing.length,
+    missing: scan.missing,
+  };
 }

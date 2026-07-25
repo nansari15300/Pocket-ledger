@@ -3,9 +3,8 @@
 import { addLocalServerGate, listGates, normalizeServerUrl } from "@/lib/gates/gateStore";
 import { refreshActiveLocalServerGateContext, applyActiveGateRuntime } from "@/lib/gates/gateRuntime";
 import { applyPlServerAccessContextPayload } from "@/lib/plServerAccessContext";
-import { persistDevClientAccessToken } from "@/lib/plServerAccessContext";
 import { plServerRemoteCompanyLogin } from "@/lib/plServerRemoteCompanyLogin";
-import { verifyPlServerCompanyMirrorReady } from "@/lib/gates/gateServerFetch";
+import { verifyPlServerCompanyDeltaReady } from "@/lib/gates/gateServerFetch";
 import { setLocalAuthToken } from "@/lib/writeGateway/legacy/localApiClient";
 import { appNavHref } from "@/lib/appNavHref";
 import type { GateRecord } from "@/lib/gates/gateTypes";
@@ -32,25 +31,14 @@ export type ConnectFromShareAlertResult = {
   navigateTo: string;
 };
 
-function findMatchingGate(serverUrl: string, accessToken: string): GateRecord | null {
+function findMatchingGate(serverUrl: string): GateRecord | null {
   const norm = normalizeServerUrl(serverUrl);
-  const tok = accessToken.trim();
   return (
     listGates().find(
       (g) =>
         g.type === "local_server" &&
-        normalizeServerUrl(g.serverUrl || "") === norm &&
-        (g.accessToken || "").trim() === tok
+        normalizeServerUrl(g.serverUrl || "") === norm
     ) ?? null
-  );
-}
-
-/** Same invite token — user ne dropdown se naya IP choose kiya ho to purana gate mil jaye. */
-function findGateByAccessToken(accessToken: string): GateRecord | null {
-  const tok = accessToken.trim();
-  if (!tok) return null;
-  return (
-    listGates().find((g) => g.type === "local_server" && (g.accessToken || "").trim() === tok) ?? null
   );
 }
 
@@ -58,17 +46,11 @@ function findGateByAccessToken(accessToken: string): GateRecord | null {
 export async function connectFromLocalServerShareAlert(
   input: ConnectFromShareAlertInput
 ): Promise<ConnectFromShareAlertResult> {
-  const accessToken = String(input.accessToken || "").trim();
   const username = String(input.username || "").trim();
   const password = String(input.password || "").trim();
-  if (!accessToken) {
-    throw new Error("Invite link is incomplete — ask the server owner to resend.");
-  }
   if (!username || !password) {
     throw new Error("Enter login username and password from the server owner.");
   }
-
-  persistDevClientAccessToken(accessToken);
 
   const preferredUrl = normalizeServerUrl(input.serverUrl);
   const allUrls =
@@ -83,7 +65,7 @@ export async function connectFromLocalServerShareAlert(
 
   const hit = await tryPlServerUrlsUntilConnected(
     allUrls,
-    accessToken,
+    "",
     preferredUrl || undefined,
     input.serverPort
   );
@@ -93,25 +75,30 @@ export async function connectFromLocalServerShareAlert(
       `Cannot reach host at ${tried}. On dev/LAN pick "This PC" or "LAN" — Public IP often times out on the same network.`
     );
   }
-  const serverUrl = hit.serverUrl;
+  const gateServerUrl = preferredUrl || hit.serverUrl;
+  const transportUrl = hit.serverUrl;
 
-  let gate = findMatchingGate(serverUrl, accessToken) ?? findGateByAccessToken(accessToken);
+  let gate = findMatchingGate(gateServerUrl);
   if (!gate) {
     gate = addLocalServerGate({
       label: input.gateLabel?.trim() || "Shared server",
-      serverUrl,
-      accessToken,
+      serverUrl: gateServerUrl,
+      accessToken: "",
     });
   } else {
     const { updateLocalServerGate } = await import("@/lib/gates/gateStore");
     const prevUrl = normalizeServerUrl(gate.serverUrl || "");
-    if (prevUrl !== serverUrl || (gate.accessToken || "").trim() !== accessToken) {
+    if (prevUrl !== gateServerUrl || (gate.accessToken || "").trim()) {
       gate = updateLocalServerGate(gate.id, {
         label: gate.label,
-        serverUrl,
-        accessToken,
+        serverUrl: gateServerUrl,
+        accessToken: "",
       });
     }
+  }
+  {
+    const { writeGateTransportUrl } = await import("@/lib/gates/gateStore");
+    writeGateTransportUrl(gate.id, transportUrl);
   }
 
   const ctx = await refreshActiveLocalServerGateContext(gate);
@@ -146,10 +133,10 @@ export async function connectFromLocalServerShareAlert(
     saveOfflineUnlockSession(undefined, pickCompanyId, 7, login.token, login.user);
     writeSelectedCompanyId(pickCompanyId);
 
-    const mirrorReady = await verifyPlServerCompanyMirrorReady(serverUrl, accessToken, pickCompanyId);
-    if (!mirrorReady.ok) {
+    const deltaReady = await verifyPlServerCompanyDeltaReady(transportUrl, "", pickCompanyId);
+    if (!deltaReady.ok) {
       throw new Error(
-        mirrorReady.error ||
+        deltaReady.error ||
           "Host cannot serve company ledger yet — check sharing and that the company is open on the server PC."
       );
     }

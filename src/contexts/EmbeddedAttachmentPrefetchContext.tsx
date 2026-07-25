@@ -40,6 +40,33 @@ function publishHeaderAttachmentPrefetch(next: HeaderAttachmentPrefetchSnapshot)
   for (const l of listeners) l();
 }
 
+/** Background warm/backfill — React hook ke bina header % update (module store). */
+export function reportHeaderAttachmentPrefetchProgress(
+  companyId: string | null | undefined,
+  percent: number | null | undefined
+): void {
+  const cid = companyId?.trim();
+  if (!cid || percent == null || !Number.isFinite(percent) || percent >= 100) {
+    clearHeaderAttachmentPrefetchForCompany(companyId);
+    return;
+  }
+  publishHeaderAttachmentPrefetch({
+    companyId: cid,
+    percent: Math.min(99, Math.max(0, Math.round(percent))),
+  });
+}
+
+/** Abort / company switch — sirf matching company ki strip hatao. */
+export function clearHeaderAttachmentPrefetchForCompany(companyId?: string | null): void {
+  const cid = companyId?.trim();
+  if (!cid) {
+    publishHeaderAttachmentPrefetch(null);
+    return;
+  }
+  const snap = getHeaderAttachmentPrefetchSnapshot();
+  if (snap?.companyId === cid) publishHeaderAttachmentPrefetch(null);
+}
+
 type SetterCtx = {
   setHeaderAttachmentPrefetch: (v: HeaderAttachmentPrefetchSnapshot) => void;
 };

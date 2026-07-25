@@ -10,6 +10,8 @@ import {
   type DriveCloudSyncStatusDetail,
 } from "@/lib/localCloudSync/driveCloudSyncUiEvents";
 
+const DRIVE_HEADER_STATUS_POLL_MS = 15_000;
+
 /** Drive-sync company par header spinner — Firebase online company par kabhi nahi. */
 export function useDriveCloudSyncHeaderIndicator(): { showSpinner: boolean } {
   const { companyId, company } = useCompany();
@@ -38,15 +40,19 @@ export function useDriveCloudSyncHeaderIndicator(): { showSpinner: boolean } {
   }, [companyId, company]);
 
   useEffect(() => {
-    void refresh();
+    const initialId = window.setTimeout(() => void refresh(), 0);
     const onStatus = (event: Event) => {
       const detail = (event as CustomEvent<DriveCloudSyncStatusDetail>).detail;
       if (!detail || detail.companyId !== String(companyId || "").trim()) return;
       setSyncing(detail.status === "syncing");
     };
     window.addEventListener(PL_DRIVE_CLOUD_SYNC_STATUS_EVENT, onStatus);
-    const pollId = window.setInterval(() => void refresh(), 1500);
+    const pollId = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      void refresh();
+    }, DRIVE_HEADER_STATUS_POLL_MS);
     return () => {
+      window.clearTimeout(initialId);
       window.removeEventListener(PL_DRIVE_CLOUD_SYNC_STATUS_EVENT, onStatus);
       window.clearInterval(pollId);
     };

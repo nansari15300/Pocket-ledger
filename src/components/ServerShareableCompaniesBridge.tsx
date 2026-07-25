@@ -1,30 +1,56 @@
 "use client";
 
-import { useEffect } from "react";
-import { listLocalCompanies, localCompanyRowIsDeleted } from "@/lib/localCompanyStore";
+import { useEffect, useRef } from "react";
 import {
-  normalizeLocalCompanyRowForHost,
+  listShareableLocalCompaniesForHost,
 } from "@/lib/listShareableLocalCompaniesForHost";
 import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 import { clearBrowserDbCache } from "@/lib/localSqlite";
+import { persistShareableCompaniesSnapshot } from "@/lib/plServerShareableSnapshotPersist";
+import { useCompany } from "@/hooks/useCompany";
+
+type ShareableCompanyBridgeRow = {
+  id: string;
+  name: string;
+  storageOption: "local";
+  ownerEmail?: string | null;
+  planId?: string | null;
+  planExpiryMs?: number | null;
+  offlineLicenseValidUntilMs?: number | null;
+  requiresLogin?: boolean;
+  usernameHint?: string | null;
+  accessEmails?: string[];
+};
 
 declare global {
   interface Window {
-    __plListShareableLocalCompanies?: () => Promise<
-      Array<{ id: string; name: string; storageOption: "local"; ownerEmail?: string | null }>
-    >;
+    __plListShareableLocalCompanies?: () => Promise<ShareableCompanyBridgeRow[]>;
     __plValidateLocalCompanyLogin?: (
       companyId: string,
       username: string,
       password: string
     ) => Promise<{ ok: true; token: string; user: { id: string; username: string; displayName?: string; role?: string } } | { ok: false; error: string }>;
-    __plExportCompanyMirrorBundle?: (
+    __plGetCompanyLoginMeta?: (
+      companyId: string,
+      appEmail?: string | null
+    ) => Promise<{ requiresLogin: boolean; usernameHint: string | null }>;
+    __plExportCompanyDeltaBundle?: (
       companyId: string
     ) => Promise<{ company: Record<string, unknown>; collections: Record<string, unknown[]> } | null>;
-    __plExportCompanyMirrorCollection?: (
+    __plExportCompanyDeltaCollection?: (
       companyId: string,
       collection: string
     ) => Promise<Array<Record<string, unknown>> | null>;
+    __plProbeDeltaExportCompany?: (
+      companyId: string
+    ) => Promise<{ ok: boolean; companyId?: string; reason?: string }>;
+    __plWarmServerDataBridge?: () => Promise<{
+      ok: boolean;
+      ms?: number;
+      shareableCount?: number;
+      warmedIds?: string[];
+      error?: string;
+    }>;
     __plReadAttachmentBlob?: (
       companyId: string,
       localId: string
@@ -42,14 +68,14 @@ declare global {
         field?: string;
       }
     ) => Promise<{ ok: boolean; deduped?: boolean; error?: string }>;
-    __plUpsertCompanyMirrorDocs?: (
+    __plUpsertCompanyDeltaDocs?: (
       companyId: string,
       collection: string,
       docs: Array<Record<string, unknown>>
     ) => Promise<{ ok: boolean; applied?: number; skipped?: number; received?: number; collection?: string; count?: number; error?: string }>;
     __plInvalidateBrowserDbCache?: () => void;
-    __plMirrorHealthDbOpenMs?: () => Promise<number>;
-    __plDebugCompareMirrorExportConsistency?: (
+    __plDeltaHealthDbOpenMs?: () => Promise<number>;
+    __plDebugCompareDeltaExportConsistency?: (
       companyId: string,
       collection?: string
     ) => Promise<{ ok: boolean; first: unknown; second: unknown }>;
@@ -69,12 +95,45 @@ declare global {
 
 /** Server PC (EXE): HTTP `/__pl_access_context` ke liye local company list expose — main process IPC. */
 export function ServerShareableCompaniesBridge() {
+  const { allCompaniesRegistry, localCompanyRegistryEpoch } = useCompany();
+  const registryRef = useRef(allCompaniesRegistry);
+
+  useEffect(() => {
+    registryRef.current = allCompaniesRegistry;
+  }, [allCompaniesRegistry, localCompanyRegistryEpoch]);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (isPlRemoteServerClientMode()) return;
+    const isCanonicalServerBridge =
+      new URLSearchParams(window.location.search).get("pl_server_data_bridge") === "1";
+    if (isPlRemoteServerClientMode() && !isCanonicalServerBridge) return;
+    let cancelled = false;
+    void (async () => {
+      const { toPlServerSharedCompanySummaryAsync } = await import(
+        "@/lib/localServerShareableCompanies"
+      );
+      const shareable = await listShareableLocalCompaniesForHost(allCompaniesRegistry);
+      if (cancelled || shareable.length === 0) return;
+      const companies: ShareableCompanyBridgeRow[] = [];
+      for (const row of shareable) {
+        companies.push(await toPlServerSharedCompanySummaryAsync(row));
+      }
+      if (cancelled || companies.length === 0) return;
+      await persistShareableCompaniesSnapshot(companies);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [allCompaniesRegistry]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const isCanonicalServerBridge =
+      new URLSearchParams(window.location.search).get("pl_server_data_bridge") === "1";
+    if (isPlRemoteServerClientMode() && !isCanonicalServerBridge) return;
 
     try {
-      if (new URLSearchParams(window.location.search).get("pl_server_data_bridge") === "1") {
+      if (isCanonicalServerBridge) {
         window.__plIsCanonicalServerBridge = true;
       }
     } catch {
@@ -102,22 +161,99 @@ export function ServerShareableCompaniesBridge() {
       });
     };
 
+    const resolveDeltaExportCompanyId = async (requestedCompanyId: string): Promise<string> => {
+      const requested = String(requestedCompanyId || "").trim();
+      if (!requested) return "";
+      const { getLocalCompanyById, listLocalCompanies } = await import("@/lib/localCompanyStore");
+      const direct = await getLocalCompanyById(requested, { includeDeleted: true });
+      if (direct) return requested;
+
+      const rows = await listLocalCompanies({ includeDeleted: true });
+      const slug = requested.includes("_") ? requested.slice(0, requested.lastIndexOf("_")) : requested;
+      const hit = rows.find((row) => {
+        const id = String((row as { id?: unknown }).id || "").trim();
+        const hostId = String((row as { plServerHostCompanyId?: unknown }).plServerHostCompanyId || "").trim();
+        const name = String((row as { name?: unknown }).name || "").trim();
+        return (
+          id === requested ||
+          hostId === requested ||
+          (slug && (id === slug || id.startsWith(`${slug}_`) || name === slug || name === requested))
+        );
+      });
+      return String((hit as { id?: unknown } | undefined)?.id || requested).trim();
+    };
+
+    window.__plProbeDeltaExportCompany = async (requestedCompanyId) => {
+      const resolvedCompanyId = await resolveDeltaExportCompanyId(requestedCompanyId);
+      if (!resolvedCompanyId) return { ok: false, reason: "empty_id" };
+      const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
+      const company = await getLocalCompanyById(resolvedCompanyId, { includeDeleted: true });
+      if (!company) return { ok: false, reason: "company_not_in_store", companyId: resolvedCompanyId };
+      try {
+        const { getBrowserDb } = await import("@/lib/localSqlite");
+        const db = await getBrowserDb();
+        if (!db) return { ok: false, reason: "db_unavailable", companyId: resolvedCompanyId };
+        return { ok: true, companyId: resolvedCompanyId };
+      } catch (e) {
+        return {
+          ok: false,
+          reason: e instanceof Error ? e.message : "db_open_failed",
+          companyId: resolvedCompanyId,
+        };
+      }
+    };
+
+    window.__plWarmServerDataBridge = async () => {
+      const startedMs = Date.now();
+      const { listShareableLocalCompaniesForHost } = await import("@/lib/listShareableLocalCompaniesForHost");
+      const shareable = await listShareableLocalCompaniesForHost(registryRef.current);
+      const { getBrowserDb } = await import("@/lib/localSqlite");
+      await getBrowserDb();
+      const warmedIds: string[] = [];
+      const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
+      for (const row of shareable) {
+        const id = String(row?.id || "").trim();
+        if (!id) continue;
+        const doc = await getLocalCompanyById(id, { includeDeleted: true });
+        if (doc) warmedIds.push(id);
+      }
+      return {
+        ok: true,
+        ms: Date.now() - startedMs,
+        shareableCount: shareable.length,
+        warmedIds,
+      };
+    };
+
     window.__plListShareableLocalCompanies = async () => {
-      const { isLocalServerShareableCompany, toPlServerSharedCompanySummary } = await import(
+      const { toPlServerSharedCompanySummaryAsync } = await import(
         "@/lib/localServerShareableCompanies"
       );
-      const rows = await listLocalCompanies();
-      return rows
-        .filter((row) => !localCompanyRowIsDeleted(row))
-        .map(normalizeLocalCompanyRowForHost)
-        .filter(isLocalServerShareableCompany)
-        .map(toPlServerSharedCompanySummary);
+      const shareable = await listShareableLocalCompaniesForHost(registryRef.current);
+      const out: ShareableCompanyBridgeRow[] = [];
+      for (const row of shareable) {
+        out.push(await toPlServerSharedCompanySummaryAsync(row));
+      }
+      if (out.length > 0) {
+        void persistShareableCompaniesSnapshot(out);
+      }
+      return out;
+    };
+
+    window.__plGetCompanyLoginMeta = async (companyId, appEmail) => {
+      const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
+      const { computePlServerCompanyLoginMeta } = await import("@/lib/plServerCompanyLoginMeta");
+      const doc = await getLocalCompanyById(String(companyId || "").trim(), { includeDeleted: true });
+      if (!doc) return { requiresLogin: true, usernameHint: null };
+      return computePlServerCompanyLoginMeta(doc, appEmail || null, null);
     };
 
     window.__plValidateLocalCompanyLogin = async (companyId, username, password) => {
       const { localAuthLoginClientOnly } = await import("@/lib/localCompanyUsers");
       try {
-        const { token, user } = await localAuthLoginClientOnly(companyId, username, password);
+        const { token, user } = await localAuthLoginClientOnly(companyId, username, password, undefined, {
+          remoteGate: true,
+        });
         return { ok: true as const, token, user };
       } catch (e) {
         return {
@@ -127,37 +263,40 @@ export function ServerShareableCompaniesBridge() {
       }
     };
 
-    window.__plExportCompanyMirrorBundle = async (companyId) => {
-      const { flushPendingBrowserDbSave, clearBrowserDbCache, getBrowserDb } = await import("@/lib/localSqlite");
-      await flushPendingBrowserDbSave();
-      clearBrowserDbCache();
-      await getBrowserDb();
+    window.__plExportCompanyDeltaBundle = async (companyId) => {
       const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
       const { listCompanyDocsFromBrowserDb } = await import("@/lib/localCompanyDocMirror");
       const { COLLECTIONS_TO_BACKUP } = await import("@/lib/companyBackupCollections");
-      const company = await getLocalCompanyById(companyId);
+      const resolvedCompanyId = await resolveDeltaExportCompanyId(companyId);
+      const company = await getLocalCompanyById(resolvedCompanyId);
       if (!company) return null;
+      const { flushPendingBrowserDbSave, getBrowserDb } = await import("@/lib/localSqlite");
+      await flushPendingBrowserDbSave();
+      await getBrowserDb();
+      const { withHostPlanFieldsOnCompanyExport } = await import("@/lib/plServerHostPlanSync");
+      const companyWithPlan = await withHostPlanFieldsOnCompanyExport(
+        company as unknown as Record<string, unknown>
+      );
       const collections: Record<string, unknown[]> = {};
       for (const col of COLLECTIONS_TO_BACKUP) {
-        const rows = await listCompanyDocsFromBrowserDb(companyId, col, { forBackupMerge: true });
-        if (rows.length > 0) collections[col] = rows as unknown[];
+        const rows = await listCompanyDocsFromBrowserDb(resolvedCompanyId, col, { forBackupMerge: true });
+        collections[col] = rows as unknown[];
       }
-      return { company: company as unknown as Record<string, unknown>, collections };
+      return { company: companyWithPlan, collections };
     };
 
-    window.__plExportCompanyMirrorCollection = async (companyId, collection) => {
-      const { flushPendingBrowserDbSave, clearBrowserDbCache, getBrowserDb } = await import("@/lib/localSqlite");
-      await flushPendingBrowserDbSave();
-      clearBrowserDbCache();
-      await getBrowserDb();
+    window.__plExportCompanyDeltaCollection = async (companyId, collection) => {
       const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
       const { listCompanyDocsFromBrowserDb } = await import("@/lib/localCompanyDocMirror");
       const { COLLECTIONS_TO_BACKUP } = await import("@/lib/companyBackupCollections");
       const col = String(collection || "").trim();
       if (!col || !(COLLECTIONS_TO_BACKUP as readonly string[]).includes(col)) return null;
-      const company = await getLocalCompanyById(companyId);
+      const resolvedCompanyId = await resolveDeltaExportCompanyId(companyId);
+      const company = await getLocalCompanyById(resolvedCompanyId);
       if (!company) return null;
-      const rows = await listCompanyDocsFromBrowserDb(companyId, col, { forBackupMerge: true });
+      const { getBrowserDb } = await import("@/lib/localSqlite");
+      await getBrowserDb();
+      const rows = await listCompanyDocsFromBrowserDb(resolvedCompanyId, col, { forBackupMerge: true });
       if (col === "parties") {
         const { serverTimestampTraceLog } = await import("@/lib/plServerLivePullDevLog");
         const { mirrorDocTimestampFields } = await import("@/lib/localCompanyDocMirror");
@@ -165,7 +304,7 @@ export function ServerShareableCompaniesBridge() {
           const id = String((row as { id?: string }).id || "").trim();
           if (!id) continue;
           serverTimestampTraceLog("before_export_collection", {
-            companyId,
+            companyId: resolvedCompanyId,
             collection: col,
             id,
             ...mirrorDocTimestampFields(row as Record<string, unknown>),
@@ -176,10 +315,11 @@ export function ServerShareableCompaniesBridge() {
     };
 
     window.__plReadAttachmentBlob = async (companyId, localId) => {
-      const id = String(localId || "").trim();
+      const { getBlobFromLocalFileRef, LOCAL_FILE_PREFIX } = await import("@/lib/localPendingFiles");
+      const rawId = String(localId || "").trim();
+      const id = rawId.startsWith(LOCAL_FILE_PREFIX) ? rawId.slice(LOCAL_FILE_PREFIX.length).trim() : rawId;
       const cid = String(companyId || "").trim();
       if (!id || !cid) return null;
-      const { getBlobFromLocalFileRef, LOCAL_FILE_PREFIX } = await import("@/lib/localPendingFiles");
       const blob = await getBlobFromLocalFileRef(`${LOCAL_FILE_PREFIX}${id}`, { companyId: cid });
       if (!blob?.size) return null;
       const ab = await blob.arrayBuffer();
@@ -197,8 +337,10 @@ export function ServerShareableCompaniesBridge() {
     };
 
     window.__plPutPendingAttachmentFromRemote = async (companyId, body) => {
+      const { LOCAL_FILE_PREFIX } = await import("@/lib/localPendingFiles");
       const cid = String(companyId || "").trim();
-      const id = String(body?.id || "").trim();
+      const rawId = String(body?.id || "").trim();
+      const id = rawId.startsWith(LOCAL_FILE_PREFIX) ? rawId.slice(LOCAL_FILE_PREFIX.length).trim() : rawId;
       const base64 = String(body?.base64 || "").trim();
       if (!cid || !id || !base64) return { ok: false, error: "missing_fields" };
       const { getAttachmentFileRef } = await import("@/lib/attachmentFileRefStore");
@@ -239,7 +381,7 @@ export function ServerShareableCompaniesBridge() {
       }
     };
 
-    window.__plUpsertCompanyMirrorDocs = async (companyId, collection, docs) => {
+    window.__plUpsertCompanyDeltaDocs = async (companyId, collection, docs) => {
       const cid = String(companyId || "").trim();
       const col = String(collection || "").trim();
       const rows = Array.isArray(docs) ? docs : [];
@@ -251,21 +393,34 @@ export function ServerShareableCompaniesBridge() {
       const { mirrorCollectionDocsToBrowserDbSilent, notifyBrowserDbCollectionUpdated } = await import(
         "@/lib/localCompanyDocMirror"
       );
+      const { resolvePlServerIncomingVoucherNumberConflicts } = await import(
+        "@/lib/plServerVoucherConflictResolver"
+      );
       const { flushPendingBrowserDbSave } = await import("@/lib/localSqlite");
-      const stats = await mirrorCollectionDocsToBrowserDbSilent(cid, col, rows, {
+      const resolvedBatch = await resolvePlServerIncomingVoucherNumberConflicts(cid, col, rows);
+      const rowsToApply = resolvedBatch.docs;
+      const stats = await mirrorCollectionDocsToBrowserDbSilent(cid, col, rowsToApply, {
         force: true,
         mergePreferNewer: true,
         mergePreferNewerTieBreak: "incoming",
       });
       await flushPendingBrowserDbSave();
-      notifyBrowserDbCollectionUpdated(cid, col);
+      notifyBrowserDbCollectionUpdated(cid, col, { immediate: true, source: "pl_host_remote_write" });
       const received = rows.length;
       const applied = stats.upserted;
       const skipped = stats.skipped;
-      return { ok: true, applied, skipped, received, collection: col, count: applied };
+      return {
+        ok: true,
+        applied,
+        skipped,
+        received,
+        collection: col,
+        count: applied,
+        conflictResolved: resolvedBatch.resolved,
+      };
     };
 
-    window.__plMirrorHealthDbOpenMs = async () => {
+    window.__plDeltaHealthDbOpenMs = async () => {
       clearBrowserDbCache();
       const t0 = Date.now();
       const { getBrowserDb } = await import("@/lib/localSqlite");
@@ -278,9 +433,9 @@ export function ServerShareableCompaniesBridge() {
     };
 
     if (process.env.NODE_ENV === "development") {
-      window.__plDebugCompareMirrorExportConsistency = async (companyId, collection) => {
-        const { debugCompareMirrorExportConsistency } = await import("@/lib/plMirrorExportDebug");
-        return debugCompareMirrorExportConsistency(companyId, collection);
+      window.__plDebugCompareDeltaExportConsistency = async (companyId, collection) => {
+        const { debugCompareDeltaExportConsistency } = await import("@/lib/plDeltaExportDebug");
+        return debugCompareDeltaExportConsistency(companyId, collection);
       };
     }
 
@@ -288,15 +443,18 @@ export function ServerShareableCompaniesBridge() {
       delete window.__plHostBridgeCompanyDocUpsert;
       delete window.__plIsCanonicalServerBridge;
       delete window.__plListShareableLocalCompanies;
+      delete window.__plGetCompanyLoginMeta;
       delete window.__plValidateLocalCompanyLogin;
-      delete window.__plExportCompanyMirrorBundle;
-      delete window.__plExportCompanyMirrorCollection;
+      delete window.__plExportCompanyDeltaBundle;
+      delete window.__plExportCompanyDeltaCollection;
+      delete window.__plProbeDeltaExportCompany;
+      delete window.__plWarmServerDataBridge;
       delete window.__plReadAttachmentBlob;
       delete window.__plPutPendingAttachmentFromRemote;
-      delete window.__plUpsertCompanyMirrorDocs;
+      delete window.__plUpsertCompanyDeltaDocs;
       delete window.__plInvalidateBrowserDbCache;
-      delete window.__plMirrorHealthDbOpenMs;
-      delete window.__plDebugCompareMirrorExportConsistency;
+      delete window.__plDeltaHealthDbOpenMs;
+      delete window.__plDebugCompareDeltaExportConsistency;
     };
   }, []);
 

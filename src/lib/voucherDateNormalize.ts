@@ -1,8 +1,9 @@
 "use client";
 
-import { format } from "date-fns";
+import { format, startOfDay, differenceInCalendarDays } from "date-fns";
 import { Timestamp } from "firebase/firestore";
 import { PL_CLIENT_OFFLINE_FIRST_PERSIST_MS } from "@/lib/localMirrorServerMeta";
+import { bsToAd } from "@/lib/bs-date";
 
 /**
  * Firestore Timestamp / JSON `{ seconds, nanoseconds }` / ISO / `Date` → JS `Date` (form default + sale edit)
@@ -68,6 +69,72 @@ export function parseFirestoreDateFieldToJsDate(raw: unknown): Date | null {
     }
   }
   return null;
+}
+
+/** BS calendar string (`2082-05-24`) — PL server SQLite kabhi AD ki jagah BS store karta hai. */
+export function parseLikelyBsVoucherDate(raw: unknown): Date | null {
+  if (typeof raw !== "string") return null;
+  const match = raw.trim().match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (!match) return null;
+  const y = Number(match[1]);
+  const m = Number(match[2]);
+  const d = Number(match[3]);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+  if (y < 2070 || y > 2200 || m < 1 || m > 12 || d < 1 || d > 32) return null;
+  try {
+    const ad = bsToAd({ y, m, d });
+    return ad instanceof Date && !isNaN(ad.getTime()) ? ad : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Voucher `date` field → AD for backdate permission check.
+ * PL server / SQLite: BS `2082-xx-xx` ko `new Date()` AD 2082 bana deta hai → future date → permission deny.
+ */
+export function resolveVoucherDateForBackdateCheck(raw: unknown): Date | null {
+  const now = new Date();
+  const futureGuardMs = now.getTime() + 36 * 60 * 60 * 1000;
+  const parsed = parseFirestoreDateFieldToJsDate(raw);
+  if (parsed && parsed.getTime() <= futureGuardMs) {
+    return normalizeVoucherDateForBackdateCheck(parsed);
+  }
+
+  const bsFromString = parseLikelyBsVoucherDate(raw);
+  if (bsFromString) return bsFromString;
+
+  if (parsed) {
+    const normalized = normalizeVoucherDateForBackdateCheck(parsed);
+    if (normalized.getTime() <= futureGuardMs) return normalized;
+  }
+
+  return null;
+}
+
+/**
+ * Date object jisme BS year (2082) AD samajh liya gaya ho — components ko BS maan kar AD me convert.
+ */
+export function normalizeVoucherDateForBackdateCheck(recordDate: Date): Date {
+  if (!(recordDate instanceof Date) || isNaN(recordDate.getTime())) return recordDate;
+  const today = startOfDay(new Date());
+  const day = startOfDay(recordDate);
+  const ageInDays = differenceInCalendarDays(today, day);
+  if (ageInDays >= 0) return recordDate;
+
+  const y = recordDate.getFullYear();
+  if (y >= 2070 && y <= 2200) {
+    try {
+      const fixed = bsToAd({ y, m: recordDate.getMonth() + 1, d: recordDate.getDate() });
+      if (fixed instanceof Date && !isNaN(fixed.getTime())) {
+        const fixedAge = differenceInCalendarDays(today, startOfDay(fixed));
+        if (fixedAge >= 0) return fixed;
+      }
+    } catch {
+      /* keep original */
+    }
+  }
+  return recordDate;
 }
 
 /**

@@ -46,7 +46,7 @@ const formSchema = z.object({
 
 /** Never add a key for password — only email may be persisted when "Remember email" is on. */
 
-export function LoginForm() {
+export function LoginForm({ onChangeAccount }: { onChangeAccount?: () => void }) {
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
@@ -366,25 +366,27 @@ export function LoginForm() {
           OR
         </span>
       </div>
-      <Button
-        variant="outline"
-        className="w-full"
-        onClick={handleGoogleSignIn}
-        disabled={isGoogleLoading}
-      >
-        {/* Guest login removed: local-first now runs under authenticated user session only. */}
-        {isGoogleLoading ? (
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        ) : (
-          <GoogleIcon />
-        )}
-        {isElectronDesktopApp() ? "Sign in with Google (browser)" : "Sign in with Google"}
-      </Button>
-      {isElectronDesktopApp() ? (
-        <p className="mt-2 text-center text-xs text-muted-foreground">
-          Chrome/Edge khulega — wahan pehle se logged-in Gmail account choose karein. Email/password yahan type na karein.
-        </p>
-      ) : null}
+      <div className="flex w-full items-center gap-2">
+        <Button
+          variant="outline"
+          className="min-w-0 flex-1"
+          onClick={handleGoogleSignIn}
+          disabled={isGoogleLoading}
+        >
+          {/* Guest login removed: local-first now runs under authenticated user session only. */}
+          {isGoogleLoading ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <GoogleIcon />
+          )}
+          {isElectronDesktopApp() ? "Sign in with Google (browser)" : "Sign in with Google"}
+        </Button>
+        {onChangeAccount ? (
+          <Button type="button" variant="outline" className="shrink-0" onClick={onChangeAccount}>
+            Change account
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }

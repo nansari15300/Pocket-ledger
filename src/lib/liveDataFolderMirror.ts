@@ -165,7 +165,7 @@ function mirrorFileName(companyId: string): string {
 }
 
 /** Explorer-safe folder name: readable name + stable id (rename company = naya folder; purana prune se hata sakte ho). */
-export function sanitizeCompanyMirrorFolderNamePart(raw: string): string {
+export function sanitizeCompanyDeltaFolderNamePart(raw: string): string {
   return (
     String(raw || "")
       .trim()
@@ -178,8 +178,8 @@ export function sanitizeCompanyMirrorFolderNamePart(raw: string): string {
 }
 
 /** `pocket-ledger/companies/` ke andar ek company ka directory naam. */
-export function companyMirrorFolderSegment(row: Pick<LocalCompanyDoc, "id" | "name">): string {
-  const namePart = sanitizeCompanyMirrorFolderNamePart(String(row.name ?? "company"));
+export function companyDeltaFolderSegment(row: Pick<LocalCompanyDoc, "id" | "name">): string {
+  const namePart = sanitizeCompanyDeltaFolderNamePart(String(row.name ?? "company"));
   const idPart = String(row.id ?? "")
     .trim()
     .replace(/[^a-zA-Z0-9._-]/g, "_") || "unknown";
@@ -188,7 +188,7 @@ export function companyMirrorFolderSegment(row: Pick<LocalCompanyDoc, "id" | "na
 
 /** Native SAF / docs: `pocket-ledger/companies/.../file.json` */
 export function liveMirrorRelativeFilePath(row: Pick<LocalCompanyDoc, "id" | "name">): string {
-  return `${POCKET_LEDGER_MIRROR_DIR}/${COMPANIES_DIR_SEGMENT}/${companyMirrorFolderSegment(row)}/${mirrorFileName(row.id)}`;
+  return `${POCKET_LEDGER_MIRROR_DIR}/${COMPANIES_DIR_SEGMENT}/${companyDeltaFolderSegment(row)}/${mirrorFileName(row.id)}`;
 }
 
 async function blobToBase64Raw(blob: Blob): Promise<string> {
@@ -206,14 +206,8 @@ async function blobToBase64Raw(blob: Blob): Promise<string> {
 async function buildMirrorPayload(companyId: string): Promise<Record<string, unknown> | null> {
   const db = await getBrowserDb();
   if (!db) return null;
-  const row = db.prepare(`SELECT id, data FROM companies WHERE id = ?`).get(companyId) as { id: string; data: string } | undefined;
-  if (!row?.data) return null;
-  let company: Record<string, unknown>;
-  try {
-    company = JSON.parse(row.data) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+  const company = await getLocalCompanyById(companyId);
+  if (!company) return null;
   const collections: Record<string, unknown[]> = {};
   for (const col of COLLECTIONS_TO_MIRROR) {
     try {
@@ -303,13 +297,13 @@ async function getOrCreateCompaniesDir(plDir: FileSystemDirectoryHandle): Promis
  * Web: company mirror folder pehle se bana tha lekin andar wala `.json` gum — user ne hard-delete kiya.
  * Pehli baar sync (folder hi nahi) par `false` taaki `writeMirrorWeb` create:true se naya file bana sake.
  */
-async function companyMirrorJsonMissingButCompanyDirExisted(
+async function companyDeltaJsonMissingButCompanyDirExisted(
   plDir: FileSystemDirectoryHandle,
   row: LocalCompanyDoc
 ): Promise<boolean> {
   try {
     const companiesDir = await plDir.getDirectoryHandle(COMPANIES_DIR_SEGMENT, { create: false });
-    const seg = companyMirrorFolderSegment(row);
+    const seg = companyDeltaFolderSegment(row);
     let companyDir: FileSystemDirectoryHandle;
     try {
       companyDir = await companiesDir.getDirectoryHandle(seg, { create: false });
@@ -339,21 +333,21 @@ async function writeMirrorWeb(plDir: FileSystemDirectoryHandle, row: LocalCompan
   if (!ok) return;
   try {
     const companiesDir = await getOrCreateCompaniesDir(plDir);
-    const seg = companyMirrorFolderSegment(row);
+    const seg = companyDeltaFolderSegment(row);
     const companyDir = await companiesDir.getDirectoryHandle(seg, { create: true });
     const name = mirrorFileName(row.id);
     const fileHandle = await companyDir.getFileHandle(name, { create: true });
     const writable = await fileHandle.createWritable();
     await writable.write(fileText);
     await writable.close();
-    await removeDuplicateCompanyMirrorDirs(companiesDir, row.id, seg);
+    await removeDuplicateCompanyDeltaDirs(companiesDir, row.id, seg);
   } catch (e) {
     if (isFileSystemAccessDeniedError(e)) return;
     throw e;
   }
 }
 
-async function removeDuplicateCompanyMirrorDirs(
+async function removeDuplicateCompanyDeltaDirs(
   companiesDir: FileSystemDirectoryHandle,
   companyId: string,
   keepSegment: string
@@ -416,7 +410,7 @@ async function deleteMirrorWebForCompany(plDir: FileSystemDirectoryHandle, row: 
   if (!ok) return;
   try {
     const companiesDir = await plDir.getDirectoryHandle(COMPANIES_DIR_SEGMENT, { create: false });
-    await companiesDir.removeEntry(companyMirrorFolderSegment(row), { recursive: true });
+    await companiesDir.removeEntry(companyDeltaFolderSegment(row), { recursive: true });
     return;
   } catch {
     /* fall through: legacy flat file */
@@ -574,14 +568,14 @@ export type LiveDataMirrorSyncOptions = {
   userInitiated?: boolean;
 };
 
-export async function syncLocalCompanyMirrorToFolder(
+export async function syncLocalCompanyDeltaToFolder(
   companyId: string,
   options?: LiveDataMirrorSyncOptions
 ): Promise<void> {
-  return withMirrorSyncContext(options?.userInitiated === true, () => syncLocalCompanyMirrorToFolderInner(companyId));
+  return withMirrorSyncContext(options?.userInitiated === true, () => syncLocalCompanyDeltaToFolderInner(companyId));
 }
 
-async function syncLocalCompanyMirrorToFolderInner(companyId: string): Promise<void> {
+async function syncLocalCompanyDeltaToFolderInner(companyId: string): Promise<void> {
   const prefs = readLiveDataFolderPrefs();
   if (!prefs.webEnabled && !prefs.nativeFolderPath) return;
   if (!isNativeRuntime() && prefs.webEnabled && mirrorFolderWriteBlocked) return;
@@ -603,7 +597,7 @@ async function syncLocalCompanyMirrorToFolderInner(companyId: string): Promise<v
     }
     await migrateLegacyFlatMirrorFilesWeb(inner);
     // Sirf tab roko jab pehle se company subfolder tha aur ab json nahi — full `pocket-ledger` delete jaisa hi prompt (resave / remove).
-    if (await companyMirrorJsonMissingButCompanyDirExisted(inner, row)) {
+    if (await companyDeltaJsonMissingButCompanyDirExisted(inner, row)) {
       await dispatchMirrorFolderMissingIfWeb(companyId);
       return;
     }
@@ -616,11 +610,11 @@ async function syncLocalCompanyMirrorToFolderInner(companyId: string): Promise<v
   await writeMirrorNative(tree, row, fileText);
 }
 
-export async function syncAllLocalCompanyMirrorsToFolder(options?: LiveDataMirrorSyncOptions): Promise<void> {
-  return withMirrorSyncContext(options?.userInitiated === true, () => syncAllLocalCompanyMirrorsToFolderInner());
+export async function syncAllLocalCompanyDeltasToFolder(options?: LiveDataMirrorSyncOptions): Promise<void> {
+  return withMirrorSyncContext(options?.userInitiated === true, () => syncAllLocalCompanyDeltasToFolderInner());
 }
 
-async function syncAllLocalCompanyMirrorsToFolderInner(): Promise<void> {
+async function syncAllLocalCompanyDeltasToFolderInner(): Promise<void> {
   const prefs = readLiveDataFolderPrefs();
   if (!prefs.webEnabled && !prefs.nativeFolderPath) return;
   if (!isNativeRuntime() && prefs.webEnabled && mirrorFolderWriteBlocked) return;
@@ -641,7 +635,7 @@ async function syncAllLocalCompanyMirrorsToFolderInner(): Promise<void> {
     await migrateLegacyFlatMirrorFilesWeb(inner);
     await pruneStaleMirrorsWeb(inner);
     for (const c of localRows) {
-      await syncLocalCompanyMirrorToFolder(c.id).catch(() => undefined);
+      await syncLocalCompanyDeltaToFolder(c.id).catch(() => undefined);
     }
     return;
   }
@@ -649,11 +643,11 @@ async function syncAllLocalCompanyMirrorsToFolderInner(): Promise<void> {
   const tree = String(prefs.nativeFolderPath || "").trim();
   if (!tree) return;
   for (const c of localRows) {
-    await syncLocalCompanyMirrorToFolder(c.id).catch(() => undefined);
+    await syncLocalCompanyDeltaToFolder(c.id).catch(() => undefined);
   }
 }
 
-export async function removeLocalCompanyMirrorFromFolder(companyId: string): Promise<void> {
+export async function removeLocalCompanyDeltaFromFolder(companyId: string): Promise<void> {
   const cid = String(companyId || "").trim();
   if (!cid) return;
 
@@ -697,7 +691,7 @@ export async function recreatePocketLedgerMirrorFolderAndResync(
       throw e;
     }
   }
-  await syncAllLocalCompanyMirrorsToFolder();
+  await syncAllLocalCompanyDeltasToFolder();
 }
 
 export async function clearLiveDataFolderPrefsAndSession(): Promise<void> {
@@ -714,6 +708,6 @@ export function scheduleLiveDataFolderMirrorAfterFlush(): void {
   mirrorDebounceTimer = setTimeout(() => {
     mirrorDebounceTimer = null;
     // Background: permission request nahi — NotAllowedError uncaught mat aaye.
-    void syncAllLocalCompanyMirrorsToFolder().catch(() => undefined);
+    void syncAllLocalCompanyDeltasToFolder().catch(() => undefined);
   }, 4000);
 }

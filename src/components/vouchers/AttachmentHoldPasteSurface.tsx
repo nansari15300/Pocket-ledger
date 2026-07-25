@@ -38,9 +38,9 @@ export type VoucherAttachmentReuseConfig = {
   maxFiles: number;
 };
 
-/** Voucher attach row — sky circle; sale/payment/contra sab jagah same dikhe. */
+/** Reuse action inside the Add File tile. */
 export const VOUCHER_ATTACHMENT_REUSE_TILE_CLASS =
-  "h-24 w-24 shrink-0 flex-col items-center justify-center gap-1 rounded-full border-2 border-dashed border-sky-400/70 bg-sky-100/80 px-1 text-[10px] font-medium leading-tight text-sky-900 hover:border-sky-500 hover:bg-sky-200/80 dark:border-sky-400/55 dark:bg-sky-950/35 dark:text-sky-100";
+  "absolute inset-x-2 bottom-1 z-10 h-6 gap-1 rounded-md border-sky-300 bg-sky-100/95 px-1.5 text-[10px] font-semibold leading-tight text-sky-900 shadow-sm hover:border-sky-500 hover:bg-sky-200/95 dark:border-sky-400/55 dark:bg-sky-950/85 dark:text-sky-100";
 
 type Props = {
   /** Khali slot + role allow ho tab hi */
@@ -181,7 +181,7 @@ export function AttachmentHoldPasteSurface({
     voucherAttachmentReuseEnabled() &&
     (voucherAttachmentReuse?.currentFiles.length ?? 0) < (voucherAttachmentReuse?.maxFiles ?? 0);
 
-  const reuseTile = canShowReuseTile && voucherAttachmentReuse ? (
+  const reuseAction = canShowReuseTile && voucherAttachmentReuse ? (
     <CompanyAttachmentReuseButton
       currentFiles={voucherAttachmentReuse.currentFiles}
       maxFiles={voucherAttachmentReuse.maxFiles}
@@ -193,48 +193,75 @@ export function AttachmentHoldPasteSurface({
 
   const addTile = (
     <div
-      className={cn("group relative flex h-full w-full min-h-0 flex-col", className)}
+      role="button"
+      tabIndex={enabled ? 0 : -1}
+      aria-disabled={!enabled}
+      className={cn(
+        "group relative flex h-full w-full min-h-0 flex-col items-center justify-center touch-manipulation outline-none",
+        className
+      )}
       onClickCapture={hold.onClickCapture}
       onPointerDown={hold.onPointerDown}
       onPointerMove={hold.onPointerMove}
       onPointerUp={hold.onPointerUp}
       onPointerCancel={hold.onPointerCancel}
       onPointerLeave={hold.onPointerLeave}
-    >
-      <div
-        role="button"
-        tabIndex={0}
-        className="relative flex min-h-0 flex-1 flex-col items-center justify-center touch-manipulation outline-none"
-        onClick={() => onShortActivate()}
-        onContextMenu={(e) => e.preventDefault()}
-        onPaste={(e) => {
-          if (!enabled) return;
-          const text = e.clipboardData.getData("text/plain");
-          if (!text?.trim()) return;
+      onClick={(e) => {
+        if (!enabled) return;
+        if ((e.target as HTMLElement).closest("[data-attachment-paste-chip]")) return;
+        if ((e.target as HTMLElement).closest("[data-attachment-reuse-action]")) return;
+        onShortActivate();
+      }}
+      onContextMenu={(e) => e.preventDefault()}
+      onPaste={(e) => {
+        if (!enabled) return;
+        const text = e.clipboardData.getData("text/plain");
+        if (!text?.trim()) return;
+        e.preventDefault();
+        e.stopPropagation();
+        void runPasteFromHoldClipboard(text);
+      }}
+      onKeyDown={(e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+          return;
+        }
+        if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          e.stopPropagation();
-          void runPasteFromHoldClipboard(text);
-        }}
-        onKeyDown={(e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
-            return;
-          }
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onShortActivate();
-          }
-        }}
-      >
-        {children}
-        {enabled ? (
-          <>
-            {/* PC: hover par Paste — wrapper `pointer-events-none` taaki Add area click file picker tak jaye */}
-            <div className="pointer-events-none absolute inset-x-0 top-0 z-10 hidden justify-center pt-0.5 opacity-0 transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:opacity-100">
+          onShortActivate();
+        }
+      }}
+    >
+      {children}
+      {reuseAction}
+      {enabled ? (
+        <>
+          {/* PC: hover par Paste — chip alag click; baaki poori tile file picker */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-10 hidden justify-center pt-0.5 opacity-0 transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:opacity-100">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              data-attachment-paste-chip
+              className="pointer-events-auto h-7 gap-0.5 px-2 text-[10px] font-semibold shadow-md"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                void runPasteFromHoldClipboard();
+              }}
+            >
+              Paste
+            </Button>
+          </div>
+          {/* Mobile: ~1s hold ke baad Paste chip; click se paste */}
+          {mobilePasteRevealed ? (
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-0.5 [@media(pointer:fine)]:hidden">
               <Button
                 type="button"
                 variant="secondary"
                 size="sm"
-                className="pointer-events-auto h-7 gap-0.5 px-2 text-[10px] font-semibold shadow-md"
+                data-attachment-paste-chip
+                className="pointer-events-auto h-6 gap-0.5 px-1.5 text-[9px] font-semibold shadow-md"
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -245,40 +272,12 @@ export function AttachmentHoldPasteSurface({
                 Paste
               </Button>
             </div>
-            {/* Mobile: ~1s hold ke baad Paste chip; click se paste */}
-            {mobilePasteRevealed ? (
-              <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-0.5 [@media(pointer:fine)]:hidden">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  className="pointer-events-auto h-6 gap-0.5 px-1.5 text-[9px] font-semibold shadow-md"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    void runPasteFromHoldClipboard();
-                  }}
-                >
-                  Paste
-                </Button>
-              </div>
-            ) : null}
-          </>
-        ) : null}
-      </div>
+          ) : null}
+        </>
+      ) : null}
     </div>
   );
 
   const addTileSlot = <div className="relative h-24 w-24 shrink-0">{addTile}</div>;
-
-  if (!reuseTile) return addTileSlot;
-
-  /** Reuse + Add alag tiles — ek `h-24` box ke andar stack na ho (Add File niche na jaye). */
-  return (
-    <div className="flex shrink-0 flex-row flex-wrap items-start gap-4">
-      {reuseTile}
-      {addTileSlot}
-    </div>
-  );
+  return addTileSlot;
 }

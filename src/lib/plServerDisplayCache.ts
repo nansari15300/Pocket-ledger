@@ -4,7 +4,7 @@ import type { CompanyBackupCollection } from "@/lib/companyBackupCollections";
 import { COLLECTIONS_TO_BACKUP } from "@/lib/companyBackupCollections";
 import { deserializeLocalDbValue } from "@/lib/localCompanyDocMirror";
 import { notifyBrowserDbCollectionUpdated, mirrorDocTimestampFields } from "@/lib/localCompanyDocMirror";
-import { resolvePlServerMirrorTransport } from "@/lib/plServerClientMirrorPush";
+import { resolvePlServerDeltaTransport } from "@/lib/plServerClientDeltaSync";
 import { gateHttpGet } from "@/lib/gates/gateServerFetch";
 import { livePullDevLog, livePullBugCatch } from "@/lib/plServerLivePullDevLog";
 import {
@@ -12,7 +12,7 @@ import {
   getCachedCompanyCollection,
   getCachedCompanyCollections,
   type CompanyCollectionPath,
-} from "@/lib/companyMirrorCache";
+} from "@/lib/companyDeltaCache";
 
 type DocRow = Record<string, unknown> & { id: string };
 
@@ -301,11 +301,33 @@ async function fetchCollectionFromServer(
   companyId: string,
   collection: CompanyBackupCollection
 ): Promise<Array<Record<string, unknown>> | null> {
-  const transport = resolvePlServerMirrorTransport(companyId);
+  const transport = resolvePlServerDeltaTransport(companyId);
   if (!transport?.baseUrl) return null;
-  const url = `${transport.baseUrl.replace(/\/$/, "")}/__pl_company_mirror/${encodeURIComponent(companyId)}/${encodeURIComponent(collection)}`;
+  const { resolvePlServerHostCompanyId } = await import("@/lib/plServerHostCompanyId");
+  let hostCompanyId = (await resolvePlServerHostCompanyId(companyId)) || companyId;
+  const fetchOnce = async (hostId: string) => {
+    const url = `${transport.baseUrl.replace(/\/$/, "")}/__pl_company_delta/${encodeURIComponent(hostId)}/${encodeURIComponent(collection)}`;
+    return gateHttpGet(url, transport.accessToken, {
+      timeoutMs: collection === "vouchers" ? 125_000 : 50_000,
+    });
+  };
   try {
-    const { status, body } = await gateHttpGet(url, transport.accessToken);
+    let { status, body } = await fetchOnce(hostCompanyId);
+    if (status === 403) {
+      livePullDevLog("display_cache_collection_forbidden_retry", {
+        companyId,
+        collection,
+        hostCompanyId,
+      });
+      const { refreshPlServerAccessContext } = await import("@/lib/plServerAccessContext");
+      await refreshPlServerAccessContext().catch(() => undefined);
+      hostCompanyId = (await resolvePlServerHostCompanyId(companyId)) || companyId;
+      ({ status, body } = await fetchOnce(hostCompanyId));
+    }
+    if (status === 403) {
+      livePullDevLog("display_cache_collection_forbidden", { companyId, collection, hostCompanyId });
+      return null;
+    }
     if (!status || status >= 400) return null;
     const parsed = JSON.parse(body) as unknown;
     if (Array.isArray(parsed)) return parsed as Array<Record<string, unknown>>;
@@ -321,11 +343,22 @@ async function fetchCollectionFromServer(
 async function fetchBundleFromServer(companyId: string): Promise<{
   collections?: Record<string, Array<Record<string, unknown>>>;
 } | null> {
-  const transport = resolvePlServerMirrorTransport(companyId);
+  const transport = resolvePlServerDeltaTransport(companyId);
   if (!transport?.baseUrl) return null;
-  const url = `${transport.baseUrl.replace(/\/$/, "")}/__pl_company_mirror/${encodeURIComponent(companyId)}`;
+  const { resolvePlServerHostCompanyId } = await import("@/lib/plServerHostCompanyId");
+  let hostCompanyId = (await resolvePlServerHostCompanyId(companyId)) || companyId;
+  const fetchOnce = async (hostId: string) => {
+    const url = `${transport.baseUrl.replace(/\/$/, "")}/__pl_company_delta/${encodeURIComponent(hostId)}`;
+    return gateHttpGet(url, transport.accessToken);
+  };
   try {
-    const { status, body } = await gateHttpGet(url, transport.accessToken);
+    let { status, body } = await fetchOnce(hostCompanyId);
+    if (status === 403) {
+      const { refreshPlServerAccessContext } = await import("@/lib/plServerAccessContext");
+      await refreshPlServerAccessContext().catch(() => undefined);
+      hostCompanyId = (await resolvePlServerHostCompanyId(companyId)) || companyId;
+      ({ status, body } = await fetchOnce(hostCompanyId));
+    }
     if (!status || status >= 400) return null;
     return JSON.parse(body) as { collections?: Record<string, Array<Record<string, unknown>>> };
   } catch {

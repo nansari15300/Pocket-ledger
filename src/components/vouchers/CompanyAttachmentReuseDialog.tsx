@@ -28,7 +28,7 @@ import {
 } from "@/lib/companyAttachmentCatalog";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageDownloadUrl";
-import { linkCloudAttachmentRefs } from "@/lib/companyAttachmentRegistry";
+import { copyCloudAttachmentRefToCompany, linkCloudAttachmentRefs } from "@/lib/companyAttachmentRegistry";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { useCompany } from "@/hooks/useCompany";
 import { useToast } from "@/hooks/use-toast";
@@ -180,15 +180,25 @@ export function CompanyAttachmentReuseDialog({
     }
     setLinking(url);
     try {
-      if (companyId) await linkCloudAttachmentRefs(companyId, [url]);
-      onAddUrls([url]);
       const kind = isDriveFileRef(url) ? "cloud file" : "file";
-      const crossCompany = selectedCompanyId && companyId && selectedCompanyId !== companyId;
+      const crossCompany = Boolean(selectedCompanyId && companyId && selectedCompanyId !== companyId);
+      if (crossCompany) {
+        if (!companyId) throw new Error("Current company is missing.");
+        const copiedUrl = await copyCloudAttachmentRefToCompany({
+          sourceUrl: url,
+          targetCompanyId: companyId,
+          targetCompanyName: currentCompanyName,
+        });
+        onAddUrls([copiedUrl]);
+      } else {
+        if (companyId) await linkCloudAttachmentRefs(companyId, [url]);
+        onAddUrls([url]);
+      }
       toast({
-        title: "Attachment linked",
+        title: crossCompany ? "Attachment copied" : "Attachment linked",
         description: crossCompany
-          ? `Linked from ${selectedCompanyName} — no new upload.`
-          : `Reused existing ${kind} — no new upload.`,
+          ? `Copied from ${selectedCompanyName} into ${currentCompanyName}.`
+          : `Reused existing ${kind} - no new upload.`,
       });
       onOpenChange(false);
     } catch (e) {
@@ -201,7 +211,6 @@ export function CompanyAttachmentReuseDialog({
       setLinking(null);
     }
   };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -398,9 +407,14 @@ export function CompanyAttachmentReuseButton({
         type="button"
         variant="outline"
         size="sm"
+        data-attachment-reuse-action
         className={cn("whitespace-normal text-center", className)}
         disabled={!canAdd}
-        onClick={() => setOpen(true)}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(true);
+        }}
       >
         <Link2 className="h-5 w-5 shrink-0" aria-hidden />
         <span>Reuse file</span>

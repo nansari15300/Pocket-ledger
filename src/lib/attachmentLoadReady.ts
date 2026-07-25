@@ -34,6 +34,10 @@ function urlKey(raw: string): string {
   return normalizeAttachmentUrlForDevicePreview(String(raw || "").trim());
 }
 
+function isInlinePreviewUrl(raw: string): boolean {
+  return /^(data:|blob:)/i.test(String(raw || "").trim());
+}
+
 function publishAttachmentLoadStore(): void {
   for (const l of storeListeners) l();
 }
@@ -49,9 +53,18 @@ export function getAttachmentUiRefreshTick(): number {
   return attachmentUiRefreshTick;
 }
 
-export function requestAttachmentUiRefresh(): void {
+let attachmentUiRefreshDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+const ATTACHMENT_UI_REFRESH_DEBOUNCE_MS = 280;
+
+function flushAttachmentUiRefresh(): void {
+  attachmentUiRefreshDebounceTimer = null;
   attachmentUiRefreshTick = (attachmentUiRefreshTick + 1) % Number.MAX_SAFE_INTEGER;
   publishAttachmentLoadStore();
+}
+
+export function requestAttachmentUiRefresh(): void {
+  if (attachmentUiRefreshDebounceTimer != null) return;
+  attachmentUiRefreshDebounceTimer = setTimeout(flushAttachmentUiRefresh, ATTACHMENT_UI_REFRESH_DEBOUNCE_MS);
 }
 
 export function ensureAttachmentUiRefreshListeners(): void {
@@ -80,6 +93,7 @@ export function ensureAttachmentUiRefreshListeners(): void {
 export function getAttachmentUrlLoadStatus(raw: string): AttachmentUrlLoadStatus {
   const k = urlKey(raw);
   if (!k) return "ready";
+  if (isInlinePreviewUrl(k)) return "ready";
   return statusByUrl.get(k) ?? "unknown";
 }
 
@@ -91,6 +105,7 @@ export async function isAttachmentUrlReadyOnDevice(
 ): Promise<boolean> {
   const u = String(raw || "").trim();
   if (!u) return true;
+  if (isInlinePreviewUrl(u)) return true;
   if (peekHoverCachedBlobUrl(u)) return true;
   const cid = await resolveAttachmentCompanyId(companyId);
   if (isLocalFileRef(u)) {
@@ -123,7 +138,8 @@ export function markAttachmentUrlReady(raw: string): void {
   if (!k) return;
   if (statusByUrl.get(k) === "ready") return;
   statusByUrl.set(k, "ready");
-  publishAttachmentLoadStore();
+  // useSyncExternalStore needs a changed snapshot, not only a listener callback.
+  requestAttachmentUiRefresh();
 }
 
 export function computeAttachmentUrlsReadyState(urls: readonly string[]): "loading" | "ready" {

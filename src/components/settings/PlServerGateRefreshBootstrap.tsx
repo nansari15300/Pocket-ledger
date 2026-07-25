@@ -17,6 +17,8 @@ import {
   readStoredOfflineUnlockSession,
 } from "@/lib/offlineCompanyUnlockRemember";
 import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
+import { isPlServerStaffOnAppUiOrigin } from "@/lib/plGatePageOrigin";
+import { isPlServerGateClientActive } from "@/lib/plRemoteServerClient";
 
 /** Refresh boot: persisted server-gate company + remembered unlock + gate context restore (CompanySelector mount par depend mat karo). */
 export function PlServerGateRefreshBootstrap() {
@@ -36,6 +38,7 @@ export function PlServerGateRefreshBootstrap() {
   }, [user?.uid, user?.email]);
 
   useEffect(() => {
+    if (!isPlServerGateClientActive() && !isPlServerStaffOnAppUiOrigin()) return;
     const companyId = readSelectedCompanyId()?.trim();
     if (!companyId) return;
     if (bootAttemptedForRef.current === companyId) return;

@@ -964,7 +964,7 @@ export function PartyDetails({
                         headerClosingBalance >= 0 ? "text-green-600" : "text-red-600"
                       )}
                     >
-                      {formatCurrency(headerClosingBalance, { showDrCr: true, noAnimation: true })}
+                      {formatCurrency(headerClosingBalance, { showDrCr: true })}
                     </span>
                   </>
                 )}
@@ -1410,7 +1410,7 @@ export function PartyDetails({
                     </EditPartyDialog>
                   )}
                   <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                    {formatCurrency(headerClosingBalance, { showDrCr: true, noAnimation: true })}
+                    {formatCurrency(headerClosingBalance, { showDrCr: true })}
                   </div>
                   {/* Linked reconciliation — balance ke baad, related account compare */}
                   {party.id !== "all" && !(party as any).isSystemAccount ? (
@@ -1769,4 +1769,3 @@ export function PartyDetails({
 }
 
     
-

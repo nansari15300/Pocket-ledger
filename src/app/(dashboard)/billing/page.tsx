@@ -93,6 +93,10 @@ import {
   parseBillingFrozenPlanLedger,
   parseBillingDowngradeBlockedPlanIds,
 } from "@/lib/billingFrozenPlanSnapshots";
+import {
+  applyLocalDemoProPlusPlan,
+  LOCAL_DEMO_PLAN_DAYS,
+} from "@/lib/applyLocalDemoPlan";
 
 /** Per-column price — regional amounts (admin Nepal/SAARC/International ya live FX). */
 function formatTermPriceFromKey(
@@ -613,6 +617,7 @@ export default function BillingPage() {
   /** Paid footer: fetch statement API — preview (Print) ya file save (Download). */
   const [printStatementBusy, setPrintStatementBusy] = useState(false);
   const [downloadStatementBusy, setDownloadStatementBusy] = useState(false);
+  const [localDemoPlanBusy, setLocalDemoPlanBusy] = useState(false);
   /** Super Admin `app_settings/billing` — paid→cheaper paid downgrade policy. */
   const { planDowngradeEnabled, loading: billingPolicyLoading } = useBillingPolicyFlags();
   const formatBillingDate = useCallback(
@@ -1423,6 +1428,63 @@ export default function BillingPage() {
     user,
   ]);
 
+  /** pocket-ledger.com band ho to owner local SQLite + cache par Pro Plus demo (100 din). */
+  const handleLocalDemoProPlusPlan = useCallback(async () => {
+    if (!user?.uid) {
+      toast({
+        variant: "destructive",
+        title: "Sign in required",
+        description: "Sign in as the company owner to use the local demo plan.",
+      });
+      return;
+    }
+    if (!isBillingOwner) {
+      toast({
+        variant: "destructive",
+        title: "Owner only",
+        description: "Only the company owner can activate the local demo plan.",
+      });
+      return;
+    }
+    setLocalDemoPlanBusy(true);
+    try {
+      const extraIds = [companyId, billingFirestoreCompanyId].filter(
+        (id): id is string => Boolean(String(id || "").trim())
+      );
+      const result = await applyLocalDemoProPlusPlan(user.uid, { extraCompanyIds: extraIds });
+      if (result.ok === false) {
+        toast({
+          variant: "destructive",
+          title: "Demo plan not applied",
+          description:
+            result.reason === "no_company"
+              ? "No local company found on this device. Open a company first, then try again."
+              : "Could not update the local plan on this device.",
+        });
+        return;
+      }
+      const expiryDate = new Date(result.expiryMs);
+      toast({
+        title: "Pro Plus demo activated (local)",
+        description: `This device: Pro Plus for ${LOCAL_DEMO_PLAN_DAYS} days (until ${formatBillingDate(expiryDate)}). No pocket-ledger.com server needed.`,
+      });
+    } catch (e: unknown) {
+      toast({
+        variant: "destructive",
+        title: "Demo plan failed",
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setLocalDemoPlanBusy(false);
+    }
+  }, [
+    billingFirestoreCompanyId,
+    companyId,
+    formatBillingDate,
+    isBillingOwner,
+    user?.uid,
+  ]);
+
   const hasActiveStripeSubscription = useMemo(
     () => typeof company?.stripeSubscriptionId === "string" && company.stripeSubscriptionId.trim().length > 0,
     [company?.stripeSubscriptionId]
@@ -1529,11 +1591,28 @@ export default function BillingPage() {
             <CardTitle className="text-3xl font-bold">Billing & Plans</CardTitle>
             <CardDescription>Choose a plan that fits your needs.</CardDescription>
             </div>
+            <div className="flex flex-wrap items-center gap-2">
             <Button type="button" variant="outline" size="sm" onClick={() => void handleDownloadPlansPdf()}>
               {/* User asked for downloadable plan PDF on web/static. */}
               <Download className="mr-2 h-4 w-4" />
               Download PDF
             </Button>
+            {isBillingOwner ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={localDemoPlanBusy || companyLoading}
+                onClick={() => void handleLocalDemoProPlusPlan()}
+                title="Local only — activates Pro Plus on this device for 100 days without pocket-ledger.com"
+              >
+                {localDemoPlanBusy ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : null}
+                Demo: Pro Plus ({LOCAL_DEMO_PLAN_DAYS}d local)
+              </Button>
+            ) : null}
+            </div>
           </div>
         </CardHeader>
         <CardContent>

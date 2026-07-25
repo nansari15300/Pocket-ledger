@@ -47,6 +47,8 @@ const BIO_FLAG_SUFFIX = "pl_embedded_bio_on_v1";
 const USER_PIN_FLAG_SUFFIX = "pl_embedded_user_pin_v1";
 /** User choice: setup gate par "Skip PIN for now" select kiya ho to startup par force setup mat karo. */
 const SETUP_SKIP_SUFFIX = "pl_embedded_lock_setup_skip_v1";
+/** `useEmbeddedDeviceLockReady` — PIN unlock / skip ke baad deferred boot resume. */
+export const EMBEDDED_DEVICE_LOCK_CHANGED_EVENT = "pl-embedded-device-lock-changed";
 
 function hashKey(uid: string) {
   return `${PIN_HASH_SUFFIX}_${uid}`;
@@ -112,6 +114,13 @@ export function setEmbeddedLockSetupSkipped(firebaseUid: string, skipped: boolea
   try {
     if (skipped) localStorage.setItem(setupSkipKey(firebaseUid), "1");
     else localStorage.removeItem(setupSkipKey(firebaseUid));
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event(EMBEDDED_DEVICE_LOCK_CHANGED_EVENT));
+    }
   } catch {
     /* ignore */
   }
@@ -194,6 +203,41 @@ function clearExeBootScopedUnlock(): void {
   }
 }
 
+/** Full-screen PIN gate dikhana chahiye? (hydration overlay se clash avoid ke liye shared helper.) */
+export function isEmbeddedDeviceLockGateBlocking(args: {
+  authLoading: boolean;
+  firebaseUid: string;
+  sessionUnlocked?: boolean;
+}): boolean {
+  if (!isEmbeddedDeviceLockShell()) return false;
+  if (args.authLoading) return false;
+  const uid = String(args.firebaseUid || "").trim();
+  if (!uid || uid.startsWith("local:")) return false;
+  const lockConfigured = hasEmbeddedLockConfigured(uid);
+  const sessionUnlocked = args.sessionUnlocked ?? isEmbeddedSessionUnlocked();
+  const setupSkipped = hasEmbeddedLockSetupSkipped(uid);
+  return lockConfigured ? !sessionUnlocked : !setupSkipped;
+}
+
+/** EXE/APK: PIN / auth settle se pehle SQLite + sync boot mat chalao. */
+export function shouldDeferEmbeddedHeavyAppBoot(args: {
+  authLoading: boolean;
+  firebaseUid: string;
+  sessionUnlocked?: boolean;
+}): boolean {
+  if (!isEmbeddedDeviceLockShell()) return false;
+  const uid = String(args.firebaseUid || "").trim();
+  if (args.authLoading) {
+    // Login screen: user abhi nahi — providers chalne do taaki sign-in dikhe.
+    if (!uid || uid.startsWith("local:")) return false;
+    // Is boot me pehle hi unlock ho to SQLite parallel load OK.
+    const sessionUnlocked = args.sessionUnlocked ?? isEmbeddedSessionUnlocked();
+    if (sessionUnlocked) return false;
+    return true;
+  }
+  return isEmbeddedDeviceLockGateBlocking(args);
+}
+
 export function isEmbeddedSessionUnlocked(): boolean {
   try {
     if (sessionStorage.getItem(SESSION_UNLOCK_KEY) === "1") return true;
@@ -229,6 +273,13 @@ export function markEmbeddedSessionUnlocked(): void {
   } catch {
     /* ignore */
   }
+  try {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event(EMBEDDED_DEVICE_LOCK_CHANGED_EVENT));
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Logout / sign-out: agla cold open dubara PIN/biometric maange — PIN hash mat todo. */
@@ -241,6 +292,13 @@ export function clearEmbeddedSessionUnlock(): void {
   try {
     localStorage.removeItem(PERSISTENT_UNLOCK_KEY);
     clearExeBootScopedUnlock();
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event(EMBEDDED_DEVICE_LOCK_CHANGED_EVENT));
+    }
   } catch {
     /* ignore */
   }

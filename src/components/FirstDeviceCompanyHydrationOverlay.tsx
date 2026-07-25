@@ -31,11 +31,17 @@ import {
   readEmbeddedFullWarmSucceeded,
 } from "@/lib/embeddedWarmBootstrapFlags";
 import { useFirstLoginWarmGate } from "@/contexts/FirstLoginWarmGateContext";
+import {
+  clearHeaderAttachmentPrefetchForCompany,
+  reportHeaderAttachmentPrefetchProgress,
+} from "@/contexts/EmbeddedAttachmentPrefetchContext";
 import { shouldPrefetchAttachmentsForCompany } from "@/lib/offlineFullWarmSync";
+import { isFirebaseLedgerLocalDeltaMode } from "@/lib/firebaseLedgerSyncMode";
 import {
   clearEmbeddedPendingCompanyDataWarm,
   hasEmbeddedPendingCompanyDataWarm,
 } from "@/lib/embeddedPendingCompanyWarm";
+import { isEmbeddedDeviceLockGateBlocking } from "@/lib/embeddedDeviceLock";
 
 const MIN_DISPLAY_MS = 2000;
 /** Web-only: stuck trap */
@@ -67,7 +73,7 @@ export function FirstDeviceCompanyHydrationOverlay() {
   const isLoginRoute = pathname === "/" || pathname === "";
   const isCompanySelectionRoute = pathname.startsWith("/company");
   /** APK / static build / Electron EXE — poora account offline preload. */
-  const embeddedFullWarm = isEmbeddedOfflinePreloadClient();
+  const embeddedFullWarm = isFirebaseLedgerLocalDeltaMode() && isEmbeddedOfflinePreloadClient();
 
   const firstSplashPending =
     !!uid &&
@@ -87,7 +93,13 @@ export function FirstDeviceCompanyHydrationOverlay() {
     company.id === companyId &&
     shouldPrefetchAttachmentsForCompany(company);
 
-  const eligible = firstSplashPending || pendingEmbeddedCompanyWarm;
+  const deviceLockGateBlocking = isEmbeddedDeviceLockGateBlocking({
+    authLoading,
+    firebaseUid: uid,
+  });
+
+  const eligible =
+    !deviceLockGateBlocking && (firstSplashPending || pendingEmbeddedCompanyWarm);
 
   const overlayClockStartRef = useRef<number | null>(null);
   const dismissedRef = useRef(false);
@@ -260,6 +272,8 @@ export function FirstDeviceCompanyHydrationOverlay() {
               company: row,
               localCompanyId: localId,
               signal: accountAc.signal,
+              onAttachmentProgressPercent: (pct) =>
+                reportHeaderAttachmentPrefetchProgress(localId, pct),
             });
           } catch {
             /* per-company network / abort */
@@ -283,6 +297,7 @@ export function FirstDeviceCompanyHydrationOverlay() {
         }
       } finally {
         warmAbortRef.current = null;
+        clearHeaderAttachmentPrefetchForCompany(companyId);
         setGateActive(false);
         setWarmPhase("done");
       }

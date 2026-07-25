@@ -15,14 +15,14 @@
  *    Host save must mirror bytes to bridge via loopback `POST /__pl_attachment` (main vs bridge storage split).
  * 6. HTTP POST/attachment fetch: bounded timeout (gateHttpPost / gateHttpFetchBlob) — save must not hang forever.
  * 7. PlServer staff live sync: poll + post-pull UI bumps; isPlServerSharedCompanyRow for scheduler.
- * 8. Push + pull same transport: `resolvePlServerMirrorTransport` → active gate `serverUrl`.
+ * 8. Push + pull same transport: `resolvePlServerDeltaTransport` → active gate `serverUrl`.
  *
  * Touch list (PlServer-only):
  * - plServerThinStaffClient.ts, plServerDisplayCache.ts
  * - plServerClientAuthoritativeWrite.ts
  * - localCompanyDocMirror.ts
- * - plServerClientCompanyMirror.ts
- * - plServerClientMirrorPush.ts
+ * - plServerClientCompanyDelta.ts
+ * - plServerClientDeltaSync.ts
  * - plServerStaffOfflinePolicy.ts, plServerStaffCompanyConnect.ts
  * - plServerAttachmentUploadQueue.ts
  * - voucherActionsClient.ts

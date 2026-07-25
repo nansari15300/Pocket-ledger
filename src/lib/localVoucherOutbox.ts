@@ -28,6 +28,8 @@ import {
   isClientNavigatorOffline,
   shouldAutoFlushOutboxAfterEnqueue,
 } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
+import { isFirebaseLedgerCompanyDataSyncEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import { mirrorCompanyDocToBrowserDb, getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { getLocalCompanyById, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { coerceVoucherDocumentDate } from "@/lib/voucherDateNormalize";
@@ -334,6 +336,13 @@ export async function removeOutboxRowsForCompanyDoc(
  * Stops on the first failing row (network may still be bad).
  */
 export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number }> {
+  // Temporary kill-switch: ledger Firestore upload band (plan sync HTTP alag chalta rahe).
+  if (isFirebaseLedgerDataSyncDisabled()) {
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[QUEUE_FLUSH]", "skip:firebase-ledger-data-sync-disabled");
+    }
+    return { ok: 0, failed: 0 };
+  }
   // Flush: web local + embedded SQLite-first (APK/static) — still flush the queue when `isLocalOnlyMode` is false.
   if (!isLocalOnlyMode() && !apkEmbeddedSqliteFirstWritesPreferred()) {
     if (process.env.NODE_ENV !== "production") {
@@ -432,6 +441,9 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
         }
         continue;
       }
+      if (!isFirebaseLedgerCompanyDataSyncEnabled(row.company_id)) {
+        continue;
+      }
       if (row.collection_name === "vouchers" && typeof data === "object" && data && PL_CLIENT_OFFLINE_FIRST_PERSIST_MS in data) {
         delete (data as Record<string, unknown>)[PL_CLIENT_OFFLINE_FIRST_PERSIST_MS];
       }
@@ -504,6 +516,8 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
 
       const idemKey = String(row.client_write_id || row.outbox_id || "").trim() || row.outbox_id;
       const idemRef = doc(firestore, `companies/${fsCompanyId}/_pl_ledger_idem`, idemKey);
+      const safeChangeId = `${Date.now()}_${idemKey.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80)}`;
+      const changeLogRef = doc(firestore, `companies/${fsCompanyId}/_pl_change_log`, safeChangeId);
       const payloadHash = row.payload_hash || "";
 
       /** Build Firestore payload before `runTransaction` — do not run async encrypt inside the transaction callback. */
@@ -595,6 +609,14 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
         docId: row.doc_id,
         at: serverTimestamp(),
       };
+      const changeLogBody = {
+        collectionName: row.collection_name,
+        docId: row.doc_id,
+        op: row.op,
+        clientWriteId: idemKey,
+        payloadHash,
+        at: serverTimestamp(),
+      };
 
       let flushResult: "duplicate" | "applied";
       try {
@@ -615,6 +637,7 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
           } else {
             tx.set(ref, txnPayload.doc, { merge: true });
           }
+          tx.set(changeLogRef, changeLogBody, { merge: false });
           return "applied" as const;
         });
       } catch (e) {

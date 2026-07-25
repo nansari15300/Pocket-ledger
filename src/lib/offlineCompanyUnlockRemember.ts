@@ -175,7 +175,7 @@ export function readStoredOfflineUnlockSession(
     }
     const migrated = migrateNoUidOfflineUnlockSessionToUser(firebaseUid, companyId, userEmail);
     if (migrated) return migrated;
-    return readAnyStoredOfflineUnlockSessionForCompany(companyId);
+    return null;
   } catch {
     return null;
   }
@@ -258,6 +258,30 @@ export function clearOfflineUnlockSession(firebaseUid: string | undefined, compa
     localStorage.removeItem(k);
   }
   saveOfflineUnlockPreferenceDays(firebaseUid, companyId, 0);
+}
+
+/** Gate delete / company purge — saari remember keys is company ke liye (uid/email variants). */
+export function clearAllOfflineUnlockSessionsForCompany(companyId: string): void {
+  if (typeof window === "undefined" || !companyId) return;
+  const cid = String(companyId).trim();
+  if (!cid) return;
+  const suffix = `_${cid}`;
+  const keysToRemove: string[] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      if (
+        (key.startsWith(`${STORAGE_PREFIX}_`) || key.startsWith(`${PREF_PREFIX}_`)) &&
+        key.endsWith(suffix)
+      ) {
+        keysToRemove.push(key);
+      }
+    }
+    for (const k of keysToRemove) localStorage.removeItem(k);
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Logout: is account ke saare offline company unlock sessions hatao. */

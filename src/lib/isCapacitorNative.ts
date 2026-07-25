@@ -23,3 +23,28 @@ export function isCapacitorNativeApp(): boolean {
     return false;
   }
 }
+
+/** Android WebView / iOS in-app shell jab Capacitor global load na ho (purane APK builds). */
+export function isAndroidOrIosEmbeddedWebView(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  if (/Android/i.test(ua) && /; wv\)|\bwv\b|Capacitor|Ionic/i.test(ua)) return true;
+  if (/iPhone|iPad|iPod/i.test(ua)) {
+    try {
+      if (isCapacitorNativeApp()) return true;
+      if (typeof window !== "undefined") {
+        const proto = window.location.protocol;
+        if (proto === "capacitor:" || proto === "ionic:") return true;
+      }
+      if (/AppleWebKit/i.test(ua) && !/Safari/i.test(ua)) return true;
+    } catch {
+      /* ignore */
+    }
+  }
+  return false;
+}
+
+/** APK / iOS — browser nahi, app ke andar WebView. */
+export function isEmbeddedMobileShell(): boolean {
+  return isCapacitorNativeApp() || isAndroidOrIosEmbeddedWebView();
+}

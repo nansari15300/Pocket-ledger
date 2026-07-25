@@ -7,10 +7,13 @@ import type {
   LocalAppServerConfig,
   LocalAppServerStatus,
 } from "@/lib/electronLocalServer";
+import { normalizeSharedLocalCompanyIds } from "@/lib/plServerHostSharedCompanyIds";
+import { resolvePlDevProjectRoot } from "@/lib/devPlLocalServer/projectRoot";
 
 const CONFIG_FILE = "pl-local-server-config.json";
 const ACCESS_TOKENS_FILE = "pl-server-access-tokens.json";
 const RUNTIME_FILE = "pl-dev-server-runtime.json";
+const SHAREABLE_COMPANIES_FILE = "pl-dev-shareable-companies.json";
 
 const PL_CLIENT_HEADER = "x-pocket-ledger-app";
 const PL_ACCESS_HEADER = "x-pocket-ledger-access";
@@ -19,19 +22,19 @@ const PL_ELECTRON_MARKER_HEADER = "x-pocket-ledger-client";
 const DEFAULT_CONFIG: LocalAppServerConfig = {
   port: 37123,
   bindMode: "localhost",
-  appOnlyAccess: true,
   autoStartOnBoot: false,
-  userWantsRunning: true,
+  userWantsRunning: false,
   appRole: "both",
   remoteServerUrl: "",
   clientAccessToken: "",
   publicHost: "",
-  requireRemoteAccessToken: true,
+  requireRemoteAccessToken: false,
   selectedInviteUrls: [],
+  sharedLocalCompanyIds: null,
 };
 
 export function devUserDataDir(): string {
-  return path.join(process.cwd(), ".data", "pl-dev-server-userdata");
+  return path.join(resolvePlDevProjectRoot(), ".data", "pl-dev-server-userdata");
 }
 
 function configPath(): string {
@@ -44,6 +47,10 @@ function tokensPath(): string {
 
 function runtimePath(): string {
   return path.join(devUserDataDir(), RUNTIME_FILE);
+}
+
+function shareableCompaniesPath(): string {
+  return path.join(devUserDataDir(), SHAREABLE_COMPANIES_FILE);
 }
 
 function ensureDir(): void {
@@ -98,15 +105,15 @@ export function loadDevConfig(): LocalAppServerConfig {
       ...raw,
       port: Number.isFinite(port) && port > 0 && port < 65536 ? port : DEFAULT_CONFIG.port,
       bindMode: normalizeBindMode(raw.bindMode),
-      appOnlyAccess: raw.appOnlyAccess !== false,
       autoStartOnBoot: raw.autoStartOnBoot === true,
-      userWantsRunning: raw.userWantsRunning !== false,
+      userWantsRunning: raw.userWantsRunning === true,
       appRole: normalizeAppRole(raw.appRole),
       remoteServerUrl: typeof raw.remoteServerUrl === "string" ? raw.remoteServerUrl.trim() : "",
-      clientAccessToken: typeof raw.clientAccessToken === "string" ? raw.clientAccessToken.trim() : "",
+      clientAccessToken: "",
       publicHost: typeof raw.publicHost === "string" ? raw.publicHost.trim() : "",
-      requireRemoteAccessToken: raw.requireRemoteAccessToken !== false,
+      requireRemoteAccessToken: false,
       selectedInviteUrls: normalizeSelectedInviteUrls(raw.selectedInviteUrls),
+      sharedLocalCompanyIds: normalizeSharedLocalCompanyIds(raw.sharedLocalCompanyIds),
     };
   } catch {
     return { ...DEFAULT_CONFIG };
@@ -123,16 +130,83 @@ function normalizeSelectedInviteUrls(raw: unknown): string[] {
   return out;
 }
 
+export type DevShareableCompanySnapshotRow = {
+  id: string;
+  name: string;
+  storageOption: "local";
+  ownerEmail?: string | null;
+  planId?: string | null;
+  planExpiryMs?: number | null;
+  offlineLicenseValidUntilMs?: number | null;
+  requiresLogin?: boolean;
+  usernameHint?: string | null;
+};
+
+function normalizeShareableCompanySnapshotRows(raw: unknown): DevShareableCompanySnapshotRow[] {
+  if (!Array.isArray(raw)) return [];
+  const out: DevShareableCompanySnapshotRow[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const id = String(row.id || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const name = String(row.name || id).trim() || id;
+    out.push({
+      id,
+      name,
+      storageOption: "local",
+      ownerEmail: row.ownerEmail == null ? null : String(row.ownerEmail),
+      ...(row.planId != null ? { planId: String(row.planId) } : {}),
+      ...(typeof row.planExpiryMs === "number" ? { planExpiryMs: row.planExpiryMs } : {}),
+      ...(typeof row.offlineLicenseValidUntilMs === "number"
+        ? { offlineLicenseValidUntilMs: row.offlineLicenseValidUntilMs }
+        : {}),
+      ...(typeof row.requiresLogin === "boolean" ? { requiresLogin: row.requiresLogin } : {}),
+      ...(row.usernameHint != null ? { usernameHint: String(row.usernameHint) } : {}),
+    });
+    if (out.length >= 200) break;
+  }
+  return out;
+}
+
+export function saveDevShareableCompaniesSnapshot(raw: unknown): DevShareableCompanySnapshotRow[] {
+  const rows = normalizeShareableCompanySnapshotRows(raw);
+  ensureDir();
+  fs.writeFileSync(
+    shareableCompaniesPath(),
+    JSON.stringify({ updatedAt: new Date().toISOString(), companies: rows }, null, 2),
+    "utf8"
+  );
+  return rows;
+}
+
+export function loadDevShareableCompaniesSnapshot(): DevShareableCompanySnapshotRow[] {
+  ensureDir();
+  try {
+    const raw = JSON.parse(fs.readFileSync(shareableCompaniesPath(), "utf8")) as Record<string, unknown>;
+    return normalizeShareableCompanySnapshotRows(raw.companies);
+  } catch {
+    return [];
+  }
+}
+
 export function saveDevConfig(partial: Partial<LocalAppServerConfig>): LocalAppServerConfig {
   const next = { ...loadDevConfig(), ...partial };
+  next.clientAccessToken = "";
+  next.requireRemoteAccessToken = false;
   if (partial.appRole != null) next.appRole = normalizeAppRole(partial.appRole);
   if (partial.bindMode != null) next.bindMode = normalizeBindMode(partial.bindMode);
+  if (Object.prototype.hasOwnProperty.call(partial, "sharedLocalCompanyIds")) {
+    next.sharedLocalCompanyIds = normalizeSharedLocalCompanyIds(partial.sharedLocalCompanyIds);
+  }
   ensureDir();
   fs.writeFileSync(configPath(), JSON.stringify(next, null, 2), "utf8");
   return next;
 }
 
-type RuntimeState = { running?: boolean; port?: number | null };
+type RuntimeState = { running?: boolean; port?: number | null; pid?: number | null };
 
 function readRuntime(): RuntimeState {
   try {
@@ -376,7 +450,7 @@ export function getDevStatus(): LocalAppServerStatus {
   const processUp = rt.running === true && typeof rt.port === "number";
   const port = processUp ? rt.port! : null;
   const hosting = shouldHostLocalServer(cfg);
-  const sharingUp = Boolean(port && hosting && cfg.userWantsRunning !== false);
+  const sharingUp = Boolean(port && hosting && cfg.userWantsRunning === true);
   return {
     running: sharingUp,
     appUiServing: processUp && !sharingUp,
@@ -386,7 +460,6 @@ export function getDevStatus(): LocalAppServerStatus {
     sharingPort: sharingUp ? port : null,
     configuredPort: cfg.port,
     bindMode: cfg.bindMode,
-    appOnlyAccess: cfg.appOnlyAccess,
     autoStartOnBoot: cfg.autoStartOnBoot,
     userWantsRunning: cfg.userWantsRunning,
     appRole: cfg.appRole,
@@ -409,21 +482,30 @@ export function resolvePlAccessContextFromHeaders(headers: Headers): {
   allowedCompanyIds: string[] | null;
   label: string | null;
 } {
+  const cfg = loadDevConfig();
+  if (!cfg.requireRemoteAccessToken) {
+    return { unrestricted: true, allowedCompanyIds: null, label: null };
+  }
   const tok = (headers.get("x-pocket-ledger-access") || "").trim();
   if (tok) {
     const rec = getAccessTokenRecord(tok);
-    if (!rec) throw new Error("invalid_or_missing_token");
-    touchToken(rec);
-    const ids = normalizeCompanyIds(rec.allowedCompanyIds);
-    return {
-      unrestricted: false,
-      allowedCompanyIds: ids.length > 0 ? ids : null,
-      label: typeof rec.label === "string" ? rec.label : null,
-    };
+    if (rec) {
+      touchToken(rec);
+      const ids = normalizeCompanyIds(rec.allowedCompanyIds);
+      return {
+        unrestricted: false,
+        allowedCompanyIds: ids.length > 0 ? ids : null,
+        label: typeof rec.label === "string" ? rec.label : null,
+      };
+    }
+    // Invalid token: only reject when host still requires tokens
+    if (cfg.requireRemoteAccessToken) {
+      throw new Error("invalid_or_missing_token");
+    }
   }
   const host = (headers.get("host") || "").split(":")[0].toLowerCase();
   const fromLocalhost = host === "localhost" || host === "127.0.0.1" || host === "[::1]";
-  if (fromLocalhost) {
+  if (fromLocalhost || !cfg.requireRemoteAccessToken) {
     return { unrestricted: true, allowedCompanyIds: null, label: null };
   }
   throw new Error("invalid_or_missing_token");

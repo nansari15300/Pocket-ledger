@@ -5,7 +5,7 @@ import { isLocalAppServerHost } from "@/lib/localAppServerDevPreview";
 import { isCanonicalServerBridgeRenderer } from "@/lib/hostBridgeWrite";
 
 /** Host main window: existing voucher attachments → bridge via loopback POST (staff preview/spinner fix). */
-export function PlServerHostAttachmentMirrorBootstrap() {
+export function PlServerHostAttachmentDeltaBootstrap() {
   const ranRef = useRef(false);
 
   useEffect(() => {
@@ -15,7 +15,7 @@ export function PlServerHostAttachmentMirrorBootstrap() {
     const timer = setTimeout(() => {
       void import("@/lib/plServerAttachmentUploadQueue").then(({ backfillPlServerHostAttachmentsToBridge }) =>
         backfillPlServerHostAttachmentsToBridge().catch((e) => {
-          console.warn("[PlServerHostAttachmentMirrorBootstrap]", e);
+          console.warn("[PlServerHostAttachmentDeltaBootstrap]", e);
         })
       );
     }, 3_000);

@@ -55,12 +55,16 @@ export async function getBlobFromAttachmentRefPreferLocalFirst(
     const localOrRemote = await fetchAttachmentRefBlob(normalized, {
       galleryUrls: options?.galleryUrls,
       companyId: options?.companyId,
+      localOnly: options?.localLedgerOnly,
     });
     if (localOrRemote && localOrRemote.size > 0) return localOrRemote;
   }
 
+  if (options?.localLedgerOnly) return null;
+
   return getRemoteAttachmentBlobPreferOfflineCache(normalized, undefined, {
     galleryUrls: options?.galleryUrls,
     companyId: options?.companyId,
+    localOnly: options?.localLedgerOnly,
   });
 }

@@ -173,8 +173,8 @@ export async function executeCompanyDocBrowserWriteRoute(
         if (dispatchOptions?.requireAuthoritativeAck) {
           throw e;
         }
-        const { flushPlServerMirrorDocPushNow } = await import("@/lib/plServerClientMirrorPush");
-        const mirrorPush = await flushPlServerMirrorDocPushNow(companyId, collectionName, docId, data);
+        const { flushPlServerDeltaDocPushNow } = await import("@/lib/plServerClientDeltaSync");
+        const mirrorPush = await flushPlServerDeltaDocPushNow(companyId, collectionName, docId, data);
         if (mirrorPush.ok) {
           return;
         }

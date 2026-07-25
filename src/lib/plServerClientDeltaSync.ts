@@ -4,16 +4,14 @@ import { COLLECTIONS_TO_BACKUP, type CompanyBackupCollection } from "@/lib/compa
 import { isLocalServerShareableCompany } from "@/lib/localServerShareableCompanies";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { isServerGateCompany } from "@/lib/companyStorageKind";
-import { normalizeServerUrl, getActiveGate } from "@/lib/gates/gateStore";
+import { normalizeServerUrl, getActiveGate, listGates, resolveGateServerTransportUrl } from "@/lib/gates/gateStore";
 import type { GateRecord } from "@/lib/gates/gateTypes";
-import { resolveLocalServerGateAccessToken } from "@/lib/gates/gateRuntime";
 import { gateHttpPost } from "@/lib/gates/gateServerFetch";
 import { shouldFetchPlServerAccessContext } from "@/lib/plServerAccessContext";
 import { getLocalAuthToken } from "@/lib/localApiClient";
 import { outboxJsonParse, outboxJsonStringify } from "@/lib/localVoucherOutbox";
 import { isCompanyAllowedOnActiveServerGate } from "@/lib/plServerRemoteCompanyLogin";
 import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
-import { readDevClientAccessToken } from "@/lib/plServerAccessContext";
 import {
   evaluateMirrorProtocol,
   logMirrorProtocolEvaluation,
@@ -28,7 +26,7 @@ import {
 const PUSH_DEBOUNCE_MS = 400;
 const PUSH_RETRY_MS = 4_000;
 
-type PlMirrorPushRetryReason =
+type PlDeltaPushRetryReason =
   | "partial_write"
   | "push_rejected"
   | "network"
@@ -44,6 +42,7 @@ const pushRetryByKey = new Map<string, ReturnType<typeof setTimeout>>();
 const queuedDocs = new Map<string, Record<string, unknown>>();
 const lastLocalWriteMsByCompany = new Map<string, number>();
 const pullGenerationByCompany = new Map<string, number>();
+const fallbackServerUrlByCompany = new Map<string, string>();
 
 function bumpPlServerPullGeneration(companyId: string): void {
   const id = String(companyId || "").trim();
@@ -64,12 +63,22 @@ export function isPlServerPullGenerationStale(companyId: string, startGeneration
   return getPlServerPullGeneration(id) !== startGeneration;
 }
 
-export function isPlServerMirrorDocPushPending(
+export function isPlServerDeltaDocPushPending(
   companyId: string,
   collection: string,
   docId: string
 ): boolean {
   return queuedDocs.has(pushKey(String(companyId || "").trim(), String(collection || "").trim(), String(docId || "").trim()));
+}
+
+function hasPlServerDeltaDocPushPendingForCompany(companyId: string): boolean {
+  const id = String(companyId || "").trim();
+  if (!id) return false;
+  const prefix = `${id}::`;
+  for (const key of queuedDocs.keys()) {
+    if (key.startsWith(prefix)) return true;
+  }
+  return false;
 }
 
 /** User SQLite write — generation + pull pause (sirf ek baar per save). */
@@ -90,9 +99,37 @@ function extendPlServerLivePullPause(companyId: string): void {
 export function isPlServerLivePullPaused(companyId: string): boolean {
   const id = String(companyId || "").trim();
   if (!id) return false;
+  if (hasPlServerDeltaDocPushPendingForCompany(id)) return true;
   const t = lastLocalWriteMsByCompany.get(id);
   if (!t) return false;
   return Date.now() - t < PL_SERVER_PULL_PAUSE_AFTER_LOCAL_MS;
+}
+
+/** Unlock / server pull ke baad stale pause hatao — focus poll dubara chale. */
+export function clearPlServerLivePullPause(companyId: string): void {
+  const id = String(companyId || "").trim();
+  if (!id) return;
+  lastLocalWriteMsByCompany.delete(id);
+}
+
+/** Host SSE / remote bump — local write pause mat lagao (stale overwrite guard sirf focus_poll par). */
+export function isPlServerRemoteLivePullReason(reason: string): boolean {
+  const r = String(reason || "").trim();
+  if (!r) return false;
+  return (
+    r.startsWith("server_event_") ||
+    r.startsWith("remote_bump_") ||
+    r === "full_check" ||
+    r === "mount" ||
+    r === "route_change" ||
+    r === "online" ||
+    r === "visibility_visible" ||
+    r === "window_focus" ||
+    r.startsWith("queued_server_event_") ||
+    r.startsWith("queued_remote_bump_") ||
+    r.startsWith("electron_resume_") ||
+    r.startsWith("queued_full_check")
+  );
 }
 
 function pushKey(companyId: string, collection: string, docId: string): string {
@@ -100,11 +137,11 @@ function pushKey(companyId: string, collection: string, docId: string): string {
 }
 
 /** Firestore Timestamp / Date → JSON-safe mirror payload (server SQLite revive). */
-function serializeMirrorDoc(doc: Record<string, unknown>): Record<string, unknown> {
+function serializeDeltaDoc(doc: Record<string, unknown>): Record<string, unknown> {
   return outboxJsonParse(outboxJsonStringify(doc));
 }
 
-export type PlServerMirrorTransport = {
+export type PlServerDeltaTransport = {
   baseUrl: string;
   accessToken: string;
   gate: GateRecord;
@@ -112,46 +149,110 @@ export type PlServerMirrorTransport = {
   unlockedLocally: boolean;
 };
 
-/** Push + live pull dono ke liye same gate token / allow rules. */
-export function resolvePlServerMirrorTransport(companyId: string): PlServerMirrorTransport | null {
+export function registerPlServerCompanyTransportHint(companyId: string, serverUrl: string | null | undefined): void {
   const id = String(companyId || "").trim();
-  if (!id) return null;
-  if (isPlRemoteServerClientMode() && typeof window !== "undefined") {
-    const token = readDevClientAccessToken();
-    if (!token) return null;
-    const baseUrl = normalizeServerUrl(window.location.origin);
-    if (!baseUrl) return null;
-    const syntheticGate: GateRecord = {
-      id: "pl_remote_server",
-      type: "local_server",
-      serverUrl: baseUrl,
-      label: "Remote server",
-      createdAtMs: Date.now(),
-    };
-    return {
-      baseUrl,
-      accessToken: token,
-      gate: syntheticGate,
-      gateAllowed: true,
-      unlockedLocally: false,
-    };
+  const url = normalizeServerUrl(String(serverUrl || "").trim());
+  if (!id || !url) return;
+  fallbackServerUrlByCompany.set(id, url);
+}
+
+export function clearPlServerCompanyTransportHint(companyId: string): void {
+  const id = String(companyId || "").trim();
+  if (!id) return;
+  fallbackServerUrlByCompany.delete(id);
+}
+
+function isDirectPlServerOriginForDelta(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return String(window.location.port || "").trim() === "3001";
+  } catch {
+    return false;
   }
-  const gate = getActiveGate();
-  if (gate.type !== "local_server" || !String(gate.serverUrl || "").trim()) return null;
-  const accessToken = resolveLocalServerGateAccessToken(gate);
-  if (!accessToken) return null;
-  const baseUrl = normalizeServerUrl(gate.serverUrl || "");
+}
+
+function inferPlServerUrlFromCurrentOrigin(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    const host = String(window.location.hostname || "").trim();
+    if (!host) return "";
+    const protocol = String(window.location.protocol || "http:");
+    return normalizeServerUrl(`${protocol}//${host}:3001`);
+  } catch {
+    return "";
+  }
+}
+
+function syntheticPlServerTransport(
+  companyId: string,
+  baseUrl: string,
+  label = "Remote server"
+): PlServerDeltaTransport | null {
+  const id = String(companyId || "").trim();
+  const url = normalizeServerUrl(baseUrl);
+  if (!id || !url) return null;
+  const syntheticGate: GateRecord = {
+    id: "pl_remote_server",
+    type: "local_server",
+    serverUrl: url,
+    label,
+    createdAtMs: Date.now(),
+  };
+  return {
+    baseUrl: url,
+    accessToken: "",
+    gate: syntheticGate,
+    gateAllowed: true,
+    unlockedLocally: Boolean(getLocalAuthToken(id)),
+  };
+}
+
+function transportFromLocalServerGate(companyId: string, gate: GateRecord): PlServerDeltaTransport | null {
+  const id = String(companyId || "").trim();
+  if (!id || gate.type !== "local_server" || !String(gate.serverUrl || "").trim()) return null;
+  const baseUrl = resolveGateServerTransportUrl(gate);
   if (!baseUrl) return null;
   return {
     baseUrl,
-    accessToken,
+    accessToken: "",
     gate,
     gateAllowed: isCompanyAllowedOnActiveServerGate(id, gate),
     unlockedLocally: Boolean(getLocalAuthToken(id)),
   };
 }
 
-export function parseMirrorPushResponseOk(
+function findSavedLocalServerTransport(companyId: string): PlServerDeltaTransport | null {
+  const id = String(companyId || "").trim();
+  if (!id || typeof window === "undefined") return null;
+  const localGates = listGates().filter(
+    (gate) => gate.type === "local_server" && Boolean(normalizeServerUrl(gate.serverUrl || ""))
+  );
+  const allowedGate = localGates.find((gate) => isCompanyAllowedOnActiveServerGate(id, gate));
+  const preferred = allowedGate || localGates[0] || null;
+  return preferred ? transportFromLocalServerGate(id, preferred) : null;
+}
+
+/** Push + live pull dono ke liye same token-free gate / allow rules. */
+export function resolvePlServerDeltaTransport(companyId: string): PlServerDeltaTransport | null {
+  const id = String(companyId || "").trim();
+  if (!id) return null;
+  if ((isPlRemoteServerClientMode() || isDirectPlServerOriginForDelta()) && typeof window !== "undefined") {
+    const direct = syntheticPlServerTransport(id, window.location.origin, "Remote server");
+    if (direct) return direct;
+  }
+  const gate = getActiveGate();
+  const activeTransport = transportFromLocalServerGate(id, gate);
+  if (activeTransport) return activeTransport;
+  const savedTransport = findSavedLocalServerTransport(id);
+  if (savedTransport) return savedTransport;
+  const fallbackUrl = fallbackServerUrlByCompany.get(id);
+  if (fallbackUrl) {
+    return syntheticPlServerTransport(id, fallbackUrl, "Saved server");
+  }
+  return null;
+}
+
+export function parseDeltaPushResponseOk(
   status: number,
   body: string,
   sentCount: number
@@ -236,37 +337,59 @@ export function parseMirrorPushResponseOk(
   }
 }
 
-async function shouldPushPlServerMirrorDoc(companyId: string): Promise<boolean> {
-  if (typeof window === "undefined" || !shouldFetchPlServerAccessContext()) return false;
-
-  const { isPlServerThinStaffCompany } = await import("@/lib/plServerThinStaffClient");
-  if (await isPlServerThinStaffCompany(companyId)) return false;
-
-  const transport = resolvePlServerMirrorTransport(companyId);
-  if (!transport) return false;
-  if (!transport.gateAllowed && !transport.unlockedLocally) return false;
-
-  const { isLocalAuthoritativeHostForCompany } = await import("@/lib/plServerClientAuthoritativeWrite");
-  if (await isLocalAuthoritativeHostForCompany(companyId)) return false;
-
+async function shouldPushPlServerDeltaDoc(companyId: string): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+  const accessContextReady = shouldFetchPlServerAccessContext() || isDirectPlServerOriginForDelta();
   const id = String(companyId || "").trim();
+  if (!id) return false;
+
+  let companyRow: Awaited<ReturnType<typeof getLocalCompanyById>> | null = null;
+  let rowLooksServer = false;
+  let rowUrl = "";
   try {
-    const doc = await getLocalCompanyById(id, { includeDeleted: true });
-    if (doc && isServerGateCompany(doc)) return true;
-    if (doc && isServerGateCompany(doc) === false && isLocalServerShareableCompany(doc)) {
-      return transport.gateAllowed;
-    }
+    companyRow = await getLocalCompanyById(id, { includeDeleted: true });
+    rowUrl = String((companyRow as { plServerGateServerUrl?: unknown } | null)?.plServerGateServerUrl || "").trim();
+    rowLooksServer = Boolean(
+      companyRow &&
+        (isServerGateCompany(companyRow) ||
+          (companyRow as { plServerShared?: unknown }).plServerShared === true)
+    );
   } catch {
-    /* ignore */
+    companyRow = null;
   }
-  return transport.gateAllowed;
+
+  let transport = resolvePlServerDeltaTransport(id);
+  if (!transport) {
+    if (rowUrl) {
+      registerPlServerCompanyTransportHint(id, rowUrl);
+      transport = resolvePlServerDeltaTransport(id);
+    } else if (rowLooksServer) {
+      const inferred = inferPlServerUrlFromCurrentOrigin();
+      if (inferred) {
+        registerPlServerCompanyTransportHint(id, inferred);
+        transport = resolvePlServerDeltaTransport(id);
+      }
+    }
+  }
+  if (!accessContextReady && !transport) return false;
+  if (!transport) return false;
+  if (!transport.gateAllowed && !transport.unlockedLocally && !rowLooksServer) return false;
+
+  const { isPlServerShareableHostWriter } = await import("@/lib/plServerHostDeltaPublish");
+  if (await isPlServerShareableHostWriter(id)) return false;
+
+  if (companyRow && isServerGateCompany(companyRow)) return true;
+  if (companyRow && isServerGateCompany(companyRow) === false && isLocalServerShareableCompany(companyRow)) {
+    return rowLooksServer || transport.gateAllowed;
+  }
+  return rowLooksServer || transport.gateAllowed;
 }
 
 function classifyPushRetryReason(
   error: string | undefined,
   status: number,
   isNetwork: boolean
-): PlMirrorPushRetryReason {
+): PlDeltaPushRetryReason {
   if (isNetwork) return "network";
   const e = String(error || "").toLowerCase();
   if (e.includes("bridge_missing")) return "bridge_missing";
@@ -280,15 +403,15 @@ function classifyPushRetryReason(
   return "push_rejected";
 }
 
-function schedulePlServerMirrorPushRetry(
+function schedulePlServerDeltaPushRetry(
   companyId: string,
   collection: string,
-  reason: PlMirrorPushRetryReason
+  reason: PlDeltaPushRetryReason
 ): void {
   const debounceKey = `${String(companyId || "").trim()}::${String(collection || "").trim()}`;
   if (!debounceKey || debounceKey === "::") return;
   if (pushRetryByKey.has(debounceKey)) return;
-  console.warn("[plServerClientMirrorPush] push retry scheduled", {
+  console.warn("[plServerClientDeltaSync] push retry scheduled", {
     companyId,
     collection,
     retry_reason: reason,
@@ -297,19 +420,29 @@ function schedulePlServerMirrorPushRetry(
     debounceKey,
     setTimeout(() => {
       pushRetryByKey.delete(debounceKey);
-      void flushPlServerMirrorPushQueue(companyId, collection);
+      void flushPlServerDeltaPushQueue(companyId, collection);
     }, PUSH_RETRY_MS)
   );
 }
 
-async function flushPlServerMirrorPushQueue(companyId: string, collection: string): Promise<void> {
+async function flushPlServerDeltaPushQueue(companyId: string, collection: string): Promise<void> {
   const cid = String(companyId || "").trim();
   const col = String(collection || "").trim();
   if (!cid || !col || !(COLLECTIONS_TO_BACKUP as readonly string[]).includes(col)) return;
-  if (!(await shouldPushPlServerMirrorDoc(cid))) return;
+  if (!(await shouldPushPlServerDeltaDoc(cid))) {
+    livePullBugCatch("DELTA_PUSH_NOT_ALLOWED", {
+      companyId: cid,
+      collection: col,
+      queued: [...queuedDocs.keys()].filter((key) => key.startsWith(`${cid}::${col}::`)).length,
+    });
+    return;
+  }
 
-  const transport = resolvePlServerMirrorTransport(cid);
-  if (!transport) return;
+  const transport = resolvePlServerDeltaTransport(cid);
+  if (!transport) {
+    livePullBugCatch("DELTA_PUSH_TRANSPORT_MISSING", { companyId: cid, collection: col });
+    return;
+  }
 
   const docs: Record<string, unknown>[] = [];
   const keysToFlush: string[] = [];
@@ -320,7 +453,13 @@ async function flushPlServerMirrorPushQueue(companyId: string, collection: strin
   }
   if (!docs.length) return;
 
-  const url = `${transport.baseUrl.replace(/\/$/, "")}/__pl_company_mirror_push`;
+  const url = `${transport.baseUrl.replace(/\/$/, "")}/__pl_company_delta_push`;
+  livePullDevLog("delta_push_started", {
+    companyId: cid,
+    collection: col,
+    count: docs.length,
+    serverUrl: transport.baseUrl,
+  });
   try {
     const { status, body } = await gateHttpPost(url, transport.accessToken, {
       companyId: cid,
@@ -328,46 +467,130 @@ async function flushPlServerMirrorPushQueue(companyId: string, collection: strin
       docs,
       mirrorProtocol: PL_MIRROR_PROTOCOL_VERSION,
     });
-    const parsed = parseMirrorPushResponseOk(status, body, docs.length);
+    const parsed = parseDeltaPushResponseOk(status, body, docs.length);
     if (!parsed.ok) {
       const retryReason = classifyPushRetryReason(parsed.error, status, false);
-      console.warn("[plServerClientMirrorPush] push failed", {
+      console.warn("[plServerClientDeltaSync] push failed", {
         status,
         error: parsed.error || body,
         sent: docs.length,
         applied: parsed.applied,
         retry_reason: parsed.protocolReject ? "protocol_mismatch" : retryReason,
       });
+      livePullBugCatch("DELTA_PUSH_FAILED", {
+        companyId: cid,
+        collection: col,
+        status,
+        error: parsed.error || body,
+        sent: docs.length,
+        applied: parsed.applied,
+      });
       if (!parsed.protocolReject) {
-        schedulePlServerMirrorPushRetry(cid, col, retryReason);
+        schedulePlServerDeltaPushRetry(cid, col, retryReason);
       }
       return;
     }
     for (const key of keysToFlush) queuedDocs.delete(key);
     extendPlServerLivePullPause(cid);
+    void import("@/lib/plServerLiveChangeTrace")
+      .then(({ plServerLiveChangeTrace }) =>
+        plServerLiveChangeTrace("client_delta_push_ok", {
+          companyId: cid,
+          collection: col,
+          count: docs.length,
+          applied: parsed.applied,
+          serverUrl: transport.baseUrl,
+        })
+      )
+      .catch(() => undefined);
+    livePullDevLog("delta_push_success", {
+      companyId: cid,
+      collection: col,
+      count: docs.length,
+      applied: parsed.applied,
+    });
   } catch (e) {
-    console.warn("[plServerClientMirrorPush] push error", {
+    console.warn("[plServerClientDeltaSync] push error", {
       error: e,
       retry_reason: "network",
     });
-    schedulePlServerMirrorPushRetry(cid, col, "network");
+    livePullBugCatch("DELTA_PUSH_NETWORK_ERROR", {
+      companyId: cid,
+      collection: col,
+      error: e instanceof Error ? e.message : String(e),
+    });
+    schedulePlServerDeltaPushRetry(cid, col, "network");
   }
 }
 
 /** SQLite write ke baad server PC ko turant update — sirf P2P gate + unlocked company. */
-export async function maybeQueuePlServerMirrorAfterDocWrite(
+export async function maybeQueuePlServerDeltaAfterDocWrite(
   companyId: string,
   collection: string,
   docId: string,
   doc: Record<string, unknown>
 ): Promise<void> {
-  if (!(await shouldPushPlServerMirrorDoc(companyId))) return;
+  const { isPlServerShareableHostWriter, maybePublishHostDeltaAfterBridgeWrite } = await import(
+    "@/lib/plServerHostDeltaPublish"
+  );
+  if (await isPlServerShareableHostWriter(companyId)) {
+    await maybePublishHostDeltaAfterBridgeWrite(companyId, collection, docId, doc);
+    return;
+  }
+
+  if (!(await shouldPushPlServerDeltaDoc(companyId))) {
+    let rowUrl = "";
+    let rowShared = false;
+    let rowServerGate = false;
+    try {
+      const row = await getLocalCompanyById(String(companyId || "").trim(), { includeDeleted: true });
+      rowUrl = String((row as { plServerGateServerUrl?: unknown } | null)?.plServerGateServerUrl || "").trim();
+      rowShared = Boolean((row as { plServerShared?: unknown } | null)?.plServerShared === true);
+      rowServerGate = Boolean(row && isServerGateCompany(row));
+    } catch {
+      /* debug only */
+    }
+    let locationOrigin = "";
+    let locationPort = "";
+    try {
+      locationOrigin = String(window.location.origin || "");
+      locationPort = String(window.location.port || "");
+    } catch {
+      /* debug only */
+    }
+    const activeGate = getActiveGate();
+    const localServerGates = listGates()
+      .filter((gate) => gate.type === "local_server")
+      .slice(0, 5)
+      .map((gate) => ({
+        id: gate.id,
+        url: normalizeServerUrl(gate.serverUrl || ""),
+        allowed: isCompanyAllowedOnActiveServerGate(companyId, gate),
+      }));
+    livePullBugCatch("DELTA_PUSH_QUEUE_NOT_ALLOWED", {
+      companyId,
+      collection,
+      docId,
+      hasTransport: Boolean(resolvePlServerDeltaTransport(companyId)),
+      locationOrigin,
+      locationPort,
+      activeGateId: activeGate.id,
+      activeGateType: activeGate.type,
+      activeGateServerUrl: normalizeServerUrl(activeGate.serverUrl || ""),
+      localServerGates,
+      fallbackUrl: fallbackServerUrlByCompany.get(String(companyId || "").trim()) || "",
+      rowPlServerGateServerUrl: rowUrl,
+      rowPlServerShared: rowShared,
+      rowServerGate,
+    });
+    return;
+  }
   markPlServerLocalWrite(companyId);
-  queuePlServerMirrorDocPush(companyId, collection, docId, doc, { skipLocalWriteMark: true });
+  queuePlServerDeltaDocPush(companyId, collection, docId, doc, { skipLocalWriteMark: true });
 }
 
 /** P2P client: local SQLite write → server PC SQLite (owner + doosre clients poll se dekhenge). */
-export function queuePlServerMirrorDocPush(
+export function queuePlServerDeltaDocPush(
   companyId: string,
   collection: string,
   docId: string,
@@ -379,7 +602,13 @@ export function queuePlServerMirrorDocPush(
   const id = String(docId || "").trim();
   if (!cid || !col || !id) return;
   if (!options?.skipLocalWriteMark) markPlServerLocalWrite(cid);
-  queuedDocs.set(pushKey(cid, col, id), serializeMirrorDoc({ ...doc, id }));
+  queuedDocs.set(pushKey(cid, col, id), serializeDeltaDoc({ ...doc, id }));
+  livePullDevLog("delta_push_queued", {
+    companyId: cid,
+    collection: col,
+    docId: id,
+    queueSize: [...queuedDocs.keys()].filter((key) => key.startsWith(`${cid}::${col}::`)).length,
+  });
   const debounceKey = `${cid}::${col}`;
   const prev = pendingByKey.get(debounceKey);
   if (prev) clearTimeout(prev);
@@ -387,13 +616,13 @@ export function queuePlServerMirrorDocPush(
     debounceKey,
     setTimeout(() => {
       pendingByKey.delete(debounceKey);
-      void flushPlServerMirrorPushQueue(cid, col as CompanyBackupCollection);
+      void flushPlServerDeltaPushQueue(cid, col as CompanyBackupCollection);
     }, PUSH_DEBOUNCE_MS)
   );
 }
 
 /** Dev / replay: push one doc immediately (same gate URL as live pull). */
-export async function flushPlServerMirrorDocPushNow(
+export async function flushPlServerDeltaDocPushNow(
   companyId: string,
   collection: string,
   docId: string,
@@ -403,13 +632,13 @@ export async function flushPlServerMirrorDocPushNow(
   const col = String(collection || "").trim();
   const id = String(docId || "").trim();
   if (!cid || !col || !id) return { ok: false, error: "missing_fields" };
-  if (!(await shouldPushPlServerMirrorDoc(cid))) return { ok: false, error: "push_not_allowed" };
+  if (!(await shouldPushPlServerDeltaDoc(cid))) return { ok: false, error: "push_not_allowed" };
 
-  const transport = resolvePlServerMirrorTransport(cid);
+  const transport = resolvePlServerDeltaTransport(cid);
   if (!transport) return { ok: false, error: "transport_unavailable" };
 
-  const url = `${transport.baseUrl.replace(/\/$/, "")}/__pl_company_mirror_push`;
-  const docs = [serializeMirrorDoc({ ...doc, id })];
+  const url = `${transport.baseUrl.replace(/\/$/, "")}/__pl_company_delta_push`;
+  const docs = [serializeDeltaDoc({ ...doc, id })];
   try {
     const { status, body } = await gateHttpPost(url, transport.accessToken, {
       companyId: cid,
@@ -417,7 +646,7 @@ export async function flushPlServerMirrorDocPushNow(
       docs,
       mirrorProtocol: PL_MIRROR_PROTOCOL_VERSION,
     });
-    const parsed = parseMirrorPushResponseOk(status, body, docs.length);
+    const parsed = parseDeltaPushResponseOk(status, body, docs.length);
     return parsed.ok ? { ok: true } : { ok: false, error: parsed.error || "push_failed" };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "push_network_error" };
@@ -425,17 +654,23 @@ export async function flushPlServerMirrorDocPushNow(
 }
 
 /** Voucher save / patch ke baad — `saveVoucher` SQLite path se call karo. */
-export function queuePlServerVoucherMirrorPush(
+export function queuePlServerVoucherDeltaPush(
   companyId: string,
   voucherId: string,
   doc: Record<string, unknown>
 ): void {
-  queuePlServerMirrorDocPush(companyId, "vouchers", voucherId, doc);
+  queuePlServerDeltaDocPush(companyId, "vouchers", voucherId, doc);
 }
 
 export async function syncPlServerSharedCompanyLive(
   companyId: string,
-  options?: { pollOnly?: boolean; focusCollections?: CompanyBackupCollection[] }
+  options?: {
+    pollOnly?: boolean;
+    focusCollections?: CompanyBackupCollection[];
+    /** Server SSE / host remote write — skip local-write pull pause. */
+    ignoreLivePullPause?: boolean;
+    pullReason?: string;
+  }
 ): Promise<{ ok: boolean; fullPull: boolean; changedCollections?: CompanyBackupCollection[] }> {
   const id = String(companyId || "").trim();
   if (!id || typeof window === "undefined") {
@@ -452,7 +687,7 @@ export async function syncPlServerSharedCompanyLive(
         const vouchers = await listCompanyDocsFromBrowserDb(id, "vouchers");
         if (vouchers.length > 0) {
           recordPlServerReadPullOutcome(id, { ok: true, fullPull: false }, {
-            context: "offline_sqlite_mirror",
+            context: "offline_sqlite_delta",
             error: "offline_cached_view",
           });
           livePullDevLog("pull_offline_cache", { companyId: id, cacheUsable: true, path: "sqlite" });
@@ -480,13 +715,31 @@ export async function syncPlServerSharedCompanyLive(
     recordPlServerReadPullAborted(id, "missing_id_or_offline");
     return { ok: false, fullPull: false };
   }
-  if (!shouldFetchPlServerAccessContext()) {
+  try {
+    const row = await getLocalCompanyById(id, { includeDeleted: true });
+    const rowUrl = String((row as { plServerGateServerUrl?: unknown } | null)?.plServerGateServerUrl || "").trim();
+    if (rowUrl) registerPlServerCompanyTransportHint(id, rowUrl);
+  } catch {
+    /* ignore */
+  }
+  const transport = resolvePlServerDeltaTransport(id);
+  const accessContextReady = shouldFetchPlServerAccessContext();
+  if (!accessContextReady && !transport) {
     livePullDevLog("pull_aborted", { companyId: id, reason: "shouldFetchPlServerAccessContext_false" });
     recordPlServerReadPullAborted(id, "shouldFetchPlServerAccessContext_false");
     return { ok: false, fullPull: false };
   }
-  const transport = resolvePlServerMirrorTransport(id);
-  if (!transport || (!transport.gateAllowed && !transport.unlockedLocally)) {
+  let rowLooksServer = false;
+  try {
+    const row = await getLocalCompanyById(id, { includeDeleted: true });
+    rowLooksServer = Boolean(
+      row &&
+        (isServerGateCompany(row) || (row as { plServerShared?: unknown }).plServerShared === true)
+    );
+  } catch {
+    rowLooksServer = false;
+  }
+  if (!transport || (!transport.gateAllowed && !transport.unlockedLocally && !rowLooksServer)) {
     livePullDevLog("pull_aborted", {
       companyId: id,
       reason: "transport_unavailable",
@@ -499,7 +752,10 @@ export async function syncPlServerSharedCompanyLive(
     });
     return { ok: false, fullPull: false };
   }
-  if (isPlServerLivePullPaused(id)) {
+  const ignorePause =
+    options?.ignoreLivePullPause === true ||
+    (options?.pullReason ? isPlServerRemoteLivePullReason(options.pullReason) : false);
+  if (!ignorePause && isPlServerLivePullPaused(id)) {
     livePullDevLog("pull_aborted", { companyId: id, reason: "live_pull_paused" });
     recordPlServerReadPullAborted(id, "live_pull_paused");
     return { ok: false, fullPull: false };
@@ -518,8 +774,8 @@ export async function syncPlServerSharedCompanyLive(
     });
     if (isPlServerThinStaffClient()) {
       // Mirror-first: SQLite pull every poll (EXE/APK/iOS). Soft-fail — don't throw on partial.
-      const { mirrorPlServerSharedCompaniesToLocalSqliteLegacy } = await import(
-        "@/lib/plServerClientCompanyMirror"
+      const { syncPlServerSharedCompaniesToLocalSqliteLegacy } = await import(
+        "@/lib/plServerClientCompanyDelta"
       );
       const { getPlServerSharedCompanies, refreshPlServerAccessContext } = await import(
         "@/lib/plServerAccessContext"
@@ -529,25 +785,28 @@ export async function syncPlServerSharedCompanyLive(
         await refreshPlServerAccessContext();
       }
       const focusCollections = options?.focusCollections?.length ? options.focusCollections : undefined;
-      const result = await mirrorPlServerSharedCompaniesToLocalSqliteLegacy({
+      const result = await syncPlServerSharedCompaniesToLocalSqliteLegacy({
         companyIds: [id],
         pullFullLedger: !focusCollections,
         focusCollections,
         pullGeneration,
       });
       const ledgerPullComplete = result.fullPull > 0;
-      const partialMirrorOk = result.mirrored > 0;
-      const focusPullOk = Boolean(focusCollections?.length && (result.changedCollections?.length || result.mirrored > 0));
+      const partialDeltaOk = result.synced > 0;
+      const focusPullOk = Boolean(
+      focusCollections?.length &&
+        ((result.changedCollections?.length ?? 0) > 0 || result.synced > 0 || result.fullPull > 0)
+    );
       const pullResult = {
-        ok: ledgerPullComplete || partialMirrorOk || focusPullOk,
+        ok: ledgerPullComplete || partialDeltaOk || focusPullOk,
         fullPull: ledgerPullComplete,
         changedCollections: result.changedCollections,
       };
       if (!pullResult.ok) {
-        livePullBugCatch("SQLITE_MIRROR_PULL_INCOMPLETE", {
+        livePullBugCatch("SQLITE_DELTA_PULL_INCOMPLETE", {
           companyId: id,
           serverUrl,
-          mirrored: result.mirrored,
+          synced: result.synced,
           fullPull: result.fullPull,
           focusCollections,
           changedCollections: result.changedCollections,
@@ -555,16 +814,16 @@ export async function syncPlServerSharedCompanyLive(
         });
       }
       recordPlServerReadPullOutcome(id, pullResult, {
-        error: pullResult.ok ? undefined : "sqlite_mirror_pull_incomplete",
-        context: ledgerPullComplete ? "fresh" : partialMirrorOk ? "partial" : "empty",
+        error: pullResult.ok ? undefined : "SQLITE_DELTA_PULL_INCOMPLETE",
+        context: ledgerPullComplete ? "fresh" : partialDeltaOk ? "partial" : "empty",
         serverUrl,
       });
       livePullDevLog("pull_finished", {
         companyId: id,
-        path: "sqlite_mirror",
+        path: "sqlite_delta",
         ok: pullResult.ok,
         fullPull: pullResult.fullPull,
-        mirrored: result.mirrored,
+        synced: result.synced,
         pollOnly: options?.pollOnly === true,
         focusCollections,
         changedCollections: result.changedCollections,
@@ -572,45 +831,61 @@ export async function syncPlServerSharedCompanyLive(
       return pullResult;
     }
 
-    const { mirrorPlServerSharedCompaniesToLocalSqlite } = await import("@/lib/plServerClientCompanyMirror");
+    const { syncPlServerSharedCompaniesToLocalSqlite } = await import("@/lib/plServerClientCompanyDelta");
+    const { getPlServerSharedCompanies, refreshPlServerAccessContext } = await import(
+      "@/lib/plServerAccessContext"
+    );
+    const { matchPlServerSharedCompanyForLocalId } = await import("@/lib/plServerHostCompanyId");
+    let shared = getPlServerSharedCompanies();
+    if (
+      !shared.length ||
+      !matchPlServerSharedCompanyForLocalId(id, shared)
+    ) {
+      livePullDevLog("access_context_refresh_before_pull", { companyId: id, serverUrl });
+      await refreshPlServerAccessContext();
+      shared = getPlServerSharedCompanies();
+    }
     const focusCollections = options?.focusCollections?.length ? options.focusCollections : undefined;
-    const result = await mirrorPlServerSharedCompaniesToLocalSqlite({
+    const result = await syncPlServerSharedCompaniesToLocalSqlite({
       companyIds: [id],
       pullFullLedger: !focusCollections,
       focusCollections,
       pullGeneration,
     });
     const ledgerPullComplete = result.fullPull > 0;
-    const partialMirrorOk = result.mirrored > 0;
-    const focusPullOk = Boolean(focusCollections?.length && (result.changedCollections?.length || result.mirrored > 0));
+    const partialDeltaOk = result.synced > 0;
+    const focusPullOk = Boolean(
+      focusCollections?.length &&
+        ((result.changedCollections?.length ?? 0) > 0 || result.synced > 0 || result.fullPull > 0)
+    );
     livePullDevLog("pull_finished", {
       companyId: id,
-      mirrored: result.mirrored,
+      synced: result.synced,
       fullPull: result.fullPull,
       ledgerPullComplete,
-      partialMirrorOk,
+      partialDeltaOk,
       focusCollections,
       changedCollections: result.changedCollections,
       pullGeneration,
     });
-    if (!ledgerPullComplete && !partialMirrorOk && !focusPullOk) {
-      livePullBugCatch("LEGACY_SQLITE_MIRROR_INCOMPLETE", {
+    if (!ledgerPullComplete && !partialDeltaOk && !focusPullOk) {
+      livePullBugCatch("LEGACY_sqlite_delta_INCOMPLETE", {
         companyId: id,
-        mirrored: result.mirrored,
+        synced: result.synced,
         fullPull: result.fullPull,
         pullGeneration,
         hint: "Staff EXE should use display_cache path — check isPlServerThinStaffClient",
       });
       livePullDevLog("pull_incomplete", {
         companyId: id,
-        path: "legacy_sqlite_mirror",
-        mirrored: result.mirrored,
+        path: "legacy_sqlite_delta",
+        synced: result.synced,
         fullPull: result.fullPull,
         pullGeneration,
       });
     }
     const pullResult = {
-      ok: ledgerPullComplete || partialMirrorOk || focusPullOk,
+      ok: ledgerPullComplete || partialDeltaOk || focusPullOk,
       fullPull: ledgerPullComplete,
       changedCollections: result.changedCollections,
     };

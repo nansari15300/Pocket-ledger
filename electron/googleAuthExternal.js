@@ -131,7 +131,11 @@ function buildGoogleAuthUrl(redirectUri, sessionId, options = {}) {
     prompt: "select_account",
   });
   const loginHint = String(options.loginHint || "").trim();
-  if (loginHint) params.set("login_hint", loginHint);
+  if (loginHint) {
+    params.set("login_hint", loginHint);
+  } else if (options.forceAccountPicker !== false) {
+    params.set("authuser", "-1");
+  }
   return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
 }
 

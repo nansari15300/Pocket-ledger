@@ -66,7 +66,7 @@ import { hasPaymentLinks, hasSpendWiseLinks, hasAllocationsToVoucherId } from "@
 import { useAuth } from "@/hooks/useAuth";
 import { approveVoucherWithHistory, softDeleteVoucherMoveToRecycleBin } from "@/lib/voucherActionsClient";
 import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
-import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
+import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { VoucherAttachmentFallbackContext } from "@/contexts/VoucherAttachmentFallbackContext";
 import { readInterCompanyLink } from "@/lib/interCompany/interCompanyVoucherHydrate";
 import { mergeVoucherFileUrlsForEditDialog } from "@/lib/resolveVoucherAttachmentRemoteUrl";
@@ -83,6 +83,7 @@ import { filterVoucherAttachmentsForCompanyContext } from "@/lib/crossCompanyAtt
 import { cloneVoucherAttachmentsAsNewFilesForCopy } from "@/lib/voucherLocalAttachmentUpload";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { persistLedgerModalParentFromBrowser } from "@/lib/modalUrlSync";
+import { flushPendingBrowserDbSave } from "@/lib/localSqlite";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import {
   apkCloudCompanyOfflineViewOnly,
@@ -92,6 +93,11 @@ import {
   preferLocalLedgerReads,
 } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import {
+  companyLedgerMastersReadableFromSqlite,
+  isDeviceLocalCompany,
+  isServerGateCompany,
+} from "@/lib/companyStorageKind";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { useDate } from "@/hooks/useDate";
 import { recurringAutoVoucherLabels } from "@/lib/calendarDisplayLabels";
@@ -117,6 +123,7 @@ import {
   type RecurringRateAdjustMode,
   type RecurringVoucherTemplate,
 } from "@/lib/recurringVouchers";
+import { useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
 import {
   canEditRecurringAutoMonthly,
   canGenerateRecurringVoucherNow,
@@ -601,15 +608,33 @@ function orderMasterCandidatesForCollection(
   return ordered;
 }
 
-/** Copy To remap: local/Drive company masters SQLite se — mobile par Firestore-only read kabhi khali reh jata tha. */
+function mergeSourceRowsWithFallback(
+  dbRows: Array<Record<string, any>>,
+  fallbackRows?: Array<Record<string, any>>
+): Array<Record<string, any>> {
+  const byId = new Map<string, Record<string, any>>();
+  [...dbRows, ...(fallbackRows || [])].forEach((row) => {
+    const id = String(row?.id || "").trim();
+    if (id && isActiveMasterRow(row)) byId.set(id, row);
+  });
+  return Array.from(byId.values());
+}
+
+/** Copy To remap: SQLite masters — local / PL server / restore; cloud-sync off par bhi. */
 async function copyRemapShouldReadSqliteMasters(
   companyId: string,
-  laneCompany: { storageOption?: string } | null | undefined
+  laneCompany: { storageOption?: string; syncedFromCloud?: boolean; plServerShared?: boolean } | null | undefined
 ): Promise<boolean> {
   if (apkEntityWriteUsesLocalSqliteMirror(laneCompany)) return true;
   if (apkCloudEntityMasterReadFromSqliteMirror(laneCompany)) return true;
-    if (laneCompany && isOfflineCompanyStorage(laneCompany)) return true;
-    return false;
+  if (companyLedgerMastersReadableFromSqlite(laneCompany)) return true;
+  try {
+    const probe = await listCompanyDocsFromBrowserDb(companyId, "parties", { forBackupMerge: true });
+    if (probe.length > 0) return true;
+  } catch {
+    /* ignore */
+  }
+  return false;
 }
 
 async function loadCollectionRows(
@@ -618,12 +643,27 @@ async function loadCollectionRows(
   /** Kis company lane par SQLite mirror merge karna hai — APK Firestore-company par skip */
   laneCompany: { storageOption?: string } | null | undefined
 ): Promise<Array<Record<string, any>>> {
-  const readSqlite = await copyRemapShouldReadSqliteMasters(companyId, laneCompany);
-  // `forBackupMerge`: pure-local + Drive companies par bhi SQLite read allow (mobile web/APK).
+  let readSqlite = await copyRemapShouldReadSqliteMasters(companyId, laneCompany);
+  let requestedCollectionProbe: Array<Record<string, any>> | null = null;
+  // Registry lane kabhi PLServer/local company switch ke dauran missing/partial hoti hai. Generic
+  // `parties` probe empty hone ka matlab yeh nahi ki requested bank/expense/staff master SQLite me nahi hai.
+  if (!readSqlite) {
+    try {
+      requestedCollectionProbe = await listCompanyDocsFromBrowserDb(companyId, collectionName, {
+        forBackupMerge: true,
+      });
+      readSqlite = requestedCollectionProbe.length > 0;
+    } catch {
+      /* Firestore fallback below remains available for online companies. */
+    }
+  }
   const localRows = readSqlite
-    ? await listCompanyDocsFromBrowserDb(companyId, collectionName, { forBackupMerge: true })
+    ? requestedCollectionProbe ??
+      (await listCompanyDocsFromBrowserDb(companyId, collectionName, { forBackupMerge: true }))
     : [];
-  const skipFirestore = laneCompany != null && isOfflineCompanyStorage(laneCompany);
+  const skipFirestore =
+    laneCompany != null &&
+    (companyLedgerMastersReadableFromSqlite(laneCompany) || isOfflineCompanyStorage(laneCompany));
   let fsRows: Array<Record<string, any>> = [];
   if (!skipFirestore) {
     try {
@@ -649,7 +689,8 @@ async function remapVoucherReferencesByName(
   targetCompanyId: string,
   voucher: Record<string, any>,
   /** Har side ka `storageOption` — APK cloud par local rows merge gate */
-  allCompaniesLane: ReadonlyArray<{ id: string; storageOption?: string }>
+  allCompaniesLane: ReadonlyArray<{ id: string; storageOption?: string }>,
+  sourceFallbackRows?: Partial<Record<CollectionName, Array<Record<string, any>>>>
 ): Promise<{ remapped: Record<string, any>; unmatchedNames: string[]; unmatchedCategories: string[] }> {
   const lane = (cid: string) => allCompaniesLane.find((c) => c.id === cid) ?? null;
   const collections: CollectionName[] = ["parties", "bank_accounts", "staff", "taxes", "expense_accounts", "items"];
@@ -664,10 +705,12 @@ async function remapVoucherReferencesByName(
     sourceRowsByCollection.clear();
     targetNameToIdByCollection.clear();
     for (const cname of collections) {
-      const [sourceRows, targetRows] = await Promise.all([
+      const [sourceRowsFromDb, targetRows] = await Promise.all([
         loadCollectionRows(sourceCompanyId, cname, lane(sourceCompanyId)),
         loadCollectionRows(targetCompanyId, cname, lane(targetCompanyId)),
       ]);
+      // Local/PL masters can already be live in useVouchers while the browser mirror is cold.
+      const sourceRows = mergeSourceRowsWithFallback(sourceRowsFromDb, sourceFallbackRows?.[cname]);
       sourceRowsByCollection.set(cname, sourceRows);
       const idx = new Map<string, string>();
       targetRows.forEach((row) => {
@@ -834,6 +877,16 @@ function toEpochMs(value: unknown): number | null {
 }
 
 /** Canonical display name bank/party/item/tax rows ke लिए — target side duplicate naam match. */
+function normalizeCopyDraftDateForFormSeed(source: Record<string, unknown>, fallback?: Record<string, unknown>): Date | null {
+  const ms =
+    toEpochMs(source.date) ??
+    toEpochMs(fallback?.date) ??
+    toEpochMs(source.createdAt) ??
+    toEpochMs(source.updatedAt) ??
+    null;
+  return ms && Number.isFinite(ms) ? new Date(ms) : null;
+}
+
 function masterRowCanonicalName(row: Record<string, unknown>): string {
   return String(row?.name ?? row?.itemName ?? row?.accountName ?? row?.title ?? "").trim();
 }
@@ -980,6 +1033,11 @@ function VoucherDialogContent({
   recurringVoucherAuxiliaryDirty?: boolean;
 }) {
   const { processedStaff } = useVouchers();
+  const { company: voucherCompany } = useCompany();
+  // Local and PL Server companies do not expose Inter Company voucher creation.
+  const interCompanyDisabled = Boolean(
+    voucherCompany && (isDeviceLocalCompany(voucherCompany) || isServerGateCompany(voucherCompany))
+  );
   const isEditing = !!voucher?.id;
   const isMobile = useIsMobile();
   // Parent se `allowedTabs={[...]}` inline aaye to har render naya reference milta hai; effect reset-loop rokne ke liye stable key use karo.
@@ -988,15 +1046,19 @@ function VoucherDialogContent({
     [allowedTabs]
   );
 
-  const [activeTab, setActiveTab] = useState<VoucherType>(getVoucherType(voucher, defaultVoucherData, defaultTab));
+  const [activeTab, setActiveTab] = useState<VoucherType>(() => {
+    const initial = getVoucherType(voucher, defaultVoucherData, defaultTab);
+    return interCompanyDisabled && !voucher?.id && initial === "inter_company" ? "sale" : initial;
+  });
   /** Cashflow Quartet tab-switch: mismatch refresh + prefetch cancel — mount par duplicate fire na ho. */
   const prevCashflowQuadTabRef = useRef<VoucherType | null>(null);
   useEffect(() => {
     const initial = getVoucherType(voucher, defaultVoucherData, defaultTab);
     const allowed = Array.isArray(allowedTabs) && allowedTabs.length > 0 ? allowedTabs : null;
     // Saved txn edit: kabhi allowedTabs narrow (incomes FAB, etc.) — initial ko sale jaisi default pe mat kheench; conversion/APK me galat form.
-    const next =
+    const resolved =
       voucher?.id ? initial : allowed && !allowed.includes(initial) ? allowed[0] : initial;
+    const next = interCompanyDisabled && !voucher?.id && resolved === "inter_company" ? "sale" : resolved;
     setActiveTab(next);
     // Poora `voucher` dep mat rakho: live snapshot har baar naya reference → edit convert ke baad tab purani `type` pe revert.
   }, [
@@ -1007,6 +1069,7 @@ function VoucherDialogContent({
     defaultVoucherData?.subType,
     defaultTab,
     allowedTabsKey,
+    interCompanyDisabled,
   ]);
 
   // Parent header (Auto Monthly strip) ko current tab — `AddVoucherDialog` me `activeTab` state nahi hai.
@@ -1081,11 +1144,15 @@ function VoucherDialogContent({
 
   // Mobile/APK: dropdown sirf `allowedTabs` se banta tha — Payment In↔Direct Income jaise edit-convert targets list me hote hi nahi the (disabled bhi nahi, gayab).
   const tabKeys = useMemo(() => {
-    const baseKeys = TAB_ORDER.filter((k) => (k in formMap) && (!allowedTabs || allowedTabs.includes(k)));
+    const baseKeys = TAB_ORDER.filter((k) =>
+      (k in formMap) &&
+      (!interCompanyDisabled || k !== "inter_company") &&
+      (!allowedTabs || allowedTabs.includes(k))
+    );
     if (!voucher?.id) return baseKeys;
     const stored = getVoucherType(voucher, defaultVoucherData, defaultTab);
     const eligible = new Set<VoucherType>(baseKeys);
-    eligible.add(stored);
+    if (!interCompanyDisabled || stored !== "inter_company") eligible.add(stored);
     if (!restrictConvertWhenLinked) {
       const conv = getRestrictedEnabledTabs(stored, true, Boolean(copySaveTargetCompanyId));
       if (conv) conv.forEach((t) => eligible.add(t));
@@ -1104,6 +1171,7 @@ function VoucherDialogContent({
     defaultTab,
     restrictConvertWhenLinked,
     copySaveTargetCompanyId,
+    interCompanyDisabled,
   ]);
 
   return (
@@ -1279,6 +1347,7 @@ const MIN_DIALOG_H = 320;
 const VOUCHER_DIALOG_STORAGE_KEY = "pl-voucher-dialog-bounds";
 
 export function AddVoucherDialog(props: any) {
+  const isAttachmentProcessing = useVoucherAttachmentProcessing();
   /** Compare-before-sync jaisi jagah nested stack: `false` se parent non-modal Compare band hone par saath na band ho. */
   const {
     children,
@@ -1344,7 +1413,23 @@ export function AddVoucherDialog(props: any) {
   const router = useRouter();
   const pathname = usePathname();
   const { can, canEditRecord, canDeleteVoucher } = usePermissions();
-  const { vouchers } = useVouchers();
+  const {
+    vouchers,
+    processedParties,
+    processedAccounts,
+    processedStaff,
+    processedTaxes,
+    processedExpenseAccounts,
+    processedItems,
+  } = useVouchers();
+  const sourceMasterRowsFallback = useMemo<Partial<Record<CollectionName, Array<Record<string, any>>>>>(() => ({
+    parties: processedParties as Array<Record<string, any>>,
+    bank_accounts: processedAccounts as Array<Record<string, any>>,
+    staff: processedStaff as Array<Record<string, any>>,
+    taxes: processedTaxes as Array<Record<string, any>>,
+    expense_accounts: processedExpenseAccounts as Array<Record<string, any>>,
+    items: processedItems as Array<Record<string, any>>,
+  }), [processedParties, processedAccounts, processedStaff, processedTaxes, processedExpenseAccounts, processedItems]);
   const isMobile = useIsMobile();
   const isDesktop = !isMobile;
   // Manage Sharing → Recurring Auto Voucher (Voucher Settings user list hata di).
@@ -1352,6 +1437,7 @@ export function AddVoucherDialog(props: any) {
   const canEditRecurringOnVoucher = useMemo(() => canEditRecurringAutoMonthly(can), [can]);
   const canAddRecurringOnVoucher = useMemo(() => can("add_recurring_auto_monthly"), [can]);
   const canGenerateRecurringOnVoucher = useMemo(() => canGenerateRecurringVoucherNow(can), [can]);
+  const suppressDashboardRedirectGuard = props.suppressDashboardRedirectGuard === true;
   // Static export: FAB + party/bank *desktop* ledger par modal khulte hi URL session me — save/approve/dashboard-guard ko restore anchor mile
   useEffect(() => {
     if (!isOpen || !isStaticAppBuild()) return;
@@ -2351,7 +2437,9 @@ export function AddVoucherDialog(props: any) {
       return;
     }
     // APK/mobile: kuch parent / global effect approve ke baad silently `/dashboard` push kar deta hai — guard poll + restore (native ~8s).
-    armDashboardRedirectGuard(router, { isMobile: ledgerModalGuardWide });
+    if (!suppressDashboardRedirectGuard) {
+      armDashboardRedirectGuard(router, { isMobile: ledgerModalGuardWide });
+    }
     plNavDbg("AddVoucherDialog.handleApprove.start", {
       cidHint: plNavDbgIdHint(cid),
       voucherId: effectiveVoucher?.id,
@@ -2408,6 +2496,7 @@ export function AddVoucherDialog(props: any) {
     onOpenChange,
     isMobile,
     ledgerModalGuardWide,
+    suppressDashboardRedirectGuard,
     router,
     apkOfflineViewOnly,
   ]);
@@ -2421,7 +2510,6 @@ export function AddVoucherDialog(props: any) {
     const destinationCompanyId = String(targetCompanyIdRef.current || targetCompanyId || "").trim();
     /** Source lane: APK Firestore-company par local mirror fallback copy-race ko bigaad sakta tha (`apkEntityWriteUsesLocalSqliteMirror`). */
     const sourceLaneCompany = copyToCompanies.find((c) => c.id === sourceCompanyId) ?? company ?? null;
-    const readLocalVoucherStaleFallback = apkEntityWriteUsesLocalSqliteMirror(sourceLaneCompany);
     if (!sourceCompanyId || !destinationCompanyId) {
       toast.error("Company not selected.");
       return null;
@@ -2439,12 +2527,14 @@ export function AddVoucherDialog(props: any) {
         sourceDoc = copySourceVoucherSnapshot;
       } else if (explicitSourceVoucherId) {
         const voucherIdToCopy = explicitSourceVoucherId;
-        const sourceIsLocalCompany =
-          sourceLaneCompany != null && isOfflineCompanyStorage(sourceLaneCompany);
+        const sourceUsesSqliteLedger =
+          sourceLaneCompany != null &&
+          (companyLedgerMastersReadableFromSqlite(sourceLaneCompany) ||
+            apkEntityWriteUsesLocalSqliteMirror(sourceLaneCompany));
         // Save & Copy To me stale seed fallback bilkul na ho: freshly saved voucher hi source hona chahiye.
         for (let attempt = 0; attempt < 6; attempt++) {
           // Local company: SQLite pehle (mobile par Firestore row aksar missing / late).
-          if (readLocalVoucherStaleFallback || sourceIsLocalCompany) {
+          if (sourceUsesSqliteLedger) {
             const localRow =
               (await getCompanyDocFromBrowserDb(sourceCompanyId, "vouchers", voucherIdToCopy) as Record<string, any> | null) ??
               null;
@@ -2457,7 +2547,7 @@ export function AddVoucherDialog(props: any) {
               }
             }
           }
-          if (!sourceIsLocalCompany) {
+          if (!sourceUsesSqliteLedger) {
             const snap = await getDoc(doc(firestore, `companies/${sourceCompanyId}/vouchers`, voucherIdToCopy));
             if (snap.exists()) {
               const docCandidate = { id: snap.id, ...(snap.data() as Record<string, any>) };
@@ -2488,10 +2578,12 @@ export function AddVoucherDialog(props: any) {
         const fallbackId = String(effectiveVoucher?.id || "").trim();
         if (fallbackId) {
           const voucherIdToCopy = fallbackId;
-          const sourceIsLocalCompany =
-            sourceLaneCompany != null && isOfflineCompanyStorage(sourceLaneCompany);
+          const sourceUsesSqliteLedger =
+            sourceLaneCompany != null &&
+            (companyLedgerMastersReadableFromSqlite(sourceLaneCompany) ||
+              apkEntityWriteUsesLocalSqliteMirror(sourceLaneCompany));
           for (let attempt = 0; attempt < 6; attempt++) {
-            if (readLocalVoucherStaleFallback || sourceIsLocalCompany) {
+            if (sourceUsesSqliteLedger) {
               const localRow =
                 (await getCompanyDocFromBrowserDb(sourceCompanyId, "vouchers", voucherIdToCopy) as Record<string, any> | null) ??
                 null;
@@ -2500,7 +2592,7 @@ export function AddVoucherDialog(props: any) {
                 break;
               }
             }
-            if (!sourceIsLocalCompany) {
+            if (!sourceUsesSqliteLedger) {
               const snap = await getDoc(doc(firestore, `companies/${sourceCompanyId}/vouchers`, voucherIdToCopy));
               if (snap.exists()) {
                 sourceDoc = { id: snap.id, ...(snap.data() as Record<string, any>) };
@@ -2540,7 +2632,8 @@ export function AddVoucherDialog(props: any) {
         sourceCompanyId,
         destinationCompanyId,
         cleaned,
-        copyToCompanies
+        copyToCompanies,
+        sourceMasterRowsFallback
       );
       const { id: _sourceVoucherDocId, ...remappedSansId } = remapped as Record<string, unknown>;
       const copyPayloadBase = {
@@ -2558,8 +2651,10 @@ export function AddVoucherDialog(props: any) {
         destinationCompanyId,
         new Set(copyToCompanies.map((c) => c.id).filter(Boolean))
       );
+      const copiedDate = normalizeCopyDraftDateForFormSeed(copyPayload, sourceDoc);
       const nextNewFormSeed = {
         ...copyPayload,
+        ...(copiedDate ? { date: copiedDate } : {}),
         // New form seed me voucher number fresh auto/entry ke liye blank rakho.
         voucherNumber: nextVoucherNumber,
         defaultTab: defaultTabFromVoucherLike(copyPayload),
@@ -2590,6 +2685,7 @@ export function AddVoucherDialog(props: any) {
     company,
     copySourceVoucherSnapshot,
     effectiveVoucher,
+    sourceMasterRowsFallback,
   ]);
 
   /** Party/bank/target me create-save ke baad mismatch list dubara ginti — Copy buttons stale na rahein (`accountName` match ab mila ho). */
@@ -2604,13 +2700,39 @@ export function AddVoucherDialog(props: any) {
         sourceCompanyId,
         destinationCompanyId,
         cleaned,
-        copyToCompanies
+        copyToCompanies,
+        sourceMasterRowsFallback
       );
       setCopyMismatchCategories(unmatchedCategories);
     } catch {
       /* Firestore list race par ignore — user fir save / company change kar sakta hai */
     }
-  }, [companyId, targetCompanyId, postCopyNewFormSeed, copySourceVoucherSnapshot, copyToCompanies]);
+  }, [companyId, targetCompanyId, postCopyNewFormSeed, copySourceVoucherSnapshot, copyToCompanies, sourceMasterRowsFallback]);
+
+  /** Copy To seed apply ke turant baad local/PL SQLite masters hydrate hone ka ek chhota race hota hai.
+   * Journal/Contra/Note me tab switch se Copy chips aa jaate the; ye recount wahi refresh automatically karta hai.
+   */
+  useEffect(() => {
+    if (!isOpen || !postCopyNewFormSeed || !copySourceVoucherSnapshot) return;
+    let cancelled = false;
+    const run = () => {
+      if (cancelled) return;
+      void refreshCopyMismatchAfterMasterSave();
+    };
+    const first = window.setTimeout(run, 250);
+    const second = window.setTimeout(run, 900);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(first);
+      window.clearTimeout(second);
+    };
+  }, [
+    isOpen,
+    copyDraftSeedVersion,
+    postCopyNewFormSeed,
+    copySourceVoucherSnapshot,
+    refreshCopyMismatchAfterMasterSave,
+  ]);
 
   /** Quartet (PI/PO/DInc/DExp) tabs switch — prefilled Create_* dialog cancel + mismatch recount; tab-click se dialog na khule. */
   const onCashflowQuadTabNavigate = useCallback(() => {
@@ -2622,7 +2744,7 @@ export function AddVoucherDialog(props: any) {
     const sourceCompanyId = companyId;
     const destinationCompanyId = String(targetCompanyIdRef.current || targetCompanyId || "").trim();
     if (!sourceCompanyId || !destinationCompanyId || !copySourceVoucherSnapshot) return;
-    const collectionsToCopy = mapMismatchCategoryToCollections(category);
+    let collectionsToCopy = mapMismatchCategoryToCollections(category);
     const candidateIdsBucket = new Set<string>();
     collectLikelyReferenceIds(copySourceVoucherSnapshot, candidateIdsBucket);
     const candidateIds = Array.from(candidateIdsBucket);
@@ -2641,6 +2763,18 @@ export function AddVoucherDialog(props: any) {
         ? opts
         : undefined;
 
+    if (preferredMasterIds.length > 0) {
+      const preferredCollections: CollectionName[] = [];
+      for (const collectionName of ["parties", "bank_accounts", "staff", "taxes", "expense_accounts", "items"] as CollectionName[]) {
+        const sourceRowsFromDb = await loadCollectionRows(sourceCompanyId, collectionName, sourceLaneCompany);
+        const sourceRows = mergeSourceRowsWithFallback(sourceRowsFromDb, sourceMasterRowsFallback[collectionName]);
+        if (sourceRows.some((row) => preferredMasterIds.includes(String(row.id || "")))) {
+          preferredCollections.push(collectionName);
+        }
+      }
+      collectionsToCopy = Array.from(new Set([...preferredCollections, ...collectionsToCopy]));
+    }
+
     /** Target में यह naam pehle se hai क्या — टर्मिनोलॉजी bank/expense/name सब.cover. */
     const collectTargetLowerNames = (rows: Record<string, any>[]): Set<string> => {
       const s = new Set<string>();
@@ -2652,7 +2786,8 @@ export function AddVoucherDialog(props: any) {
     };
 
     for (const collectionName of collectionsToCopy) {
-      const sourceRows = await loadCollectionRows(sourceCompanyId, collectionName, sourceLaneCompany);
+      const sourceRowsFromDb = await loadCollectionRows(sourceCompanyId, collectionName, sourceLaneCompany);
+      const sourceRows = mergeSourceRowsWithFallback(sourceRowsFromDb, sourceMasterRowsFallback[collectionName]);
       const targetRows = await loadCollectionRows(destinationCompanyId, collectionName, destLaneCompany);
       const targetNameSet = collectTargetLowerNames(targetRows as Record<string, any>[]);
       const sourceById = new Map(sourceRows.map((row) => [String(row.id || ""), row]));
@@ -2742,7 +2877,7 @@ export function AddVoucherDialog(props: any) {
       title: "Reference Not Available For Copy",
       message: formalMessage,
     });
-  }, [companyId, targetCompanyId, copySourceVoucherSnapshot, copyToCompanies]);
+  }, [companyId, targetCompanyId, copySourceVoucherSnapshot, copyToCompanies, sourceMasterRowsFallback]);
 
   // Copy-draft mode me dropdown se target company badle to form ko naye target ke hisaab se auto re-seed karo:
   // voucher number target company ka next number, party/account/item IDs naye company me name-match se remap.
@@ -3072,7 +3207,7 @@ export function AddVoucherDialog(props: any) {
     }
 
     // Static ledger (mobile + desktop wide): SQLite flush ke baad `/dashboard` push — guard pehle arm (native ~8s window).
-    if (status === "saved") {
+    if (status === "saved" && !suppressDashboardRedirectGuard) {
       plNavDbg("AddVoucherDialog.handleAction.saved.armGuard", {
         ledgerModalWide: ledgerModalGuardWide,
         pinCapacitorShell: apkLedgerPinsShellCompanyContext,
@@ -3105,6 +3240,31 @@ export function AddVoucherDialog(props: any) {
     const unassignedFileId =
       status === "saved" ? String(defaultVoucherData?.unassignedFile?.id || "").trim() : "";
     const cleanupCompanyId = companyId;
+    let unassignedCleanupAlreadyDurable = false;
+    if (
+      status === "saved" &&
+      unassignedFileId &&
+      cleanupCompanyId &&
+      apkEntityWriteUsesLocalSqliteMirror(company)
+    ) {
+      await upsertCompanyDocInBrowserDb(
+        cleanupCompanyId,
+        "unassigned_documents",
+        unassignedFileId,
+        {
+          ...((defaultVoucherData?.unassignedFile || {}) as Record<string, unknown>),
+          id: unassignedFileId,
+          isDeleted: true,
+          deleted: true,
+          deletedAt: Timestamp.now(),
+          status: "FREE",
+        },
+        { force: true, skipPlanMutationGate: true }
+      );
+      const { scheduleBrowserDbPersistAfterWrite } = await import("@/lib/localSqlite");
+      scheduleBrowserDbPersistAfterWrite();
+      unassignedCleanupAlreadyDurable = true;
+    }
 
     // ३. Propagate action — pehle parent ko saved batao + dialog band (static/offline par niche recurring `getDoc` await se form mat chipke)
     let keepDialogAsNew = Boolean(isSaveAndNew);
@@ -3165,10 +3325,26 @@ export function AddVoucherDialog(props: any) {
             }
           }
         }
-        if (unassignedFileId && cleanupCompanyId) {
+        if (unassignedFileId && cleanupCompanyId && !unassignedCleanupAlreadyDurable) {
           try {
             const laneForFirestoreCleanup = company;
-            if (!apkEntityWriteUsesLocalSqliteMirror(laneForFirestoreCleanup)) {
+            if (apkEntityWriteUsesLocalSqliteMirror(laneForFirestoreCleanup)) {
+              await upsertCompanyDocInBrowserDb(
+                cleanupCompanyId,
+                "unassigned_documents",
+                unassignedFileId,
+                {
+                  ...((defaultVoucherData?.unassignedFile || {}) as Record<string, unknown>),
+                  id: unassignedFileId,
+                  isDeleted: true,
+                  deleted: true,
+                  deletedAt: Timestamp.now(),
+                  status: "FREE",
+                },
+                { force: true, skipPlanMutationGate: true }
+              );
+              await flushPendingBrowserDbSave();
+            } else {
               const fileDocRef = doc(
                 firestore,
                 `companies/${cleanupCompanyId}/unassigned_documents`,
@@ -4184,7 +4360,7 @@ export function AddVoucherDialog(props: any) {
    */
   const handleDialogOpenChange = useCallback(
     (open: boolean) => {
-      if (!open) {
+      if (!open && !suppressDashboardRedirectGuard) {
         plNavDbg("AddVoucherDialog.onClose (dialog root)", {
           ledgerModalWide: ledgerModalGuardWide,
         });
@@ -4192,7 +4368,7 @@ export function AddVoucherDialog(props: any) {
       }
       onOpenChange?.(open);
     },
-    [onOpenChange, router, ledgerModalGuardWide]
+    [onOpenChange, router, ledgerModalGuardWide, suppressDashboardRedirectGuard]
   );
 
   return (
@@ -4201,6 +4377,7 @@ export function AddVoucherDialog(props: any) {
       {isDesktop ? (
         <DialogContent
           hideCloseButton
+          onFocusOutside={(e) => e.preventDefault()}
           className="flex flex-col p-0 md:!left-0 md:!top-0 md:!translate-x-0 md:!translate-y-0 md:w-full md:h-full md:max-w-none md:max-h-none md:border-0 md:bg-transparent md:shadow-none md:rounded-none"
         >
           <div
@@ -4276,6 +4453,7 @@ export function AddVoucherDialog(props: any) {
         // Mobile: full viewport — PWA, mobile browser aur static/Capacitor APK sab par yahi layout; safe-area env() 0 ho to asar nahi.
         <DialogContent
           hideCloseButton
+          onFocusOutside={(e) => e.preventDefault()}
           className={cn(
             "flex min-h-0 flex-col overflow-hidden p-0 !gap-0",
             "box-border h-[100dvh] max-h-[100dvh] w-full max-w-none !left-0 !top-0 !translate-x-0 !translate-y-0 rounded-none border-0 shadow-lg",
@@ -4301,7 +4479,7 @@ export function AddVoucherDialog(props: any) {
               isMobile && "min-w-0 w-full text-center",
               BTN_SAVE_CLASS
             )}
-            disabled={isCopyingToCompany || !targetCompanyId || apkOfflineViewOnly}
+            disabled={isAttachmentProcessing || isCopyingToCompany || !targetCompanyId || apkOfflineViewOnly}
             title="Copy to another company"
             onClick={async () => {
               if (apkOfflineViewOnly) {

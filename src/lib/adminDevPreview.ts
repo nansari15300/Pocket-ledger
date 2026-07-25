@@ -41,5 +41,5 @@ export function isAdminPanelDevPreview(): boolean {
 
 export function isAdminPanelNavVisible(isSuperAdminUser: boolean, isStaticAppBundle: boolean): boolean {
   if (isAdminPanelDevPreview()) return true;
-  return isSuperAdminUser && !isStaticAppBundle;
+  return isSuperAdminUser;
 }

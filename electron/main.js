@@ -9,12 +9,15 @@ const {
   nativeImage,
   shell,
   session,
+  powerMonitor,
+  powerSaveBlocker,
 } = require("electron");
 const googleAuthExternal = require("./googleAuthExternal");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const localAppServer = require("./localAppServer");
+const plTraceLog = require("./plTraceLog");
 const appUpgradeCache = require("./appUpgradeCache");
 const { PL_MIRROR_PROTOCOL_VERSION, evaluateMirrorProtocol } = require("./plMirrorProtocol.cjs");
 
@@ -67,7 +70,7 @@ const PRINT_MODE_ACTUAL = "actual";
 const PRINT_MODE_FIT_WIDTH = "fit-width";
 const PRINT_MODE_FIT_PAGE = "fit-page";
 /** Tab strip height (px) — merged title row (Win/Linux) ya classic macOS strip */
-const TAB_STRIP_HEIGHT = 40;
+const TAB_STRIP_HEIGHT = 36;
 /** Win/Linux: frameless window — "Pocket Ledger (N tabs)" + tabs + 10px + minimize/max/close ek hi row */
 const USE_MERGED_TITLEBAR = process.platform === "win32" || process.platform === "linux";
 
@@ -138,6 +141,7 @@ localAppServer.setServerDeps({
 
 /** Packaged app: UI BrowserView tabs (main window webContents khali rehta hai). */
 let serverDataBridgeWindow = null;
+let serverPowerSaveBlockerId = null;
 
 /** Keep in sync with src/lib/plMirrorProtocol.ts — import from plMirrorProtocol.cjs */
 
@@ -250,10 +254,21 @@ function mirrorDatasetFingerprintHex(docs) {
 }
 
 function mirrorExportRendererScore(docs, label) {
-  const count = docs.length;
-  const maxUpdatedAt = mirrorDocsMaxUpdatedAtMs(docs);
-  const rendererPriority = mirrorRendererPriority(label);
-  return 100000 * count + 1000 * maxUpdatedAt + rendererPriority;
+  return {
+    count: docs.length,
+    maxUpdatedAt: mirrorDocsMaxUpdatedAtMs(docs),
+    rendererPriority: mirrorRendererPriority(label),
+  };
+}
+
+/** Prefer the complete SQLite dataset; freshness only breaks equal-count ties. */
+function mirrorExportScoreIsBetter(candidate, current) {
+  if (!current) return true;
+  if (candidate.count !== current.count) return candidate.count > current.count;
+  if (candidate.maxUpdatedAt !== current.maxUpdatedAt) {
+    return candidate.maxUpdatedAt > current.maxUpdatedAt;
+  }
+  return candidate.rendererPriority > current.rendererPriority;
 }
 
 function scoreLocalhostAppUrl(url) {
@@ -301,21 +316,112 @@ function getAppTabWebContentsList() {
   });
 }
 
+const SERVER_DATA_EXPORT_TIMEOUT_MS = {
+  vouchers: 120_000,
+  collection: 45_000,
+  bundle: 90_000,
+  bridgeFn: 12_000,
+};
+
+function serverDataCollectionExportTimeoutMs(collection) {
+  return String(collection || "").trim() === "vouchers"
+    ? SERVER_DATA_EXPORT_TIMEOUT_MS.vouchers
+    : SERVER_DATA_EXPORT_TIMEOUT_MS.collection;
+}
+
+function webContentsDebugInfo(wc) {
+  if (!wc || wc.isDestroyed()) return { ready: false, reason: "destroyed" };
+  try {
+    const url = String(wc.getURL() || "").trim() || null;
+    if (wc.isLoading()) return { ready: false, reason: "loading", url, id: wc.id };
+    if (!url || url === "about:blank") return { ready: false, reason: "blank_url", url, id: wc.id };
+    if (url.startsWith("devtools://")) return { ready: false, reason: "devtools", url, id: wc.id };
+    if (!/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(url)) {
+      return { ready: false, reason: "not_app_origin", url, id: wc.id };
+    }
+    return { ready: true, url, id: wc.id, label: mirrorRendererLabel(wc) };
+  } catch (e) {
+    return { ready: false, reason: "error", error: String(e?.message || e) };
+  }
+}
+
+function isWebContentsReadyForBridge(wc) {
+  return webContentsDebugInfo(wc).ready === true;
+}
+
+async function executeJavaScriptWithTimeout(wc, script, timeoutMs = SERVER_DATA_EXPORT_TIMEOUT_MS.collection) {
+  if (!wc || wc.isDestroyed()) return undefined;
+  const info = webContentsDebugInfo(wc);
+  if (!info.ready) {
+    plTraceLog.traceLog("PL-SERVER", "executeJavaScript_skip_not_ready", info);
+    return undefined;
+  }
+  let timer = null;
+  try {
+    return await Promise.race([
+      wc.executeJavaScript(script, true),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("executeJavaScript_timeout")), timeoutMs);
+      }),
+    ]);
+  } catch (e) {
+    if (e?.message === "executeJavaScript_timeout") {
+      plTraceLog.traceLog("PL-SERVER", "executeJavaScript_timeout", {
+        timeoutMs,
+        ...info,
+      });
+    }
+    return undefined;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** Ek waqt me ek export — parallel bundle + collection requests renderer SQLite par deadlock na karein. */
+let serverDataExportChain = Promise.resolve();
+function enqueueServerDataExport(task) {
+  const run = serverDataExportChain.then(() => task(), () => task());
+  serverDataExportChain = run.catch(() => undefined);
+  return run;
+}
+
 async function waitForWindowBridgeFn(wc, fnName, timeoutMs = 25000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (!wc || wc.isDestroyed()) return false;
-    try {
-      const ok = await wc.executeJavaScript(`typeof window[${JSON.stringify(fnName)}] === "function"`, true);
-      if (ok) return true;
-    } catch (_) {}
+    if (!isWebContentsReadyForBridge(wc)) {
+      await new Promise((r) => setTimeout(r, 300));
+      continue;
+    }
+    const ok = await executeJavaScriptWithTimeout(
+      wc,
+      `typeof window[${JSON.stringify(fnName)}] === "function"`,
+      SERVER_DATA_EXPORT_TIMEOUT_MS.bridgeFn
+    );
+    if (ok) return true;
     await new Promise((r) => setTimeout(r, 300));
   }
+  plTraceLog.traceLog("PL-SERVER", "waitForWindowBridgeFn_timeout", {
+    fnName,
+    timeoutMs,
+    ...webContentsDebugInfo(wc),
+  });
   return false;
 }
 
-/** Hidden localhost tab — sharing on par company list + login bridge (tray-only server ke liye). */
-async function ensureServerDataBridgeWindow() {
+const WARM_SERVER_DATA_BRIDGE_SCRIPT = `(async () => {
+  try {
+    if (typeof window.__plWarmServerDataBridge !== "function") return { ok: false, error: "no_warm_fn" };
+    return await window.__plWarmServerDataBridge();
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : "warm_failed" };
+  }
+})()`;
+
+/** Hidden localhost tab — same IndexedDB origin as app tabs (web jaisa SQLite read). */
+let serverDataBridgeEnsureInflight = null;
+
+async function ensureServerDataBridgeWindowInner() {
   if (!app.isPackaged && !IS_PHASE1B_RUNTIME_VERIFY) return null;
   const cfg = localAppServer.loadConfig(userDataPath());
   if (!localAppServer.shouldHostLocalServer(cfg) || !cfg.userWantsRunning) return null;
@@ -332,6 +438,7 @@ async function ensureServerDataBridgeWindow() {
         preload: path.join(__dirname, "app-content-preload.js"),
         nodeIntegration: false,
         contextIsolation: true,
+        backgroundThrottling: false,
       },
     });
     installPlServerRequestHeaders(serverDataBridgeWindow.webContents.session);
@@ -341,26 +448,154 @@ async function ensureServerDataBridgeWindow() {
   }
   const wc = serverDataBridgeWindow.webContents;
   const current = wc.getURL() || "";
-  const onCanonicalBridgeOrigin =
-    current.includes(`localhost:${port}`) && current.includes("pl_server_data_bridge=1");
+  let onCanonicalBridgeOrigin = false;
+  let onExpectedLocalOrigin = false;
+  try {
+    const u = new URL(current);
+    onExpectedLocalOrigin =
+      (u.hostname === "localhost" || u.hostname === "127.0.0.1") &&
+      String(u.port || "") === String(port) &&
+      u.searchParams.get("pl_remote_client") !== "1";
+    onCanonicalBridgeOrigin =
+      onExpectedLocalOrigin &&
+      u.searchParams.get("pl_server_data_bridge") === "1" &&
+      u.searchParams.get("pl_remote_client") !== "1";
+  } catch (_) {}
+  if (!onCanonicalBridgeOrigin && onExpectedLocalOrigin && !wc.isLoading()) {
+    const alreadyReady = await executeJavaScriptWithTimeout(
+      wc,
+      `typeof window.__plListShareableLocalCompanies === "function" && typeof window.__plExportCompanyDeltaCollection === "function"`,
+      SERVER_DATA_EXPORT_TIMEOUT_MS.bridgeFn
+    );
+    if (alreadyReady === true) {
+      plTraceLog.traceLog("PL-SERVER", "bridge_reuse_ready", { current });
+      return wc;
+    }
+  }
   if (!onCanonicalBridgeOrigin) {
+    plTraceLog.traceLog("PL-SERVER", "bridge_load_url_start", { bridgeUrl, previousUrl: current || null });
     await wc.loadURL(bridgeUrl);
   }
   await waitForWindowBridgeFn(wc, "__plListShareableLocalCompanies");
+  await waitForWindowBridgeFn(wc, "__plExportCompanyDeltaCollection", SERVER_DATA_EXPORT_TIMEOUT_MS.bridgeFn);
   return wc;
 }
 
+async function ensureServerDataBridgeWindow() {
+  if (serverDataBridgeEnsureInflight) return serverDataBridgeEnsureInflight;
+  serverDataBridgeEnsureInflight = ensureServerDataBridgeWindowInner();
+  try {
+    return await serverDataBridgeEnsureInflight;
+  } finally {
+    serverDataBridgeEnsureInflight = null;
+  }
+}
+
+async function warmServerDataBridgeBestEffort() {
+  const startedMs = Date.now();
+  try {
+    const bridge = await ensureServerDataBridgeWindow();
+    if (!bridge || bridge.isDestroyed()) {
+      plTraceLog.traceLog("PL-SERVER", "bridge_warm_skip", { reason: "no_bridge" });
+      return null;
+    }
+    const warm = await executeJavaScriptWithTimeout(
+      bridge,
+      WARM_SERVER_DATA_BRIDGE_SCRIPT,
+      SERVER_DATA_EXPORT_TIMEOUT_MS.bundle
+    );
+    plTraceLog.traceLog("PL-SERVER", "bridge_warm_done", {
+      ms: Date.now() - startedMs,
+      warm,
+    });
+    return warm;
+  } catch (e) {
+    plTraceLog.traceLog("PL-SERVER", "bridge_warm_failed", {
+      ms: Date.now() - startedMs,
+      error: String(e?.message || e),
+    });
+    return null;
+  }
+}
+
+async function orderExportCandidates(candidates, companyId) {
+  const cid = JSON.stringify(String(companyId || "").trim());
+  const probeScript = `(async () => {
+    try {
+      if (typeof window.__plProbeDeltaExportCompany !== "function") return { ok: false, reason: "no_probe" };
+      return await window.__plProbeDeltaExportCompany(${cid});
+    } catch (e) {
+      return { ok: false, reason: e && e.message ? e.message : "probe_error" };
+    }
+  })()`;
+  const scored = [];
+  for (const wc of candidates) {
+    const info = webContentsDebugInfo(wc);
+    if (!info.ready) {
+      plTraceLog.traceLog("PL-SERVER", "export_candidate_skip", info);
+      scored.push({ wc, score: -1, info, probe: null });
+      continue;
+    }
+    const probe = await executeJavaScriptWithTimeout(
+      wc,
+      probeScript,
+      SERVER_DATA_EXPORT_TIMEOUT_MS.bridgeFn
+    );
+    const hasCompany = probe && typeof probe === "object" && probe.ok === true;
+    plTraceLog.traceLog("PL-SERVER", hasCompany ? "export_candidate_hit" : "export_candidate_miss", {
+      ...info,
+      probe,
+    });
+    scored.push({ wc, score: hasCompany ? 2 : 1, info, probe });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.map((row) => row.wc);
+}
+
 /** P2P client push ke baad saari app tabs ko SQLite bump — hidden bridge window alag process me likhta hai. */
-async function broadcastBrowserDbCollectionBump(companyId, collection) {
+async function broadcastBrowserDbCollectionBump(companyId, collection, options = {}) {
   if (IS_PHASE1B_RUNTIME_VERIFY) phase1bVerifyStats.broadcast += 1;
+  const source = String(options.source || "pl_host_remote_write");
+  const immediate = options.immediate !== false;
   const script = `(function(){
     try {
       if (typeof window.__plInvalidateBrowserDbCache === "function") window.__plInvalidateBrowserDbCache();
     } catch (e) {}
     try {
       window.dispatchEvent(new CustomEvent("pocket-ledger-browser-db-bump", {
-        detail: { companyId: ${JSON.stringify(String(companyId || ""))}, collection: ${JSON.stringify(String(collection || ""))} }
+        detail: {
+          companyId: ${JSON.stringify(String(companyId || ""))},
+          collection: ${JSON.stringify(String(collection || ""))},
+          immediate: ${immediate ? "true" : "false"},
+          source: ${JSON.stringify(source)}
+        }
       }));
+    } catch (e) {}
+  })()`;
+  const contentsList = getAppTabWebContentsList();
+  await Promise.all(
+    contentsList.map(async (wc) => {
+      if (!wc || wc.isDestroyed()) return;
+      try {
+        const url = wc.getURL();
+        if (!url || url.startsWith("devtools://")) return;
+        await wc.executeJavaScript(script, true);
+      } catch (_) {}
+    })
+  );
+}
+
+/** Gate add/remove — localhost:3000 vs :3001 alag localStorage; saari EXE tabs ko snapshot sync. */
+async function broadcastGateStoreSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || !Array.isArray(snapshot.gates)) return;
+  const script = `(function(){
+    try {
+      const snap = ${JSON.stringify(snapshot)};
+      if (typeof window.__plApplyGateStoreSnapshot === "function") {
+        window.__plApplyGateStoreSnapshot(snap);
+      } else {
+        window.dispatchEvent(new Event("pl-gate-changed"));
+      }
     } catch (e) {}
   })()`;
   const contentsList = getAppTabWebContentsList();
@@ -398,31 +633,136 @@ async function executeHostBridgeAuthoritativeCompanyDocUpsert(payload) {
   return out;
 }
 
-/** Local Server SQLite/export/push — canonical hidden bridge only (visible tabs are UI). */
+/**
+ * Local Server SQLite/export/push — dev jaisa: pehle open app tabs (SQLite loaded),
+ * phir hidden bridge fallback (tray-only server).
+ */
 async function runInServerAppRenderer(script, opts = {}) {
   const requireFn = opts.requireFn || "";
   const accept = opts.accept;
-  const bridge = await ensureServerDataBridgeWindow();
-  if (!bridge || bridge.isDestroyed()) return null;
-  if (requireFn) await waitForWindowBridgeFn(bridge, requireFn);
-  try {
-    const result = await bridge.executeJavaScript(script, true);
-    if (typeof accept === "function" ? accept(result) : result != null) return result;
-  } catch (_) {}
+  const companyId = String(opts.companyId || "").trim();
+  const timeoutMs =
+    typeof opts.timeoutMs === "number" && opts.timeoutMs > 0
+      ? opts.timeoutMs
+      : SERVER_DATA_EXPORT_TIMEOUT_MS.collection;
+  void ensureServerDataBridgeWindow().catch(() => {});
+  let candidates = getAppTabWebContentsList().filter(isWebContentsReadyForBridge);
+  if (companyId) {
+    candidates = await orderExportCandidates(candidates, companyId);
+  }
+  plTraceLog.traceLog("PL-SERVER", "runInServerAppRenderer_start", {
+    requireFn: requireFn || null,
+    companyId: companyId || null,
+    candidateCount: candidates.length,
+  });
+  for (const wc of candidates) {
+    if (!wc || wc.isDestroyed()) continue;
+    if (requireFn) {
+      const hasFn = await executeJavaScriptWithTimeout(
+        wc,
+        `typeof window[${JSON.stringify(requireFn)}] === "function"`,
+        SERVER_DATA_EXPORT_TIMEOUT_MS.bridgeFn
+      );
+      if (!hasFn) continue;
+    }
+    const result = await executeJavaScriptWithTimeout(wc, script, timeoutMs);
+    if (typeof accept === "function" ? accept(result) : result != null) {
+      plTraceLog.traceLog("PL-SERVER", "runInServerAppRenderer_ok", {
+        requireFn: requireFn || null,
+        companyId: companyId || null,
+        renderer: mirrorRendererLabel(wc),
+      });
+      return result;
+    }
+  }
+  if (requireFn) {
+    const bridge = await ensureServerDataBridgeWindow();
+    if (bridge && !bridge.isDestroyed()) {
+      await waitForWindowBridgeFn(bridge, requireFn, SERVER_DATA_EXPORT_TIMEOUT_MS.bridgeFn);
+      const result = await executeJavaScriptWithTimeout(bridge, script, timeoutMs);
+      if (typeof accept === "function" ? accept(result) : result != null) {
+        plTraceLog.traceLog("PL-SERVER", "runInServerAppRenderer_ok", {
+          requireFn: requireFn || null,
+          companyId: companyId || null,
+          renderer: "bridge",
+        });
+        return result;
+      }
+    }
+  }
+  plTraceLog.traceLog("PL-SERVER", "runInServerAppRenderer_miss", {
+    requireFn: requireFn || null,
+    companyId: companyId || null,
+  });
   return null;
 }
 
+const SHAREABLE_COMPANIES_SNAPSHOT_FILE = "pl-shareable-companies-snapshot.json";
+
+function shareableCompaniesSnapshotPath() {
+  return path.join(userDataPath(), SHAREABLE_COMPANIES_SNAPSHOT_FILE);
+}
+
+function loadShareableCompaniesSnapshot() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(shareableCompaniesSnapshotPath(), "utf8"));
+    if (!Array.isArray(raw?.companies)) return [];
+    return raw.companies
+      .map((row) => {
+        const id = String(row?.id || "").trim();
+        if (!id) return null;
+        const planExpiryMs =
+          typeof row?.planExpiryMs === "number" && Number.isFinite(row.planExpiryMs) ? row.planExpiryMs : null;
+        const offlineLicenseValidUntilMs =
+          typeof row?.offlineLicenseValidUntilMs === "number" && Number.isFinite(row.offlineLicenseValidUntilMs)
+            ? row.offlineLicenseValidUntilMs
+            : null;
+        return {
+          id,
+          name: String(row?.name || id).trim() || id,
+          storageOption: "local",
+          ownerEmail: row?.ownerEmail ?? null,
+          ...(Array.isArray(row?.accessEmails) ? { accessEmails: row.accessEmails } : {}),
+          ...(row?.planId != null && String(row.planId).trim() ? { planId: String(row.planId).trim() } : {}),
+          ...(planExpiryMs != null ? { planExpiryMs } : {}),
+          ...(offlineLicenseValidUntilMs != null ? { offlineLicenseValidUntilMs } : {}),
+          ...(typeof row?.requiresLogin === "boolean" ? { requiresLogin: row.requiresLogin } : {}),
+          ...(row?.usernameHint != null ? { usernameHint: String(row.usernameHint).trim() || null } : {}),
+        };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function saveShareableCompaniesSnapshot(companies) {
+  const rows = Array.isArray(companies) ? companies : [];
+  try {
+    fs.writeFileSync(
+      shareableCompaniesSnapshotPath(),
+      JSON.stringify({ updatedAt: new Date().toISOString(), companies: rows }, null, 2),
+      "utf8"
+    );
+  } catch (_) {}
+  return rows;
+}
+
 /** Collection mirror export — canonical server-data bridge only. */
-async function runMirrorCollectionExportWithMeta(companyId, collection) {
+async function runMirrorCollectionExportWithMeta(companyId, collection, opts = {}) {
   const exportStartedMs = Date.now();
   const cid = String(companyId || "").trim();
   const col = String(collection || "").trim();
+  const timeoutMs =
+    typeof opts.timeoutMs === "number" && opts.timeoutMs > 0
+      ? opts.timeoutMs
+      : serverDataCollectionExportTimeoutMs(col);
   if (!cid || !col) return { docs: null, meta: null };
 
   const exportScript = `(async () => {
     try {
-      if (typeof window.__plExportCompanyMirrorCollection !== "function") return null;
-      return await window.__plExportCompanyMirrorCollection(${JSON.stringify(cid)}, ${JSON.stringify(col)});
+      if (typeof window.__plExportCompanyDeltaCollection !== "function") return null;
+      return await window.__plExportCompanyDeltaCollection(${JSON.stringify(cid)}, ${JSON.stringify(col)});
     } catch (_) {
       return null;
     }
@@ -432,33 +772,50 @@ async function runMirrorCollectionExportWithMeta(companyId, collection) {
     col === "vouchers"
       ? `(async () => {
     try {
-      if (typeof window.__plExportCompanyMirrorCollection !== "function") return null;
-      return await window.__plExportCompanyMirrorCollection(${JSON.stringify(cid)}, "parties");
+      if (typeof window.__plExportCompanyDeltaCollection !== "function") return null;
+      return await window.__plExportCompanyDeltaCollection(${JSON.stringify(cid)}, "parties");
     } catch (_) {
       return null;
     }
   })()`
       : null;
 
-  const bridge = await ensureServerDataBridgeWindow();
-  if (!bridge || bridge.isDestroyed()) {
-    return { docs: null, meta: null };
-  }
-  await waitForWindowBridgeFn(bridge, "__plExportCompanyMirrorCollection");
-
-  const rendererStartedMs = Date.now();
-  const label = mirrorRendererLabel(bridge);
+  void ensureServerDataBridgeWindow().catch(() => {});
+  const candidates = await orderExportCandidates(
+    getAppTabWebContentsList().filter(isWebContentsReadyForBridge),
+    cid
+  );
+  plTraceLog.traceLog("PL-SERVER", "mirror_export_start", {
+    companyId: cid,
+    collection: col,
+    candidateCount: candidates.length,
+  });
   let sawSuspiciousEmptyVouchers = false;
   let bestRows = null;
-  let bestScore = -1;
+  let bestScore = null;
+  let bestWc = null;
+  let bestLabel = "";
 
-  try {
-    const result = await bridge.executeJavaScript(exportScript, true);
-    const rendererDurationMs = Date.now() - rendererStartedMs;
-    if (Array.isArray(result)) {
+  for (const wc of candidates) {
+    if (!wc || wc.isDestroyed()) continue;
+    const url = wc.getURL() || "";
+    if (url.startsWith("devtools://")) continue;
+    const hasFn = await executeJavaScriptWithTimeout(
+      wc,
+      `typeof window.__plExportCompanyDeltaCollection === "function"`,
+      SERVER_DATA_EXPORT_TIMEOUT_MS.bridgeFn
+    );
+    if (!hasFn) continue;
+
+    const rendererStartedMs = Date.now();
+    const label = mirrorRendererLabel(wc);
+    try {
+      const result = await executeJavaScriptWithTimeout(wc, exportScript, timeoutMs);
+      const rendererDurationMs = Date.now() - rendererStartedMs;
+      if (!Array.isArray(result)) continue;
       if (col === "vouchers" && result.length === 0 && partiesScript) {
         try {
-          const parties = await bridge.executeJavaScript(partiesScript, true);
+          const parties = await executeJavaScriptWithTimeout(wc, partiesScript, timeoutMs);
           if (Array.isArray(parties) && parties.length > 0) {
             sawSuspiciousEmptyVouchers = true;
             logMirrorExportDev("renderer_skipped", {
@@ -468,48 +825,113 @@ async function runMirrorCollectionExportWithMeta(companyId, collection) {
               partiesCount: parties.length,
               mirror_export_duration_ms: rendererDurationMs,
             });
+            continue;
           }
         } catch (_) {
           /* fall through — treat as authoritative empty */
         }
       }
-      if (!sawSuspiciousEmptyVouchers) {
-        bestScore = mirrorExportRendererScore(result, label);
-        bestRows = result;
-        logMirrorExportDev("renderer_result", {
+      const score = mirrorExportRendererScore(result, label);
+      if (col === "vouchers") {
+        plTraceLog.traceLog("PL-VOUCHER-FORENSIC", "host_renderer_candidate", {
+          companyId: cid,
           renderer: label,
-          collection: col,
           count: result.length,
-          cacheReload: true,
-          score: bestScore,
           fingerprint: mirrorDatasetFingerprintHex(result),
-          mirror_export_duration_ms: rendererDurationMs,
+          score,
         });
       }
+      logMirrorExportDev("renderer_result", {
+        renderer: label,
+        collection: col,
+        count: result.length,
+        cacheReload: true,
+        score,
+        fingerprint: mirrorDatasetFingerprintHex(result),
+        mirror_export_duration_ms: rendererDurationMs,
+      });
+      if (mirrorExportScoreIsBetter(score, bestScore)) {
+        bestScore = score;
+        bestRows = result;
+        bestWc = wc;
+        bestLabel = label;
+      }
+    } catch (_) {
+      /* try next renderer */
     }
-  } catch (_) {
-    /* bridge export failed */
+  }
+
+  if (!Array.isArray(bestRows)) {
+    const bridge = await ensureServerDataBridgeWindow();
+    if (bridge && !bridge.isDestroyed()) {
+      await waitForWindowBridgeFn(
+        bridge,
+        "__plExportCompanyDeltaCollection",
+        SERVER_DATA_EXPORT_TIMEOUT_MS.bridgeFn
+      );
+      const rendererStartedMs = Date.now();
+      const label = mirrorRendererLabel(bridge);
+      try {
+        const result = await executeJavaScriptWithTimeout(bridge, exportScript, timeoutMs);
+        const rendererDurationMs = Date.now() - rendererStartedMs;
+        if (Array.isArray(result)) {
+          if (col === "vouchers" && result.length === 0 && partiesScript) {
+            try {
+              const parties = await executeJavaScriptWithTimeout(bridge, partiesScript, timeoutMs);
+              if (Array.isArray(parties) && parties.length > 0) {
+                sawSuspiciousEmptyVouchers = true;
+              }
+            } catch (_) {}
+          }
+          if (!sawSuspiciousEmptyVouchers) {
+            bestScore = mirrorExportRendererScore(result, label);
+            bestRows = result;
+            bestWc = bridge;
+            bestLabel = label;
+            logMirrorExportDev("renderer_result", {
+              renderer: label,
+              collection: col,
+              count: result.length,
+              cacheReload: true,
+              score: bestScore,
+              fingerprint: mirrorDatasetFingerprintHex(result),
+              mirror_export_duration_ms: rendererDurationMs,
+            });
+          }
+        }
+      } catch (_) {}
+    }
   }
 
   if (Array.isArray(bestRows)) {
     const mirrorExportDurationMs = Date.now() - exportStartedMs;
     logMirrorExportDev("export_selected", {
-      renderer: label,
+      renderer: bestLabel,
       collection: col,
       count: bestRows.length,
       score: bestScore,
       fingerprint: mirrorDatasetFingerprintHex(bestRows),
       mirror_export_duration_ms: mirrorExportDurationMs,
     });
+    if (col === "vouchers") {
+      plTraceLog.traceLog("PL-VOUCHER-FORENSIC", "host_export_selected", {
+        companyId: cid,
+        renderer: bestLabel,
+        count: bestRows.length,
+        fingerprint: mirrorDatasetFingerprintHex(bestRows),
+        score: bestScore,
+        exportMs: mirrorExportDurationMs,
+      });
+    }
     return {
       docs: bestRows,
       meta: {
-        renderer: label,
+        renderer: bestLabel,
         fingerprint: mirrorDatasetFingerprintHex(bestRows),
         score: bestScore,
         exportMs: mirrorExportDurationMs,
         voucherCount: bestRows.length,
-        bestWc: bridge,
+        bestWc: bestWc,
       },
     };
   }
@@ -519,17 +941,17 @@ async function runMirrorCollectionExportWithMeta(companyId, collection) {
   return { docs: null, meta: null };
 }
 
-async function runMirrorCollectionExportBestEffort(companyId, collection) {
-  const { docs } = await runMirrorCollectionExportWithMeta(companyId, collection);
+async function runMirrorCollectionExportBestEffort(companyId, collection, opts = {}) {
+  const { docs } = await runMirrorCollectionExportWithMeta(companyId, collection, opts);
   return docs;
 }
 
 async function probeMirrorDbOpenMs(wc) {
   if (!wc || wc.isDestroyed()) return null;
   try {
-    const ready = await wc.executeJavaScript(`typeof window.__plMirrorHealthDbOpenMs === "function"`, true);
+    const ready = await wc.executeJavaScript(`typeof window.__plDeltaHealthDbOpenMs === "function"`, true);
     if (!ready) return null;
-    const ms = await wc.executeJavaScript(`window.__plMirrorHealthDbOpenMs()`, true);
+    const ms = await wc.executeJavaScript(`window.__plDeltaHealthDbOpenMs()`, true);
     return typeof ms === "number" && Number.isFinite(ms) ? ms : null;
   } catch (_) {
     return null;
@@ -566,6 +988,7 @@ localAppServer.setMirrorHealthProvider(async (companyId) => {
 });
 
 localAppServer.setShareableCompaniesProvider(async () => {
+  const snap = loadShareableCompaniesSnapshot();
   const rows = await runInServerAppRenderer(
     `(async () => {
       try {
@@ -577,14 +1000,19 @@ localAppServer.setShareableCompaniesProvider(async () => {
     })()`,
     {
       requireFn: "__plListShareableLocalCompanies",
-      accept: (r) => Array.isArray(r) && r.length > 0,
+      // Empty array is valid — do not fall through to 25s bridge wait (remote gate Test timeout).
+      accept: (r) => Array.isArray(r),
     }
   );
-  return Array.isArray(rows) ? rows : [];
+  if (Array.isArray(rows) && rows.length > 0) {
+    saveShareableCompaniesSnapshot(rows);
+    return rows;
+  }
+  return snap;
 });
 
-localAppServer.setLocalCompanyAuthProvider(async (companyId, username, password) => {
-  const script = `(async () => {
+const LOGIN_BRIDGE_SCRIPT = (companyId, username, password) =>
+  `(async () => {
       try {
         if (typeof window.__plValidateLocalCompanyLogin !== "function") {
           return { ok: false, error: "bridge_missing" };
@@ -594,6 +1022,19 @@ localAppServer.setLocalCompanyAuthProvider(async (companyId, username, password)
         return { ok: false, error: e && e.message ? e.message : "Login failed" };
       }
     })()`;
+
+async function runLocalCompanyLoginBridge(companyId, username, password) {
+  const script = LOGIN_BRIDGE_SCRIPT(companyId, username, password);
+  const fromApp = await runInServerAppRenderer(script, {
+    requireFn: "__plValidateLocalCompanyLogin",
+    accept: (r) => r && typeof r === "object" && "ok" in r,
+  });
+  if (fromApp && typeof fromApp === "object") {
+    if (fromApp.ok === true) return fromApp;
+    if (fromApp.error && fromApp.error !== "bridge_missing") {
+      return { ok: false, error: String(fromApp.error) };
+    }
+  }
   let lastError = "Invalid username or password";
   const bridge = await ensureServerDataBridgeWindow();
   if (!bridge || bridge.isDestroyed()) {
@@ -603,7 +1044,7 @@ localAppServer.setLocalCompanyAuthProvider(async (companyId, username, password)
         "Server data bridge is not ready. On the server PC keep Pocket Ledger open (or wait ~10s after starting sharing), then try again.",
     };
   }
-  await waitForWindowBridgeFn(bridge, "__plValidateLocalCompanyLogin");
+  await waitForWindowBridgeFn(bridge, "__plValidateLocalCompanyLogin", 12000);
   try {
     const result = await bridge.executeJavaScript(script, true);
     if (result && typeof result === "object" && result.ok === true) return result;
@@ -619,60 +1060,106 @@ localAppServer.setLocalCompanyAuthProvider(async (companyId, username, password)
     };
   }
   return { ok: false, error: lastError };
+}
+
+localAppServer.setLocalCompanyAuthProvider(async (companyId, username, password) => {
+  return runLocalCompanyLoginBridge(companyId, username, password);
 });
 
-localAppServer.setCompanyMirrorExportProvider(async (companyId) => {
-  const bundle = await runInServerAppRenderer(
-    `(async () => {
+localAppServer.setCompanyLoginMetaProvider(async (companyId, appEmail) => {
+  const script = `(async () => {
       try {
-        if (typeof window.__plExportCompanyMirrorBundle !== "function") return null;
-        return await window.__plExportCompanyMirrorBundle(${JSON.stringify(companyId)});
+        if (typeof window.__plGetCompanyLoginMeta !== "function") {
+          return { requiresLogin: true, usernameHint: null };
+        }
+        return await window.__plGetCompanyLoginMeta(${JSON.stringify(companyId)}, ${JSON.stringify(appEmail || null)});
       } catch (_) {
-        return null;
+        return { requiresLogin: true, usernameHint: null };
       }
-    })()`,
-    { requireFn: "__plExportCompanyMirrorBundle" }
-  );
-  return bundle && typeof bundle === "object" ? bundle : null;
-});
-
-localAppServer.setCompanyMirrorCollectionExportProvider(async (companyId, collection) => {
-  const rows = await runMirrorCollectionExportBestEffort(companyId, collection);
-  if (Array.isArray(rows)) {
-    noteMirrorExportSuccess(companyId);
-    return rows;
+    })()`;
+  const fromApp = await runInServerAppRenderer(script, {
+    requireFn: "__plGetCompanyLoginMeta",
+    accept: (r) => r && typeof r === "object" && "requiresLogin" in r,
+  });
+  if (fromApp && typeof fromApp === "object") return fromApp;
+  const bridge = await ensureServerDataBridgeWindow();
+  if (!bridge || bridge.isDestroyed()) {
+    return { requiresLogin: true, usernameHint: null };
   }
-  const bundle = await runInServerAppRenderer(
-    `(async () => {
+  await waitForWindowBridgeFn(bridge, "__plGetCompanyLoginMeta", 12000);
+  try {
+    const result = await bridge.executeJavaScript(script, true);
+    if (result && typeof result === "object") return result;
+  } catch (_) {}
+  return { requiresLogin: true, usernameHint: null };
+});
+
+localAppServer.setCompanyMirrorExportProvider(async (companyId) =>
+  enqueueServerDataExport(async () => {
+    const bundle = await runInServerAppRenderer(
+      `(async () => {
       try {
-        if (typeof window.__plExportCompanyMirrorBundle !== "function") return null;
-        return await window.__plExportCompanyMirrorBundle(${JSON.stringify(companyId)});
+        if (typeof window.__plExportCompanyDeltaBundle !== "function") return null;
+        return await window.__plExportCompanyDeltaBundle(${JSON.stringify(companyId)});
       } catch (_) {
         return null;
       }
     })()`,
-    { requireFn: "__plExportCompanyMirrorBundle" }
-  );
-  const col = String(collection || "").trim();
-  const fromBundle = bundle?.collections?.[col];
-  if (Array.isArray(fromBundle)) {
-    mirrorExportMetrics.bundleFallbackCount += 1;
-    console.warn(
-      "[MirrorExport] mirror_bundle_fallback_count",
-      mirrorExportMetrics.bundleFallbackCount,
-      { companyId, collection: col, count: fromBundle.length }
+      {
+        requireFn: "__plExportCompanyDeltaBundle",
+        timeoutMs: SERVER_DATA_EXPORT_TIMEOUT_MS.bundle,
+        companyId: String(companyId || ""),
+      }
     );
-    logMirrorExportDev("bundle_fallback", {
-      companyId,
-      collection: col,
-      count: fromBundle.length,
-      mirror_bundle_fallback_count: mirrorExportMetrics.bundleFallbackCount,
-    });
-    noteMirrorExportSuccess(companyId);
-    return fromBundle;
-  }
-  return null;
-});
+    return bundle && typeof bundle === "object" ? bundle : null;
+  })
+);
+
+localAppServer.setCompanyMirrorCollectionExportProvider(async (companyId, collection) =>
+  enqueueServerDataExport(async () => {
+    const col = String(collection || "").trim();
+    const timeoutMs = serverDataCollectionExportTimeoutMs(col);
+    const rows = await runMirrorCollectionExportBestEffort(companyId, collection, { timeoutMs });
+    if (Array.isArray(rows)) {
+      noteMirrorExportSuccess(companyId);
+      return rows;
+    }
+    const bundle = await runInServerAppRenderer(
+      `(async () => {
+      try {
+        if (typeof window.__plExportCompanyDeltaBundle !== "function") return null;
+        return await window.__plExportCompanyDeltaBundle(${JSON.stringify(companyId)});
+      } catch (_) {
+        return null;
+      }
+    })()`,
+      {
+        requireFn: "__plExportCompanyDeltaBundle",
+        timeoutMs: SERVER_DATA_EXPORT_TIMEOUT_MS.bundle,
+        companyId: String(companyId || ""),
+      }
+    );
+    const fromBundle = bundle?.collections?.[col];
+    if (Array.isArray(fromBundle)) {
+      mirrorExportMetrics.bundleFallbackCount += 1;
+      console.warn(
+        "[MirrorExport] mirror_bundle_fallback_count",
+        mirrorExportMetrics.bundleFallbackCount,
+        { companyId, collection: col, count: fromBundle.length }
+      );
+      logMirrorExportDev("bundle_fallback", {
+        companyId,
+        collection: col,
+        count: fromBundle.length,
+        mirror_bundle_fallback_count: mirrorExportMetrics.bundleFallbackCount,
+      });
+      noteMirrorExportSuccess(companyId);
+      return fromBundle;
+    }
+    plTraceLog.traceLog("PL-SERVER", "mirror_collection_export_null", { companyId, collection: col });
+    return null;
+  })
+);
 
 localAppServer.setAttachmentBlobProvider(async (companyId, ref) => {
   const payload = await runInServerAppRenderer(
@@ -720,6 +1207,7 @@ localAppServer.setCompanyMirrorPushProvider(async (companyId, collection, docs, 
   if (meta?.hostSelfPublish) {
     noteMirrorPushSuccess(companyId);
     if (IS_PHASE1B_RUNTIME_VERIFY) phase1bVerifyStats.hostPublish += 1;
+    await broadcastBrowserDbCollectionBump(companyId, collection);
     return {
       ok: true,
       applied: 0,
@@ -733,18 +1221,23 @@ localAppServer.setCompanyMirrorPushProvider(async (companyId, collection, docs, 
   const result = await runInServerAppRenderer(
     `(async () => {
       try {
-        if (typeof window.__plUpsertCompanyMirrorDocs !== "function") return { ok: false, error: "bridge_missing" };
-        return await window.__plUpsertCompanyMirrorDocs(${JSON.stringify(companyId)}, ${JSON.stringify(collection)}, ${JSON.stringify(docs)});
+        if (typeof window.__plUpsertCompanyDeltaDocs !== "function") return { ok: false, error: "bridge_missing" };
+        return await window.__plUpsertCompanyDeltaDocs(${JSON.stringify(companyId)}, ${JSON.stringify(collection)}, ${JSON.stringify(docs)});
       } catch (e) {
         return { ok: false, error: e && e.message ? e.message : "push_failed" };
       }
     })()`,
-    { requireFn: "__plUpsertCompanyMirrorDocs" }
+    { requireFn: "__plUpsertCompanyDeltaDocs" }
   );
   const out = result && typeof result === "object" ? result : { ok: false, error: "push_failed" };
   if (out.ok) {
     noteMirrorPushSuccess(companyId);
     if (IS_PHASE1B_RUNTIME_VERIFY) phase1bVerifyStats.mirrorPushBroadcast += 1;
+    plTraceLog.traceLog("PL-LIVE-CHANGE", "server_delta_push_applied", {
+      companyId,
+      collection,
+      hostSelfPublish: Boolean(meta?.hostSelfPublish),
+    });
     await broadcastBrowserDbCollectionBump(companyId, collection);
   }
   return {
@@ -828,13 +1321,27 @@ function stopStaticServer() {
 let serverTray = null;
 
 function getTrayIconImage() {
-  const icon = getWindowIcon();
-  if (icon && typeof icon === "object" && typeof icon.isEmpty === "function" && !icon.isEmpty()) {
-    return icon;
-  }
   try {
-    const img = nativeImage.createFromPath(getIconPath());
-    if (!img.isEmpty()) return img;
+    const p = getIconPath();
+    let img = nativeImage.createFromPath(p);
+    if (!img.isEmpty()) {
+      if (process.platform === "win32") {
+        const { width, height } = img.getSize();
+        if (width !== 16 || height !== 16) {
+          img = img.resize({ width: 16, height: 16, quality: "best" });
+        }
+      }
+      return img;
+    }
+  } catch (_) {}
+  try {
+    const icon = getWindowIcon();
+    if (icon && typeof icon === "object" && typeof icon.isEmpty === "function" && !icon.isEmpty()) {
+      if (process.platform === "win32") {
+        return icon.resize({ width: 16, height: 16, quality: "best" });
+      }
+      return icon;
+    }
   } catch (_) {}
   return null;
 }
@@ -845,6 +1352,7 @@ function destroyServerTray() {
       serverTray.destroy();
     } catch (_) {}
     serverTray = null;
+    plTraceLog.traceLog("PL-MAIN", "tray_destroyed", {});
   }
 }
 
@@ -875,7 +1383,7 @@ async function startSharedLocalServer() {
   localAppServer.saveConfig(userDataPath(), { userWantsRunning: true });
   await localAppServer.startStaticServer(userDataPath(), { forAppUi: true });
   const port = await localAppServer.startSharingServer(userDataPath());
-  void ensureServerDataBridgeWindow().catch(() => {});
+  void warmServerDataBridgeBestEffort().catch(() => {});
   return port;
 }
 
@@ -897,18 +1405,23 @@ async function ensureHostSharingRunningAfterLaunch(options = {}) {
   }
 
   try {
+    try {
+      await localAppServer.startStaticServer(ud, { forAppUi: true });
+    } catch (uiErr) {
+      console.warn("[main] ensure app UI server failed", uiErr?.message || uiErr);
+    }
     if (forceRestart) {
       const port = await localAppServer.restartSharingServer(ud);
-      if (port != null) void ensureServerDataBridgeWindow().catch(() => {});
+      if (port != null) void warmServerDataBridgeBestEffort().catch(() => {});
       return port;
     }
     const st = localAppServer.getStatus(ud);
-    if (st.sharingActive) {
-      void ensureServerDataBridgeWindow().catch(() => {});
-      return st.port;
+    if (st.sharingActive && st.sharingPort) {
+      void warmServerDataBridgeBestEffort().catch(() => {});
+      return st.sharingPort;
     }
     const port = await localAppServer.startSharingServer(ud);
-    void ensureServerDataBridgeWindow().catch(() => {});
+    void warmServerDataBridgeBestEffort().catch(() => {});
     return port;
   } catch (e) {
     console.warn("[main] ensure host sharing running failed", e?.message || e);
@@ -929,28 +1442,135 @@ function shouldOfferTrayStartSharing(cfg, st) {
   );
 }
 
+function shouldHideMainWindowToTrayOnClose() {
+  if (!app.isPackaged || app.__plQuitting) return false;
+  const cfg = localAppServer.loadConfig(userDataPath());
+  if (!localAppServer.shouldHostLocalServer(cfg)) return false;
+  const st = localAppServer.getStatus(userDataPath());
+  return !!st.sharingActive;
+}
+
+function stopServerPowerSaveBlocker(reason) {
+  if (serverPowerSaveBlockerId == null) return;
+  try {
+    if (powerSaveBlocker.isStarted(serverPowerSaveBlockerId)) {
+      powerSaveBlocker.stop(serverPowerSaveBlockerId);
+    }
+    plTraceLog.traceLog("PL-MAIN", "server_power_save_blocker_stopped", {
+      reason: reason || "unknown",
+    });
+  } catch (_) {}
+  serverPowerSaveBlockerId = null;
+}
+
+function syncServerPowerSaveBlocker(st) {
+  const active = app.isPackaged && st?.sharingActive === true;
+  if (!active) {
+    stopServerPowerSaveBlocker("sharing_inactive");
+    return;
+  }
+  try {
+    if (serverPowerSaveBlockerId != null && powerSaveBlocker.isStarted(serverPowerSaveBlockerId)) {
+      return;
+    }
+    serverPowerSaveBlockerId = powerSaveBlocker.start("prevent-app-suspension");
+    plTraceLog.traceLog("PL-MAIN", "server_power_save_blocker_started", {
+      id: serverPowerSaveBlockerId,
+      sharingPort: st.sharingPort || st.port || null,
+    });
+  } catch (e) {
+    plTraceLog.traceLog("PL-MAIN", "server_power_save_blocker_failed", {
+      error: e && e.message ? e.message : String(e || "unknown"),
+    });
+  }
+}
+
+function hideAllMainWindowsToTray() {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.hide();
+  }
+}
+
+async function quitPocketLedgerFully(reason) {
+  if (app.__plQuitting) return;
+  app.__plQuitting = true;
+  plTraceLog.traceLog("PL-MAIN", "full_quit_requested", { reason: reason || "unknown" });
+  stopServerPowerSaveBlocker(reason || "full_quit");
+  destroyServerTray();
+  try {
+    localAppServer.saveConfig(userDataPath(), { userWantsRunning: false });
+  } catch (_) {}
+  try {
+    await localAppServer.stopStaticServer();
+  } catch (_) {}
+  try {
+    await stopStaticServer();
+  } catch (_) {}
+  try {
+    if (serverDataBridgeWindow && !serverDataBridgeWindow.isDestroyed()) {
+      serverDataBridgeWindow.destroy();
+    }
+    serverDataBridgeWindow = null;
+  } catch (_) {}
+  try {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.destroy();
+    }
+  } catch (_) {}
+  app.quit();
+  setTimeout(() => {
+    try {
+      app.exit(0);
+    } catch (_) {}
+  }, 2000).unref?.();
+}
+
+function attachPackagedCloseToTrayBehavior(win) {
+  win.on("close", (event) => {
+    if (!app.isPackaged || app.__plQuitting) return;
+    if (shouldHideMainWindowToTrayOnClose()) {
+      event.preventDefault();
+      hideAllMainWindowsToTray();
+      syncLocalServerTray();
+      const st = localAppServer.getStatus(userDataPath());
+      plTraceLog.traceLog("PL-MAIN", "window_hidden_server_running", {
+        sharingActive: st.sharingActive === true,
+        sharingPort: st.sharingPort || st.port || null,
+      });
+      notifyServerStillRunningInTray(st);
+      return;
+    }
+
+    // Hidden bridge/static-server windows can keep Electron alive, so do not rely
+    // on `window-all-closed` when the user closes the last visible app window.
+    event.preventDefault();
+    quitPocketLedgerFully("window_close_server_not_running");
+  });
+}
+
+/** Tray rule: sharing ON → tray icon; sharing OFF → no tray. Window open/closed does not matter. */
 function syncLocalServerTray() {
   if (!app.isPackaged) {
+    stopServerPowerSaveBlocker("not_packaged");
     destroyServerTray();
     return;
   }
   const cfg = localAppServer.loadConfig(userDataPath());
   if (!localAppServer.shouldHostLocalServer(cfg)) {
+    stopServerPowerSaveBlocker("host_disabled");
     destroyServerTray();
     return;
   }
   const st = localAppServer.getStatus(userDataPath());
-  if (!st.appUiServing && !cfg.userWantsRunning) {
+  if (!st.sharingActive) {
+    syncServerPowerSaveBlocker(st);
     destroyServerTray();
     return;
   }
+  syncServerPowerSaveBlocker(st);
 
   const portLabel = st.port != null ? `port ${st.port}` : "running";
-  const statusLine = st.sharingActive
-    ? `Sharing on for others (${portLabel})`
-    : st.appUiServing
-      ? `This PC only — remote sharing off (${portLabel})`
-      : "Local server stopped";
+  const statusLine = `Sharing on for others (${portLabel})`;
 
   const template = [
     { label: statusLine, enabled: false },
@@ -969,30 +1589,23 @@ function syncLocalServerTray() {
         void stopLocalServerAndPersist();
       },
     });
-  } else if (shouldOfferTrayStartSharing(cfg, st)) {
-    template.push({
-      label: "Start sharing for others",
-      click: () => {
-        void startSharedLocalServer().then(() => syncLocalServerTray());
-      },
-    });
   }
   template.push(
     { type: "separator" },
     {
       label: "Quit Pocket Ledger",
       click: () => {
-        void (async () => {
-          await stopLocalServerAndPersist();
-          app.quit();
-        })();
+        void quitPocketLedgerFully("tray_quit");
       },
     }
   );
 
   const menu = Menu.buildFromTemplate(template);
   const trayIcon = getTrayIconImage();
-  if (!trayIcon) return;
+  if (!trayIcon) {
+    plTraceLog.traceLog("PL-MAIN", "tray_icon_missing", { sharingPort: st.sharingPort || st.port });
+    return;
+  }
 
   if (!serverTray) {
     serverTray = new Tray(trayIcon);
@@ -1000,16 +1613,13 @@ function syncLocalServerTray() {
     serverTray.on("double-click", () => {
       void focusOrOpenMainWindow();
     });
+    plTraceLog.traceLog("PL-MAIN", "tray_created", { sharingPort: st.sharingPort || st.port });
   } else {
     serverTray.setImage(trayIcon);
   }
   serverTray.setContextMenu(menu);
-  if (st.appUiServing && st.port != null) {
-    serverTray.setToolTip(
-      st.sharingActive
-        ? `Pocket Ledger — sharing on port ${st.port}`
-        : `Pocket Ledger — this PC only (port ${st.port})`
-    );
+  if (st.port != null) {
+    serverTray.setToolTip(`Pocket Ledger — sharing on port ${st.port}`);
   }
 }
 
@@ -1029,13 +1639,16 @@ function notifyServerStillRunningInTray(st) {
 /** Gate → Connect: remote server origin → access token for webRequest header injection. */
 const remoteGateAuthByOrigin = new Map();
 
-function isPlServerRequest(urlStr, port, remoteBase) {
+function isPlServerRequest(urlStr, appUiPort, sharingPort, remoteBase) {
   try {
     const u = new URL(urlStr);
     const h = (u.hostname || "").toLowerCase();
     const reqPort = String(u.port || (u.protocol === "https:" ? "443" : "80"));
     if (remoteGateAuthByOrigin.has(u.origin)) return true;
-    if (port && reqPort === String(port)) {
+    const ports = new Set();
+    if (appUiPort) ports.add(String(appUiPort));
+    if (sharingPort) ports.add(String(sharingPort));
+    if (ports.has(reqPort)) {
       if (h === "localhost" || h === "127.0.0.1" || h === "[::1]") return true;
       if (/^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(h)) return true;
       // Public WAN IP on sharing port (router port-forward / remote Gate clients).
@@ -1070,9 +1683,10 @@ function installPlServerRequestHeaders(session) {
   const remoteBase = localAppServer.normalizeRemoteServerUrl(cfg.remoteServerUrl);
   const accessTok = String(cfg.clientAccessToken || "").trim();
   session.webRequest.onBeforeSendHeaders({ urls: ["http://*/*", "https://*/*"] }, (details, callback) => {
-    const port = localAppServer.getStaticServerPort();
+    const appUiPort = localAppServer.getAppUiServerPort();
+    const sharingPort = localAppServer.getSharingServerPort();
     const headers = { ...details.requestHeaders };
-    if (isPlServerRequest(details.url || "", port, remoteBase)) {
+    if (isPlServerRequest(details.url || "", appUiPort, sharingPort, remoteBase)) {
       headers[localAppServer.PL_ELECTRON_MARKER_HEADER] = localAppServer.PL_ELECTRON_MARKER_VALUE;
       headers[localAppServer.PL_CLIENT_HEADER] = legacyToken;
       let gateTok = "";
@@ -1313,18 +1927,36 @@ function resolveWindowForTabStripIpc(sender) {
 }
 
 /** Tab titles / active state + tooltip string (merged strip `#dragFill` title + optional future use) → strip UI */
+function formatTabUrlLabel(webContents) {
+  if (!webContents || webContents.isDestroyed()) return "";
+  try {
+    const raw = webContents.getURL();
+    if (!raw || raw.startsWith("devtools://")) return "";
+    const u = new URL(raw);
+    const host = u.hostname === "127.0.0.1" ? "localhost" : u.hostname;
+    const port = u.port || (u.protocol === "https:" ? "443" : u.protocol === "http:" ? "80" : "");
+    if (!port || port === "80" || port === "443") return host;
+    return `${host}:${port}`;
+  } catch (_) {
+    return "";
+  }
+}
+
 function pushTabStripState(win) {
   const state = windowTabs.get(win.id);
   if (!state?.stripView?.webContents || state.stripView.webContents.isDestroyed()) return;
   const tabs = state.tabs.map((view, index) => ({
     title: view.webContents.getTitle() || `Tab ${index + 1}`,
+    urlLabel: formatTabUrlLabel(view.webContents),
     index,
     active: index === state.activeIndex,
   }));
   const n = tabs.length;
-  const titleBarLabel = n > 1 ? `Pocket Ledger (${n} tabs)` : "Pocket Ledger";
+  const activeUrlLabel = tabs[state.activeIndex]?.urlLabel || "";
+  let titleBarLabel = n > 1 ? `Pocket Ledger (${n} tabs)` : "Pocket Ledger";
+  if (activeUrlLabel) titleBarLabel = `${titleBarLabel} — ${activeUrlLabel}`;
   try {
-    state.stripView.webContents.send("tabs-update", { tabs, titleBarLabel });
+    state.stripView.webContents.send("tabs-update", { tabs, titleBarLabel, activeUrlLabel });
   } catch (_) {}
 }
 
@@ -1501,13 +2133,14 @@ async function reloadAllAppBrowserViewsPreservePath(port) {
   }
 }
 
-async function openNewTab(win) {
-  const entryUrl = await getAppEntryUrl();
+async function openNewTab(win, loadUrl) {
+  const entryUrl = loadUrl || (await getAppEntryUrl());
   const view = new BrowserView({
     webPreferences: {
       preload: path.join(__dirname, "app-content-preload.js"),
       nodeIntegration: false,
       contextIsolation: true,
+      backgroundThrottling: false,
     },
   });
   installPlServerRequestHeaders(view.webContents.session);
@@ -1542,6 +2175,8 @@ async function openNewTab(win) {
 
   view.webContents.on("page-title-updated", () => pushTabStripState(win));
   view.webContents.on("did-finish-load", () => pushTabStripState(win));
+  view.webContents.on("did-navigate", () => pushTabStripState(win));
+  view.webContents.on("did-navigate-in-page", () => pushTabStripState(win));
   view.webContents.on("devtools-opened", () => updateBrowserViewBounds(win));
   view.webContents.on("devtools-closed", () => updateBrowserViewBounds(win));
 
@@ -1551,6 +2186,7 @@ async function openNewTab(win) {
   switchToTab(win, state.tabs.length - 1);
   try {
     await view.webContents.loadURL(entryUrl);
+    plTraceLog.traceLog("PL-TAB", "opened", { url: entryUrl });
   } catch (e) {
     const msg = String(e?.message || e);
     if (msg.includes("PL_REMOTE_SERVER_URL_MISSING")) {
@@ -1795,7 +2431,14 @@ async function createWindow() {
   });
   win.on("enter-full-screen", () => updateBrowserViewBounds(win));
   win.on("leave-full-screen", () => updateBrowserViewBounds(win));
-  win.on("show", () => updateBrowserViewBounds(win));
+  win.on("show", () => {
+    updateBrowserViewBounds(win);
+    syncLocalServerTray();
+    notifyLiveSyncResume("window_show", win);
+  });
+  win.on("focus", () => notifyLiveSyncResume("window_focus", win));
+  win.on("restore", () => notifyLiveSyncResume("window_restore", win));
+  attachPackagedCloseToTrayBehavior(win);
   win.on("closed", () => {
     const state = windowTabs.get(win.id);
     if (state) {
@@ -1813,8 +2456,28 @@ async function createWindow() {
   sendWindowMaxState(win);
 }
 
+function notifyLiveSyncResume(reason, targetWindow) {
+  const windows = targetWindow ? [targetWindow] : BrowserWindow.getAllWindows();
+  for (const win of windows) {
+    if (!win || win.isDestroyed()) continue;
+    const state = windowTabs.get(win.id);
+    if (!state) continue;
+    for (const tab of state.tabs) {
+      if (!tab?.webContents || tab.webContents.isDestroyed()) continue;
+      try {
+        tab.webContents.send("pl-live-sync-resume", { reason: String(reason || "resume") });
+      } catch (_) {}
+    }
+  }
+}
+
 if (gotSingleInstanceLock) {
   app.whenReady().then(async () => {
+    plTraceLog.initPlTraceLog(userDataPath());
+    plTraceLog.traceLog("PL-MAIN", "app_ready", {
+      packaged: app.isPackaged,
+      platform: process.platform,
+    });
   getAppBootSessionId();
 
   if (app.isPackaged) {
@@ -1852,6 +2515,10 @@ if (gotSingleInstanceLock) {
       const origin = new URL(normalized).origin;
       if (accessToken) remoteGateAuthByOrigin.set(origin, accessToken);
       else remoteGateAuthByOrigin.delete(origin);
+      plTraceLog.traceLog("PL-GATE-TRACE", "set_remote_gate_auth", {
+        origin,
+        hasToken: Boolean(accessToken),
+      });
       event.returnValue = { ok: true, origin };
     } catch {
       event.returnValue = { ok: false };
@@ -1860,6 +2527,12 @@ if (gotSingleInstanceLock) {
 
   const bootCfg = localAppServer.loadConfig(userDataPath());
   localAppServer.applyLoginItemSettings(app, bootCfg.autoStartOnBoot);
+  powerMonitor.on("resume", () => {
+    plTraceLog.traceLog("PL-MAIN", "system_resume_live_sync");
+    void ensureHostSharingRunningAfterLaunch().catch(() => undefined);
+    void ensureServerDataBridgeWindow().catch(() => undefined);
+    notifyLiveSyncResume("system_resume");
+  });
 
   ipcMain.handle("pl-google-auth-external", async (_event, options) => {
     return googleAuthExternal.signInWithGoogleExternal(shell, options || {});
@@ -1984,6 +2657,11 @@ if (gotSingleInstanceLock) {
     return { ok };
   });
 
+  ipcMain.handle("pl-local-server-save-shareable-snapshot", async (_event, companies) => {
+    const rows = saveShareableCompaniesSnapshot(Array.isArray(companies) ? companies : []);
+    return { ok: true, count: rows.length };
+  });
+
   ipcMain.handle("window-chrome-action", async (event, action) => {
     const win =
       resolveWindowForTabStripIpc(event.sender) || BrowserWindow.fromWebContents(event.sender);
@@ -2049,6 +2727,47 @@ if (gotSingleInstanceLock) {
     }
   });
 
+  ipcMain.handle("pl-open-url-in-new-tab", async (event, payload) => {
+    const url = String(payload?.url || "").trim();
+    if (!url) return { ok: false, error: "missing-url" };
+    const win = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow();
+    if (!win || win.isDestroyed()) return { ok: false, error: "no-window" };
+    try {
+      plTraceLog.traceLog("PL-GATE-TRACE", "open_gate_new_tab", { url });
+      await openNewTab(win, url);
+      return { ok: true };
+    } catch (e) {
+      plTraceLog.traceLog("PL-GATE-TRACE", "open_gate_new_tab_failed", { url, error: String(e?.message || e) });
+      return { ok: false, error: String(e?.message || e) };
+    }
+  });
+
+  ipcMain.on("pl-trace-log-client", (_event, payload) => {
+    plTraceLog.traceLog(payload?.tag || "PL-CLIENT", payload?.event || "log", payload?.detail);
+  });
+
+  ipcMain.on("pl-gate-store-snapshot", (_event, snapshot) => {
+    void broadcastGateStoreSnapshot(snapshot);
+  });
+
+  ipcMain.on("pl-browser-db-collection-bump", (_event, payload) => {
+    const companyId = String(payload?.companyId || "").trim();
+    const collection = String(payload?.collection || "").trim();
+    if (!companyId || !collection) return;
+    const source = String(payload?.source || "local_write");
+    const immediate = payload?.immediate !== false;
+    plTraceLog.traceLog("PL-LIVE-CHANGE", "ipc_browser_db_bump", { companyId, collection, source, immediate });
+    void broadcastBrowserDbCollectionBump(companyId, collection, { source, immediate });
+  });
+
+  ipcMain.handle("pl-trace-get-logs", async (_event, limit) => {
+    return plTraceLog.getRecentTraceLogs(limit);
+  });
+
+  ipcMain.handle("pl-trace-get-log-file-path", async () => {
+    return plTraceLog.getTraceLogFilePath();
+  });
+
   /**
    * Sync device list / Firestore `deviceLabel`: WebView UA sirf "Chrome (Windows)" deta hai —
    * APK jaisa PC naam + OS string (hostname + platform release) main se.
@@ -2092,7 +2811,17 @@ if (gotSingleInstanceLock) {
   }
 
   function attachmentsRootDir() {
+    return path.join(userDataPath(), "PocketLedgerData");
+  }
+
+  function legacyAttachmentsRootDir() {
     return path.join(userDataPath(), "pl-attachments");
+  }
+
+  function attachmentFullPathForRead(rel) {
+    const primary = path.join(attachmentsRootDir(), rel);
+    if (fs.existsSync(primary)) return primary;
+    return path.join(legacyAttachmentsRootDir(), rel);
   }
 
   /** APK jaisa offline cache / pending files — disk par bytes, renderer SQLite me path. */
@@ -2139,7 +2868,7 @@ if (gotSingleInstanceLock) {
     try {
       const rel = safeAttachmentRelativePath(payload?.relativePath);
       if (!rel) return { ok: false, error: "missing-path" };
-      const full = path.join(attachmentsRootDir(), rel);
+      const full = attachmentFullPathForRead(rel);
       if (!fs.existsSync(full)) return { ok: false, error: "not-found" };
       const buf = fs.readFileSync(full);
       return { ok: true, base64: buf.toString("base64") };
@@ -2153,7 +2882,7 @@ if (gotSingleInstanceLock) {
     try {
       const rel = safeAttachmentRelativePath(payload?.relativePath);
       if (!rel) return { ok: false, error: "missing-path" };
-      const full = path.join(attachmentsRootDir(), rel);
+      const full = attachmentFullPathForRead(rel);
       if (!fs.existsSync(full)) return { ok: false, error: "not-found" };
       const buf = fs.readFileSync(full);
       if (!buf.length) return { ok: false, error: "empty-file" };
@@ -2168,7 +2897,9 @@ if (gotSingleInstanceLock) {
       const rel = safeAttachmentRelativePath(relRaw);
       if (!rel) return { ok: false, error: "missing-path" };
       const full = path.join(attachmentsRootDir(), rel);
+      const legacyFull = path.join(legacyAttachmentsRootDir(), rel);
       if (fs.existsSync(full)) fs.unlinkSync(full);
+      if (legacyFull !== full && fs.existsSync(legacyFull)) fs.unlinkSync(legacyFull);
       return { ok: true };
     } catch (e) {
       return { ok: false, error: String(e?.message || e) };
@@ -2180,7 +2911,8 @@ if (gotSingleInstanceLock) {
       const rel = safeAttachmentRelativePath(relRaw);
       if (!rel) return { ok: false, exists: false };
       const full = path.join(attachmentsRootDir(), rel);
-      return { ok: true, exists: fs.existsSync(full) };
+      const legacyFull = path.join(legacyAttachmentsRootDir(), rel);
+      return { ok: true, exists: fs.existsSync(full) || fs.existsSync(legacyFull) };
     } catch (e) {
       return { ok: false, exists: false, error: String(e?.message || e) };
     }
@@ -2192,25 +2924,43 @@ if (gotSingleInstanceLock) {
       const dirPath = String(payload?.dirPath || "").trim();
       const fileName = path.basename(String(payload?.fileName || "backup.plbp"));
       const base64 = String(payload?.base64 || "");
+      const relativeSubdir = String(payload?.relativeSubdir || "")
+        .trim()
+        .replace(/\\/g, "/");
       if (!dirPath || !fileName || !base64) return { ok: false, error: "missing-args" };
-      fs.mkdirSync(dirPath, { recursive: true });
+      let targetDir = dirPath;
+      if (relativeSubdir) {
+        targetDir = path.join(dirPath, ...relativeSubdir.split("/").filter(Boolean));
+      }
+      fs.mkdirSync(targetDir, { recursive: true });
       const buf = Buffer.from(base64, "base64");
-      fs.writeFileSync(path.join(dirPath, fileName), buf);
+      fs.writeFileSync(path.join(targetDir, fileName), buf);
       return { ok: true };
     } catch (e) {
       return { ok: false, error: String(e?.message || e) };
     }
   });
 
-  /** Incremental backup: folder me `.plbp` names list — pichla backup reuse ke liye. */
+  /** Incremental backup: folder me `.plbp` names list — nested `{company}/{date}/` included. */
   ipcMain.handle("pl-list-backup-files", async (_event, dirPathRaw) => {
     try {
       const dirPath = String(dirPathRaw || "").trim();
       if (!dirPath) return { ok: false, error: "missing-dir" };
-      const names = fs
-        .readdirSync(dirPath)
-        .filter((n) => String(n).toLowerCase().endsWith(".plbp"));
-      return { ok: true, files: names };
+      const files = [];
+      const walk = (current, prefix = "") => {
+        for (const ent of fs.readdirSync(current, { withFileTypes: true })) {
+          const rel = prefix ? `${prefix}/${ent.name}` : ent.name;
+          const full = path.join(current, ent.name);
+          if (ent.isDirectory()) {
+            walk(full, rel);
+          } else if (ent.isFile() && String(ent.name).toLowerCase().endsWith(".plbp")) {
+            files.push({ name: ent.name, relativePath: rel.replace(/\\/g, "/") });
+          }
+        }
+      };
+      walk(dirPath);
+      files.sort((a, b) => String(b.relativePath).localeCompare(String(a.relativePath)));
+      return { ok: true, files };
     } catch (e) {
       return { ok: false, error: String(e?.message || e) };
     }
@@ -2316,6 +3066,8 @@ if (gotSingleInstanceLock) {
 
 // Ensure temporary local server is closed on every quit path.
 app.on("before-quit", () => {
+  app.__plQuitting = true;
+  stopServerPowerSaveBlocker("before_quit");
   destroyServerTray();
   stopStaticServer();
 });
@@ -2323,12 +3075,15 @@ app.on("before-quit", () => {
 app.on("window-all-closed", () => {
   const cfg = localAppServer.loadConfig(userDataPath());
   const st = localAppServer.getStatus(userDataPath());
-  if (app.isPackaged && localAppServer.shouldHostLocalServer(cfg) && st.appUiServing) {
+  if (app.isPackaged && localAppServer.shouldHostLocalServer(cfg) && st.sharingActive) {
     syncLocalServerTray();
-    if (st.sharingActive) notifyServerStillRunningInTray(st);
+    notifyServerStillRunningInTray(st);
     return;
   }
   destroyServerTray();
   stopStaticServer();
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin") {
+    app.__plQuitting = true;
+    app.quit();
+  }
 });

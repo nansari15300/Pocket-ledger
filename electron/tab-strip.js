@@ -75,15 +75,21 @@
       const row = document.createElement("div");
       row.className = "tab" + (t.active ? " active" : "");
       row.title = t.title || "";
+
+      const stack = document.createElement("div");
+      stack.className = "tabStack";
       const title = document.createElement("span");
       title.className = "title";
       title.textContent = t.title || "Tab " + (t.index + 1);
+      stack.appendChild(title);
+      row.appendChild(stack);
+
       const close = document.createElement("span");
       close.className = "close";
       close.textContent = "\u00D7";
       close.title = "Close tab";
-      row.appendChild(title);
       row.appendChild(close);
+
       row.addEventListener("click", async (e) => {
         if (e.target === close) {
           e.stopPropagation();

@@ -4,11 +4,12 @@ import { useEffect, useRef } from "react";
 import { useCompany } from "@/hooks/useCompany";
 import { getLocalAuthToken } from "@/lib/localApiClient";
 import { isServerGateCompany } from "@/lib/companyStorageKind";
-import { plServerCompanyLedgerNeedsFullPull } from "@/lib/plServerLedgerMirrorGate";
-import { mirrorPlServerSharedCompanyById } from "@/lib/plServerClientCompanyMirror";
+import { plServerCompanyLedgerNeedsFullPull } from "@/lib/plServerLedgerDeltaGate";
+import { syncPlServerSharedCompanyById } from "@/lib/plServerClientCompanyDelta";
 import { isCompanyAllowedOnActiveServerGate } from "@/lib/plServerRemoteCompanyLogin";
 import { getActiveGate } from "@/lib/gates/gateStore";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
+import { shouldRunPlServerContinuousLiveSync } from "@/lib/plGatePageOrigin";
 
 const SESSION_PULL_KEY = "pl-server-ledger-pulled";
 
@@ -16,12 +17,13 @@ function sessionPullKey(companyId: string): string {
   return `${SESSION_PULL_KEY}:${companyId}`;
 }
 
-/** Open server-gate company par ek baar full ledger P2P mirror — repeat loop mat chalao. */
+/** Open server-gate company par ek baar full ledger P2P delta — repeat loop mat chalao. */
 export function PlServerGateLedgerBootstrap() {
   const { companyId, company } = useCompany();
   const runningRef = useRef(false);
 
   useEffect(() => {
+    if (!shouldRunPlServerContinuousLiveSync()) return;
     const id = String(companyId || "").trim();
     if (!id) return;
     const gate = getActiveGate();
@@ -55,7 +57,7 @@ export function PlServerGateLedgerBootstrap() {
           return;
         }
         runningRef.current = true;
-        await mirrorPlServerSharedCompanyById(id, { pullFullLedger: true });
+        await syncPlServerSharedCompanyById(id, { pullFullLedger: true });
         if (!cancelled) {
           try {
             sessionStorage.setItem(sessionPullKey(id), "1");
@@ -64,7 +66,7 @@ export function PlServerGateLedgerBootstrap() {
           }
         }
       } catch (e) {
-        console.warn("[PlServerGateLedgerBootstrap] mirror failed", e);
+        console.warn("[PlServerGateLedgerBootstrap] delta failed", e);
       } finally {
         runningRef.current = false;
       }

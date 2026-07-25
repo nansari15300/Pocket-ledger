@@ -19,6 +19,7 @@ import {
   shouldSuppressFirestorePermissionConsole,
 } from '@/lib/firestorePermissionSuppress';
 import { isEmbeddedOfflinePreloadClient } from '@/lib/isEmbeddedOfflinePreloadClient';
+import { getEmbeddedLockShellKind } from '@/lib/embeddedDeviceLock';
 import { isClientNavigatorOffline } from '@/lib/apkOnlineFirestoreWritePolicy';
 import { clearEmbeddedWarmBootstrapFlags } from '@/lib/embeddedWarmBootstrapFlags';
 
@@ -39,6 +40,22 @@ export const FIREBASE_WEB_OAUTH_CLIENT_ID =
 const apps = getApps();
 const app = apps.length > 0 ? apps[0] : initializeApp(firebaseConfig);
 const auth = getAuth(app);
+
+function isFirestorePersistenceLeaseError(message: string): boolean {
+  return (
+    message.includes('Failed to obtain exclusive access to the persistence layer') ||
+    message.includes('multi-tab synchronization has to be enabled') ||
+    message.includes('Failed to obtain primary lease') ||
+    (message.includes('Firestore') && message.includes('primary lease'))
+  );
+}
+
+/** APK/static single WebView: single-tab cache. EXE tab strip + browser: multi-tab IndexedDB lease. */
+function useFirestoreSingleTabPersistence(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (getEmbeddedLockShellKind() === 'exe') return false;
+  return isEmbeddedOfflinePreloadClient();
+}
 
 /** Window to mute Firestore watch-teardown noise during / after `signOutWithFirestoreTeardown` (ca9 / b815). */
 let firestoreWatchTeardownSuppressionUntil = 0;
@@ -72,18 +89,17 @@ if (typeof window !== 'undefined') {
     ) {
       return;
     }
-    // Firestore 12.x: multi-tab IndexedDB lease races during Next dev HMR / duplicate listeners.
+    // Firestore billing/quota cap — expected on dev; SDK backoff spam console mat bhare.
     if (
-      errorMessage.includes('Failed to obtain primary lease') ||
-      (errorMessage.includes('Firestore') && errorMessage.includes('primary lease'))
+      errorMessage.includes('resource-exhausted') ||
+      errorMessage.includes('Quota exceeded') ||
+      (errorMessage.includes('Firestore') &&
+        errorMessage.includes('maximum backoff delay to prevent overloading'))
     ) {
       return;
     }
-    // Single-tab persistence + doosra browser tab / stale lease — recoverable; multi-tab manager se fix hota hai.
-    if (
-      errorMessage.includes('Failed to obtain exclusive access to the persistence layer') ||
-      errorMessage.includes('multi-tab synchronization has to be enabled')
-    ) {
+    // Firestore 12.x: multi-tab IndexedDB lease races during Next dev HMR / duplicate listeners.
+    if (isFirestorePersistenceLeaseError(errorMessage)) {
       return;
     }
     // Firestore 12.12: signOut + snapshot teardown → ca9; AsyncQueue sometimes wraps it as b815 (SDK bug).
@@ -150,10 +166,23 @@ if (typeof window !== 'undefined') {
     }
   };
 
+  let firestorePersistenceLeaseLogged = false;
+
   window.addEventListener(
     'unhandledrejection',
     (event) => {
       const msg = stringifyReason(event.reason);
+      if (isFirestorePersistenceLeaseError(msg)) {
+        event.preventDefault();
+        if (!firestorePersistenceLeaseLogged) {
+          firestorePersistenceLeaseLogged = true;
+          console.warn(
+            '[Firestore persistence] IndexedDB lease conflict (multiple tabs). Using multi-tab cache where configured; reload if data looks stale.',
+            event.reason
+          );
+        }
+        return;
+      }
       if (
         shouldSuppressFirestoreWatchAssertionNow() &&
         isFirestoreWatchTeardownAssertionMessage(msg)
@@ -189,11 +218,10 @@ function initFirestoreInstance() {
     return getFirestore(app);
   }
   const forceLongPolling = process.env.NEXT_PUBLIC_FIRESTORE_FORCE_LONG_POLLING === '1';
-  // Sirf embedded WebView single-tab — browser dev/prod me multi-tab taaki 2+ tabs same company khol saken.
-  const useSingleTabPersistence = isEmbeddedOfflinePreloadClient();
+  const useSingleTabPersistence = useFirestoreSingleTabPersistence();
   try {
     return initializeFirestore(app, {
-      /** Hosted web + dev: multi-tab IndexedDB share; APK/static embed: single WebView tab. */
+      /** Hosted web + EXE tab strip: multi-tab IndexedDB; APK/static embed: single WebView tab. */
       localCache: persistentLocalCache({
         tabManager: useSingleTabPersistence
           ? persistentSingleTabManager({})

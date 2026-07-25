@@ -4,8 +4,6 @@ import { readCloudCompanyPasswordUnlockSession } from "@/lib/cloudCompanyPasswor
 import { readAnyStoredOfflineUnlockSessionForCompany, readStoredOfflineUnlockSession } from "@/lib/offlineCompanyUnlockRemember";
 import { setLocalAuthToken } from "@/lib/localApiClient";
 import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
-import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
-import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 
 export type PostAuthCompanyRoute = "/dashboard" | "/company";
 
@@ -24,9 +22,7 @@ export function resolvePostAuthCompanyRoute(
 
   // Offline/local company: remembered token+user must still be valid; then restore local auth.
   // Fast-local synthetic uid (`local:*`) won't match old Firebase-keyed remember entry, so fallback scan by company.
-  const rememberedOffline =
-    readStoredOfflineUnlockSession(firebaseUid, selectedCompanyId, userEmail) ||
-    readAnyStoredOfflineUnlockSessionForCompany(selectedCompanyId);
+  const rememberedOffline = readStoredOfflineUnlockSession(firebaseUid, selectedCompanyId, userEmail);
   if (rememberedOffline) {
     setLocalAuthToken(selectedCompanyId, rememberedOffline.token, rememberedOffline.user);
     return "/dashboard";
@@ -34,16 +30,6 @@ export function resolvePostAuthCompanyRoute(
 
   // Online company with per-company password: valid "remember X days" window means no prompt needed.
   if (readCloudCompanyPasswordUnlockSession(firebaseUid, selectedCompanyId, userEmail)) {
-    return "/dashboard";
-  }
-
-  // Static APK / file shell / Capacitor: browser jaisa `/company` pe rokna mat — last `companyId` ho to seedha dashboard
-  // (unlock zarurat ho to header/CompanyActions flow; logout par `clearSelectedCompanyId` picker ya login).
-  const embeddedLike =
-    isStaticAppBuild() ||
-    (typeof window !== "undefined" &&
-      (window.location.protocol === "file:" || isCapacitorNativeApp()));
-  if (embeddedLike && firebaseUid && selectedCompanyId) {
     return "/dashboard";
   }
 

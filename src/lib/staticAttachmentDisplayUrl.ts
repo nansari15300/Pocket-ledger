@@ -1,6 +1,11 @@
 "use client";
 
-import { isServerGateCompany, shouldReadLedgerFromSqliteOnly } from "@/lib/companyStorageKind";
+import {
+  companyRowUsesSqliteLedgerWrites,
+  isServerGateCompany,
+  shouldReadLedgerFromSqliteOnly,
+} from "@/lib/companyStorageKind";
+import { isLocalOnlyMode } from "@/lib/localMode";
 import { localCompanyAttachmentStrategy } from "@/lib/companyAttachmentStrategies/localCompanyAttachmentStrategy";
 import { onlineCompanyAttachmentStrategy } from "@/lib/companyAttachmentStrategies/onlineCompanyAttachmentStrategy";
 import { serverCompanyAttachmentStrategy } from "@/lib/companyAttachmentStrategies/serverCompanyAttachmentStrategy";
@@ -45,6 +50,19 @@ export function companyRequiresLocalAttachmentUrlsOnly(
   company: CompanyStrategyRow
 ): boolean {
   return strategyForMode(companyAttachmentMode(company)).requiresLocalAttachmentUrlsOnly;
+}
+
+/** Gallery / local company: attachment bytes sirf device cache + `local:` — Firebase Storage mat chhedo. */
+export function companyUsesLocalAttachmentSourcesOnly(
+  company: CompanyStrategyRow
+): boolean {
+  if (isLocalOnlyMode()) return true;
+  if (!company) return false;
+  return (
+    shouldReadLedgerFromSqliteOnly(company) ||
+    companyRowUsesSqliteLedgerWrites(company) ||
+    companyRequiresLocalAttachmentUrlsOnly(company)
+  );
 }
 
 /** EXE/APK online company: local cache first; local/server company: only local/server bytes. */

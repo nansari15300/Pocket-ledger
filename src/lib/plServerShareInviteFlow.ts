@@ -2,7 +2,7 @@
 
 import { getDocs, query, collection, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
-import { getElectronLocalServerApi, type LocalAppServerAccessTokenSummary } from "@/lib/electronLocalServer";
+import { getElectronLocalServerApi, type LocalAppServerAccessTokenSummary, isLocalAppServerSharingActive, resolveLocalAppServerSharingPort } from "@/lib/electronLocalServer";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import {
   getLocalCompanyUsersRecords,
@@ -13,8 +13,6 @@ import { normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
 import { sendLocalServerShareInviteAlert, localServerShareAlertUrlOptions } from "@/lib/plServerShareInvite";
 import {
   buildPlServerInviteUrlList,
-  dedupePlServerListingUrls,
-  normalizePlServerListingUrl,
 } from "@/lib/plServerPublicHostUrl";
 import { preferPlServerUrlsForClient, orderPlServerUrlsWithPreferred } from "@/lib/plServerClientUrlPick";
 import { pickDefaultPlServerShareUrl } from "@/lib/plServerGateInviteLink";
@@ -27,12 +25,17 @@ import {
 } from "@/lib/plServerAccessContext";
 import { refreshActiveLocalServerGateContext, dispatchGateChanged, applyActiveGateRuntime } from "@/lib/gates/gateRuntime";
 import type { GateRecord } from "@/lib/gates/gateTypes";
+import { bumpLocalCompanyRegistry } from "@/lib/applyStripePlanToLocalCompany";
+import { flushPendingBrowserDbSave } from "@/lib/localSqlite";
 
 const PL_SERVER_URL_PROBE_TIMEOUT_MS = 8_000;
 
 export type PlServerShareUserRow = {
   tokenId: string;
   email: string;
+  shareEmail?: string;
+  loginUsername?: string;
+  uid?: string | null;
   name: string;
   role: string;
   allowedCompanyIds: string[];
@@ -41,6 +44,78 @@ export type PlServerShareUserRow = {
 };
 
 const PROCESSED_INVITE_KEY = "pl_local_server_share_processed_v1";
+
+/** Login username se Gmail guess — Add Person dialog Gmail require karta hai. */
+export function guessGmailCandidatesForLoginUsername(raw: string): string[] {
+  const login = String(raw || "").trim().toLowerCase();
+  if (!login) return [];
+  if (login.includes("@")) return [login];
+  return [`${login}@gmail.com`, `${login}@googlemail.com`];
+}
+
+export type FirestoreUserProfileHint = {
+  id: string;
+  email?: string;
+  displayName?: string;
+  photoURL?: string;
+  online?: boolean;
+  lastSeen?: unknown;
+};
+
+export async function lookupFirestoreUserProfileByHint(input: {
+  email?: string;
+  loginUsername?: string;
+}): Promise<FirestoreUserProfileHint | null> {
+  const tries = new Set<string>();
+  for (const raw of [input.email, input.loginUsername]) {
+    for (const em of guessGmailCandidatesForLoginUsername(String(raw || ""))) {
+      tries.add(em);
+    }
+  }
+  for (const em of tries) {
+    const snap = await getDocs(query(collection(firestore, "users"), where("email", "==", em)));
+    if (snap.empty) continue;
+    const d = snap.docs[0]!;
+    return { id: d.id, ...(d.data() as object) } as FirestoreUserProfileHint;
+  }
+  return null;
+}
+
+export async function backfillLocalCompanyUserShareMeta(
+  companyId: string,
+  localUserId: string,
+  meta: { shareEmail: string; uid?: string | null }
+): Promise<void> {
+  const cid = String(companyId || "").trim();
+  const userId = String(localUserId || "").trim();
+  const shareEmail = String(meta.shareEmail || "")
+    .trim()
+    .toLowerCase();
+  if (!cid || !userId || !shareEmail.includes("@")) return;
+  const doc = await getLocalCompanyById(cid, { includeDeleted: true });
+  if (!doc) return;
+  const rows = parseLocalCompanyUserRows((doc as { localCompanyUsers?: unknown }).localCompanyUsers);
+  const idx = rows.findIndex((r) => r.id === userId);
+  if (idx < 0) return;
+  const row = rows[idx]!;
+  if (row.shareEmail === shareEmail && row.uid) return;
+  rows[idx] = {
+    ...row,
+    shareEmail: row.shareEmail || shareEmail,
+    uid: row.uid || (meta.uid ? String(meta.uid).trim() : null),
+  };
+  await upsertLocalCompany({
+    ...(doc as LocalCompanyDoc),
+    id: cid,
+    localCompanyUsers: rows,
+    updatedAt: Date.now(),
+  });
+  await flushPendingBrowserDbSave();
+  bumpLocalCompanyRegistry();
+  void import("@/lib/plServerCompanyMetaSync").then(({ notifyPlServerHostCompanyMetaSaved }) =>
+    notifyPlServerHostCompanyMetaSaved(cid)
+  );
+}
 
 async function resolveRecipientUidByEmail(email: string): Promise<string | null> {
   const em = String(email || "").trim().toLowerCase();
@@ -77,7 +152,6 @@ export async function tryPlServerUrlsUntilConnected(
   serverPort?: number
 ): Promise<{ serverUrl: string; context: Awaited<ReturnType<typeof fetchGateServerAccessContext>> } | null> {
   const tok = accessToken.trim();
-  if (!tok) return null;
   const port = Number(serverPort) || 0;
   const normalizedUrls =
     port > 0 ? rewritePlServerListingUrlsPort(urls, port) : urls.map((u) => normalizeServerUrl(u)).filter(Boolean);
@@ -105,14 +179,14 @@ export async function tryPlServerUrlsUntilConnected(
 function findGateByUrlAndToken(serverUrl: string, accessToken: string): GateRecord | null {
   const norm = normalizeServerUrl(serverUrl);
   const tok = accessToken.trim();
-  return (
-    listGates().find(
-      (g) =>
-        g.type === "local_server" &&
-        normalizeServerUrl(g.serverUrl || "") === norm &&
-        (g.accessToken || "").trim() === tok
-    ) ?? null
+  const sameUrl = listGates().filter(
+    (g) => g.type === "local_server" && normalizeServerUrl(g.serverUrl || "") === norm
   );
+  if (!sameUrl.length) return null;
+  const exactTok = sameUrl.find((g) => (g.accessToken || "").trim() === tok);
+  if (exactTok) return exactTok;
+  // Token badal gaya (naya share) — same URL pe latest gate reuse, naya duplicate mat banao
+  return [...sameUrl].sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0))[0] ?? null;
 }
 
 /** Receiver: probe IPs, bind gate, mirror companies — ledger data local server se aata hai. */
@@ -123,8 +197,7 @@ export async function autoConnectFromPlServerShareNotification(input: {
   companyId?: string | null;
   serverPort?: number;
 }): Promise<{ gate: GateRecord; serverUrl: string } | null> {
-  const accessToken = String(input.accessToken || "").trim();
-  if (!accessToken) return null;
+  const accessToken = "";
 
   const hit = await tryPlServerUrlsUntilConnected(
     input.serverUrls,
@@ -134,31 +207,28 @@ export async function autoConnectFromPlServerShareNotification(input: {
   );
   if (!hit) return null;
 
-  persistDevClientAccessToken(accessToken);
+  persistDevClientAccessToken("");
 
   let gate = findGateByUrlAndToken(hit.serverUrl, accessToken);
   if (!gate) {
     gate = listGates().find(
       (g) =>
-        g.type === "local_server" && (g.accessToken || "").trim() === accessToken.trim()
+        g.type === "local_server" && normalizeServerUrl(g.serverUrl || "") === hit.serverUrl
     ) ?? null;
   }
   if (!gate) {
     gate = addLocalServerGate({
       label: input.gateLabel?.trim() || "Shared server",
       serverUrl: hit.serverUrl,
-      accessToken,
+      accessToken: "",
     });
   } else {
-    const prevUrl = normalizeServerUrl(gate.serverUrl || "");
-    if (prevUrl !== hit.serverUrl) {
-      const { updateLocalServerGate } = await import("@/lib/gates/gateStore");
-      gate = updateLocalServerGate(gate.id, {
-        label: gate.label,
-        serverUrl: hit.serverUrl,
-        accessToken,
-      });
-    }
+    const { updateLocalServerGate } = await import("@/lib/gates/gateStore");
+    gate = updateLocalServerGate(gate.id, {
+      label: input.gateLabel?.trim() || gate.label,
+      serverUrl: hit.serverUrl,
+      accessToken: "",
+    });
   }
 
   const ctx = await refreshActiveLocalServerGateContext(gate);
@@ -177,13 +247,15 @@ export async function autoConnectFromPlServerShareNotification(input: {
   applyActiveGateRuntime(gate);
   dispatchGateChanged();
 
-  const { mirrorPlServerSharedCompaniesToLocalSqlite } = await import("@/lib/plServerClientCompanyMirror");
-  await mirrorPlServerSharedCompaniesToLocalSqlite({ pullFullLedger: false }).catch(() => undefined);
+  const { syncPlServerSharedCompaniesToLocalSqlite } = await import("@/lib/plServerClientCompanyDelta");
+  await syncPlServerSharedCompaniesToLocalSqlite({
+    pullFullLedger: true,
+  }).catch(() => undefined);
 
   const companyId = String(input.companyId || "").trim();
   if (companyId) {
-    const { mirrorPlServerSharedCompanyById } = await import("@/lib/plServerClientCompanyMirror");
-    await mirrorPlServerSharedCompanyById(companyId, { pullFullLedger: true }).catch(() => undefined);
+    const { syncPlServerSharedCompanyById } = await import("@/lib/plServerClientCompanyDelta");
+    await syncPlServerSharedCompanyById(companyId, { pullFullLedger: true }).catch(() => undefined);
   }
 
   return { gate, serverUrl: hit.serverUrl };
@@ -235,6 +307,96 @@ export function tokenRowsForCompany(
     }));
 }
 
+/** Token-free PLServer: shared login users from company SQLite doc. */
+export async function listPlServerShareUserRowsFromCompany(
+  companyId: string,
+  ownerEmail?: string | null
+): Promise<PlServerShareUserRow[]> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return [];
+  const doc = await getLocalCompanyById(cid, { includeDeleted: true });
+  if (!doc) return [];
+  const owner = String(ownerEmail || (doc as { ownerEmail?: string | null }).ownerEmail || "")
+    .trim()
+    .toLowerCase();
+  const ownerLocal = owner.includes("@") ? owner.split("@")[0]!.trim() : owner;
+  const users = parseLocalCompanyUserRows((doc as { localCompanyUsers?: unknown }).localCompanyUsers);
+  return users
+    .filter((u) => {
+      const role = String(u.role || "").trim().toLowerCase();
+      if (role === "owner") return false;
+      const un = u.username.trim().toLowerCase();
+      if (owner && un === owner) return false;
+      if (ownerLocal && un === ownerLocal) return false;
+      return true;
+    })
+    .map((u) => {
+      const username = u.username.trim();
+      const emailLike = username.includes("@") ? username.toLowerCase() : "";
+      let shareEmail =
+        typeof u.shareEmail === "string" && u.shareEmail.includes("@")
+          ? u.shareEmail.trim().toLowerCase()
+          : emailLike;
+      if (!shareEmail.includes("@")) {
+        for (const other of users) {
+          if (other.id === u.id) continue;
+          const otherUn = other.username.trim().toLowerCase();
+          if (otherUn.includes("@") && otherUn.split("@")[0] === username.toLowerCase()) {
+            shareEmail = otherUn;
+            break;
+          }
+          const otherShare = String(other.shareEmail || "")
+            .trim()
+            .toLowerCase();
+          if (otherShare.includes("@") && otherShare.split("@")[0] === username.toLowerCase()) {
+            shareEmail = otherShare;
+            break;
+          }
+        }
+      }
+      const emailForLookup =
+        shareEmail ||
+        emailLike ||
+        guessGmailCandidatesForLoginUsername(username)[0] ||
+        "";
+      return {
+        tokenId: `lcu:${u.id}`,
+        email: emailForLookup,
+        shareEmail: shareEmail.includes("@") ? shareEmail : undefined,
+        loginUsername: username,
+        uid: u.uid ?? null,
+        name: u.displayName?.trim() || username,
+        role: u.role || "manager",
+        allowedCompanyIds: [cid],
+        createdAt: null,
+        lastUsedAt: null,
+      };
+    });
+}
+
+async function resolveLocalServerShareInviteContext(): Promise<{
+  serverUrls: string[];
+  publicHost: string;
+  serverPort: number | undefined;
+  sharingActive: boolean;
+}> {
+  const api = getElectronLocalServerApi();
+  if (!api?.getStatus) {
+    return { serverUrls: [], publicHost: "", serverPort: undefined, sharingActive: false };
+  }
+  const [status, config] = await Promise.all([
+    api.getStatus().catch(() => null),
+    api.getConfig?.().catch(() => null),
+  ]);
+  const serverPort = resolveLocalAppServerSharingPort(status) ?? undefined;
+  return {
+    serverUrls: Array.isArray(status?.urls) ? status!.urls : [],
+    publicHost: String(config?.publicHost || "").trim(),
+    serverPort,
+    sharingActive: isLocalAppServerSharingActive(status),
+  };
+}
+
 async function ensureLocalLoginUserOnCompanies(input: {
   companyIds: string[];
   loginUsername: string;
@@ -245,6 +407,9 @@ async function ensureLocalLoginUserOnCompanies(input: {
   recipientUid?: string | null;
 }): Promise<void> {
   const role = normalizeLocalCompanyAppRole(input.role);
+  const recipientUid =
+    input.recipientUid ??
+    (await resolveRecipientUidByEmail(input.shareEmail.trim().toLowerCase()));
   for (const companyId of input.companyIds) {
     const cid = String(companyId || "").trim();
     if (!cid) continue;
@@ -253,12 +418,13 @@ async function ensureLocalLoginUserOnCompanies(input: {
       if (!doc) continue;
       const rows = parseLocalCompanyUserRows((doc as { localCompanyUsers?: unknown }).localCompanyUsers);
       const gmail = input.shareEmail.trim().toLowerCase();
-      let next = upsertUserInList(rows, {
+      const next = upsertUserInList(rows, {
         username: input.loginUsername.trim(),
         displayName: input.displayName.trim(),
         role,
         password: input.password,
-        uid: input.recipientUid ? String(input.recipientUid).trim() : null,
+        uid: recipientUid,
+        shareEmail: gmail,
       });
       const gmailIdx = next.findIndex((u) => u.username.toLowerCase() === gmail);
       if (gmailIdx >= 0 && gmail !== input.loginUsername.trim().toLowerCase()) {
@@ -275,6 +441,11 @@ async function ensureLocalLoginUserOnCompanies(input: {
         localCompanyUsers: next,
         updatedAt: Date.now(),
       });
+      await flushPendingBrowserDbSave();
+      bumpLocalCompanyRegistry();
+      void import("@/lib/plServerCompanyMetaSync").then(({ notifyPlServerHostCompanyMetaSaved }) =>
+        notifyPlServerHostCompanyMetaSaved(cid)
+      );
     } catch (e) {
       throw e;
     }
@@ -301,11 +472,6 @@ export type InviteUserToPlServerShareInput = {
 export async function inviteUserToPlServerShare(
   input: InviteUserToPlServerShareInput
 ): Promise<{ ok: true; tokenId: string } | { ok: false; reason: string }> {
-  const api = getElectronLocalServerApi();
-  if (!api?.createAccessToken) {
-    return { ok: false, reason: "Local server is not available on this device." };
-  }
-
   const email = input.recipientEmail.trim().toLowerCase();
   if (!email.includes("@")) {
     return { ok: false, reason: "Enter a valid Gmail address." };
@@ -322,14 +488,6 @@ export async function inviteUserToPlServerShare(
     return { ok: false, reason: "Login username and password are required for remote users." };
   }
 
-  const recipientUid = await resolveRecipientUidByEmail(email);
-  if (!recipientUid) {
-    return {
-      ok: false,
-      reason: `${email} is not on Pocket Ledger yet. They must sign up with this Gmail first.`,
-    };
-  }
-
   await ensureLocalLoginUserOnCompanies({
     companyIds,
     loginUsername,
@@ -337,67 +495,38 @@ export async function inviteUserToPlServerShare(
     password,
     role: input.role,
     shareEmail: email,
-    recipientUid,
+    recipientUid: await resolveRecipientUidByEmail(email),
   });
 
-  const existing = (await api.listAccessTokens()).find(
-    (t) => String(t.email || "").trim().toLowerCase() === email
-  );
-
-  let tokenId: string;
-  let accessToken: string;
-
-  if (existing) {
-    const mergedIds = [...new Set([...(existing.allowedCompanyIds || []), ...companyIds])];
-    const rotated = await api.rotateAccessToken(existing.id, {
-      label: input.displayName.trim() || email,
-      allowedCompanyIds: mergedIds,
-    });
-    if (!rotated.ok || !rotated.token) {
-      return { ok: false, reason: "Could not update existing share for this user." };
-    }
-    tokenId = existing.id;
-    accessToken = rotated.token;
-    await api.updateAccessToken(existing.id, { label: input.displayName.trim() || email });
-  } else {
-    const created = await api.createAccessToken({
-      label: input.displayName.trim() || email,
-      email,
-      uid: recipientUid,
-      allowedCompanyIds: companyIds,
-    });
-    tokenId = created.id;
-    accessToken = created.token;
-  }
-
+  const tokenId = `share:${email}`;
+  const serverCtx = await resolveLocalServerShareInviteContext();
   const urls = buildPlServerInviteUrlList({
-    urls: input.serverUrls,
-    publicHost: input.publicHost,
-    port: input.serverPort,
+    urls: input.serverUrls.length ? input.serverUrls : serverCtx.serverUrls,
+    publicHost: input.publicHost || serverCtx.publicHost,
+    port: input.serverPort ?? serverCtx.serverPort,
   });
   const primary = pickDefaultPlServerShareUrl(urls) || urls[0] || "";
-  if (!primary) {
-    return { ok: false, reason: "Server is not running — start sharing first, then invite users." };
-  }
 
-  const invite = await sendLocalServerShareInviteAlert({
-    recipientEmail: email,
-    senderUserId: input.senderUserId,
-    senderEmail: input.senderEmail,
-    senderName: input.senderName,
-    serverUrl: primary,
-    serverUrls: urls.length ? urls : [primary],
-    serverPort: input.serverPort,
-    accessToken,
-    gateLabel: input.gateLabel || "Shared Pocket Ledger server",
-    tokenLabel: input.displayName.trim() || email,
-    companyNames: input.companyNames,
-    companyId: companyIds.length === 1 ? companyIds[0]! : null,
-    loginUsername,
-  });
+  if (primary && input.senderUserId) {
+    const invite = await sendLocalServerShareInviteAlert({
+      recipientEmail: email,
+      senderUserId: input.senderUserId,
+      senderEmail: input.senderEmail,
+      senderName: input.senderName,
+      serverUrl: primary,
+      serverUrls: urls.length ? urls : [primary],
+      serverPort: input.serverPort ?? serverCtx.serverPort,
+      accessToken: "",
+      gateLabel: input.gateLabel || "Shared Pocket Ledger server",
+      tokenLabel: input.displayName.trim() || email,
+      companyNames: input.companyNames,
+      companyId: companyIds.length === 1 ? companyIds[0]! : null,
+      loginUsername,
+    });
 
-  if (invite.ok === false) {
-    return { ok: false, reason: invite.reason };
+    if (invite.ok === false) {
+      return { ok: false, reason: invite.reason || "Invite failed." };
+    }
   }
 
   return { ok: true, tokenId };
@@ -438,11 +567,6 @@ export async function resendPlServerShareInvite(input: {
   gateLabel?: string;
   companyNames?: string;
 }): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const api = getElectronLocalServerApi();
-  if (!api?.rotateAccessToken) {
-    return { ok: false, reason: "Local server is not available on this device." };
-  }
-
   const email = input.recipientEmail.trim().toLowerCase();
   const companyIds = input.allowedCompanyIds.map((id) => String(id || "").trim()).filter(Boolean);
   if (!email.includes("@")) {
@@ -460,18 +584,11 @@ export async function resendPlServerShareInvite(input: {
     };
   }
 
-  const rotated = await api.rotateAccessToken(input.tokenId, {
-    label: input.displayName.trim() || email,
-    allowedCompanyIds: companyIds,
-  });
-  if (!rotated.ok || !rotated.token) {
-    return { ok: false, reason: "Could not refresh share token for this user." };
-  }
-
+  const serverCtx = await resolveLocalServerShareInviteContext();
   const urls = buildPlServerInviteUrlList({
-    urls: input.serverUrls,
-    publicHost: input.publicHost,
-    port: input.serverPort,
+    urls: input.serverUrls.length ? input.serverUrls : serverCtx.serverUrls,
+    publicHost: input.publicHost || serverCtx.publicHost,
+    port: input.serverPort ?? serverCtx.serverPort,
   });
   const primary = pickDefaultPlServerShareUrl(urls) || urls[0] || "";
   if (!primary) {
@@ -487,8 +604,8 @@ export async function resendPlServerShareInvite(input: {
     senderName: input.senderName,
     serverUrl: primary,
     serverUrls: urls.length ? urls : [primary],
-    serverPort: input.serverPort,
-    accessToken: rotated.token,
+    serverPort: input.serverPort ?? serverCtx.serverPort,
+    accessToken: "",
     gateLabel: input.gateLabel || "Shared Pocket Ledger server",
     tokenLabel: input.displayName.trim() || email,
     companyNames: input.companyNames,
@@ -510,15 +627,13 @@ export function notificationToShareConnectInput(n: Record<string, unknown>): {
   companyId?: string | null;
   serverPort?: number;
 } | null {
-  const accessToken = String(n.accessToken || "").trim();
-  if (!accessToken) return null;
   const opts = localServerShareAlertUrlOptions(n);
   const serverUrls = opts.map((o) => o.url);
   if (!serverUrls.length) return null;
   const serverPort = Number(n.serverPort) || 0;
   return {
     serverUrls,
-    accessToken,
+    accessToken: "",
     gateLabel: String(n.gateLabel || n.tokenLabel || "Shared server").trim() || undefined,
     companyId: String(n.companyId || "").trim() || null,
     serverPort: serverPort > 0 ? serverPort : undefined,
@@ -532,8 +647,6 @@ export function syncPlServerGateUrlForInvite(input: {
   gateLabel?: string;
   serverPort?: number;
 }): GateRecord | null {
-  const tok = String(input.accessToken || "").trim();
-  if (!tok) return null;
   const port = Number(input.serverPort) || 0;
   let url = normalizeServerUrl(input.serverUrl);
   if (!url) return null;
@@ -541,29 +654,28 @@ export function syncPlServerGateUrlForInvite(input: {
     url = rewritePlServerListingUrlsPort([url], port)[0] || url;
   }
   let gate =
-    findGateByUrlAndToken(url, tok) ??
-    listGates().find((g) => g.type === "local_server" && (g.accessToken || "").trim() === tok) ??
+    findGateByUrlAndToken(url, "") ??
     null;
   if (!gate) {
     gate = addLocalServerGate({
       label: input.gateLabel?.trim() || "Shared server",
       serverUrl: url,
-      accessToken: tok,
+      accessToken: "",
     });
   } else {
     const prevUrl = normalizeServerUrl(gate.serverUrl || "");
-    if (prevUrl !== url || (gate.accessToken || "").trim() !== tok) {
+    if (prevUrl !== url || (gate.accessToken || "").trim()) {
       gate = updateLocalServerGate(gate.id, {
         label: gate.label,
         serverUrl: url,
-        accessToken: tok,
+        accessToken: "",
       });
     }
   }
   const active = getActiveGate();
   if (
     active.type === "local_server" &&
-    (active.accessToken || "").trim() === tok
+    normalizeServerUrl(active.serverUrl || "") === url
   ) {
     writeActiveGateId(gate.id);
     applyActiveGateRuntime(gate);

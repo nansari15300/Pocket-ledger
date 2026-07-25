@@ -136,6 +136,7 @@ export function AppLockSettings() {
     setPinBusy(true);
     try {
       await saveEmbeddedPinHash(uid, newPin);
+      setEmbeddedLockSetupSkipped(uid, false);
       setUserChosenEmbeddedPin(uid, true);
       if (readBiometricUnlockEnabled(uid)) {
         try {
@@ -330,11 +331,46 @@ export function AppLockSettings() {
           <CardHeader>
             <CardTitle>Set up app lock</CardTitle>
             <CardDescription>
-              App lock is optional for static startup. If you want PIN protection again, re-enable setup now.
+              {shellKind === "exe"
+                ? "Set a 6-digit PIN below, or open the full-screen setup gate."
+                : "App lock is optional for static startup. If you want PIN protection again, re-enable setup now."}
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <Button type="button" onClick={onEnableSetupNow}>
+          <CardContent className="space-y-4">
+            {shellKind === "exe" ? (
+              <div className="space-y-4 max-w-md">
+                <div className="space-y-2">
+                  <Label htmlFor="pl-al-exe-setpin">PIN ({n} digits)</Label>
+                  <Input
+                    id="pl-al-exe-setpin"
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="new-password"
+                    maxLength={n}
+                    value={newPin}
+                    onChange={(e) => setNewPin(e.target.value.replace(/\D/g, "").slice(0, n))}
+                    disabled={pinBusy}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="pl-al-exe-setpin2">Confirm PIN</Label>
+                  <Input
+                    id="pl-al-exe-setpin2"
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="new-password"
+                    maxLength={n}
+                    value={newPin2}
+                    onChange={(e) => setNewPin2(e.target.value.replace(/\D/g, "").slice(0, n))}
+                    disabled={pinBusy}
+                  />
+                </div>
+                <Button type="button" disabled={pinBusy} onClick={() => void onSetBackupPin()}>
+                  {pinBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save PIN"}
+                </Button>
+              </div>
+            ) : null}
+            <Button type="button" variant={shellKind === "exe" ? "outline" : "default"} onClick={onEnableSetupNow}>
               Require PIN setup now
             </Button>
           </CardContent>

@@ -12,12 +12,13 @@ import {
   serverTimestamp,
   setDoc,
 } from "firebase/firestore";
-import { ref, deleteObject } from "firebase/storage";
+import { ref, deleteObject, getBlob } from "firebase/storage";
 import { firestore, storage } from "@/lib/firebase";
 import { companyAttachmentRegistryEnabled } from "@/lib/firebaseBillingOptimization";
 import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageDownloadUrl";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import { uploadFileClient } from "@/lib/storageClient";
 
 type RegistryRow = {
   url: string;
@@ -99,6 +100,48 @@ export async function linkCloudAttachmentRefs(companyId: string, urls: string[])
 }
 
 /** Voucher permanent delete — decrement; delete Storage bytes only when unreferenced. */
+function fileNameFromStoragePath(path: string): string {
+  const base = path.split("/").pop() || "attachment";
+  try {
+    return decodeURIComponent(base);
+  } catch {
+    return base;
+  }
+}
+
+/**
+ * Cross-company reuse copies bytes into the target company. Same URL across
+ * companies would make delete/ref-count ownership unsafe.
+ */
+export async function copyCloudAttachmentRefToCompany(params: {
+  sourceUrl: string;
+  targetCompanyId: string;
+  targetCompanyName?: string;
+}): Promise<string> {
+  const sourceUrl = String(params.sourceUrl || "").trim();
+  const targetCompanyId = String(params.targetCompanyId || "").trim();
+  if (!targetCompanyId) throw new Error("Target company is missing.");
+  if (!isRegistryEligibleHttpsUrl(sourceUrl)) {
+    throw new Error("This attachment type cannot be copied between companies yet.");
+  }
+  const sourcePath = tryGetStoragePathFromFirebaseDownloadUrl(sourceUrl);
+  if (!sourcePath) throw new Error("Could not read the source attachment path.");
+
+  const blob = await getBlob(ref(storage, sourcePath));
+  const uploaded = await uploadFileClient(
+    {
+      name: fileNameFromStoragePath(sourcePath),
+      type: blob.type || "application/octet-stream",
+      arrayBuffer: await blob.arrayBuffer(),
+    },
+    targetCompanyId,
+    params.targetCompanyName,
+    new Date()
+  );
+  if (uploaded.success === false) throw new Error(uploaded.error || "Could not copy attachment.");
+  await registerFirebaseAttachmentRef(targetCompanyId, uploaded.url, 1);
+  return uploaded.url;
+}
 export async function unlinkFirebaseAttachmentRefsForDoc(
   companyId: string,
   fileUrls: string[]

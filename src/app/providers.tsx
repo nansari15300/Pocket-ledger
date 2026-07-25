@@ -29,6 +29,8 @@ import { LocalCompanySqliteWarmBootstrap } from "@/components/LocalCompanySqlite
 import { LiveMirrorFolderMissingDialog } from "@/components/LiveMirrorFolderMissingDialog";
 import { FirstDeviceCompanyHydrationOverlay } from "@/components/FirstDeviceCompanyHydrationOverlay";
 import { EmbeddedDeviceLockGate } from "@/components/EmbeddedDeviceLockGate";
+import { EmbeddedAppDeferredShell } from "@/components/EmbeddedAppDeferredShell";
+import { EmbeddedDeviceLockSessionProvider } from "@/contexts/EmbeddedDeviceLockSessionContext";
 import { EmbeddedLogoutProvider } from "@/contexts/EmbeddedLogoutContext";
 import { EmbeddedOfflineFirestoreTransport } from "@/components/EmbeddedOfflineFirestoreTransport";
 import { FirstLoginWarmGateProvider } from "@/contexts/FirstLoginWarmGateContext";
@@ -39,10 +41,14 @@ import { DevPlHostBridgeWorker } from "@/components/DevPlHostBridgeWorker";
 import { ServerShareableCompaniesBridge } from "@/components/ServerShareableCompaniesBridge";
 import { PlServerAccessBootstrap } from "@/components/settings/PlServerAccessBootstrap";
 import { PlRemoteClientLandingBootstrap } from "@/components/settings/PlRemoteClientLandingBootstrap";
-import { PlServerClientMirrorManager } from "@/components/settings/PlServerClientMirrorManager";
+import { PlServerGateLandingBootstrap } from "@/components/settings/PlServerGateLandingBootstrap";
+import { PlFirebaseAuthHandoffBootstrap } from "@/components/settings/PlFirebaseAuthHandoffBootstrap";
+import { PlAppHubCompanyReturnBootstrap } from "@/components/settings/PlAppHubCompanyReturnBootstrap";
+import { PlServerClientDeltaManager } from "@/components/settings/PlServerClientDeltaManager";
 import { PlServerLiveSyncManager } from "@/components/settings/PlServerLiveSyncManager";
 import { LocalServerShareAutoConnectManager } from "@/components/settings/LocalServerShareAutoConnectManager";
 import { PlServerAuthoritativeReplayManager } from "@/components/PlServerAuthoritativeReplayManager";
+import { FirebaseLedgerDeltaSyncManager } from "@/components/FirebaseLedgerDeltaSyncManager";
 
 /** Local-only app start: sql.js init pehle se — refresh par company turant SQLite se load. */
 function SqlitePrewarmBootstrap() {
@@ -51,10 +57,17 @@ function SqlitePrewarmBootstrap() {
   }, []);
   return null;
 }
+
+function EmbeddedStartupPrimeBootstrap() {
+  useEffect(() => {
+    void primeLocalFileRefMetaRuntimeCache();
+  }, []);
+  return null;
+}
 import { PlServerGateLedgerBootstrap } from "@/components/settings/PlServerGateLedgerBootstrap";
-import { PlMirrorExportDevBridge } from "@/components/settings/PlMirrorExportDevBridge";
+import { PlDeltaExportDevBridge } from "@/components/settings/PlDeltaExportDevBridge";
 import { PlServerGateRefreshBootstrap } from "@/components/settings/PlServerGateRefreshBootstrap";
-import { PlServerHostAttachmentMirrorBootstrap } from "@/components/settings/PlServerHostAttachmentMirrorBootstrap";
+import { PlServerHostAttachmentDeltaBootstrap } from "@/components/settings/PlServerHostAttachmentDeltaBootstrap";
 import { PlServerCompanyDetectionAuditRunner } from "@/components/PlServerCompanyDetectionAuditRunner";
 import { primeLocalFileRefMetaRuntimeCache } from "@/lib/localPendingFiles";
 import { isPerfDebugEnabled } from "@/lib/perfDebug";
@@ -72,8 +85,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
         // Root client mount — agar har navigation par dubara dikhe to remount/root cause alag.
         console.log("[APP_BOOTSTRAP]", "Providers mount (client)");
       }
-      // Native startup warm: pending local file refs runtime cache prefill so sync fast-path null-hit kam ho.
-      void primeLocalFileRefMetaRuntimeCache();
     }, []);
     useEffect(() => {
       if (!isPerfDebugEnabled()) return;
@@ -99,25 +110,34 @@ export function Providers({ children }: { children: React.ReactNode }) {
     return (
       <ThemeProvider>
         <AuthProvider>
+            <EmbeddedDeviceLockSessionProvider>
             <FirebaseErrorListener />
+            {/* EXE/APK: PIN pehle — SQLite/sync baad me (`EmbeddedAppDeferredShell`) */}
+            <EmbeddedDeviceLockGate />
+            <EmbeddedAppDeferredShell>
             <PlServerCompanyDetectionAuditRunner />
             <EmbeddedOfflineFirestoreTransport />
             <GateProvider>
             <CompanyProvider>
+                <EmbeddedStartupPrimeBootstrap />
                 <SqlitePrewarmBootstrap />
                 <CrossCompanyAttachmentAccessBridge />
                 <ServerShareableCompaniesBridge />
+                <FirebaseLedgerDeltaSyncManager />
                 <DevPlHostBridgeWorker />
-                <PlServerHostAttachmentMirrorBootstrap />
+                <PlServerHostAttachmentDeltaBootstrap />
                 <PlServerAccessBootstrap />
+                <PlFirebaseAuthHandoffBootstrap />
+                <PlAppHubCompanyReturnBootstrap />
                 <PlServerGateRefreshBootstrap />
                 <PlRemoteClientLandingBootstrap />
-                <PlServerClientMirrorManager />
+                <PlServerGateLandingBootstrap />
+                <PlServerClientDeltaManager />
                 <PlServerLiveSyncManager />
                 <LocalServerShareAutoConnectManager />
                 <PlServerAuthoritativeReplayManager />
                 <PlServerGateLedgerBootstrap />
-                <PlMirrorExportDevBridge />
+                <PlDeltaExportDevBridge />
                 <EmbeddedLogoutProvider>
                 <EmbeddedAttachmentPrefetchProvider>
                 {/* APK/static pehli login: full warm chalte waqt background warm band — gate overlay set karti hai */}
@@ -160,8 +180,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 </EmbeddedLogoutProvider>
             </CompanyProvider>
             </GateProvider>
-            {/* EXE/APK: Firebase restore ke baad PIN/biometric overlay — Company tree ke upar full-screen */}
-            <EmbeddedDeviceLockGate />
+            </EmbeddedAppDeferredShell>
+            </EmbeddedDeviceLockSessionProvider>
         </AuthProvider>
       </ThemeProvider>
     )

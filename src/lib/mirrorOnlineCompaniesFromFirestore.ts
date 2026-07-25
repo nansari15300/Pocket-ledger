@@ -15,6 +15,8 @@ import {
 } from "firebase/firestore";
 import { auth, firestore, ensureEmbeddedFirestoreOnlineForCloudCompanyLoad } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
+import { FIREBASE_LEDGER_COMPANY_REGISTRY_PULL_EVENT } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import {
   getLocalCompanyById,
   listLocalCompanies,
@@ -27,7 +29,7 @@ import {
   isCurrentUserOwnerOfCompanyRow,
   isCurrentUserSharedOnCompanyRow,
 } from "@/lib/companyOnlineIntegrity";
-import { isDeviceLocalCompany } from "@/lib/companyStorageKind";
+import { isDeviceLocalCompany, isStrictLocalOnlyCompany } from "@/lib/companyStorageKind";
 import { isLocalBackupRestoredCompanyRow } from "@/lib/localBackupRestoreCompany";
 import { isProtectedDriveLocalRegistryRow } from "@/lib/driveRestoredLocalCompany";
 import { pullSharedOnlineCompaniesFromFirestore } from "@/lib/sharedCompaniesFirestorePull";
@@ -143,6 +145,7 @@ async function upsertCloudCompanyDoc(
   const raw = { id: rid, ...docData } as Record<string, unknown>;
   const isCloudDeleted = raw.isDeleted === true;
   const existing = await getLocalCompanyById(rid, { includeDeleted: true });
+  if (isStrictLocalOnlyCompany(existing)) return;
   const localMs =
     typeof (existing as unknown as { updatedAt?: unknown })?.updatedAt === "number"
       ? (existing as unknown as { updatedAt: number }).updatedAt
@@ -176,7 +179,7 @@ async function upsertCloudCompanyDoc(
  * Firestore owned + shared → SQLite upsert.
  * UI list seed ke liye `rows` return — SQLite round-trip par mat chhodo.
  */
-export async function mirrorOnlineCompaniesFromFirestore(
+async function mirrorOnlineCompaniesFromFirestoreImpl(
   user: MirrorOnlineUser,
   ownerIdCandidates: string[]
 ): Promise<{
@@ -276,8 +279,50 @@ export async function mirrorOnlineCompaniesFromFirestore(
   };
 }
 
+export async function mirrorOnlineCompaniesFromFirestore(
+  user: MirrorOnlineUser,
+  ownerIdCandidates: string[]
+): Promise<{
+  rows: MirroredCompanyRow[];
+  ownedIds: Set<string>;
+  sharedOnlyIds: Set<string>;
+  cloudAllowedIds: Set<string>;
+}> {
+  if (isFirebaseLedgerDataSyncDisabled()) {
+    return {
+      rows: [],
+      ownedIds: new Set(),
+      sharedOnlyIds: new Set(),
+      cloudAllowedIds: new Set(),
+    };
+  }
+  return mirrorOnlineCompaniesFromFirestoreImpl(user, ownerIdCandidates);
+}
+
+/** Cloud sync ON — sirf company registry list Firestore se (ledger/attachments alag tick se). */
+export async function pullOnlineCompanyRegistryFromFirestore(
+  user: MirrorOnlineUser,
+  ownerIdCandidates: string[]
+): Promise<{
+  rows: MirroredCompanyRow[];
+  ownedIds: Set<string>;
+  sharedOnlyIds: Set<string>;
+  cloudAllowedIds: Set<string>;
+}> {
+  return mirrorOnlineCompaniesFromFirestoreImpl(user, ownerIdCandidates);
+}
+
+export function requestOnlineCompanyRegistryPull(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.dispatchEvent(new CustomEvent(FIREBASE_LEDGER_COMPANY_REGISTRY_PULL_EVENT));
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Ghost SQLite rows hatao — shared mirror partial ho to shared rows mat udao. */
-export async function purgeGhostOnlineCompanyMirrors(
+export async function purgeGhostOnlineCompanyDeltas(
   user: MirrorOnlineUser,
   cloudAllowedIds: Set<string>
 ): Promise<void> {
@@ -290,7 +335,9 @@ export async function purgeGhostOnlineCompanyMirrors(
     const isSharedMirror =
       !isOwner && isCurrentUserSharedOnCompanyRow(row, user);
     const isPureLocalRow = isDeviceLocalCompany(row);
+    const isStrictLocalOnlyRow = isStrictLocalOnlyCompany(row);
     const isDriveSharedJoin = (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;
+    if (isStrictLocalOnlyRow) continue;
     if (isOwner && isPureLocalRow) continue;
     if (isDriveSharedJoin) continue;
     if (isProtectedDriveLocalRegistryRow(row as Record<string, unknown>, user)) continue;

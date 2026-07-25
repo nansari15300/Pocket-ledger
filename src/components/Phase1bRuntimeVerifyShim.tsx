@@ -175,7 +175,7 @@ export function Phase1bRuntimeVerifyShim() {
     };
 
     window.__plPhase1bVerifyPullPlServerSharedCompanyLive = async (companyId) => {
-      const { syncPlServerSharedCompanyLive } = await import("@/lib/plServerClientMirrorPush");
+      const { syncPlServerSharedCompanyLive } = await import("@/lib/plServerClientDeltaSync");
       return syncPlServerSharedCompanyLive(companyId);
     };
 

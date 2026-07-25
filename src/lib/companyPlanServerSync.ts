@@ -10,12 +10,15 @@
 import { getBillingApiUrl } from "@/lib/billingApiOrigin";
 import { hostedApiFetch } from "@/lib/hostedApiFetch";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isLocalDemoPlanActive } from "@/lib/applyLocalDemoPlan";
+import { isHostedPlanSyncDisabled } from "@/lib/hostedPlanSyncDisabled";
 import { bumpLocalCompanyRegistry } from "@/lib/applyStripePlanToLocalCompany";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { isServerGateCompany } from "@/lib/companyStorageKind";
 import { isPlRemoteServerClientMode } from "@/lib/plRemoteServerClient";
 import { isDriveCloudSyncLocalRegistryRow } from "@/lib/driveRestoredLocalCompany";
 import { clearCompanyPlanLocalCache, readCompanyPlanLocalCache, writeCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
+import { writeAccountPlanLocalCache } from "@/lib/accountPlanLocalCache";
 import { normalizePlanIdForClient, planTierIndex } from "@/config/plans";
 import { highestPlanIdAmongOwnedCompanies } from "@/lib/accountPlanForOwner";
 import { verifyPlanEntitlementJws } from "@/lib/security/planEntitlementJwtVerify";
@@ -72,6 +75,12 @@ async function applyAuthoritativePlanPayloadToLocal(opts: {
   data: ServerAuthoritativePlanPayload;
 }): Promise<SyncCompanyPlanResult> {
   const { firebaseCompanyId, localCompanyId, data } = opts;
+
+  const localDemoGuard = await getLocalCompanyById(localCompanyId);
+  if (isLocalDemoPlanActive(localDemoGuard)) {
+    return { ok: true, applied: false, reason: "local_demo_plan_active" };
+  }
+
   const planId = String(data.planId || "basic").trim() || "basic";
   const planExpiryMs =
     typeof data.planExpiryMs === "number" && Number.isFinite(data.planExpiryMs) ? data.planExpiryMs : null;
@@ -205,6 +214,14 @@ export async function syncLocalOnlyCompanyPlanFromOwnerAccount(opts: {
   const uid = String(opts.firebaseUid || "").trim();
   if (!localCompanyId || !uid) return { ok: false, applied: false, reason: "missing_ids" };
 
+  const localDemoGuard = await getLocalCompanyById(localCompanyId);
+  if (isLocalDemoPlanActive(localDemoGuard)) {
+    return { ok: true, applied: false, reason: "local_demo_plan_active" };
+  }
+  if (isHostedPlanSyncDisabled()) {
+    return { ok: true, applied: false, reason: "hosted_plan_sync_disabled" };
+  }
+
   let planId = normalizePlanIdForClient("basic");
   let planExpiryMs: number | null = null;
   let stripeCustomerId: string | null = null;
@@ -230,6 +247,12 @@ export async function syncLocalOnlyCompanyPlanFromOwnerAccount(opts: {
           u.accountCanonicalStripeSubscriptionId.trim()
             ? u.accountCanonicalStripeSubscriptionId.trim()
             : null;
+        writeAccountPlanLocalCache(uid, {
+          planId,
+          planExpiryMs,
+          stripeCustomerId,
+          stripeSubscriptionId,
+        });
       }
     }
   } catch {
@@ -519,6 +542,9 @@ export async function syncCompanyPlanFromServer(opts: {
     ownerId?: string;
   }>;
 }): Promise<SyncCompanyPlanResult> {
+  if (isHostedPlanSyncDisabled()) {
+    return { ok: true, applied: false, reason: "hosted_plan_sync_disabled" };
+  }
   // Pehle network: token / POST se pehle clear "offline" message (static build bhi).
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     return { ok: false, applied: false, reason: "offline" };

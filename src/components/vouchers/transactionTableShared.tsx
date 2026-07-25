@@ -88,6 +88,22 @@ export type Context =
 export type Transaction = Record<string, any>;
 export type FileColumnDisplayMode = "preview" | "tick";
 
+/** Portal preview — stable memo taaki table re-render par fetch/spinner reset na ho. */
+function StableAttachmentPortalPreview({
+  urls,
+  companyId,
+}: {
+  urls: readonly string[];
+  companyId?: string | null;
+}) {
+  const urlsKey = React.useMemo(() => urls.join("\x1e"), [urls]);
+  const preview = React.useMemo(
+    () => <MultiAttachmentPortalPreview urls={urls} companyId={companyId} />,
+    [urlsKey, companyId, urls]
+  );
+  return preview;
+}
+
 /**
  * Ledger row par attachment — File column filter (with / without / all).
  */
@@ -101,9 +117,11 @@ export function transactionRowHasFileAttachment(t: { fileUrls?: unknown; unassig
 export function OpeningBalanceFileCellContent({
   fileUrls,
   displayMode = "preview",
+  showAll = false,
 }: {
   fileUrls?: readonly string[] | null;
   displayMode?: FileColumnDisplayMode;
+  showAll?: boolean;
 }) {
   const { company } = useCompany();
   const localLedgerOnly = companyRequiresLocalAttachmentUrlsOnly(company);
@@ -132,9 +150,23 @@ export function OpeningBalanceFileCellContent({
       triggerClassName="inline-flex cursor-pointer"
       onPreviewDoubleClick={singlePdfOpen}
       galleryUrls={urls.length > 1 ? urls : undefined}
-      preview={<MultiAttachmentPortalPreview urls={urls} />}
+      preview={<StableAttachmentPortalPreview urls={urls} companyId={company?.id} />}
     >
-      <VoucherAttachmentFileIndicator urls={urls} displayMode={displayMode} aria-label="Has attachment" />
+          {showAll && displayMode === "preview" ? (
+            <span className="inline-flex items-center gap-1">
+              {urls.map((url, index) => (
+                <span key={`${url}:${index}`} data-attachment-index={index}>
+                  <VoucherAttachmentFileIndicator
+                    urls={[url]}
+                    displayMode="preview"
+                    aria-label={`Attachment ${index + 1}`}
+                  />
+                </span>
+              ))}
+            </span>
+          ) : (
+        <VoucherAttachmentFileIndicator urls={urls} displayMode={displayMode} aria-label="Has attachment" />
+      )}
     </AttachmentHoverPortal>
   );
 }
@@ -871,6 +903,7 @@ export const TransactionRow = React.memo(
     ensureMinGaps = false,
     showFileColumn = false,
     fileDisplayMode = "preview",
+    fileShowAll = false,
     showItemPartyColumn = true,
     isSpendWiseChild = false,
     isSpendWiseGroupFirst = false,
@@ -1188,9 +1221,23 @@ export const TransactionRow = React.memo(
                   triggerClassName="inline-flex cursor-pointer"
                   onPreviewDoubleClick={singlePdfOpen}
                   galleryUrls={rowUrls.length > 1 ? rowUrls : undefined}
-                  preview={<MultiAttachmentPortalPreview urls={rowUrls} />}
+                  preview={<StableAttachmentPortalPreview urls={rowUrls} companyId={company?.id} />}
                 >
-                  <VoucherAttachmentFileIndicator urls={rowUrls} displayMode={fileDisplayMode} aria-label="Has attachment" />
+                  {fileShowAll && fileDisplayMode === "preview" ? (
+                    <span className="inline-flex items-center gap-1">
+                      {rowUrls.map((url, index) => (
+                        <span key={`${url}:${index}`} data-attachment-index={index}>
+                          <VoucherAttachmentFileIndicator
+                            urls={[url]}
+                            displayMode="preview"
+                            aria-label={`Attachment ${index + 1}`}
+                          />
+                        </span>
+                      ))}
+                    </span>
+                  ) : (
+                    <VoucherAttachmentFileIndicator urls={rowUrls} displayMode={fileDisplayMode} aria-label="Has attachment" />
+                  )}
                 </AttachmentHoverPortal>
               );
             })()}
@@ -1538,7 +1585,8 @@ export const TransactionRow = React.memo(
           // Spend-wise blink: animation on Dr/Cr/Balance text only (see shouldAnimateSpendWiseAmountText), not on tr/border.
           // Keep transaction row compact when narration is visible (override default TableCell p-1).
           showNarrationRow && "[&>td]:pt-0.5 [&>td]:pb-0",
-          !showNarrationRow && "md:[&>td]:pb-1",
+          /* No narration: bottom padding so separator stays visible (not covered by next row chrome) */
+          !showNarrationRow && "[&>td]:pb-1",
           showNarration &&
             (narrationText || (!hideStatusColumn && getStatusDetail(transaction, { billWiseOnly: statusBillWiseOnly })))
             ? "border-b-0"

@@ -36,7 +36,7 @@ import BsDatePicker from "../ui/BsDatePicker";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { Staff } from "@/components/staff/types";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
-import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
@@ -54,7 +54,8 @@ import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucher
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import { loadVoucherDataForDeletePreCheck, resolveVoucherDeleteBackdateDate } from "@/lib/voucherDeletePreCheck";
+import { assertCanPerformBackdated, PermissionDeniedError } from "@/lib/permissions/enforcePermission";
 import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { findVoucherInLocalMirrorByNumberAndType } from "@/lib/localCompanyDocMirror";
 import {
@@ -171,7 +172,7 @@ export function CreatePaymentInForm({
   const { formatCurrency, formatDate, dateSystem } = useDate();
   const { vouchers: allVouchers, loading: vouchersLoading, processedParties, processedPartiesForSelection, processedStaff, processedTaxes, processedStaffGroups, processedAccounts, expenseAccounts } = useVouchers();
   const { company, companyId } = useCompany();
-  const { canPerformBackdatedAction, allowAttachments, fileAttachmentLimits, can } = usePermissions();
+  const { canPerformBackdatedAction, allowAttachments, fileAttachmentLimits, can, canDeleteVoucher } = usePermissions();
   const isMobile = useIsMobile();
   const [loading, setLoading] = useState(true);
   const [selectedEntity, setSelectedEntity] = useState<any | null>(null);
@@ -181,6 +182,7 @@ export function CreatePaymentInForm({
   const [isVoucherOpen, setIsVoucherOpen] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
+  const isAttachmentProcessing = useVoucherAttachmentProcessing();
   const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
@@ -332,7 +334,11 @@ export function CreatePaymentInForm({
     }
     
     if (!voucher && !canPerformBackdatedAction("entry", data.date)) {
-      sonnerToast.error("Permission Denied", { description: "You cannot create a voucher for this date based on your role's permissions."});
+      sonnerToast.error("Permission Denied", {
+        description:
+          canPerformBackdatedAction.explain?.("entry", data.date) ??
+          "You cannot create a voucher for this date based on your role's permissions.",
+      });
       return;
     }
 
@@ -550,17 +556,42 @@ export function CreatePaymentInForm({
   }
 
   const handleDelete = async () => {
-    if (!savedVoucherId || !companyId) return;
-    const voucherDoc = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, savedVoucherId));
-    const voucherData = voucherDoc.exists() ? voucherDoc.data() : null;
-    if (voucherData && hasPaymentLinks(voucherData)) {
-      toast({ variant: "destructive", title: "Cannot Delete", description: "First unlink linked transactions." });
+    const voucherIdToDelete = savedVoucherId || voucher?.id || null;
+    if (!voucherIdToDelete || !companyId) return;
+    try {
+      const { voucherData, exists: voucherDocExists } = await loadVoucherDataForDeletePreCheck({
+        companyId,
+        voucherId: voucherIdToDelete,
+        company,
+        fallbackVoucher: (voucher as Record<string, unknown> | null) ?? null,
+        vouchers: null,
+      });
+      if (!canDeleteVoucher(voucherData)) {
+        throw new PermissionDeniedError("You do not have permission to delete records.");
+      }
+      if (voucherData && hasPaymentLinks(voucherData)) {
+        toast({ variant: "destructive", title: "Cannot Delete", description: "First unlink linked transactions." });
+        return;
+      }
+      if (voucherDocExists && voucherData) {
+        const voucherDate = resolveVoucherDeleteBackdateDate(voucherData, {
+          form: "direct_income",
+          companyId,
+          voucherId: voucherIdToDelete,
+        });
+        assertCanPerformBackdated(canPerformBackdatedAction, "delete", voucherDate);
+      }
+    } catch (error) {
+      if (error instanceof PermissionDeniedError) {
+        toast({ variant: "destructive", title: "Permission Denied", description: error.message });
+      } else {
+        toast({ variant: "destructive", title: "Error", description: "Failed to check permissions." });
+      }
       return;
     }
     setIsLoading(true);
     try {
-      // Local/offline compatible delete: voucher ko bin me move karo instead of hard delete.
-      await softDeleteVoucherMoveToRecycleBin(companyId, savedVoucherId, user?.uid || "");
+      await softDeleteVoucherMoveToRecycleBin(companyId, voucherIdToDelete, user?.uid || "");
       toast({ title: "Voucher Moved to Bin", description: "The voucher has been moved to recycle bin." });
       onVoucherUpdated?.();
     } catch (error) {
@@ -980,7 +1011,7 @@ export function CreatePaymentInForm({
                     Save & New
                 </Button>
               )}
-              <Button type="submit" disabled={isLoading || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+              <Button type="submit" disabled={isLoading || isAttachmentProcessing || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save
               </Button>

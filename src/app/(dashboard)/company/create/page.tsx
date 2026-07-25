@@ -35,6 +35,10 @@ function CreateCompanyPageContent() {
   /** Jab koi company pehle se hai tab dialog band kar sakte hain (select page par wapas). */
   const [userHasCompanies, setUserHasCompanies] = useState(false);
   const skipCloseRedirectRef = useRef(false);
+  /** Pehli hydrate ke baad `companyContextLoading` dubara flip par create dialog mat kholo. */
+  const initialHydrateDoneRef = useRef(false);
+  /** Save success ke baad loading spinner / dialog re-open band — dashboard par navigate ho chuka ho. */
+  const createCompletedRef = useRef(false);
 
   /** Create-company precheck: hidden-tab/deleted companies ko active company-count me include mat karo. */
   const isVisibleCompanyRow = (row: { isDeleted?: unknown; movedToAdminRecycleAt?: unknown }) =>
@@ -49,14 +53,17 @@ function CreateCompanyPageContent() {
 
   // Hydrate: /company/create par pehli baar loading ke baad create dialog kholo — `allCompanies` yahan dependency me nahi (re-open bug).
   useEffect(() => {
+    if (createCompletedRef.current) return;
+
     if (isLocalOnlyMode()) {
       registerCompanyPickerFirestoreDetach(null);
       // Local-first: jab tak SQLite/registry load ho rahi ho wait karo.
       if (authLoading || companyContextLoading) {
-        setCheckingCompanies(true);
+        if (!initialHydrateDoneRef.current) setCheckingCompanies(true);
         return;
       }
       setCheckingCompanies(false);
+      initialHydrateDoneRef.current = true;
       setIsDialogOpen(true);
       return;
     }
@@ -69,12 +76,13 @@ function CreateCompanyPageContent() {
       return;
     }
 
-    setCheckingCompanies(true);
+    if (!initialHydrateDoneRef.current) setCheckingCompanies(true);
     let settled = false;
     const setSettled = (hasCompanies: boolean) => {
-      if (settled) return;
+      if (settled || createCompletedRef.current) return;
       settled = true;
       setCheckingCompanies(false);
+      initialHydrateDoneRef.current = true;
       setUserHasCompanies(hasCompanies);
       setIsDialogOpen(true);
     };
@@ -151,9 +159,11 @@ function CreateCompanyPageContent() {
   const explicitReturnTo = searchParams.get("returnTo")?.trim();
 
   const handleCompanyCreated = (companyId: string) => {
+    createCompletedRef.current = true;
     skipCloseRedirectRef.current = true;
     setCompanyId(companyId);
     setIsDialogOpen(false);
+    setCheckingCompanies(false);
     if (explicitReturnTo) {
       const path = explicitReturnTo.startsWith("/") ? explicitReturnTo : `/${explicitReturnTo}`;
       router.replace(path);

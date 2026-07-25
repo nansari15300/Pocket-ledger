@@ -35,7 +35,7 @@ import {
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { pruneRememberedLoginEmailIfDisabled } from "@/lib/loginRememberEmail";
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, startTransition } from 'react';
 import { doc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
 import { isSuppressibleNewTransactionAlert } from "@/lib/transactionAlerts";
 import {
@@ -88,7 +88,11 @@ import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isAdminPanelNavVisible } from "@/lib/adminDevPreview";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+import { disarmDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
 import { AppSidebarZoomControls } from "@/components/layout/AppSidebarZoomControls";
+import { FirebaseLedgerDataSyncSidebarSwitch } from "@/components/layout/FirebaseLedgerDataSyncSidebarSwitch";
+import { FirebaseLedgerSyncModeSwitch } from "@/components/layout/FirebaseLedgerSyncModeSwitch";
 
 
 type MenuItem = {
@@ -182,26 +186,44 @@ export function AppSidebar() {
     processedItems,
   } = useVouchers();
   const { isOpen, isMobile, setIsOpen } = useSidebar();
-  /** Static/Capacitor: sirf <Link> se route kabhi load nahi hota — router.push se SPA navigation pakka */
-  const isStaticApp = isStaticAppBuild();
+  /**
+   * EXE / APK / iOS / static export: plain <Link> soft-nav kabhi fail / redirect-guard se undo.
+   * Client `router.push|replace` + pehle guard disarm — DashboardStatCardTxnLink jaisa.
+   */
+  const useEmbeddedClientNav =
+    isStaticAppBuild() || isCapacitorNativeApp() || isElectronDesktopApp();
   const showNativeZoomControls = isCapacitorNativeApp();
-  const onNavLinkClick = useCallback(
-    (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
-      if (isStaticApp) {
-        e.preventDefault();
-        const pathnameOnly = href.split("?")[0]?.split("#")[0] ?? href;
-        const routeKey = masterDetailRouteKeyFromPath(pathnameOnly);
+  const navigateSidebarHref = useCallback(
+    (href: string) => {
+      // Voucher save / online-resume guard warna intentional /dashboard click ko wapas undo kar deta tha.
+      disarmDashboardRedirectGuard();
+      const pathnameOnly = href.split("?")[0]?.split("#")[0] ?? href;
+      const routeKey = masterDetailRouteKeyFromPath(pathnameOnly);
+      // startTransition: nav pehle paint; SQLite/aggregate background me — 2–4s freeze feel kam.
+      startTransition(() => {
         if (routeKey) {
           // Entity sidebar: list-only + replace — push stack (bank→party) hardware back galat page khole
           markMasterDetailSidebarListNav(routeKey);
           router.replace(appNavHref(masterDetailListHref(routeKey)), { scroll: false });
         } else {
-          router.push(appNavHref(href));
+          router.push(appNavHref(href), { scroll: false });
         }
+      });
+      if (isMobile) setIsOpen(false);
+    },
+    [router, isMobile, setIsOpen]
+  );
+  const onNavLinkClick = useCallback(
+    (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
+      if (useEmbeddedClientNav) {
+        e.preventDefault();
+        e.stopPropagation();
+        navigateSidebarHref(href);
+        return;
       }
       if (isMobile) setIsOpen(false);
     },
-    [isStaticApp, router, isMobile, setIsOpen]
+    [useEmbeddedClientNav, navigateSidebarHref, isMobile, setIsOpen]
   );
   const [featureConfig, setFeatureConfig] = useState<Record<string, boolean> | null>(null);
   const defaultFeatureConfig = useMemo(() => {
@@ -498,7 +520,7 @@ export function AppSidebar() {
   }, [user?.email]);
   const isAdmin = customUser?.role === "SuperAdmin" || isSuperAdminByEmail;
   /** Static EXE/APK: `/admin` bundle me nahi; localhost `npm run dev` par test ke liye dikhao */
-  const showAdminNavLink = isAdminPanelNavVisible(isAdmin, isStaticApp);
+  const showAdminNavLink = isAdminPanelNavVisible(isAdmin, isStaticAppBuild());
   
   // Default to showing when not explicitly off (so ticked/default = show without needing save). Alerts only for company owner.
   const transactionAlerts = effectiveNotificationSettings?.transactionAlerts;
@@ -565,30 +587,44 @@ export function AppSidebar() {
     const showPendingBadge = pendingCount > 0;
     const tooltipText =
       pendingCount > 0 ? `${item.label} (${pendingCount} pending approval)` : item.label;
+    const navHref = appNavHref(item.href);
+    const button = (
+      <SidebarMenuButton isActive={isMenuItemActive(item)} tooltip={tooltipText} data-theme-nav={item.id}>
+        <span className="relative flex shrink-0 items-center justify-center [&_svg]:size-5">
+          <item.icon />
+          {showPendingBadge && (
+            <span className="absolute top-0 right-0 h-4 min-w-[1rem] translate-x-1/2 -translate-y-1/2 rounded-full bg-pink-500 px-1 text-[10px] font-medium text-white flex items-center justify-center">
+              {pendingCount}
+            </span>
+          )}
+        </span>
+        {isOpen && (
+          <span className="flex min-w-0 flex-1 items-center gap-1">
+            <span className="truncate">{item.label}</span>
+            {item.id === "reports" ? (
+              <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] leading-none">
+                Experimental
+              </Badge>
+            ) : null}
+          </span>
+        )}
+      </SidebarMenuButton>
+    );
     return (
       <SidebarMenuItem key={item.href}>
-        <Link prefetch={false} href={appNavHref(item.href)} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
-          <SidebarMenuButton isActive={isMenuItemActive(item)} tooltip={tooltipText} data-theme-nav={item.id}>
-            <span className="relative flex shrink-0 items-center justify-center [&_svg]:size-5">
-              <item.icon />
-              {showPendingBadge && (
-                <span className="absolute top-0 right-0 h-4 min-w-[1rem] translate-x-1/2 -translate-y-1/2 rounded-full bg-pink-500 px-1 text-[10px] font-medium text-white flex items-center justify-center">
-                  {pendingCount}
-                </span>
-              )}
-            </span>
-            {isOpen && (
-              <span className="flex min-w-0 flex-1 items-center gap-1">
-                <span className="truncate">{item.label}</span>
-                {item.id === "reports" ? (
-                  <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] leading-none">
-                    Experimental
-                  </Badge>
-                ) : null}
-              </span>
-            )}
-          </SidebarMenuButton>
-        </Link>
+        {useEmbeddedClientNav ? (
+          <button
+            type="button"
+            className="w-full text-left appearance-none bg-transparent p-0 border-0 cursor-pointer"
+            onClick={() => navigateSidebarHref(item.href)}
+          >
+            {button}
+          </button>
+        ) : (
+          <Link prefetch={false} href={navHref} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
+            {button}
+          </Link>
+        )}
       </SidebarMenuItem>
     );
   }
@@ -596,21 +632,35 @@ export function AppSidebar() {
   function renderBottomNavRow(item: MenuItem) {
     const badgeCount = item.id === "settings" ? pendingHandovers : item.id === "messages" ? messagesBadgeCount : 0;
     const showBadge = badgeCount > 0;
+    const navHref = appNavHref(item.href);
+    const button = (
+      <SidebarMenuButton isActive={isMenuItemActive(item)} tooltip={item.label} data-theme-nav={item.id}>
+        <span className="relative flex shrink-0 items-center justify-center [&_svg]:size-5">
+          <item.icon />
+          {showBadge && (
+            <span className={messagesSidebarNavBadgeClassName}>
+              {badgeCount > 99 ? "99+" : badgeCount}
+            </span>
+          )}
+        </span>
+        {isOpen && <span className="flex-1 truncate">{item.label}</span>}
+      </SidebarMenuButton>
+    );
     return (
       <SidebarMenuItem key={item.href}>
-        <Link prefetch={false} href={appNavHref(item.href)} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
-          <SidebarMenuButton isActive={isMenuItemActive(item)} tooltip={item.label} data-theme-nav={item.id}>
-            <span className="relative flex shrink-0 items-center justify-center [&_svg]:size-5">
-              <item.icon />
-              {showBadge && (
-                <span className={messagesSidebarNavBadgeClassName}>
-                  {badgeCount > 99 ? "99+" : badgeCount}
-                </span>
-              )}
-            </span>
-            {isOpen && <span className="flex-1 truncate">{item.label}</span>}
-          </SidebarMenuButton>
-        </Link>
+        {useEmbeddedClientNav ? (
+          <button
+            type="button"
+            className="w-full text-left appearance-none bg-transparent p-0 border-0 cursor-pointer"
+            onClick={() => navigateSidebarHref(item.href)}
+          >
+            {button}
+          </button>
+        ) : (
+          <Link prefetch={false} href={navHref} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
+            {button}
+          </Link>
+        )}
       </SidebarMenuItem>
     );
   }
@@ -707,16 +757,33 @@ export function AppSidebar() {
                     ))}
                     {showAdminNavLink && (
                       <SidebarMenuItem>
-                        <Link prefetch={false} href={appNavHref("/admin")} onClick={(e) => onNavLinkClick(e, "/admin")}>
-                          <SidebarMenuButton
-                            isActive={pathname.startsWith("/admin".replace(/\/$/, ""))}
-                            tooltip="Admin Panel"
-                            data-theme-nav="admin"
+                        {useEmbeddedClientNav ? (
+                          <button
+                            type="button"
+                            className="w-full text-left appearance-none bg-transparent p-0 border-0 cursor-pointer"
+                            onClick={() => navigateSidebarHref("/admin")}
                           >
-                            <Shield />
-                            {isOpen && <span>Admin Panel</span>}
-                          </SidebarMenuButton>
-                        </Link>
+                            <SidebarMenuButton
+                              isActive={pathname.startsWith("/admin".replace(/\/$/, ""))}
+                              tooltip="Admin Panel"
+                              data-theme-nav="admin"
+                            >
+                              <Shield />
+                              {isOpen && <span>Admin Panel</span>}
+                            </SidebarMenuButton>
+                          </button>
+                        ) : (
+                          <Link prefetch={false} href={appNavHref("/admin")} onClick={(e) => onNavLinkClick(e, "/admin")}>
+                            <SidebarMenuButton
+                              isActive={pathname.startsWith("/admin".replace(/\/$/, ""))}
+                              tooltip="Admin Panel"
+                              data-theme-nav="admin"
+                            >
+                              <Shield />
+                              {isOpen && <span>Admin Panel</span>}
+                            </SidebarMenuButton>
+                          </Link>
+                        )}
                       </SidebarMenuItem>
                     )}
                   </SidebarMenu>
@@ -730,6 +797,10 @@ export function AppSidebar() {
                 {isOpen ? (
                   <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Account</p>
                 ) : null}
+                <div className="mb-0.5 space-y-0.5">
+                  <FirebaseLedgerDataSyncSidebarSwitch sidebarOpen={isOpen} />
+                  <FirebaseLedgerSyncModeSwitch sidebarOpen={isOpen} />
+                </div>
                 <SidebarMenu className="gap-0.5 py-1">{visibleBottomMenuItems.map(renderBottomNavRow)}</SidebarMenu>
               </div>
               {/* User request: profile/user card ko green tone me dikhana */}
@@ -742,4 +813,3 @@ export function AppSidebar() {
   );
 }
 
-    

@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
-import { devPlLocalServerHandle, isDevPlLocalServerEnabled } from "@/lib/devPlLocalServer/nodeBridge";
+import {
+  devPlLocalServerHandle,
+  isDevPlLocalServerEnabledForRequest,
+} from "@/lib/devPlLocalServer/nodeBridge";
 
 export async function POST(req: Request) {
-  if (!isDevPlLocalServerEnabled()) {
+  const requestAllowed = isDevPlLocalServerEnabledForRequest(req);
+  if (!requestAllowed) {
     return NextResponse.json({ error: "Not available outside development" }, { status: 403 });
   }
   try {
@@ -12,7 +16,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing action" }, { status: 400 });
     }
     const { action: _a, ...rest } = body;
-    const result = await devPlLocalServerHandle(action, rest);
+    const result = await devPlLocalServerHandle(action, rest, { requestAllowed });
     return NextResponse.json(result);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

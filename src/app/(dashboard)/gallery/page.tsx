@@ -660,8 +660,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
         return (
           u.startsWith("data:application/pdf") ||
           getAttachmentFormatLabel(u) === "PDF" ||
-          u.split("?")[0].toLowerCase().endsWith(".pdf") ||
-          isLocalFileRef(u)
+          u.split("?")[0].toLowerCase().endsWith(".pdf")
         );
       }),
     [paginatedCompanyRows]
@@ -701,6 +700,9 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
 
   useEffect(() => {
     if (!mounted) return;
+    if (!hasPdfToPrewarmOnPage) {
+      return;
+    }
     const ac = new AbortController();
     const entries = paginatedCompanyRows.map(({ item, url, fileIndex }) => {
       const meta = getVoucherAttachmentMeta(item, url, fileIndex, companyId);
@@ -708,7 +710,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
     });
 
     void (async () => {
-      if (hasPdfToPrewarmOnPage) setPdfPrewarmLoading(true);
+      setPdfPrewarmLoading(true);
       try {
         await prewarmPdfThumbnailsForGallery(entries, ac.signal);
       } finally {
@@ -1760,13 +1762,16 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
 
   useEffect(() => {
     if (!isHydrated) return;
+    if (!hasPdfToPrewarmUnassignedPage) {
+      return;
+    }
     const ac = new AbortController();
     const entries = paginatedUnassignedFiles.map((f) => ({
       url: f.url,
       storagePath: f.path || tryGetStoragePathFromFirebaseDownloadUrl(f.url) || undefined,
     }));
     void (async () => {
-      if (hasPdfToPrewarmUnassignedPage) setPdfPrewarmLoading(true);
+      setPdfPrewarmLoading(true);
       try {
         await prewarmPdfThumbnailsForGallery(entries, ac.signal);
       } finally {
@@ -2298,9 +2303,12 @@ function GalleryPageContent() {
     setIsEditVoucherOpen(open);
     if (!open) {
       setVoucherToEdit(null);
-      // Pop the state we pushed when opening (so back-stack stays clean)
+      // Save/close must stay on Gallery. `history.back()` can jump to Dashboard if
+      // Gallery was opened from there and the modal state is not the top entry.
       if (typeof window !== "undefined" && window.history.state?.galleryEditModal) {
-        window.history.back();
+        const nextState = { ...window.history.state };
+        delete nextState.galleryEditModal;
+        window.history.replaceState(nextState, "", window.location.href);
       }
     }
   };
@@ -2362,6 +2370,7 @@ function GalleryPageContent() {
           onOpenChange={handleDialogClose}
           voucher={undefined} // Force "new" mode
           defaultVoucherData={defaultVoucherData}
+          suppressDashboardRedirectGuard
           onVoucherAction={() => {}} 
         />
         {/* Dialog for editing existing voucher */}
@@ -2369,7 +2378,18 @@ function GalleryPageContent() {
           isOpen={isEditVoucherOpen}
           onOpenChange={handleEditDialogClose}
           voucher={voucherToEdit}
-          onVoucherAction={() => {}} 
+          suppressDashboardRedirectGuard
+          onVoucherAction={(status: string) => {
+            if (status === "saved") {
+              setIsEditVoucherOpen(false);
+              setVoucherToEdit(null);
+              if (typeof window !== "undefined") {
+                const nextState = { ...(window.history.state || {}) };
+                delete nextState.galleryEditModal;
+                window.history.replaceState(nextState, "", window.location.href);
+              }
+            }
+          }}
         />
     </div>
   );

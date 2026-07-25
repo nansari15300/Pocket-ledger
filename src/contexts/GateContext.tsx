@@ -11,10 +11,14 @@ import React, {
 } from "react";
 import type { Company } from "@/hooks/useCompany";
 import {
+  ACTIVE_GATE_STORAGE_KEY,
+  GATE_STORAGE_KEY,
   PL_GATE_CHANGED_EVENT,
   type GateRecord,
   type GateStatus,
 } from "@/lib/gates/gateTypes";
+import { dispatchGateChanged } from "@/lib/gates/gateRuntime";
+import { installGateCrossTabSyncHooks } from "@/lib/gates/gateCrossTabSync";
 import {
   addLocalServerGate,
   buildDefaultGates,
@@ -26,6 +30,8 @@ import {
   updateGate,
   updateLocalServerGate,
   writeActiveGateId,
+  writeGateTransportUrl,
+  resolveGateServerTransportUrl,
 } from "@/lib/gates/gateStore";
 import { defaultBuiltinGateId } from "@/lib/gates/gateClientKind";
 import {
@@ -37,10 +43,13 @@ import {
   navigateToBundledDeviceGate,
   navigateToLocalServerGate,
   refreshActiveLocalServerGateContext,
+  registerElectronRemoteGateOrigin,
 } from "@/lib/gates/gateRuntime";
-import { fetchGateServerAccessContext } from "@/lib/gates/gateServerFetch";
+import { testPlServerGateConnection } from "@/lib/gates/gateServerFetch";
 import { applyPlServerAccessContextPayload, clearPlServerGatePreview } from "@/lib/plServerAccessContext";
 import { ensureWebDefaultOnlineGate } from "@/lib/gates/gateClientDefaults";
+import { plGateTrace } from "@/lib/plGateTrace";
+import { isAppUiOrigin } from "@/lib/plGatePageOrigin";
 
 type GateContextValue = {
   gates: GateRecord[];
@@ -80,13 +89,14 @@ export function GateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    installGateCrossTabSyncHooks();
     ensureDefaultGates();
     ensureWebDefaultOnlineGate();
     setGates(listGates());
     const gate = getActiveGate();
     setActiveGateIdState(gate.id);
     applyActiveGateRuntime(gate);
-    if (gate.type === "local_server") {
+    if (gate.type === "local_server" && !isAppUiOrigin()) {
       void refreshActiveLocalServerGateContext(gate);
     }
   }, []);
@@ -95,6 +105,15 @@ export function GateProvider({ children }: { children: ReactNode }) {
     const onChange = () => refreshGates();
     window.addEventListener(PL_GATE_CHANGED_EVENT, onChange);
     return () => window.removeEventListener(PL_GATE_CHANGED_EVENT, onChange);
+  }, [refreshGates]);
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== GATE_STORAGE_KEY && event.key !== ACTIVE_GATE_STORAGE_KEY) return;
+      refreshGates();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, [refreshGates]);
 
   const activeGate = useMemo(() => {
@@ -113,7 +132,7 @@ export function GateProvider({ children }: { children: ReactNode }) {
       const gate = activateGate(id);
       setActiveGateIdState(gate.id);
       setGates(listGates());
-      if (gate.type === "local_server") {
+      if (gate.type === "local_server" && !isAppUiOrigin()) {
         void refreshActiveLocalServerGateContext(gate);
       }
     },
@@ -124,6 +143,7 @@ export function GateProvider({ children }: { children: ReactNode }) {
     (input: { label: string; serverUrl: string; accessToken: string }) => {
       const gate = addLocalServerGate(input);
       refreshGates();
+      dispatchGateChanged();
       return gate;
     },
     [refreshGates]
@@ -133,6 +153,7 @@ export function GateProvider({ children }: { children: ReactNode }) {
     (id: string, input: { label: string; serverUrl: string; accessToken?: string }) => {
       const gate = updateLocalServerGate(id, input);
       refreshGates();
+      dispatchGateChanged();
       return gate;
     },
     [refreshGates]
@@ -142,7 +163,10 @@ export function GateProvider({ children }: { children: ReactNode }) {
     (id: string) => {
       clearPlServerGatePreview(id);
       const ok = deleteGate(id);
-      if (ok) refreshGates();
+      if (ok) {
+        refreshGates();
+        dispatchGateChanged();
+      }
       return ok;
     },
     [refreshGates]
@@ -152,39 +176,35 @@ export function GateProvider({ children }: { children: ReactNode }) {
     (id: string, label: string) => {
       updateGate(id, { label });
       refreshGates();
+      dispatchGateChanged();
     },
     [refreshGates]
   );
 
   const testLocalServerGate = useCallback(async (id: string) => {
     const gate = listGates().find((g) => g.id === id);
+    plGateTrace("gate_test_start", { gateId: id, serverUrl: gate?.serverUrl ?? null, mode: "ping_only" });
     if (!gate || gate.type !== "local_server" || !gate.serverUrl) {
       return { ok: false, message: "Gate not found" };
     }
-    const ctx = await fetchGateServerAccessContext(gate.serverUrl, gate.accessToken || "");
-    const status: GateStatus = ctx.error ? "error" : "online";
+    const result = await testPlServerGateConnection(gate.serverUrl, { timeoutMs: 15_000 });
+    plGateTrace("gate_test_ping_result", result);
+    writeGateTransportUrl(id, result.transportUrl || resolveGateServerTransportUrl(gate) || gate.serverUrl);
+    registerElectronRemoteGateOrigin(
+      result.transportUrl || resolveGateServerTransportUrl(gate) || gate.serverUrl
+    );
+    const status: GateStatus = result.ok ? "online" : "error";
     updateGate(id, {
       lastStatus: status,
-      lastError: ctx.error,
+      lastError: result.ok ? undefined : result.message,
       lastTestedAtMs: Date.now(),
     });
     refreshGates();
-    if (ctx.error) return { ok: false, message: ctx.error };
-    if (gate.accessToken?.trim()) {
-      const { persistDevClientAccessToken } = await import("@/lib/plServerAccessContext");
-      persistDevClientAccessToken(gate.accessToken.trim());
-    }
-    const payload = {
-      unrestricted: ctx.unrestricted,
-      allowedCompanyIds: ctx.allowedCompanyIds,
-      label: ctx.label ?? undefined,
-      companies: ctx.companies ?? undefined,
+    if (!result.ok) return { ok: false, message: result.message };
+    return {
+      ok: true,
+      message: `${result.message}. Tap Open gate to load companies.`,
     };
-    applyPlServerAccessContextPayload(payload, id);
-    const { countPlServerAccessContextCompanies } = await import("@/lib/plServerAccessContext");
-    const count = countPlServerAccessContextCompanies(payload);
-    const label = ctx.label ? ` (${ctx.label})` : "";
-    return { ok: true, message: `Connected${label} — ${count} companies allowed` };
   }, [refreshGates]);
 
   const connectLocalServerGate = useCallback(

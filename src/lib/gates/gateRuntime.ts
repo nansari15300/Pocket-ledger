@@ -9,18 +9,21 @@ import {
   type DataSourceMode,
 } from "@/lib/dataSourceModeDefaults";
 import {
+  isPlHubServerClientMode,
+  clearPlHubServerClientMode,
   clearPlRemoteServerClientMode,
   isPlRemoteServerClientMode,
+  isPlServerGateClientActive,
+  markPlHubServerClientMode,
   markPlRemoteServerClientMode,
 } from "@/lib/plRemoteServerClient";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
-import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isEmbeddedMobileShell } from "@/lib/isCapacitorNative";
 import {
   clearPlServerAccessContext,
   applyPlServerAccessContextPayload,
   filterCompaniesForPlServerAccess,
   buildPlServerGatePreviewCompanyList,
-  readDevClientAccessToken,
   persistDevClientAccessToken,
   isPlServerSharedCompanyRow,
 } from "@/lib/plServerAccessContext";
@@ -31,18 +34,24 @@ import {
   PL_GATE_CHANGED_EVENT,
   type GateRecord,
 } from "@/lib/gates/gateTypes";
-import { getActiveGate, writeActiveGateId } from "@/lib/gates/gateStore";
+import { getActiveGate, normalizeServerUrl, updateGate, writeActiveGateId, writeGateTransportUrl, resolveGateServerTransportUrl } from "@/lib/gates/gateStore";
 import {
   buildLocalServerConnectUrl,
   fetchGateServerAccessContext,
+  resolvePlSharingTransportUrl,
   type GateServerAccessContext,
 } from "@/lib/gates/gateServerFetch";
+import { isAppUiOrigin } from "@/lib/plGatePageOrigin";
 
 const LOCAL_API_BASE_KEY = "localApiBaseUrl";
 
-export function dispatchGateChanged(): void {
+export function dispatchGateChanged(options?: { skipCrossTab?: boolean }): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new Event(PL_GATE_CHANGED_EVENT));
+  if (options?.skipCrossTab) return;
+  void import("@/lib/gates/gateCrossTabSync")
+    .then(({ publishGateStoreSnapshotToElectron }) => publishGateStoreSnapshotToElectron())
+    .catch(() => undefined);
 }
 
 function setDataSourceMode(mode: DataSourceMode): void {
@@ -66,6 +75,23 @@ function persistGateAccessToken(token: string): void {
   }
 }
 
+type PlElectronGateBridge = {
+  setRemoteAuth?: (serverUrl: string, accessToken: string) => { ok?: boolean };
+};
+
+/** EXE staff client: remote gate origin register — webRequest PL headers + LAN fetch routing. */
+export function registerElectronRemoteGateOrigin(serverUrlRaw: string): void {
+  if (typeof window === "undefined" || !isElectronDesktopApp()) return;
+  const url = normalizeServerUrl(serverUrlRaw);
+  if (!url) return;
+  try {
+    const bridge = (window as Window & { plElectronGate?: PlElectronGateBridge }).plElectronGate;
+    bridge?.setRemoteAuth?.(url, "");
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Apply active gate to runtime (data source, tokens, remote client flags). */
 export function applyActiveGateRuntime(gate: GateRecord): void {
   if (typeof window === "undefined") return;
@@ -73,6 +99,7 @@ export function applyActiveGateRuntime(gate: GateRecord): void {
   switch (gate.type) {
     case "device":
       clearPlRemoteServerClientMode();
+      clearPlHubServerClientMode();
       clearPlServerAccessContext();
       persistGateAccessToken("");
       setDataSourceMode("local");
@@ -80,14 +107,18 @@ export function applyActiveGateRuntime(gate: GateRecord): void {
       break;
     case "online":
       clearPlRemoteServerClientMode();
+      clearPlHubServerClientMode();
       clearPlServerAccessContext();
       persistGateAccessToken("");
       setDataSourceMode("firebase");
       break;
     case "local_server": {
-      const token = (gate.accessToken || "").trim();
-      persistGateAccessToken(token);
-      if (gate.serverUrl) setLocalApiBaseUrl(gate.serverUrl);
+      persistGateAccessToken("");
+      if (gate.serverUrl) {
+        const transportUrl = resolveGateServerTransportUrl(gate);
+        setLocalApiBaseUrl(transportUrl || gate.serverUrl);
+        registerElectronRemoteGateOrigin(transportUrl || gate.serverUrl);
+      }
       setDataSourceMode("local");
       break;
     }
@@ -109,17 +140,19 @@ export async function refreshActiveLocalServerGateContext(
   gate: GateRecord
 ): Promise<GateServerAccessContext | null> {
   if (gate.type !== "local_server" || !gate.serverUrl) return null;
-  const ctx = await fetchGateServerAccessContext(gate.serverUrl, gate.accessToken || "");
+  const fetchUrl = resolveGateServerTransportUrl(gate) || gate.serverUrl;
+  const ctx = await fetchGateServerAccessContext(fetchUrl, "", { timeoutMs: 15_000 });
   if (!ctx.error) {
-    applyPlServerAccessContextPayload(
-      {
-        unrestricted: ctx.unrestricted,
-        allowedCompanyIds: ctx.allowedCompanyIds,
-        label: ctx.label ?? undefined,
-        companies: ctx.companies ?? undefined,
-      },
-      gate.id
-    );
+    const payload = {
+      unrestricted: ctx.unrestricted,
+      allowedCompanyIds: ctx.allowedCompanyIds,
+      label: ctx.label ?? undefined,
+      companies: ctx.companies ?? undefined,
+    };
+    applyPlServerAccessContextPayload(payload, gate.id);
+    await import("@/lib/plServerGateCleanup")
+      .then((m) => m.pruneLocalServerGateCompaniesFromAccessPayload(gate, payload))
+      .catch(() => ({ removedIds: [], skipped: true }));
     dispatchGateChanged();
   } else if (/invalid|missing token|403/i.test(ctx.error)) {
     clearPlServerAccessContext();
@@ -134,77 +167,115 @@ export async function activateLocalServerGateOnBundledClient(
   if (gate.type !== "local_server" || !gate.serverUrl) {
     return { ok: false, message: "Invalid server gate" };
   }
-  const token = resolveLocalServerGateAccessToken(gate);
-  if (!token) {
+  const { resolvePlSharingServerUrlForGate } = await import("@/lib/gates/gateServerFetch");
+  const resolved = await resolvePlSharingServerUrlForGate(gate.serverUrl, "", { timeoutMs: 15_000 });
+  const transportUrl = resolvePlSharingTransportUrl(resolved, gate.serverUrl);
+  writeGateTransportUrl(gate.id, transportUrl);
+  persistDevClientAccessToken("");
+  const tokenlessGate: GateRecord = { ...gate, accessToken: "" };
+  registerElectronRemoteGateOrigin(transportUrl);
+  writeActiveGateId(gate.id);
+  applyActiveGateRuntime(tokenlessGate);
+  const ctx =
+    resolved.accessContext && !resolved.accessContext.error
+      ? resolved.accessContext
+      : await refreshActiveLocalServerGateContext(tokenlessGate);
+  if (ctx?.error) return { ok: false, message: ctx.error };
+  if (ctx && !ctx.error) {
+    applyPlServerAccessContextPayload(
+      {
+        unrestricted: ctx.unrestricted,
+        allowedCompanyIds: ctx.allowedCompanyIds,
+        label: ctx.label ?? null,
+        companies: ctx.companies ?? null,
+      },
+      gate.id
+    );
+  }
+  const { syncPlServerGateToLocalSqlite } = await import("@/lib/plServerClientCompanyDelta");
+  await syncPlServerGateToLocalSqlite(tokenlessGate, { pullFullLedger: true }).catch(() => undefined);
+  dispatchGateChanged();
+  if (!resolved.capable) {
     return {
-      ok: false,
-      message: "Missing access token — edit this gate and paste the token from the server PC.",
+      ok: true,
+      message:
+        "Gate connected. If vouchers stay empty, use host sharing port 3001 (not app UI 3000) and keep Server sharing ON.",
     };
   }
-  persistDevClientAccessToken(token);
-  writeActiveGateId(gate.id);
-  applyActiveGateRuntime({ ...gate, accessToken: token || gate.accessToken });
-  const ctx = await refreshActiveLocalServerGateContext({ ...gate, accessToken: token || gate.accessToken });
-  if (ctx?.error) return { ok: false, message: ctx.error };
-  const { mirrorPlServerGateToLocalSqlite } = await import("@/lib/plServerClientCompanyMirror");
-  await mirrorPlServerGateToLocalSqlite(
-    { ...gate, accessToken: token || gate.accessToken },
-    { pullFullLedger: false }
-  ).catch(() => undefined);
-  dispatchGateChanged();
   return { ok: true };
 }
 
-/** Web browser: activate server gate in-place — no full-page redirect to host URL. */
+/** Web browser hub: server gate activate in-place — relay se, sharing URL par navigate mat. */
 export async function activateLocalServerGateOnWebClient(
   gate: GateRecord
 ): Promise<{ ok: boolean; message?: string }> {
   if (gate.type !== "local_server" || !gate.serverUrl) {
     return { ok: false, message: "Invalid server gate" };
   }
-  const token = resolveLocalServerGateAccessToken(gate);
-  if (!token) {
-    return {
-      ok: false,
-      message: "Missing access token — edit this gate and paste the token from the server owner.",
-    };
+  if (isPlHubServerClientMode() && getActiveGate().id === gate.id) {
+    const ctx = await refreshActiveLocalServerGateContext(gate);
+    if (ctx?.error) return { ok: false, message: ctx.error };
+    dispatchGateChanged();
+    return { ok: true };
   }
-  persistDevClientAccessToken(token);
+  const { resolvePlSharingServerUrlForGate } = await import("@/lib/gates/gateServerFetch");
+  const resolved = await resolvePlSharingServerUrlForGate(gate.serverUrl, "", { timeoutMs: 15_000 });
+  const transportUrl = resolvePlSharingTransportUrl(resolved, gate.serverUrl);
+  writeGateTransportUrl(gate.id, transportUrl);
+  persistDevClientAccessToken("");
+  const tokenlessGate: GateRecord = { ...gate, accessToken: "" };
+  registerElectronRemoteGateOrigin(transportUrl);
   writeActiveGateId(gate.id);
-  applyActiveGateRuntime({ ...gate, accessToken: token || gate.accessToken });
-  const ctx = await refreshActiveLocalServerGateContext({ ...gate, accessToken: token || gate.accessToken });
+  markPlHubServerClientMode();
+  applyActiveGateRuntime(tokenlessGate);
+  const ctx =
+    resolved.accessContext && !resolved.accessContext.error
+      ? resolved.accessContext
+      : await refreshActiveLocalServerGateContext(tokenlessGate);
   if (ctx?.error) return { ok: false, message: ctx.error };
+  if (ctx && !ctx.error) {
+    applyPlServerAccessContextPayload(
+      {
+        unrestricted: ctx.unrestricted,
+        allowedCompanyIds: ctx.allowedCompanyIds,
+        label: ctx.label ?? null,
+        companies: ctx.companies ?? null,
+      },
+      gate.id
+    );
+  }
   dispatchGateChanged();
   return { ok: true };
 }
 
-function shouldOpenLocalServerGateInSameBrowserTab(): boolean {
-  if (typeof window === "undefined") return false;
-  return !isElectronDesktopApp() && !isCapacitorNativeApp();
+/** PLServer gates are token-free; stale saved tokens must not be sent. */
+export function resolveLocalServerGateAccessToken(_gate: GateRecord): string {
+  return "";
 }
 
-type PlElectronGateBridge = {
-  setRemoteAuth?: (serverUrl: string, accessToken: string) => { ok?: boolean };
-};
-
-/** Gate record + session me saved token — connect URL me hamesha bhejo. */
-export function resolveLocalServerGateAccessToken(gate: GateRecord): string {
-  return (gate.accessToken || "").trim() || readDevClientAccessToken();
-}
-
-/** Open remote server in WebView (APK/EXE) or in-place on web (localhost / pocket-ledger.com). */
+/** Hub / EXE app UI: server company in-place unlock — sharing URL par navigate mat. */
 export function navigateToLocalServerGate(gate: GateRecord, companyId?: string): void {
   if (gate.type !== "local_server" || !gate.serverUrl) return;
-  const token = resolveLocalServerGateAccessToken(gate);
-  if (token) persistDevClientAccessToken(token);
-  applyActiveGateRuntime({ ...gate, accessToken: token || gate.accessToken });
-  writeActiveGateId(gate.id);
-  if (shouldOpenLocalServerGateInSameBrowserTab()) {
-    dispatchGateChanged();
+  if (!isEmbeddedMobileShell()) {
+    void import("@/lib/plGatePageOrigin").then(({ isAppUiOrigin }) => {
+      if (isAppUiOrigin() && !isPlRemoteServerClientMode()) {
+        void activateLocalServerGateOnWebClient(gate).catch(() => undefined);
+        return;
+      }
+      void import("@/lib/plServerCompanySelectNavigate").then(({ openPlServerGateConnectUrl }) => {
+        void openPlServerGateConnectUrl(gate, companyId);
+      });
+    });
     return;
   }
+  const token = resolveLocalServerGateAccessToken(gate);
+  persistDevClientAccessToken(token);
+  const tokenlessGate = { ...gate, accessToken: "" };
+  applyActiveGateRuntime(tokenlessGate);
+  writeActiveGateId(gate.id);
   const url = buildLocalServerConnectUrl(gate.serverUrl, token, companyId);
   markPlRemoteServerClientMode();
+  registerElectronRemoteGateOrigin(gate.serverUrl);
   try {
     const bridge = (window as Window & { plElectronGate?: PlElectronGateBridge }).plElectronGate;
     bridge?.setRemoteAuth?.(gate.serverUrl, token);
@@ -255,7 +326,7 @@ export function filterCompaniesForActiveGate(companies: Company[], gate: GateRec
   }
 
   if (isLocalServerGate(gate)) {
-    if (isPlRemoteServerClientMode()) {
+    if (isPlServerGateClientActive()) {
       return filterCompaniesForPlServerAccess(visible);
     }
     return buildPlServerGatePreviewCompanyList(visible, gate.id);
@@ -278,7 +349,7 @@ export function pickGateAwareAutoSelectCompanyId(
     return String(a.id || "").localeCompare(String(b.id || ""));
   });
   const g = gate ?? getActiveGate();
-  if (isLocalServerGate(g) || isPlRemoteServerClientMode()) {
+  if (isLocalServerGate(g) || isPlServerGateClientActive()) {
     const shared = sorted.filter((c) => isPlServerSharedCompanyRow(c, g.id));
     if (shared.length > 0) return shared[0]!.id;
   }

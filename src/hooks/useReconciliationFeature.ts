@@ -6,6 +6,7 @@ import { useCompany } from "@/hooks/useCompany";
 import usePermissions from "@/hooks/usePermissions";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { resolvePlanIdForActiveCompany } from "@/lib/accountPlanForOwner";
+import { useCompanyVoucherFeatureSettings } from "@/hooks/useCompanyVoucherFeatureSettings";
 
 /** Plan + company setting + role — Share for Reconciliation feature gate. */
 export function useReconciliationFeature() {
@@ -13,6 +14,7 @@ export function useReconciliationFeature() {
   const { company, allCompanies } = useCompany();
   const { can } = usePermissions();
   const livePlans = useLivePlans();
+  const { enableShareForReconciliation } = useCompanyVoucherFeatureSettings();
 
   const planEnabled = useMemo(() => {
     const planId = resolvePlanIdForActiveCompany(
@@ -25,7 +27,7 @@ export function useReconciliationFeature() {
     return plan.entitlements.shareForReconciliationEnabled === true;
   }, [company, allCompanies, customUser?.uid, customUser?.email, livePlans]);
 
-  const companyEnabled = company?.enableShareForReconciliation === true;
+  const companyEnabled = enableShareForReconciliation === true;
 
   return {
     planEnabled,

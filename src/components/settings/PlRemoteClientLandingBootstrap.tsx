@@ -1,19 +1,21 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { usePathname, useRouter } from "next/navigation";
-import { useCompany } from "@/hooks/useCompany";
-import { appNavHref } from "@/lib/appNavHref";
 import { persistDevClientAccessToken, refreshPlServerAccessContext } from "@/lib/plServerAccessContext";
-import { mirrorPlServerSharedCompaniesToLocalSqlite } from "@/lib/plServerClientCompanyMirror";
-import { readAndStripPlRemoteClientLandingQuery } from "@/lib/plRemoteServerClient";
+import { syncPlServerSharedCompaniesToLocalSqlite } from "@/lib/plServerClientCompanyDelta";
+import { readAndStripPlRemoteClientLandingQuery, reconcilePlRemoteServerClientSessionOnLoad, reconcilePlHubServerClientSessionOnLoad } from "@/lib/plRemoteServerClient";
 
-/** Remote server landing: apply token + optional company from Gate connect URL, then open dashboard. */
+/** Remote server landing: refresh gate context — company open via Gate unlock flow, not auto dashboard. */
 export function PlRemoteClientLandingBootstrap() {
-  const router = useRouter();
-  const pathname = usePathname();
-  const { setCompanyId } = useCompany();
   const consumedRef = useRef(false);
+  const reconciledRef = useRef(false);
+
+  useEffect(() => {
+    if (reconciledRef.current) return;
+    reconciledRef.current = true;
+    reconcilePlRemoteServerClientSessionOnLoad();
+    reconcilePlHubServerClientSessionOnLoad();
+  }, []);
 
   useEffect(() => {
     if (consumedRef.current) return;
@@ -21,19 +23,13 @@ export function PlRemoteClientLandingBootstrap() {
     if (!landing.hadRemoteClientFlag) return;
     consumedRef.current = true;
 
-    if (landing.accessToken) persistDevClientAccessToken(landing.accessToken);
+    persistDevClientAccessToken("");
 
     void (async () => {
       await refreshPlServerAccessContext();
-      await mirrorPlServerSharedCompaniesToLocalSqlite().catch(() => undefined);
-      if (!landing.companyId) return;
-      setCompanyId(landing.companyId);
-      const path = pathname?.replace(/\/$/, "") || "";
-      if (path === "" || path === "/" || path.startsWith("/company") || path.startsWith("/gate")) {
-        router.replace(appNavHref("/dashboard"));
-      }
+      await syncPlServerSharedCompaniesToLocalSqlite().catch(() => undefined);
     })();
-  }, [pathname, router, setCompanyId]);
+  }, []);
 
   return null;
 }

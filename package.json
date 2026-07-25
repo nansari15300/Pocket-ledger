@@ -39,6 +39,9 @@
     "cap:open:android": "npx cap open android",
     "build:static": "node scripts/build-static.js",
     "build:static:fast": "node scripts/build-static.js --fast",
+    "serve:out": "node scripts/serve-out-static.cjs",
+    "build:portable": "node scripts/build-portable-out-zip.cjs",
+    "build:portable:full": "npm run build:static && npm run build:portable",
     "build:static:all": "npm run build:static && npm run cap:copy:android && npm run cap:copy:ios && npm run electron:build:win && npm run electron:build:linux",
     "build:exe:fast": "npm run build:static:fast && npm run electron:build:win:fast",
     "storage:cors": "node scripts/apply-firebase-storage-cors.cjs"

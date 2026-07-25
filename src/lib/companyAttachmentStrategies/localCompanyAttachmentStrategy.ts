@@ -8,10 +8,10 @@ import {
   isLocalFileRef,
 } from "@/lib/localPendingFiles";
 import {
-  ensureOfflineCachedAttachmentDisplay,
   getOfflineCachedAttachmentNativeRef,
   tryOfflineCachedAttachmentBlobMultiKey,
 } from "@/lib/offlineAttachmentUrlCache";
+import { normalizeFirebaseStorageObjectPathForSdk } from "@/lib/firebaseStorageDownloadUrl";
 import { usesEmbeddedNativeAttachmentStorage } from "@/lib/usesEmbeddedNativeAttachmentStorage";
 import type { AttachmentDisplayOptions, AttachmentDisplayResult } from "@/lib/companyAttachmentStrategies/types";
 
@@ -25,7 +25,36 @@ async function resolveCompanyId(explicit?: string): Promise<string | undefined> 
   return readActiveAttachmentCompanyId() ?? undefined;
 }
 
-/** Local SQLite company: preview from local/native/cache only. */
+async function readLocalAttachmentCacheOnly(
+  url: string,
+  companyId?: string
+): Promise<AttachmentDisplayResult> {
+  const native = await getOfflineCachedAttachmentNativeRef(url);
+  if (native?.displayUrl) {
+    return { displayUrl: native.displayUrl, blob: null, contentType: native.contentType };
+  }
+
+  const cached = await tryOfflineCachedAttachmentBlobMultiKey(url);
+  if (cached && cached.size > 0) {
+    return { displayUrl: null, blob: cached, contentType: cached.type || null };
+  }
+
+  const norm = normalizeFirebaseStorageObjectPathForSdk(url, { companyId });
+  if (norm && norm !== url) {
+    const altNative = await getOfflineCachedAttachmentNativeRef(norm);
+    if (altNative?.displayUrl) {
+      return { displayUrl: altNative.displayUrl, blob: null, contentType: altNative.contentType };
+    }
+    const altCached = await tryOfflineCachedAttachmentBlobMultiKey(norm);
+    if (altCached && altCached.size > 0) {
+      return { displayUrl: null, blob: altCached, contentType: altCached.type || null };
+    }
+  }
+
+  return { displayUrl: null, blob: null, contentType: null };
+}
+
+/** Local SQLite company: preview from local/native/cache only — Firebase network mat. */
 export async function resolveLocalCompanyAttachmentDisplay(
   rawUrl: string,
   options?: AttachmentDisplayOptions
@@ -37,7 +66,6 @@ export async function resolveLocalCompanyAttachmentDisplay(
   }
 
   const companyId = await resolveCompanyId(options?.companyId);
-  const cacheOpts = { companyId, signal: options?.signal };
 
   if (isLocalFileRef(url)) {
     if (usesEmbeddedNativeAttachmentStorage()) {
@@ -50,23 +78,7 @@ export async function resolveLocalCompanyAttachmentDisplay(
     return { displayUrl: null, blob, contentType: blob?.type ?? null };
   }
 
-  if (!isHttpsAttachmentRef(url)) {
-    return ensureOfflineCachedAttachmentDisplay(url, options?.signal, cacheOpts);
-  }
-
-  const native = await getOfflineCachedAttachmentNativeRef(url);
-  if (native?.displayUrl) {
-    return { displayUrl: native.displayUrl, blob: null, contentType: native.contentType };
-  }
-
-  const cached = await tryOfflineCachedAttachmentBlobMultiKey(url);
-  if (cached && cached.size > 0) {
-    return { displayUrl: null, blob: cached, contentType: cached.type || null };
-  }
-
-  const ensured = await ensureOfflineCachedAttachmentDisplay(url, options?.signal, cacheOpts);
-  if (ensured.displayUrl || ensured.blob) return ensured;
-  return { displayUrl: null, blob: null, contentType: null };
+  return readLocalAttachmentCacheOnly(url, companyId);
 }
 
 export const localCompanyAttachmentStrategy = {

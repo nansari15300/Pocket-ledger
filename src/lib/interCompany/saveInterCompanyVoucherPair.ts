@@ -2,7 +2,7 @@
  * Inter Company — source + target company par linked `inter_company` vouchers save/update.
  */
 import type { InterCompanyEntityKind } from "@/components/inter-company/InterCompanyEntitySide";
-import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, where, Timestamp } from "firebase/firestore";
 import { auth, firestore } from "@/lib/firebase";
 import {
   isRecurringAutoUserDisplayLabel,
@@ -32,13 +32,21 @@ import {
   saveVoucher,
   softDeleteVoucherMoveToRecycleBin,
 } from "@/lib/voucherActionsClient";
-import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
+import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import { isFirebaseLedgerDataSyncEnabled } from "@/lib/firebaseLedgerDataSyncDisabled";
+import { isFirebaseLedgerCompanyDataSyncEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
+import {
+  canSyncCompanyToServer,
+  enqueueVoucherOutbox,
+  flushVoucherOutbox,
+} from "@/lib/localVoucherOutbox";
+import { dispatchVoucherLivePatch } from "@/lib/voucherFormAttachmentSave";
 import {
   isLocalToLocalInterCompanyPair,
   isPureLocalInterCompanyCompany,
 } from "@/lib/interCompany/localInterCompanyPolicy";
-import { mergeVoucherCalendarDateWithSaveClock } from "@/lib/voucherDateNormalize";
+import { coerceVoucherDocumentDate, mergeVoucherCalendarDateWithSaveClock } from "@/lib/voucherDateNormalize";
 
 export type InterCompanyLinkDoc = {
   linkId: string;
@@ -658,6 +666,63 @@ export async function patchInterCompanyShareAttachmentsWithPeer(args: {
   return {};
 }
 
+/** Sirf is company ki IC copy recycle bin — peer copy safe (locked / approved IC). */
+export async function deleteInterCompanyVoucherLocalCopyOnly(args: {
+  companyId: string;
+  voucherId: string;
+  deletedByUid: string;
+}): Promise<void> {
+  const cid = String(args.companyId || "").trim();
+  const vid = String(args.voucherId || "").trim();
+  if (!cid || !vid) {
+    throw new Error("Missing company or voucher");
+  }
+
+  let row = (await getCompanyDocFromBrowserDb(cid, "vouchers", vid)) as Record<string, unknown> | null;
+  if (!row) {
+    row = await readInterCompanyVoucherRow(cid, vid);
+  }
+  if (!row || String(row.type || "") !== "inter_company") {
+    throw new Error("Not an Inter Company voucher");
+  }
+
+  const deletedAt = Timestamp.now();
+  const payload: Record<string, unknown> = {
+    ...row,
+    id: vid,
+    isDeleted: true,
+    deletedAt,
+    deletedBy: args.deletedByUid || "",
+    updatedAt: deletedAt,
+    lastEditedAt: deletedAt,
+  };
+  coerceVoucherDocumentDate(payload);
+
+  // Hamesha pehle SQLite — Firebase ledger sync off ho to bhi local delete.
+  const written = await upsertCompanyDocInBrowserDb(cid, "vouchers", vid, payload, { force: true });
+  if (!written) {
+    throw new Error("Could not delete in local database (SQLite). Retry or reopen the company.");
+  }
+  dispatchVoucherLivePatch(cid, vid, payload);
+
+  // Firebase sirf jab ledger data sync ON ho — warna sirf SQLite tombstone.
+  if (isFirebaseLedgerDataSyncEnabled() && isFirebaseLedgerCompanyDataSyncEnabled(cid) && (await canSyncCompanyToServer(cid))) {
+    await enqueueVoucherOutbox(cid, "update", vid, payload);
+    void flushVoucherOutbox().catch((err) => {
+      console.warn("[IC] local delete outbox flush:", err);
+    });
+  }
+
+  const partyId = String(row.interCompanyCounterpartyPartyId || "").trim();
+  if (partyId) {
+    try {
+      await purgeInterCompanyCounterpartyPartyIfUnused({ companyId: cid, partyId });
+    } catch (err) {
+      console.warn("[IC] counterparty party cleanup (local delete):", err);
+    }
+  }
+}
+
 /** Source + linked target dono recycle bin. */
 export async function deleteInterCompanyVoucherPair(args: {
   sourceCompanyId: string;
@@ -672,30 +737,11 @@ export async function deleteInterCompanyVoucherPair(args: {
     await assertInterCompanyDeleteAllowed(args.sourceCompanyId, args.sourceVoucherId);
   }
 
-  const readVoucherRow = async (
-    companyId: string,
-    voucherId: string
-  ): Promise<Record<string, unknown> | null> => {
-    const cid = String(companyId || "").trim();
-    const vid = String(voucherId || "").trim();
-    if (!cid || !vid) return null;
-    const local = await getCompanyDocFromBrowserDb(cid, "vouchers", vid);
-    if (local) return local;
-    try {
-      const snap = await getDoc(doc(firestore, `companies/${cid}/vouchers`, vid));
-      return snap.exists()
-        ? ({ id: snap.id, ...(snap.data() as Record<string, unknown>) } as Record<string, unknown>)
-        : null;
-    } catch {
-      return null;
-    }
-  };
-
-  const sourceRow = await readVoucherRow(args.sourceCompanyId, args.sourceVoucherId);
+  const sourceRow = await readInterCompanyVoucherRow(args.sourceCompanyId, args.sourceVoucherId);
   const peerCompanyId = String(args.peerCompanyId || "").trim();
   const peerVoucherId = String(args.peerVoucherId || "").trim();
   const targetRow =
-    peerCompanyId && peerVoucherId ? await readVoucherRow(peerCompanyId, peerVoucherId) : null;
+    peerCompanyId && peerVoucherId ? await readInterCompanyVoucherRow(peerCompanyId, peerVoucherId) : null;
 
   await softDeleteVoucherMoveToRecycleBin(args.sourceCompanyId, args.sourceVoucherId, args.deletedByUid);
   if (peerCompanyId && peerVoucherId) {

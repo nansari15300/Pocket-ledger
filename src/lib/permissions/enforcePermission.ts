@@ -3,7 +3,10 @@
  * Throws error if permission is denied, which should be caught and shown as toast
  */
 
+import { format, startOfDay, differenceInCalendarDays } from "date-fns";
 import type { Permission } from "@/lib/permissions";
+import { normalizeVoucherDateForBackdateCheck } from "@/lib/voucherDateNormalize";
+import { companyShareRoleLabel } from "@/lib/localCompanyAppRoles";
 
 export class PermissionDeniedError extends Error {
   constructor(message: string = "No permission") {
@@ -11,6 +14,143 @@ export class PermissionDeniedError extends Error {
     this.name = "PermissionDeniedError";
   }
 }
+
+export type BackdatePermissionAction = "entry" | "edit" | "delete";
+
+export type BackdatePermissionLimits = {
+  entryDays: number;
+  editDays: number;
+  deleteDays: number;
+};
+
+export type BackdatePermissionEvaluation = {
+  allowed: boolean;
+  action: BackdatePermissionAction;
+  ageInDays: number;
+  limit: number;
+  recordDateLabel: string;
+  todayLabel: string;
+  /** Raw year before BS→AD normalize (debug: 2082 AD misread). */
+  rawRecordYear: number | null;
+  normalizedFromLikelyBs: boolean;
+};
+
+const BACKDATE_ACTION_LABEL: Record<BackdatePermissionAction, string> = {
+  entry: "entry",
+  edit: "edit",
+  delete: "delete",
+};
+
+/** Same rules as `usePermissions` backdate check — shared for toast detail text. */
+export function evaluateBackdatePermission(
+  action: BackdatePermissionAction,
+  recordDate: Date | undefined,
+  dateLimits: BackdatePermissionLimits,
+  role: string
+): BackdatePermissionEvaluation {
+  const today = startOfDay(new Date());
+  const todayLabel = format(today, "yyyy-MM-dd");
+  const limit = dateLimits[`${action}Days`] ?? 0;
+
+  if (role === "owner" || !recordDate) {
+    return {
+      allowed: true,
+      action,
+      ageInDays: 0,
+      limit: limit >= 9999 ? 9999 : limit,
+      recordDateLabel: todayLabel,
+      todayLabel,
+      rawRecordYear: null,
+      normalizedFromLikelyBs: false,
+    };
+  }
+
+  const rawDate =
+    recordDate instanceof Date && !isNaN(recordDate.getTime())
+      ? recordDate
+      : new Date(recordDate as unknown as string | number);
+  const rawRecordYear = !isNaN(rawDate.getTime()) ? rawDate.getFullYear() : null;
+  const normalized = normalizeVoucherDateForBackdateCheck(rawDate);
+  const normalizedFromLikelyBs =
+    rawRecordYear != null &&
+    rawRecordYear >= 2070 &&
+    rawRecordYear <= 2200 &&
+    normalized.getFullYear() !== rawRecordYear;
+  const recordDay = startOfDay(normalized);
+  const recordDateLabel = format(recordDay, "yyyy-MM-dd");
+  const ageInDays = differenceInCalendarDays(today, recordDay);
+
+  if (limit >= 9999) {
+    return {
+      allowed: true,
+      action,
+      ageInDays,
+      limit: 9999,
+      recordDateLabel,
+      todayLabel,
+      rawRecordYear,
+      normalizedFromLikelyBs,
+    };
+  }
+
+  let allowed: boolean;
+  if (limit === 0) {
+    allowed = ageInDays === 0;
+  } else {
+    allowed = ageInDays >= 0 && ageInDays <= limit;
+  }
+
+  return {
+    allowed,
+    action,
+    ageInDays,
+    limit,
+    recordDateLabel,
+    todayLabel,
+    rawRecordYear,
+    normalizedFromLikelyBs,
+  };
+}
+
+export function formatBackdatePermissionDeniedMessage(
+  evaluation: BackdatePermissionEvaluation,
+  verb: "create" | "edit" | "delete",
+  role?: string
+): string {
+  const { ageInDays, limit, recordDateLabel, todayLabel, normalizedFromLikelyBs, rawRecordYear } =
+    evaluation;
+  const actionWord = BACKDATE_ACTION_LABEL[evaluation.action];
+  const roleLabel = role ? companyShareRoleLabel(role) : "your role";
+
+  if (ageInDays < 0) {
+    const ahead = Math.abs(ageInDays);
+    const bsHint =
+      normalizedFromLikelyBs && rawRecordYear != null
+        ? ` Voucher year ${rawRecordYear} was treated as Bikram Sambat and converted to AD ${recordDateLabel}.`
+        : rawRecordYear != null && rawRecordYear >= 2070
+          ? ` Voucher year ${rawRecordYear} looks like BS stored as AD — check the voucher date.`
+          : "";
+    return `${verb === "create" ? "Creating" : verb === "edit" ? "Editing" : "Deleting"} blocked: voucher date ${recordDateLabel} is ${ahead} day(s) in the future (today ${todayLabel}). ${roleLabel} backdate ${actionWord} allows only past dates up to ${limit === 0 ? "today only" : `${limit} day(s)`}.${bsHint}`;
+  }
+
+  if (limit === 0) {
+    return `${verb === "create" ? "Creating" : verb === "edit" ? "Editing" : "Deleting"} blocked: backdate ${actionWord} is disabled (0 days). Voucher date ${recordDateLabel} is ${ageInDays} day(s) before today ${todayLabel} — only today is allowed (${roleLabel}).`;
+  }
+
+  const limitLabel = limit >= 9999 ? "unlimited" : `${limit} day(s)`;
+  if (ageInDays > limit) {
+    return `${verb === "create" ? "Creating" : verb === "edit" ? "Editing" : "Deleting"} blocked: voucher is ${ageInDays} day(s) backdated (${recordDateLabel}; today ${todayLabel}). ${roleLabel} allows backdate ${actionWord} for up to ${limitLabel} — exceeded by ${ageInDays - limit} day(s).`;
+  }
+
+  return `${verb === "create" ? "Creating" : verb === "edit" ? "Editing" : "Deleting"} blocked: voucher is ${ageInDays} day(s) backdated on ${recordDateLabel} (today ${todayLabel}). ${roleLabel} backdate ${actionWord} limit: ${limitLabel}.`;
+}
+
+export type CanPerformBackdatedFn = ((
+  action: BackdatePermissionAction,
+  recordDate?: Date
+) => boolean) & {
+  explain?: (action: BackdatePermissionAction, recordDate?: Date) => string;
+};
 
 /**
  * Asserts that the user has the required permission
@@ -38,20 +178,24 @@ export function assertCan(
  * @throws PermissionDeniedError if action is not allowed
  */
 export function assertCanPerformBackdated(
-  canPerformFn: (action: "entry" | "edit" | "delete", recordDate?: Date) => boolean,
+  canPerformFn: CanPerformBackdatedFn | ((action: BackdatePermissionAction, recordDate?: Date) => boolean),
   action: "create" | "edit" | "delete",
   recordDate?: Date,
   customMessage?: string
 ): void {
-  const actionMap: Record<"create" | "edit" | "delete", "entry" | "edit" | "delete"> = {
+  const actionMap: Record<"create" | "edit" | "delete", BackdatePermissionAction> = {
     create: "entry",
     edit: "edit",
     delete: "delete",
   };
+  const mapped = actionMap[action];
 
-  if (!canPerformFn(actionMap[action], recordDate)) {
-    const actionLabel = action === "create" ? "Creating" : action === "edit" ? "Editing" : "Deleting";
-    const defaultMessage = customMessage || `${actionLabel} vouchers with this date is not allowed based on your role's date limits.`;
+  if (!canPerformFn(mapped, recordDate)) {
+    const explain = (canPerformFn as CanPerformBackdatedFn).explain;
+    const defaultMessage =
+      customMessage ||
+      explain?.(mapped, recordDate) ||
+      `${action === "create" ? "Creating" : action === "edit" ? "Editing" : "Deleting"} vouchers with this date is not allowed based on your role's date limits.`;
     throw new PermissionDeniedError(defaultMessage);
   }
 }

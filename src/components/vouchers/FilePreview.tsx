@@ -70,7 +70,7 @@ import {
 import { forgetHoverBlobUrl, peekHoverCachedBlobUrl, rememberHoverBlobUrl } from "@/lib/attachmentHoverBlobCache";
 import {
   ensureAttachmentUiRefreshListeners,
-  getAttachmentUiRefreshTick,
+  getAttachmentUrlLoadStatus,
   subscribeAttachmentLoadStore,
 } from "@/lib/attachmentLoadReady";
 
@@ -236,7 +236,8 @@ const PDF_REMOTE_FETCH_TIMEOUT_MS = 25_000;
  */
 export async function prewarmPdfThumbnailsForGallery(
   entries: ReadonlyArray<{ url: string; storagePath?: string }>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  localAttachmentOnly = false
 ): Promise<void> {
   const seen = new Set<string>();
   const { convertPdfFirstPageToImage } = await import("@/lib/pdfToImage");
@@ -250,16 +251,14 @@ export async function prewarmPdfThumbnailsForGallery(
       u.startsWith("data:application/pdf") ||
       getAttachmentFormatLabel(u) === "PDF" ||
       base.endsWith(".pdf");
-    // Voucher attachment `local:uuid` — Native par blob sniff nahi; metadata se PDF detect.
+    // Voucher attachment `local:uuid` — gallery page can contain hundreds of local JPEGs.
+    // Use saved metadata only; blob sniff here turns normal gallery idle into heavy disk/pdf work.
     if (!isPdfEntry && u.startsWith(LOCAL_FILE_PREFIX)) {
       try {
-        if (isCapacitorNativeApp()) {
-          const meta = await getLocalFileRefMeta(u);
-          isPdfEntry = String(meta?.contentType || "").toLowerCase().includes("pdf");
-        } else {
-          const lb = await getBlobFromLocalFileRef(u);
-          if (lb && (await sniffBlobKindForPreview(lb)) === "pdf") isPdfEntry = true;
-        }
+        const meta = await getLocalFileRefMeta(u);
+        isPdfEntry =
+          String(meta?.contentType || "").toLowerCase().includes("pdf") ||
+          getAttachmentFormatLabelFromHints(meta?.fileName, meta?.contentType) === "PDF";
       } catch {
         /* skip */
       }
@@ -271,7 +270,7 @@ export async function prewarmPdfThumbnailsForGallery(
     if (pdfThumbCacheGet(ck)) continue;
     try {
       let pdfFile: Blob;
-      if (storagePath) {
+      if (storagePath && !localAttachmentOnly) {
         const storageRef = ref(storage, storagePath);
         pdfFile = await getBlob(storageRef);
       } else if (u.startsWith(LOCAL_FILE_PREFIX)) {
@@ -287,9 +286,12 @@ export async function prewarmPdfThumbnailsForGallery(
         // Full warm sync ne IndexedDB me jo PDF cache kiya ho — gallery hover turant
         let pdfFileHttp: Blob | null = null;
         if (u.startsWith("http")) {
-          pdfFileHttp = await getRemoteAttachmentBlobPreferOfflineCache(u, signal);
+          pdfFileHttp = await getRemoteAttachmentBlobPreferOfflineCache(u, signal, {
+            localOnly: localAttachmentOnly,
+          });
         }
         if (!pdfFileHttp || pdfFileHttp.size === 0) {
+          if (localAttachmentOnly) continue;
           const res = await fetch(u, { mode: "cors", signal });
           if (!res.ok) continue;
           pdfFileHttp = await res.blob();
@@ -378,6 +380,8 @@ interface FilePreviewProps {
   holdAttachmentClipboard?: boolean;
   /** EXE/SQLite mirror tail (`27e15173%2Fpayment_out%2F…`) → `voucher-files/{companyId}/…` resolve */
   attachmentCompanyId?: string;
+  /** Gallery local company: Firebase Storage/network mat chhedo — sirf cache + `local:`. */
+  forceLocalAttachmentOnly?: boolean;
 }
 
 const getCleanName = (name: string) => {
@@ -411,6 +415,7 @@ export function FilePreview({
   attachmentClientFileUrls,
   holdAttachmentClipboard = true,
   attachmentCompanyId,
+  forceLocalAttachmentOnly = false,
 }: FilePreviewProps) {
   const voucherAttachmentFb = useVoucherAttachmentFallback();
   const { companyId: shellCompanyId, company } = useCompany();
@@ -420,23 +425,24 @@ export function FilePreview({
     () => (typeof file === "string" ? normalizeAttachmentUrlForDevicePreview(file) : file),
     [file]
   );
-  const attachmentUiRefreshTick = React.useSyncExternalStore(
+  const fileRefForLoadStatus = typeof normalizedPreviewFile === "string" ? normalizedPreviewFile.trim() : "";
+  /** Sirf is file ka ready/loading — global tick mat (gallery: ek file ready → 16 tiles blink). */
+  const fileLoadStatus = React.useSyncExternalStore(
     subscribeAttachmentLoadStore,
-    getAttachmentUiRefreshTick,
-    getAttachmentUiRefreshTick
+    () =>
+      fileRefForLoadStatus && isLocalFileRef(fileRefForLoadStatus)
+        ? getAttachmentUrlLoadStatus(fileRefForLoadStatus)
+        : "ready",
+    () => "ready"
   );
   React.useEffect(() => {
     ensureAttachmentUiRefreshListeners();
   }, []);
-  const localAttachmentRefreshTick =
-    typeof normalizedPreviewFile === "string" && isLocalFileRef(normalizedPreviewFile)
-      ? attachmentUiRefreshTick
-      : 0;
   // Edit forms me fallback company id dene se Firebase object-path resolve stable rehta hai.
   const pathCompanyId = attachmentCompanyId ?? voucherAttachmentFb?.companyId ?? shellCompanyId ?? undefined;
   const localLedgerOnly = React.useMemo(
-    () => companyRequiresLocalAttachmentUrlsOnly(company),
-    [company]
+    () => forceLocalAttachmentOnly || companyRequiresLocalAttachmentUrlsOnly(company),
+    [forceLocalAttachmentOnly, company]
   );
   const attachmentMode = React.useMemo(
     () => companyAttachmentMode(company, { localLedgerOnly }),
@@ -526,9 +532,9 @@ export function FilePreview({
     ? `${voucherAttachmentFb.companyId}\u0001${voucherAttachmentFb.voucherId}`
     : "";
 
-  /** Native/local file ke liye render-time sync fast-path (no Promise wait before `<img src>`). */
+  /** `local:` + runtime displayUrl (EXE/APK disk OR web IDB putPendingFile blob URL) — spinner skip. */
   const immediateLocalInfo = React.useMemo(() => {
-    if (!(typeof file === "string" && isLocalFileRef(file) && usesEmbeddedNativeAttachmentStorage())) {
+    if (!(typeof file === "string" && isLocalFileRef(file))) {
       return null;
     }
     const meta = getLocalFileRefMetaSync(file);
@@ -538,6 +544,13 @@ export function FilePreview({
     const hintKind = getAttachmentPreviewKindFromHints(meta.fileName, meta.contentType);
     if (hintKind === "pdf" || ct.includes("pdf")) type = "pdf";
     else if (hintKind === "image" || ct.startsWith("image/")) type = "image";
+    // Restore / pending: octet-stream + no extension → sync FILE icon mat paint; async sniff chalao.
+    if (
+      type === "other" &&
+      (!ct || ct === "application/octet-stream" || ct === "binary/octet-stream")
+    ) {
+      return null;
+    }
     let name = "file";
     if (meta.fileName) {
       try {
@@ -590,7 +603,10 @@ export function FilePreview({
   }, [normalizedPreviewFile]);
 
   const thumbnailUrlRef = useRef<string | null>(null);
+  const pdfThumbnailKeyRef = useRef<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fileInfoRef = useRef(fileInfo);
+  fileInfoRef.current = fileInfo;
 
   // Revoke object URL to avoid memory leaks (thumbnails are blob URLs)
   const revokeThumbnailUrl = useCallback((url: string | null) => {
@@ -640,10 +656,12 @@ export function FilePreview({
         firebaseStoragePath,
         layoutMaxEdge
       );
+      pdfThumbnailKeyRef.current = ck;
 
       const run = async (): Promise<string | null> => {
         const cachedBlobUrl = pdfThumbCacheGet(ck);
         if (cachedBlobUrl) {
+          pdfThumbnailKeyRef.current = ck;
           setPdfThumbnailSafe(cachedBlobUrl);
           return cachedBlobUrl;
         }
@@ -653,6 +671,7 @@ export function FilePreview({
           const nativeThumb = await getNativePdfThumbnailDisplayUrl(ck);
           if (nativeThumb) {
             pdfThumbCacheSet(ck, nativeThumb);
+            pdfThumbnailKeyRef.current = ck;
             setPdfThumbnailSafe(nativeThumb);
             return nativeThumb;
           }
@@ -661,7 +680,10 @@ export function FilePreview({
         const existingInflight = pdfThumbInFlight.get(ck);
         if (existingInflight) {
           const reused = await existingInflight;
-          if (reused) setPdfThumbnailSafe(reused);
+          if (reused) {
+            pdfThumbnailKeyRef.current = ck;
+            setPdfThumbnailSafe(reused);
+          }
           return reused;
         }
 
@@ -671,14 +693,14 @@ export function FilePreview({
 
           if (fileObject instanceof File) {
             pdfFile = fileObject;
-          } else if (firebaseStoragePath && storage) {
+          } else if (firebaseStoragePath && storage && !localLedgerOnly) {
           // Pehle signed URL → SDK+fetch helper (CORS + naya `*.firebasestorage.app` host); phir direct getBlob — sirf getBlob+5s pe web "online" preview fail hota tha.
             let resolved: Blob | null = null;
             if (pdfUrl.startsWith("http")) {
             // Pehle warm-sync IndexedDB; phir SDK/getBlob path (helper se bytes background cache)
               resolved =
                 (await tryOfflineCachedAttachmentBlobMultiKey(pdfUrl)) ||
-                (await getRemoteAttachmentBlobPreferOfflineCache(pdfUrl, signal));
+                (await getRemoteAttachmentBlobPreferOfflineCache(pdfUrl, signal, { localOnly: localLedgerOnly }));
             }
             if (!resolved) {
               try {
@@ -735,11 +757,17 @@ export function FilePreview({
             // Warm cache → SDK/fetch (timeout wala fallback jab helper null)
             const hydrated =
               (await tryOfflineCachedAttachmentBlobMultiKey(pdfUrl)) ||
-              (await getRemoteAttachmentBlobPreferOfflineCache(pdfUrl, signal));
+              (await getRemoteAttachmentBlobPreferOfflineCache(pdfUrl, signal, { localOnly: localLedgerOnly }));
             pdfFile =
               hydrated && hydrated.size > 0
                 ? hydrated
-                : await fetchBlobWithTimeout(pdfUrl, PDF_REMOTE_FETCH_TIMEOUT_MS, signal);
+                : localLedgerOnly
+                  ? null
+                  : await fetchBlobWithTimeout(pdfUrl, PDF_REMOTE_FETCH_TIMEOUT_MS, signal);
+            if (!pdfFile) {
+              setIsPdfLoading(false);
+              return null;
+            }
           } else {
             setIsPdfLoading(false);
             return null;
@@ -774,6 +802,7 @@ export function FilePreview({
             }
           }
           pdfThumbCacheSet(ck, finalThumbUrl);
+          pdfThumbnailKeyRef.current = ck;
           setPdfThumbnailSafe(finalThumbUrl);
           return finalThumbUrl;
         })();
@@ -794,7 +823,7 @@ export function FilePreview({
         setIsPdfLoading(false);
       }
     },
-    [layoutMaxEdge, pathCompanyId, voucherAttachmentFb?.companyId, revokeThumbnailUrl, setPdfThumbnailSafe]
+    [layoutMaxEdge, pathCompanyId, voucherAttachmentFb?.companyId, revokeThumbnailUrl, setPdfThumbnailSafe, localLedgerOnly]
   );
 
   useEffect(() => {
@@ -806,6 +835,15 @@ export function FilePreview({
     const processFile = async () => {
       // Decode-on-read: effect ke andar bhi normalized file value use karo.
       const file = normalizedPreviewFile;
+      const painted = fileInfoRef.current;
+      if (
+        typeof file === "string" &&
+        painted.url &&
+        !isUnresolvedAttachmentPreviewUrl(painted.url) &&
+        painted.type !== "other"
+      ) {
+        return;
+      }
       if (typeof file === "string") {
         const warmed = peekHoverCachedBlobUrl(file);
         // `local:` + revoked blob: early paint → broken img + alt=`local:uuid` (masters Edit Party).
@@ -1060,12 +1098,15 @@ export function FilePreview({
               // 2) Cache miss + online: network se hydrate karo (is call me putCachedBlob bhi hota hai); offline par fetch mat — hang/spinner.
               if (
                 (!probe || probe.size === 0) &&
+                !localLedgerOnly &&
                 !controller.signal.aborted &&
                 typeof navigator !== "undefined" &&
                 (navigator.onLine || isCapacitorNativeApp())
               ) {
                 // Persist run ko component lifecycle se mat baandho; tile unmount ho tab bhi cache fill complete ho.
-                probe = await getRemoteAttachmentBlobPreferOfflineCache(file);
+                probe = await getRemoteAttachmentBlobPreferOfflineCache(file, undefined, {
+                  localOnly: localLedgerOnly,
+                });
               }
               if (!probe || probe.size === 0 || controller.signal.aborted) return;
               const kind = await sniffBlobKindForPreview(probe);
@@ -1133,8 +1174,10 @@ export function FilePreview({
               // Raw object-path (`voucher-files/...`) ke liye cache miss par SDK fetch + cache write try karo.
               const fetchKey = resolvedStoragePath || file;
               let cachedBlob = await tryOfflineCachedAttachmentBlobMultiKey(fetchKey);
-              if ((!cachedBlob || cachedBlob.size === 0) && !controller.signal.aborted) {
-                cachedBlob = await getRemoteAttachmentBlobPreferOfflineCache(fetchKey, controller.signal);
+              if ((!cachedBlob || cachedBlob.size === 0) && !controller.signal.aborted && !localLedgerOnly) {
+                cachedBlob = await getRemoteAttachmentBlobPreferOfflineCache(fetchKey, controller.signal, {
+                  localOnly: localLedgerOnly,
+                });
               }
               if (cachedBlob && cachedBlob.size > 0) {
                 const kind = await sniffBlobKindForPreview(cachedBlob);
@@ -1166,16 +1209,12 @@ export function FilePreview({
             /* revoked / network — neeche URL-based fallback */
           }
         }
-        /* `local:` — Native par direct file-path URL; web par cache/pending (tick hover jaisa) phir stale HTTPS resolve. */
+        /* `local:` — Native par direct file-path URL; web par putPendingFile blob URL / IDB / Host fetch. */
         if (file.startsWith(LOCAL_FILE_PREFIX)) {
           try {
-            // Native fast-path: sync cache hit ho to zero-await URL set.
-            const localMetaSync = usesEmbeddedNativeAttachmentStorage()
-              ? getLocalFileRefMetaSync(file)
-              : null;
-            const localMeta =
-              localMetaSync ||
-              (usesEmbeddedNativeAttachmentStorage() ? await getLocalFileRefMeta(file) : null);
+            // Sync meta (EXE disk OR web IDB putPendingFile displayUrl) — spinner skip.
+            const localMetaSync = getLocalFileRefMetaSync(file);
+            const localMeta = localMetaSync || (await getLocalFileRefMeta(file));
             let b: Blob | null | undefined = null;
             if (localMeta?.displayUrl) {
               if (localMeta.fileName) {
@@ -1193,6 +1232,32 @@ export function FilePreview({
               }
               resolvedUrl = localMeta.displayUrl;
               localFormatHint = getAttachmentFormatLabelFromHints(localMeta.fileName, localMeta.contentType);
+              // Restore ke baad contentType kabhi octet-stream / restored_* name → FILE icon.
+              // Bytes sniff karke IMAGE/PDF promote karo (displayUrl pehle se paint ho sake).
+              if (resolvedType === "other") {
+                try {
+                  b = await getBlobFromLocalFileRef(file, {
+                    companyId: pathCompanyId ?? voucherAttachmentFb?.companyId,
+                  });
+                  if (b && b.size > 0) {
+                    const kind = await sniffBlobKindForPreview(b);
+                    if (kind === "pdf") {
+                      resolvedType = "pdf";
+                      localFormatHint = "PDF";
+                    } else if (kind === "image") {
+                      resolvedType = "image";
+                      objectUrl = URL.createObjectURL(b);
+                      resolvedUrl = objectUrl;
+                      rememberHoverBlobUrl(file, objectUrl);
+                      localFormatHint =
+                        getAttachmentFormatLabelFromHints(localMeta.fileName, b.type || localMeta.contentType) ||
+                        "IMAGE";
+                    }
+                  }
+                } catch {
+                  /* keep displayUrl + other */
+                }
+              }
             } else {
               // Offline cache + pending IndexedDB — `local:` ref ko browser preview ke liye blob URL me resolve karo.
               const localResolved = await resolveLocalRefToBlobUrlForPreview(
@@ -1242,7 +1307,9 @@ export function FilePreview({
             isUnresolvedAttachmentPreviewUrl(resolvedUrl) &&
             typeof file === "string" &&
             file.startsWith(LOCAL_FILE_PREFIX) &&
-            (pathCompanyId || voucherAttachmentFb?.companyId)
+            (pathCompanyId || voucherAttachmentFb?.companyId) &&
+            // Offline / local-restore company: Firebase/PL URL try mat karo — bytes disk/pending pe hone chahiye.
+            !localLedgerOnly
           ) {
             try {
               const { fetchPlServerAttachmentBlob } = await import("@/lib/plServerAttachmentFetch");
@@ -1571,7 +1638,21 @@ export function FilePreview({
       });
 
       if (resolvedType === "pdf") {
-        setPdfThumbnailSafe(null); // clear previous so loading shows for this PDF
+        const pdfCacheKey = pdfThumbCacheKey(
+          fileObject instanceof File ? fileObject : undefined,
+          resolvedUrl || "",
+          resolvedStoragePath,
+          layoutMaxEdge
+        );
+        const cachedPdfThumb = pdfThumbCacheGet(pdfCacheKey);
+        if (cachedPdfThumb) {
+          pdfThumbnailKeyRef.current = pdfCacheKey;
+          setPdfThumbnailSafe(cachedPdfThumb);
+        } else if (pdfThumbnailKeyRef.current === pdfCacheKey && thumbnailUrlRef.current) {
+          // Same PDF ka thumb already visible hai; refresh/live-pull pass me icon fallback flash mat dikhao.
+        } else {
+          setPdfThumbnailSafe(null); // clear previous so loading shows for a different uncached PDF
+        }
         // Rerender churn me turant regenerate mat karo; short debounce se duplicate work kam hota hai.
         const PDF_THUMB_DEBOUNCE_MS = 120;
         if (fileObject) {
@@ -1643,7 +1724,7 @@ export function FilePreview({
     attachmentGalleryFingerprint,
     pathCompanyId,
     attachmentCompanyId,
-    localAttachmentRefreshTick,
+    fileLoadStatus,
     attachmentMode,
     localLedgerOnly,
     preferLocalAttachmentFirst,
@@ -1692,6 +1773,8 @@ export function FilePreview({
         }
       : runHoldCopyNow,
   });
+  const pointerOpenGuardRef = useRef<{ x: number; y: number; pointerType: string; at: number } | null>(null);
+  const skipNextClickOpenRef = useRef(false);
 
   const openAttachmentFromFileInfo = useCallback(() => {
     const rawRef =
@@ -1766,6 +1849,38 @@ export function FilePreview({
     if (tapInteractionMode && mobileCopyRevealed) return;
     e.preventDefault();
     e.stopPropagation();
+    pointerOpenGuardRef.current = null;
+    if (skipNextClickOpenRef.current) {
+      skipNextClickOpenRef.current = false;
+      return;
+    }
+    openAttachmentFromFileInfo();
+  };
+
+  const handlePreviewPointerDown = (e: React.PointerEvent) => {
+    if (children || (disabled && !allowPreviewWhenDisabled)) return;
+    if (e.button !== 0) return;
+    pointerOpenGuardRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      pointerType: e.pointerType,
+      at: Date.now(),
+    };
+  };
+
+  const handlePreviewPointerUp = (e: React.PointerEvent) => {
+    if (children || (disabled && !allowPreviewWhenDisabled)) return;
+    if (tapInteractionMode && mobileCopyRevealed) return;
+    const start = pointerOpenGuardRef.current;
+    pointerOpenGuardRef.current = null;
+    if (!start || start.pointerType !== e.pointerType) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    if (dx * dx + dy * dy > 12 * 12) return;
+    if (Date.now() - start.at > 700) return;
+    e.preventDefault();
+    e.stopPropagation();
+    skipNextClickOpenRef.current = true;
     openAttachmentFromFileInfo();
   };
 
@@ -1902,15 +2017,24 @@ export function FilePreview({
   /** Hold handlers thumbnail par — touch target; browser long-press menu band */
   const thumbHoldHandlers = canHoldCopyAttachment
     ? {
-        onPointerDown: copyAttachmentHold.onPointerDown,
+        onPointerDown: (e: React.PointerEvent) => {
+          handlePreviewPointerDown(e);
+          copyAttachmentHold.onPointerDown(e);
+        },
         onPointerMove: copyAttachmentHold.onPointerMove,
-        onPointerUp: copyAttachmentHold.onPointerUp,
+        onPointerUp: (e: React.PointerEvent) => {
+          copyAttachmentHold.onPointerUp();
+          handlePreviewPointerUp(e);
+        },
         onPointerCancel: copyAttachmentHold.onPointerCancel,
         onPointerLeave: copyAttachmentHold.onPointerLeave,
         onClickCapture: copyAttachmentHold.onClickCapture,
         onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
       }
-    : {};
+    : {
+        onPointerDown: handlePreviewPointerDown,
+        onPointerUp: handlePreviewPointerUp,
+      };
 
   // Thumbnail box: hover tooltip ke andar bhi yahi layout (preview + badge + compression strip)
   const borderedPreview = (

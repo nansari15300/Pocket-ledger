@@ -41,6 +41,14 @@ export function PlServerAuthoritativePendingBanner() {
   else if (failed) label = "Some changes could not sync — check gate access";
   else if (retrying) label = "Host unavailable — retrying sync…";
 
+  if (retrying && !sending && !failed) {
+    return (
+      <div className="border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-center text-xs text-amber-950">
+        Host sync retrying in background...
+      </div>
+    );
+  }
+
   return (
     <div className="border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-center text-xs text-amber-950">
       {label}

@@ -20,7 +20,8 @@ import {
   where,
 } from "firebase/firestore";
 import { uploadCompanyLogo, tryDeleteStorageFileByUrl } from "@/lib/storage";
-import { compressFile } from "@/lib/compression";
+import { compressVoucherAttachment } from "@/lib/compression";
+import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { FilePreview } from "../vouchers/FilePreview";
 import { CompanyInterCompanyCodeField } from "@/components/inter-company/CompanyInterCompanyCodeField";
 
@@ -97,8 +98,6 @@ import {
   upsertUserInList,
 } from "@/lib/localCompanyUsers";
 
-
-const MAX_FILE_SIZE_MB = 5;
 type LocalCompanyUserDraft = { name: string; username: string; role: string; password: string };
 type ExistingLocalCompanyUser = { id?: string; username?: string; displayName?: string; role?: string };
 
@@ -134,7 +133,15 @@ const formSchema = z.object({
 });
 
 
-export function EditCompanyForm({ readOnly = false }: { readOnly?: boolean }) {
+export function EditCompanyForm({
+  readOnly = false,
+  initialPasswordEnabled = false,
+  onSaved,
+}: {
+  readOnly?: boolean;
+  initialPasswordEnabled?: boolean;
+  onSaved?: () => void;
+}) {
   const [isLoading, setIsLoading] = useState(false);
   const {
     company,
@@ -165,6 +172,7 @@ export function EditCompanyForm({ readOnly = false }: { readOnly?: boolean }) {
   const { canAddAvatar } = usePermissions();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileToUpload, setFileToUpload] = useState<{ file: File; preview: string } | null>(null);
+  const [isFileProcessing, setIsFileProcessing] = useState(false);
   const [removeLogo, setRemoveLogo] = useState(false);
   /** Firebase company: Firestore mirror AES — login username+password session. */
   const [encryptCompanyEnabled, setEncryptCompanyEnabled] = useState(false);
@@ -202,20 +210,31 @@ export function EditCompanyForm({ readOnly = false }: { readOnly?: boolean }) {
     const inputFile = e.target.files[0]; // Only one logo allowed
     if (!inputFile) return;
 
-    if (inputFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+    setIsFileProcessing(true);
+    try {
+      const maxBytes = attachmentMaxBytes();
+      const compressedFile = await compressVoucherAttachment(inputFile, maxBytes);
+      if (compressedFile.size > maxBytes) {
+        toast({
+          variant: "destructive",
+          ...attachmentStillTooLargeToastFields(),
+        });
+        e.target.value = "";
+        return;
+      }
+      const preview = URL.createObjectURL(compressedFile);
+      setFileToUpload({ file: compressedFile, preview });
+      setRemoveLogo(false);
+    } catch (error) {
       toast({
         variant: "destructive",
-        title: "File Too Large",
-        description: `Please select a file smaller than ${MAX_FILE_SIZE_MB}MB.`,
+        title: "Could not process file",
+        description: error instanceof Error ? error.message : "Compression or PDF read failed.",
       });
+    } finally {
       e.target.value = "";
-      return;
+      setIsFileProcessing(false);
     }
-
-    const compressedFile = await compressFile(inputFile);
-    const preview = URL.createObjectURL(compressedFile);
-    setFileToUpload({ file: compressedFile, preview });
-    e.target.value = ""; // Reset so same file can be re-selected; keeps single-file
   };
 
   const removeFile = () => {
@@ -299,13 +318,15 @@ export function EditCompanyForm({ readOnly = false }: { readOnly?: boolean }) {
         });
         setEncryptCompanyEnabled(company.encryptServerBackup === true);
         // Saved password ho to toggle ON; nahi to user edit se naya password add kar sake.
-        setPasswordEnabled(!!(company.password && String(company.password).trim()));
+        setPasswordEnabled(
+          initialPasswordEnabled || !!(company.password && String(company.password).trim())
+        );
         currencyPickedManuallyRef.current = false;
         // Edit open par add-user section default बंद रखो to avoid accidental duplicate user create.
         setAddCompanyUserEnabled(false);
         setQueuedCompanyUsers([]);
     }
-  }, [company, form]);
+  }, [company, form, initialPasswordEnabled]);
 
   const loadExistingLocalUsers = useCallback(async () => {
     if (!companyId || !isLocalOnlyMode() || (company && !isOfflineCompanyStorage(company))) {
@@ -676,6 +697,7 @@ export function EditCompanyForm({ readOnly = false }: { readOnly?: boolean }) {
           description: "Your company details have been successfully updated.",
         });
       }
+      onSaved?.();
       if (addCompanyUserEnabled) {
         setAddCompanyUserEnabled(false);
         setQueuedCompanyUsers([]);
@@ -1280,8 +1302,7 @@ export function EditCompanyForm({ readOnly = false }: { readOnly?: boolean }) {
                 <div className="rounded-md border border-dashed bg-muted/30 p-3 text-sm text-muted-foreground">
                   <strong className="text-foreground">Local company users</strong> log in with username + password when
                   opening this company (Select company screen). If you share via{" "}
-                  <strong>local server</strong>, give them the same login and a Pocket Ledger access token from
-                  Settings → Server.
+                  <strong>local server</strong>, give them the same login; the gate connection is token-free.
                 </div>
               )}
 
@@ -1595,7 +1616,7 @@ export function EditCompanyForm({ readOnly = false }: { readOnly?: boolean }) {
 
             {!readOnly && (
             <div className="flex justify-end items-center">
-                <Button type="submit" disabled={isLoading} variant="default">
+                <Button type="submit" disabled={isLoading || isFileProcessing} variant="default">
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save Changes
                 </Button>

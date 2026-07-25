@@ -44,13 +44,15 @@ function isRemoteAttachmentRef(ref: string): boolean {
 async function verifyRefsResolvable(
   refs: string[],
   signal: AbortSignal | undefined,
-  onItem?: (done: number, total: number) => void
+  onItem?: (done: number, total: number) => void,
+  options?: { localOnly?: boolean; companyId?: string; galleryUrls?: readonly string[] }
 ): Promise<{ ok: string[]; missing: string[] }> {
   const ok: string[] = [];
   const missing: string[] = [];
   const total = refs.length;
   let done = 0;
   let next = 0;
+  const galleryUrls = options?.galleryUrls ?? refs;
 
   async function worker(): Promise<void> {
     for (;;) {
@@ -58,7 +60,11 @@ async function verifyRefsResolvable(
       const i = next++;
       if (i >= refs.length) return;
       const ref = refs[i]!;
-      const resolved = await probeAttachmentRefForBackup(ref, signal);
+      const resolved = await probeAttachmentRefForBackup(ref, signal, {
+        localOnly: options?.localOnly,
+        companyId: options?.companyId,
+        galleryUrls,
+      });
       if (resolved) ok.push(ref);
       else missing.push(ref);
       done += 1;
@@ -70,6 +76,23 @@ async function verifyRefsResolvable(
     Array.from({ length: Math.min(VERIFY_CONCURRENCY, refs.length || 1) }, () => worker())
   );
   return { ok, missing };
+}
+
+/** SQLite backup UI: device pe kaunsi attachment bytes maujood / missing (network bina). */
+export async function scanLocalAttachmentAvailabilityForBackup(
+  backupData: Record<string, unknown>,
+  signal?: AbortSignal,
+  onProgress?: (done: number, total: number) => void,
+  options?: { companyId?: string }
+): Promise<{ total: number; available: string[]; missing: string[] }> {
+  const refs = collectAttachmentRefsFromBackupData(backupData);
+  if (refs.length === 0) return { total: 0, available: [], missing: [] };
+  const result = await verifyRefsResolvable(refs, signal, onProgress, {
+    localOnly: true,
+    companyId: options?.companyId,
+    galleryUrls: refs,
+  });
+  return { total: refs.length, available: result.ok, missing: result.missing };
 }
 
 async function prefetchRemoteRefs(
@@ -103,9 +126,12 @@ export async function preflightBackupAttachmentsBeforeEmbed(options: {
   signal?: AbortSignal;
   /** Local-only backup: server download skip; jo device par hai wahi embed. */
   skipOnlineAttachmentFetch?: boolean;
+  /** Gallery/preview jaisa local resolve (drive pairing, pending, native cache). */
+  companyId?: string;
   onProgress?: (p: { done: number; total: number; detail: string }) => void;
 }): Promise<BackupAttachmentPreflightResult> {
   const allRefs = collectAttachmentRefsFromBackupData(options.backupData);
+  const galleryUrls = allRefs;
   const cache = options.incrementalCache ?? new Map();
   const refsNeedingFetch = refsMissingFromIncrementalCache(allRefs, cache);
   const remoteRefs = refsNeedingFetch.filter(isRemoteAttachmentRef);
@@ -144,15 +170,20 @@ export async function preflightBackupAttachmentsBeforeEmbed(options: {
         ? "Checking local attachment files only (no server download)…"
         : "Checking local attachment files…",
     });
-    const first = await verifyRefsResolvable(refsNeedingFetch, options.signal, (done, total) => {
-      options.onProgress?.({
-        done,
-        total,
-        detail: skipOnlineFetch
-          ? "Checking local attachment files only (no server download)…"
-          : "Checking local attachment files…",
-      });
-    });
+    const first = await verifyRefsResolvable(
+      refsNeedingFetch,
+      options.signal,
+      (done, total) => {
+        options.onProgress?.({
+          done,
+          total,
+          detail: skipOnlineFetch
+            ? "Checking local attachment files only (no server download)…"
+            : "Checking local attachment files…",
+        });
+      },
+      { localOnly: true, companyId: options.companyId, galleryUrls }
+    );
     missingRefs = first.missing;
 
     const needDownload = missingRefs.filter(isRemoteAttachmentRef);
@@ -167,7 +198,10 @@ export async function preflightBackupAttachmentsBeforeEmbed(options: {
         detail: "Downloading missing attachment files…",
         onProgress: options.onProgress,
       });
-      const retryVerify = await verifyRefsResolvable(needDownload, options.signal);
+      const retryVerify = await verifyRefsResolvable(needDownload, options.signal, undefined, {
+        companyId: options.companyId,
+        galleryUrls,
+      });
       const fixedAfterRetry = new Set(retryVerify.ok);
       missingRefs = missingRefs.filter((r) => !fixedAfterRetry.has(r));
     }
@@ -192,7 +226,7 @@ export async function preflightBackupAttachmentsBeforeEmbed(options: {
     });
     const first = await verifyRefsResolvable(refsNeedingFetch, options.signal, (done, total) => {
       options.onProgress?.({ done, total, detail: "Verifying attachment files…" });
-    });
+    }, { companyId: options.companyId, galleryUrls });
     missingRefs = first.missing;
 
     const retryRemote = missingRefs.filter(isRemoteAttachmentRef);
@@ -207,7 +241,10 @@ export async function preflightBackupAttachmentsBeforeEmbed(options: {
         detail: "Retrying missing attachment files…",
         onProgress: options.onProgress,
       });
-      const retryVerify = await verifyRefsResolvable(retryRemote, options.signal);
+      const retryVerify = await verifyRefsResolvable(retryRemote, options.signal, undefined, {
+        companyId: options.companyId,
+        galleryUrls,
+      });
       const fixedAfterRetry = new Set(retryVerify.ok);
       missingRefs = missingRefs.filter((r) => !fixedAfterRetry.has(r));
     }

@@ -25,26 +25,55 @@ const ZOOM_MAX = 3;
 const ZOOM_STEP = 0.25;
 /** Fit Width/Height: natural-size layout × scale — chhoti scale allowed (lamba stitched JPG) */
 const FIT_ZOOM_MIN = 0.02;
+/**
+ * Fit-window safety: scrollbar (≈12–17px) client box chhota karti hai → tall files pe
+ * zoom up/down vibrate. Viewport-max se thoda chhota scale = scrollbar trigger nahi.
+ */
+const FIT_WINDOW_SAFETY = 0.96;
+const ZOOM_EQ_EPS = 0.008;
 
-/** Fit window: `z` jis se layout ke baad poora content (sab images) viewport ke andar ho */
-function computeFitWindowZoomFromImages(root: HTMLElement, cw: number, ch: number): number | null {
-  const imgs = [...root.querySelectorAll("img")].filter(
-    (n): n is HTMLImageElement =>
-      n instanceof HTMLImageElement && n.naturalWidth >= 2 && n.naturalHeight >= 1
-  );
-  if (imgs.length === 0) return null;
-  const innerW = Math.max(cw - 16, 1);
-  const innerH = Math.max(ch - 16, 1);
-  let maxNw = 0;
-  let sumNh = 0;
-  for (const im of imgs) {
-    maxNw = Math.max(maxNw, im.naturalWidth);
-    sumNh += im.naturalHeight;
-  }
-  // Har img par same `zoom`: width ≈ nw*z → total scroll width maxNw*z; vertical stack → height ≈ sumNh*z
-  const zw = innerW / maxNw;
-  const zh = innerH / Math.max(sumNh, 1);
-  const z = Math.min(zw, zh);
+function nearlyEqualZoom(a: number, b: number): boolean {
+  return Math.abs(a - b) < ZOOM_EQ_EPS;
+}
+
+function getPreviewViewportSize(): { width: number; height: number } {
+  if (typeof window === "undefined") return { width: 1024, height: 720 };
+  const vv = window.visualViewport;
+  const width = Math.floor(vv?.width || window.innerWidth || 1024);
+  const height = Math.floor(vv?.height || window.innerHeight || 720);
+  return {
+    width: Math.max(width, 240),
+    height: Math.max(height, 260),
+  };
+}
+
+function getViewportFitBox(galleryActive: boolean): {
+  maxW: number;
+  maxH: number;
+  maxContentW: number;
+  maxContentH: number;
+} {
+  const viewport = getPreviewViewportSize();
+  const maxW = Math.min(PANEL_MAX_W, Math.max(viewport.width - 20, PANEL_MIN_W));
+  const maxH = Math.min(Math.floor(viewport.height * 0.88), Math.max(viewport.height - 16, PANEL_MIN_H));
+  const galleryExtraH = galleryActive ? PANEL_GALLERY_EXTRA_H : 0;
+  return {
+    maxW,
+    maxH,
+    maxContentW: Math.max(maxW - PANEL_CONTENT_PAD_W, 1),
+    maxContentH: Math.max(maxH - PANEL_CHROME_H - galleryExtraH, 1),
+  };
+}
+
+/** Fit window: natural size × stable viewport box (clientWidth mat use — scrollbar loop) */
+function computeFitWindowZoomFromNatural(
+  natural: { width: number; height: number },
+  maxContentW: number,
+  maxContentH: number
+): number {
+  const zw = maxContentW / Math.max(natural.width, 1);
+  const zh = maxContentH / Math.max(natural.height, 1);
+  const z = Math.min(zw, zh) * FIT_WINDOW_SAFETY;
   return Math.min(ZOOM_MAX, Math.max(FIT_ZOOM_MIN, z));
 }
 
@@ -67,16 +96,6 @@ function getImageStackNaturalSize(root: HTMLElement): { width: number; height: n
   return { width, height };
 }
 
-/** Multi-attachment preview: pehli decode hui image se zoom ratio (sab img par same factor) */
-function getFirstSizedImg(root: HTMLElement): HTMLImageElement | null {
-  const list = root.querySelectorAll("img");
-  for (let i = 0; i < list.length; i++) {
-    const el = list[i];
-    if (el.naturalWidth >= 2) return el;
-  }
-  return list[0] ?? null;
-}
-
 type PanSession = {
   active: boolean;
   pointerId: number;
@@ -85,6 +104,15 @@ type PanSession = {
   scrollLeft: number;
   scrollTop: number;
 };
+
+function galleryIndexFromPointerTarget(target: EventTarget | null): number | null {
+  if (!(target instanceof HTMLElement)) return null;
+  const node = target.closest("[data-attachment-index]") as HTMLElement | null;
+  const raw = node?.dataset?.attachmentIndex;
+  if (raw == null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : null;
+}
 
 /** Hydration-safe nahi: useLayoutEffect se pehle paint tak false — coarse pointer / touch par tap-toggle (hover enter/leave mobile par turant band ho jata tha) */
 function detectTapInteractionMode(): boolean {
@@ -105,7 +133,7 @@ export function useTapInteractionMode(): boolean {
 }
 
 /** Default `window` = poora image scroll viewport ke andar fit (zoom change se chhota panel + mouse leave wala bug kam) */
-type FitMode = "window" | "width" | "height";
+type FitMode = "window" | "width" | "height" | "free";
 
 type AttachmentHoverPortalProps = {
   /** Hover trigger (icon / thumbnail) */
@@ -147,8 +175,10 @@ export function AttachmentHoverPortal({
   const clickOrTapOpenMode = useTapMode || forceClickPreview || globalClickMode;
   const [open, setOpen] = React.useState(false);
   const [zoom, setZoom] = React.useState(1);
-  /** Neeche Window / Width / Height — `window` default */
+  /** Neeche Window / Width / Height — `window` default; `free` = +/- manual zoom */
   const [fitMode, setFitMode] = React.useState<FitMode>("window");
+  const fitModeRef = React.useRef<FitMode>(fitMode);
+  fitModeRef.current = fitMode;
   /** Ek baar panel andar click → trigger/pointer-leave auto-close band + backdrop se bahar click = close */
   const [stickOpen, setStickOpen] = React.useState(false);
   const [galleryIndex, setGalleryIndex] = React.useState(0);
@@ -160,6 +190,9 @@ export function AttachmentHoverPortal({
     [galleryUrls]
   );
   const galleryActive = normalizedGalleryUrls.length > 1;
+  const activeGalleryUrl = galleryActive
+    ? normalizedGalleryUrls[Math.min(Math.max(galleryIndex, 0), Math.max(normalizedGalleryUrls.length - 1, 0))]
+    : "";
   const galleryState = React.useMemo(
     () => ({
       urls: normalizedGalleryUrls,
@@ -182,6 +215,11 @@ export function AttachmentHoverPortal({
   });
   const closeTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const clampGalleryIndex = React.useCallback(
+    (index: number) => Math.min(Math.max(0, index), Math.max(normalizedGalleryUrls.length - 1, 0)),
+    [normalizedGalleryUrls.length]
+  );
+
   const cancelClose = React.useCallback(() => {
     if (closeTimer.current) {
       clearTimeout(closeTimer.current);
@@ -199,19 +237,20 @@ export function AttachmentHoverPortal({
     if (!el) return;
     const r = el.getBoundingClientRect();
     const margin = 10;
+    const viewport = getPreviewViewportSize();
     const maxPanelW = Math.min(
       panelWidth ?? PANEL_MAX_W,
       PANEL_MAX_W,
-      window.innerWidth - 2 * margin
+      viewport.width - 2 * margin
     );
     let left = r.right + margin;
-    if (left + maxPanelW > window.innerWidth - margin) {
+    if (left + maxPanelW > viewport.width - margin) {
       left = Math.max(margin, r.left - maxPanelW - margin);
     }
     let top = r.top;
-    const maxH = Math.min(panelHeight ?? window.innerHeight * 0.88, window.innerHeight * 0.88);
-    if (top + maxH > window.innerHeight - margin) {
-      top = Math.max(margin, window.innerHeight - maxH - margin);
+    const maxH = Math.min(panelHeight ?? viewport.height * 0.88, viewport.height * 0.88);
+    if (top + maxH > viewport.height - margin) {
+      top = Math.max(margin, viewport.height - maxH - margin);
     }
     setPos({ top, left });
   }, [panelWidth, panelHeight]);
@@ -220,26 +259,29 @@ export function AttachmentHoverPortal({
   const syncPanelWidthFromContent = React.useCallback(() => {
     const root = scrollRef.current;
     if (!root || typeof window === "undefined") return;
-    const maxW = Math.min(PANEL_MAX_W, Math.max(window.innerWidth - 20, PANEL_MIN_W));
-    const maxH = Math.min(Math.floor(window.innerHeight * 0.88), Math.max(window.innerHeight - 16, PANEL_MIN_H));
+    const { maxW, maxH, maxContentW, maxContentH } = getViewportFitBox(galleryActive);
     const galleryExtraH = galleryActive ? PANEL_GALLERY_EXTRA_H : 0;
-    const maxContentW = Math.max(maxW - PANEL_CONTENT_PAD_W, 1);
-    const maxContentH = Math.max(maxH - PANEL_CHROME_H - galleryExtraH, 1);
 
     const attempt = (n: number) => {
       if (n > 48) return;
       const natural = getImageStackNaturalSize(root);
       if (natural) {
-        const fitWindowScale = Math.min(maxContentW / natural.width, maxContentH / Math.max(natural.height, 1));
+        const fitWindowScale = computeFitWindowZoomFromNatural(natural, maxContentW, maxContentH);
         const fitWidthScale = maxContentW / natural.width;
-        const fitHeightScale = maxContentH / Math.max(natural.height, 1);
+        const fitHeightScale = (maxContentH / Math.max(natural.height, 1)) * FIT_WINDOW_SAFETY;
         const scale =
           fitMode === "width"
             ? fitWidthScale
             : fitMode === "height"
               ? fitHeightScale
-              : fitWindowScale;
+              : fitMode === "free"
+                ? zoom
+                : fitWindowScale;
         const safeScale = Math.min(ZOOM_MAX, Math.max(FIT_ZOOM_MIN, scale));
+        /** Fit modes: panel size aur img zoom ek hi scale — warna Fit window blue + 100% zoom + scrollbar */
+        if (fitMode === "window" || fitMode === "width" || fitMode === "height") {
+          setZoom((prev) => (nearlyEqualZoom(prev, safeScale) ? prev : safeScale));
+        }
         const desiredW = natural.width * safeScale + PANEL_CONTENT_PAD_W + (galleryActive ? 20 : 0);
         const desiredH = natural.height * safeScale + PANEL_CHROME_H + PANEL_CONTENT_PAD_H + galleryExtraH;
         const nextW = clampPanelSize(desiredW, PANEL_MIN_W, maxW);
@@ -273,54 +315,57 @@ export function AttachmentHoverPortal({
       setPanelHeight((prev) => (prev === nextH ? prev : nextH));
     };
     requestAnimationFrame(() => attempt(0));
-  }, [fitMode, galleryActive]);
+  }, [fitMode, galleryActive, zoom]);
+
+  const setZoomIfChanged = React.useCallback((next: number) => {
+    setZoom((prev) => (nearlyEqualZoom(prev, next) ? prev : next));
+  }, []);
 
   const applyFitWidth = React.useCallback(() => {
     const root = scrollRef.current;
-    if (!root) return;
-    const img = getFirstSizedImg(root);
-    if (!img || img.naturalWidth < 2) return;
+    if (!root || typeof window === "undefined") return;
+    setFitMode("width");
+    fitModeRef.current = "width";
+    const { maxContentW } = getViewportFitBox(galleryActive);
 
     const attempt = (n: number) => {
-      if (n > 60) return;
-      if (root.clientWidth < 2) {
+      if (n > 60 || fitModeRef.current !== "width") return;
+      const natural = getImageStackNaturalSize(root);
+      if (!natural) {
         requestAnimationFrame(() => attempt(n + 1));
         return;
       }
-      const cw = Math.max(root.clientWidth - 16, 1);
-      const nw = img.naturalWidth;
-      const z = Math.min(ZOOM_MAX, Math.max(FIT_ZOOM_MIN, cw / nw));
-      setZoom(z);
-      setFitMode("width");
+      const z = Math.min(ZOOM_MAX, Math.max(FIT_ZOOM_MIN, maxContentW / natural.width));
+      setZoomIfChanged(z);
       requestAnimationFrame(() => {
         root.scrollTo({ left: 0, top: 0, behavior: "auto" });
       });
     };
     attempt(0);
-  }, []);
+  }, [setZoomIfChanged, galleryActive]);
 
   const applyFitHeight = React.useCallback(() => {
     const root = scrollRef.current;
-    if (!root) return;
-    const img = getFirstSizedImg(root);
-    if (!img || img.naturalWidth < 2) return;
+    if (!root || typeof window === "undefined") return;
+    setFitMode("height");
+    fitModeRef.current = "height";
+    const { maxContentW, maxContentH } = getViewportFitBox(galleryActive);
 
     const attempt = (n: number) => {
-      if (n > 60) return;
-      if (root.clientWidth < 2 || root.clientHeight < 2) {
+      if (n > 60 || fitModeRef.current !== "height") return;
+      const natural = getImageStackNaturalSize(root);
+      if (!natural) {
         requestAnimationFrame(() => attempt(n + 1));
         return;
       }
-      const cw = Math.max(root.clientWidth - 16, 1);
-      const ch = Math.max(root.clientHeight - 16, 1);
-      const nw = img.naturalWidth;
-      const nh = img.naturalHeight;
       const z = Math.min(
         ZOOM_MAX,
-        Math.max(FIT_ZOOM_MIN, Math.min(cw / nw, ch / nh))
+        Math.max(
+          FIT_ZOOM_MIN,
+          Math.min(maxContentW / natural.width, maxContentH / natural.height) * FIT_WINDOW_SAFETY
+        )
       );
-      setZoom(z);
-      setFitMode("height");
+      setZoomIfChanged(z);
       requestAnimationFrame(() => {
         const sl = Math.max(0, (root.scrollWidth - root.clientWidth) / 2);
         const st = Math.max(0, (root.scrollHeight - root.clientHeight) / 2);
@@ -328,73 +373,45 @@ export function AttachmentHoverPortal({
       });
     };
     attempt(0);
-  }, []);
+  }, [setZoomIfChanged, galleryActive]);
 
-  /** Poori preview (multi-image stack bhi) scroll area ke andar fit */
+  /** Poori preview — stable viewport box se zoom (client/scrollbar pe mat loop) */
   const applyFitWindow = React.useCallback(() => {
     const root = scrollRef.current;
-    if (!root) return;
+    if (!root || typeof window === "undefined") return;
+    setFitMode("window");
+    fitModeRef.current = "window";
+    const { maxContentW, maxContentH } = getViewportFitBox(galleryActive);
 
     const attempt = (n: number) => {
-      if (n > 60) return;
-      if (root.clientWidth < 2 || root.clientHeight < 2) {
+      if (n > 60 || fitModeRef.current !== "window") return;
+      const natural = getImageStackNaturalSize(root);
+      if (!natural) {
+        /** PDF/thumb baad me aata hai — zoom 100% pe mat chhodna */
         requestAnimationFrame(() => attempt(n + 1));
         return;
       }
-      const cw = Math.max(root.clientWidth, 1);
-      const ch = Math.max(root.clientHeight, 1);
-      let z = computeFitWindowZoomFromImages(root, cw, ch);
-      if (z == null) {
-        const img = getFirstSizedImg(root);
-        if (!img || img.naturalWidth < 2) return;
-        const nw = img.naturalWidth;
-        const nh = Math.max(img.naturalHeight, 1);
-        const innerW = Math.max(cw - 16, 1);
-        const innerH = Math.max(ch - 16, 1);
-        z = Math.min(ZOOM_MAX, Math.max(FIT_ZOOM_MIN, Math.min(innerW / nw, innerH / nh)));
-      }
-      setZoom(z);
-      setFitMode("window");
-      /** Pehli paint ke baad scrollWidth/Height — flex `gap` + rounding; analytical `z` kabhi thoda chhota */
+      const z = computeFitWindowZoomFromNatural(natural, maxContentW, maxContentH);
+      setZoomIfChanged(z);
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          const r = scrollRef.current;
-          if (!r) return;
-          const ratio = Math.min(
-            r.clientHeight / Math.max(r.scrollHeight, 1),
-            r.clientWidth / Math.max(r.scrollWidth, 1),
-            1
-          );
-          const z2 = Math.max(FIT_ZOOM_MIN, Math.min(ZOOM_MAX, z * ratio));
-          if (ratio < 0.995) {
-            setZoom(z2);
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                const r2 = scrollRef.current;
-                if (!r2) return;
-                const sl = Math.max(0, (r2.scrollWidth - r2.clientWidth) / 2);
-                const st = Math.max(0, (r2.scrollHeight - r2.clientHeight) / 2);
-                r2.scrollTo({ left: sl, top: st, behavior: "auto" });
-              });
-            });
-          } else {
-            const sl = Math.max(0, (r.scrollWidth - r.clientWidth) / 2);
-            const st = Math.max(0, (r.scrollHeight - r.clientHeight) / 2);
-            r.scrollTo({ left: sl, top: st, behavior: "auto" });
-          }
-        });
+        const r = scrollRef.current;
+        if (!r) return;
+        r.scrollTo({ left: 0, top: 0, behavior: "auto" });
       });
     };
     attempt(0);
-  }, []);
+  }, [setZoomIfChanged, galleryActive]);
 
-  const handleOpen = React.useCallback(() => {
+  const handleOpen = React.useCallback((initialGalleryIndex?: number | null) => {
     if (effectiveDisabled) return;
     cancelClose();
     setStickOpen(false);
+    if (galleryActive && initialGalleryIndex != null) {
+      setGalleryIndex(clampGalleryIndex(initialGalleryIndex));
+    }
     updatePosition();
     setOpen(true);
-  }, [effectiveDisabled, cancelClose, updatePosition]);
+  }, [effectiveDisabled, cancelClose, updatePosition, galleryActive, clampGalleryIndex]);
 
   /** FilePreview: Preview button se bina hover ke panel kholna */
   React.useEffect(() => {
@@ -425,9 +442,11 @@ export function AttachmentHoverPortal({
     const onScrollOrResize = () => updatePosition();
     window.addEventListener("scroll", onScrollOrResize, true);
     window.addEventListener("resize", onScrollOrResize);
+    window.visualViewport?.addEventListener("resize", onScrollOrResize);
     return () => {
       window.removeEventListener("scroll", onScrollOrResize, true);
       window.removeEventListener("resize", onScrollOrResize);
+      window.visualViewport?.removeEventListener("resize", onScrollOrResize);
     };
   }, [open, updatePosition, clickOrTapOpenMode]);
 
@@ -435,12 +454,30 @@ export function AttachmentHoverPortal({
     setGalleryIndex(0);
   }, [normalizedGalleryUrls.join("\x1e")]);
 
-  /** Gallery file badalne par dubara fit-to-window */
+  /** Gallery file badalne par purane image ka zoom/panel size carry na ho. */
   React.useLayoutEffect(() => {
     if (!open || !galleryActive) return;
-    applyFitWindow();
-    syncPanelWidthFromContent();
-  }, [open, galleryActive, galleryState.index, applyFitWindow, syncPanelWidthFromContent]);
+    const root = scrollRef.current;
+    root?.scrollTo({ left: 0, top: 0, behavior: "auto" });
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = requestAnimationFrame(() => {
+      fitModeRef.current = "window";
+      lastFitSignatureRef.current = "";
+      setFitMode("window");
+      setZoom(1);
+      setPanelWidth(null);
+      setPanelHeight(null);
+      raf2 = requestAnimationFrame(() => {
+        applyFitWindow();
+        syncPanelWidthFromContent();
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [open, galleryActive, galleryState.index, activeGalleryUrl, applyFitWindow, syncPanelWidthFromContent]);
 
   /** Default: fit to window — `preview` dep mat rakho (har render naya ref = loop) */
   React.useLayoutEffect(() => {
@@ -470,11 +507,14 @@ export function AttachmentHoverPortal({
 
   /**
    * Har `<img>` ko `width = naturalW * zoom` — multi-file stack + PDF thumb baad me aaye to MutationObserver.
+   * Fit window: ResizeObserver pe dubara fit MAT — tall files pe scrollbar↔zoom vibrate hota tha.
    */
   const [scrollable, setScrollable] = React.useState(false);
+  const lastFitSignatureRef = React.useRef("");
   React.useLayoutEffect(() => {
     if (!open) {
       setScrollable(false);
+      lastFitSignatureRef.current = "";
       return;
     }
     const root = scrollRef.current;
@@ -483,6 +523,11 @@ export function AttachmentHoverPortal({
     const syncScrollable = () => {
       const r = scrollRef.current;
       if (!r) return;
+      /** Fit window/height: overflow hidden — scrollable flag vibration avoid */
+      if (fitModeRef.current === "window" || fitModeRef.current === "height") {
+        setScrollable(false);
+        return;
+      }
       setScrollable(r.scrollWidth > r.clientWidth + 2 || r.scrollHeight > r.clientHeight + 2);
     };
 
@@ -500,7 +545,41 @@ export function AttachmentHoverPortal({
       syncPanelWidthFromContent();
     };
 
-    const onImgLoad = () => applyLayoutAll();
+    const fitSignature = () => {
+      const natural = getImageStackNaturalSize(root);
+      if (!natural) return "";
+      return `${fitModeRef.current}:${natural.width}x${natural.height}`;
+    };
+
+    const refitIfNeeded = () => {
+      const mode = fitModeRef.current;
+      const sig = fitSignature();
+      if (!sig) return;
+      /** Same natural size pe dubara fit = tall-file zoom loop */
+      if (sig === lastFitSignatureRef.current && (mode === "window" || mode === "height" || mode === "width")) {
+        applyLayoutAll();
+        return;
+      }
+      lastFitSignatureRef.current = sig;
+      if (mode === "window") {
+        applyFitWindow();
+        return;
+      }
+      if (mode === "width") {
+        applyFitWidth();
+        return;
+      }
+      if (mode === "height") {
+        applyFitHeight();
+        return;
+      }
+      applyLayoutAll();
+    };
+
+    const onImgLoad = () => {
+      lastFitSignatureRef.current = "";
+      refitIfNeeded();
+    };
     const bindImgLoads = () => {
       root.querySelectorAll("img").forEach((img) => {
         if (!img.complete) img.addEventListener("load", onImgLoad, { once: true });
@@ -513,6 +592,7 @@ export function AttachmentHoverPortal({
     const ro =
       typeof ResizeObserver !== "undefined"
         ? new ResizeObserver(() => {
+            /** Sirf layout sync — applyFitWindow yahan mat (scrollbar vibrate) */
             applyLayoutAll();
             syncScrollable();
           })
@@ -523,19 +603,33 @@ export function AttachmentHoverPortal({
       typeof MutationObserver !== "undefined"
         ? new MutationObserver(() => {
             bindImgLoads();
-            applyLayoutAll();
+            refitIfNeeded();
           })
         : null;
     mo?.observe(root, { childList: true, subtree: true });
 
-    window.addEventListener("resize", syncScrollable);
+    const onWinResize = () => {
+      lastFitSignatureRef.current = "";
+      if (
+        fitModeRef.current === "window" ||
+        fitModeRef.current === "width" ||
+        fitModeRef.current === "height"
+      ) {
+        refitIfNeeded();
+      } else {
+        syncScrollable();
+      }
+    };
+    window.addEventListener("resize", onWinResize);
+    window.visualViewport?.addEventListener("resize", onWinResize);
 
     return () => {
       ro?.disconnect();
       mo?.disconnect();
-      window.removeEventListener("resize", syncScrollable);
+      window.removeEventListener("resize", onWinResize);
+      window.visualViewport?.removeEventListener("resize", onWinResize);
     };
-  }, [open, zoom, syncPanelWidthFromContent]);
+  }, [open, zoom, syncPanelWidthFromContent, applyFitWindow, applyFitWidth, applyFitHeight]);
 
   React.useEffect(() => () => cancelClose(), [cancelClose]);
 
@@ -629,10 +723,10 @@ export function AttachmentHoverPortal({
     }
   };
 
-  const handleTriggerPointerEnter = () => {
+  const handleTriggerPointerEnter = (e: React.PointerEvent<HTMLSpanElement>) => {
     if (effectiveDisabled || !openOnHover) return;
     if (useTapMode || globalClickMode) return;
-    handleOpen();
+    handleOpen(galleryIndexFromPointerTarget(e.target));
   };
 
   /** `openOnHover={false}` par bhi chhodne par delay-close — panel `pointerenter` se cancel (thumb→panel gap safe) */
@@ -656,30 +750,31 @@ export function AttachmentHoverPortal({
     if (!wantClick) return;
     e.preventDefault();
     e.stopPropagation();
+    const targetIndex = galleryIndexFromPointerTarget(e.target);
     setOpen((prev) => {
       if (prev) {
         setStickOpen(false);
         return false;
       }
       setStickOpen(false);
+      if (galleryActive && targetIndex != null) {
+        setGalleryIndex(clampGalleryIndex(targetIndex));
+      }
       updatePosition();
       return true;
     });
   };
 
-  const viewportMaxPanelW =
-    typeof window !== "undefined"
-      ? Math.min(PANEL_MAX_W, Math.max(window.innerWidth - 20, PANEL_MIN_W))
-      : PANEL_MAX_W;
-  const viewportMaxPanelH =
-    typeof window !== "undefined"
-      ? Math.min(Math.floor(window.innerHeight * 0.88), Math.max(window.innerHeight - 16, 260))
-      : 720;
+  const previewViewport = typeof window !== "undefined" ? getPreviewViewportSize() : { width: PANEL_MAX_W, height: 720 };
+  const viewportMaxPanelW = Math.min(PANEL_MAX_W, Math.max(previewViewport.width - 20, PANEL_MIN_W));
+  const viewportMaxPanelH = Math.min(Math.floor(previewViewport.height * 0.88), Math.max(previewViewport.height - 16, 260));
   const effectivePanelW =
     panelWidth != null ? Math.min(panelWidth, viewportMaxPanelW) : viewportMaxPanelW;
   const effectivePanelH =
     panelHeight != null ? Math.min(panelHeight, viewportMaxPanelH) : viewportMaxPanelH;
-  const shouldUseMaxPreviewFrame = clickOrTapOpenMode || fitMode === "window" || fitMode === "height";
+  const measuredPanelHeight = panelHeight != null;
+  const panelHeightStyle = measuredPanelHeight ? effectivePanelH : undefined;
+  const measuredContentFrame = measuredPanelHeight && (fitMode === "window" || fitMode === "height");
 
   const portalTree =
     open &&
@@ -716,7 +811,7 @@ export function AttachmentHoverPortal({
                   borderRadius: "15mm",
                   width: effectivePanelW,
                   maxWidth: viewportMaxPanelW,
-                  height: shouldUseMaxPreviewFrame ? effectivePanelH : undefined,
+                  height: panelHeightStyle,
                   maxHeight: viewportMaxPanelH,
                 }
               : {
@@ -726,7 +821,7 @@ export function AttachmentHoverPortal({
                   borderRadius: "15mm",
                   width: effectivePanelW,
                   maxWidth: viewportMaxPanelW,
-                  height: shouldUseMaxPreviewFrame ? effectivePanelH : undefined,
+                  height: panelHeightStyle,
                   maxHeight: viewportMaxPanelH,
                 }
           }
@@ -744,7 +839,7 @@ export function AttachmentHoverPortal({
             <span className="text-xs font-medium text-muted-foreground">Preview</span>
           </div>
 
-          <div className="relative flex min-h-0 flex-1 flex-col">
+          <div className={cn("relative flex min-h-0 flex-col", measuredPanelHeight ? "flex-1" : "shrink-0")}>
             {galleryActive ? (
               <>
                 <Button
@@ -783,7 +878,10 @@ export function AttachmentHoverPortal({
             <div
               ref={scrollRef}
               className={cn(
-                "min-h-0 flex-1 select-none overflow-auto bg-white px-2 pb-2 pt-1 dark:bg-zinc-950",
+                "min-h-0 select-none bg-white px-2 pb-2 pt-1 dark:bg-zinc-950",
+                measuredPanelHeight ? "flex-1" : "shrink-0",
+                /** Fit window/height: overflow hidden — tall file pe scrollbar zoom loop band */
+                measuredContentFrame ? "overflow-hidden" : "overflow-auto",
                 scrollable ? "cursor-grab active:cursor-grabbing" : "cursor-default"
               )}
               style={{ touchAction: "pan-x pan-y" }}
@@ -799,7 +897,12 @@ export function AttachmentHoverPortal({
             >
               <AttachmentPreviewGalleryContext.Provider value={galleryActive ? galleryState : null}>
                 <div className="flex min-w-0 w-full items-start justify-center py-1">
-                  <div className="inline-block w-max max-w-none shrink-0">{preview}</div>
+                  <div
+                    key={galleryActive ? `${galleryState.index}:${activeGalleryUrl}` : "single"}
+                    className="inline-block w-max max-w-none shrink-0"
+                  >
+                    {preview}
+                  </div>
                 </div>
               </AttachmentPreviewGalleryContext.Provider>
             </div>
@@ -819,9 +922,11 @@ export function AttachmentHoverPortal({
               size="icon"
               className="h-9 w-9 shrink-0"
               aria-label="Zoom out"
-              onClick={() =>
-                setZoom((z) => Math.max(FIT_ZOOM_MIN, Math.round((z - ZOOM_STEP) * 100) / 100))
-              }
+              onClick={() => {
+                fitModeRef.current = "free";
+                setFitMode("free");
+                setZoom((z) => Math.max(FIT_ZOOM_MIN, Math.round((z - ZOOM_STEP) * 100) / 100));
+              }}
             >
               <ZoomOut className="h-4 w-4" />
             </Button>
@@ -832,7 +937,11 @@ export function AttachmentHoverPortal({
               size="icon"
               className="h-9 w-9 shrink-0"
               aria-label="Zoom in"
-              onClick={() => setZoom((z) => Math.min(ZOOM_MAX, Math.round((z + ZOOM_STEP) * 100) / 100))}
+              onClick={() => {
+                fitModeRef.current = "free";
+                setFitMode("free");
+                setZoom((z) => Math.min(ZOOM_MAX, Math.round((z + ZOOM_STEP) * 100) / 100));
+              }}
             >
               <ZoomIn className="h-4 w-4" />
             </Button>

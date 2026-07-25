@@ -11,12 +11,19 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import type { Company } from "@/hooks/useCompany";
 import { useFirstLoginWarmGate } from "@/contexts/FirstLoginWarmGateContext";
+import {
+  clearHeaderAttachmentPrefetchForCompany,
+  reportHeaderAttachmentPrefetchProgress,
+} from "@/contexts/EmbeddedAttachmentPrefetchContext";
 import { shouldPrefetchAttachmentsForCompany } from "@/lib/offlineFullWarmSync";
 import {
   EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
   runEmbeddedCompanyFullPreload,
 } from "@/lib/embeddedAccountOfflineWarm";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
+import { isFirebaseLedgerLocalDeltaMode } from "@/lib/firebaseLedgerSyncMode";
+import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
+import { isFirebaseLedgerCompanyAttachmentSyncEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
 const DEBOUNCE_AFTER_COMPANY_MS = 2_800;
 
 export function CompanyAttachmentOfflineBackfillManager() {
@@ -33,6 +40,8 @@ export function CompanyAttachmentOfflineBackfillManager() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (!isFirebaseLedgerLocalDeltaMode()) return;
+    if (isFirebaseLedgerDataSyncDisabled()) return;
     // EXE: `OfflineWarmSyncManager` already serial warm chalata hai — duplicate prefetch + header % flicker avoid.
     if (isElectronDesktopApp()) return;
     if (debounceRef.current) {
@@ -47,6 +56,7 @@ export function CompanyAttachmentOfflineBackfillManager() {
     if (!shouldPrefetchAttachmentsForCompany(c as Company)) return;
     if (gateActive) return;
     const cid = companyId.trim();
+    if (!isFirebaseLedgerCompanyAttachmentSyncEnabled(cid)) return;
 
     debounceRef.current = setTimeout(() => {
       debounceRef.current = null;
@@ -67,6 +77,7 @@ export function CompanyAttachmentOfflineBackfillManager() {
             localCompanyId: cid,
             signal: ac.signal,
             prefetchOverrides: EMBEDDED_FIRST_LOGIN_ATTACHMENT_PREFETCH,
+            onAttachmentProgressPercent: (pct) => reportHeaderAttachmentPrefetchProgress(cid, pct),
           });
         } catch {
           /* abort / offline */
@@ -74,6 +85,7 @@ export function CompanyAttachmentOfflineBackfillManager() {
           if (process.env.NODE_ENV !== "production" && !ac.signal.aborted) {
             console.log("[ATTACHMENT_SYNC]", "CompanyAttachmentOfflineBackfillManager:done", { companyId: cid });
           }
+          if (ac.signal.aborted) clearHeaderAttachmentPrefetchForCompany(cid);
         }
       })();
     }, DEBOUNCE_AFTER_COMPANY_MS);
@@ -85,6 +97,7 @@ export function CompanyAttachmentOfflineBackfillManager() {
       }
       runAbortRef.current?.abort();
       runAbortRef.current = null;
+      clearHeaderAttachmentPrefetchForCompany(companyId);
     };
   }, [user, loading, companyId, gateActive]);
 

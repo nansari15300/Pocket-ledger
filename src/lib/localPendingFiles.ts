@@ -34,6 +34,7 @@ import { shouldReadLedgerFromSqliteOnly } from "@/lib/companyStorageKind";
 import { shouldUseLocalCloudSync, isEligibleLocalDriveSyncCompanyRow } from "@/lib/localCloudSync/companyConfig";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
 import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 
 const STORE = "pendingFiles";
 const ATTACHMENT_HOLD_CLIPBOARD_PREFIX = "PL_ATTACH_V1:";
@@ -230,6 +231,21 @@ async function resolvePendingTargetDocOrRemoveOrphan(
     data = await readCompanyDocForPendingSync(docPath, { includeDeleted: true });
   }
   if (!data) {
+    const companyId = companyIdFromDocPath(docPath);
+    const { isLocalAttachmentRestoreHoldActive, readLocalBackupRestoreSelectionGrace } = await import(
+      "@/lib/localBackupRestoreCompany"
+    );
+    // Restore window: vouchers abhi likhe ja rahe hain — pending bytes delete mat karo.
+    if (
+      (companyId && isLocalAttachmentRestoreHoldActive(companyId)) ||
+      (companyId && readLocalBackupRestoreSelectionGrace(companyId, 180_000))
+    ) {
+      console.warn("[localPendingFiles] orphan delete skipped — backup restore in progress", {
+        docPath,
+        localId,
+      });
+      return null;
+    }
     try {
       await removePendingFile(localId);
     } catch {
@@ -338,7 +354,7 @@ export async function resolvePendingAttachmentCloudSyncProvider(
 }
 
 /** Pending item → device registry company id (Drive upload + SQLite patch). */
-async function resolveRegistryCompanyIdForPendingItem(item: PendingFilePayload): Promise<string | null> {
+export async function resolveRegistryCompanyIdForPendingItem(item: PendingFilePayload): Promise<string | null> {
   const fromPath = resolvePendingPayloadCompanyId(item);
   if (!fromPath) return null;
   const reg = await getLocalCompanyById(fromPath, { includeDeleted: true });
@@ -539,6 +555,55 @@ function pendingFileDataDirPath(id: string, fileName?: string): string {
   return `attachments/pending/${id}.${ext}`;
 }
 
+function safePortableCompanyFolderSegment(value: unknown): string {
+  const raw = String(value || "").trim();
+  const cleaned = raw
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  return cleaned || "Company";
+}
+
+async function pendingFilePortableCompanyDataDirPath(
+  id: string,
+  fileName: string | undefined,
+  docPath: string
+): Promise<string> {
+  const legacy = pendingFileDataDirPath(id, fileName);
+  const companyId = companyIdFromDocPath(docPath);
+  if (!companyId) return legacy;
+  let companyName = "";
+  let ownerEmail: string | null = null;
+  try {
+    const row = await getLocalCompanyById(companyId, { includeDeleted: true });
+    companyName = String(row?.name || "").trim();
+    ownerEmail = row?.ownerEmail ? String(row.ownerEmail) : null;
+  } catch {
+    companyName = "";
+  }
+  const file = legacy.split("/").pop() || `${id}.bin`;
+  const folder = `${safePortableCompanyFolderSegment(companyName || companyId)}__${safePortableCompanyFolderSegment(companyId)}`;
+  try {
+    const manifest = {
+      pocketLedgerCompanyFolder: true,
+      version: 1,
+      id: companyId,
+      name: companyName || companyId,
+      ownerEmail,
+      createdAtMs: Date.now(),
+      note: "Portable company folder. Encryption will be added in a later phase.",
+    };
+    await writeAttachmentBlobToDataDir(
+      `companies/${folder}/company.json`,
+      new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" })
+    );
+  } catch {
+    /* manifest is best-effort; attachment write must continue */
+  }
+  return `companies/${folder}/pl-attachments/pending/${file}`;
+}
+
 function parsePendingMeta(metaJson: string | null): PendingFileMeta | null {
   if (!metaJson) return null;
   try {
@@ -642,23 +707,23 @@ async function getPendingFileById(
     const row = await getAttachmentFileRef("pending_file", localId);
     if (!row) return null;
     const meta = parsePendingMeta(row.metaJson);
-    if (!meta) return null;
     const blob = await readAttachmentBlobFromDataDir(
       row.filePath,
       row.contentType,
       row.sha256Hex ?? undefined
     );
     if (!blob || blob.size <= 0) return null;
+    // Meta incomplete (restore race) — preview/open ke liye bytes phir bhi return karo.
     return {
       id: localId,
       blob,
       contentType: row.contentType || blob.type || "application/octet-stream",
-      docPath: meta.docPath,
-      field: meta.field,
-      arrayIndex: meta.arrayIndex,
-      storagePathPrefix: meta.storagePathPrefix,
-      fileName: meta.fileName,
-      createdAt: meta.createdAt,
+      docPath: meta?.docPath || `companies/_/pending/${localId}`,
+      field: meta?.field || "fileUrls",
+      arrayIndex: meta?.arrayIndex,
+      storagePathPrefix: meta?.storagePathPrefix || `companies/_/pending-files`,
+      fileName: meta?.fileName,
+      createdAt: meta?.createdAt,
     };
   }
   // Direct `get(id)` — `getAll` se zyada reliable + race kam (flush/hydrate hot path).
@@ -736,6 +801,7 @@ export async function uploadPendingLocalFileRef(
   /** Sync cycle ne blob pehle hi padha ho to APK par dobara readFile/fetch avoid. */
   preloaded?: PendingFilePayload | null
 ): Promise<string> {
+  if (isFirebaseLedgerDataSyncDisabled()) return localFileRef;
   if (!isLocalFileRef(localFileRef)) return localFileRef;
   const localId = localFileRef.slice(LOCAL_FILE_PREFIX.length);
   if (!localId) return localFileRef;
@@ -782,6 +848,54 @@ export type PutPendingFileOptions = {
   skipPlServerAttachmentUploadEnqueue?: boolean;
 };
 
+/**
+ * PL staff / local: save ke turant baad FilePreview spinner → generic FILE avoid —
+ * blob URL + offline cache + hover LRU seed (host upload ke pehle hi).
+ */
+async function seedPendingAttachmentPreviewUi(
+  localId: string,
+  blob: Blob,
+  displayUrl?: string | null
+): Promise<void> {
+  const id = String(localId || "").trim();
+  if (!id || !blob?.size) return;
+  const localRef = `${LOCAL_FILE_PREFIX}${id}`;
+  let url = String(displayUrl || "").trim();
+  if (!url && typeof URL !== "undefined") {
+    try {
+      url = URL.createObjectURL(blob);
+    } catch {
+      url = "";
+    }
+  }
+  if (url) {
+    const prev = localFileRefMetaRuntimeCache.get(id);
+    if (prev && !prev.displayUrl) {
+      setLocalFileRefMetaCache({ ...prev, displayUrl: url });
+    }
+    try {
+      const { rememberHoverBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
+      rememberHoverBlobUrl(localRef, url);
+      rememberHoverBlobUrl(`${localRef}::cell-thumb`, url);
+    } catch {
+      /* preview optional */
+    }
+  }
+  try {
+    const { seedOfflineAttachmentCacheFromBlob } = await import("@/lib/offlineAttachmentUrlCache");
+    await seedOfflineAttachmentCacheFromBlob(localRef, blob);
+  } catch {
+    /* cache optional */
+  }
+  try {
+    const { markAttachmentUrlReady, requestAttachmentUiRefresh } = await import("@/lib/attachmentLoadReady");
+    markAttachmentUrlReady(localRef);
+    requestAttachmentUiRefresh();
+  } catch {
+    /* ui optional */
+  }
+}
+
 export async function putPendingFile(
   payload: PendingFilePayload,
   options?: PutPendingFileOptions
@@ -797,7 +911,11 @@ export async function putPendingFile(
   };
   if (usesEmbeddedNativeAttachmentStorage()) {
     // APK/EXE: bytes disk par; SQLite me path/meta row.
-    const path = pendingFileDataDirPath(normalizedPayload.id, normalizedPayload.fileName);
+    const path = await pendingFilePortableCompanyDataDirPath(
+      normalizedPayload.id,
+      normalizedPayload.fileName,
+      normalizedPayload.docPath
+    );
     const ok = await writeAttachmentBlobToDataDir(path, normalizedPayload.blob);
     if (!ok) throw new Error("Failed to persist pending attachment on device storage");
     const sha256Hex = await computeSha256HexFromBlob(normalizedPayload.blob);
@@ -829,6 +947,13 @@ export async function putPendingFile(
     } else {
       displayUrl = (await electronAttachmentDisplayUrlFromPath(path, normalizedPayload.contentType)) ?? undefined;
     }
+    if (!displayUrl && typeof URL !== "undefined" && normalizedPayload.blob?.size) {
+      try {
+        displayUrl = URL.createObjectURL(normalizedPayload.blob);
+      } catch {
+        displayUrl = undefined;
+      }
+    }
     setLocalFileRefMetaCache({
       id: normalizedPayload.id,
       contentType: normalizedPayload.contentType,
@@ -842,6 +967,7 @@ export async function putPendingFile(
       field: normalizedPayload.field,
       storagePathPrefix: normalizedPayload.storagePathPrefix,
     });
+    await seedPendingAttachmentPreviewUi(normalizedPayload.id, normalizedPayload.blob, displayUrl);
     if (!options?.skipPlServerAttachmentUploadEnqueue) {
       const { enqueuePlServerAttachmentUpload } = await import("@/lib/plServerAttachmentUploadQueue");
       enqueuePlServerAttachmentUpload(normalizedPayload);
@@ -856,17 +982,27 @@ export async function putPendingFile(
     store.put(row);
     tx.oncomplete = () => {
       db.close();
-      // Web preview: `getLocalFileRefMetaSync` / UI — native `putPendingFile` jaisa runtime cache seed (IDB ke alawa fast path).
+      // Web: blob URL seed — FilePreview `immediateLocalInfo` + hover LRU (IDB read race avoid).
+      let displayUrl: string | undefined;
+      if (typeof URL !== "undefined" && normalizedPayload.blob?.size) {
+        try {
+          displayUrl = URL.createObjectURL(normalizedPayload.blob);
+        } catch {
+          displayUrl = undefined;
+        }
+      }
       setLocalFileRefMetaCache({
         id: normalizedPayload.id,
         contentType: normalizedPayload.contentType,
         fileName: normalizedPayload.fileName,
+        displayUrl,
         size: normalizedPayload.blob.size || 0,
         createdAt,
         docPath: normalizedPayload.docPath,
         field: normalizedPayload.field,
         storagePathPrefix: normalizedPayload.storagePathPrefix,
       });
+      void seedPendingAttachmentPreviewUi(normalizedPayload.id, normalizedPayload.blob, displayUrl);
       if (!options?.skipPlServerAttachmentUploadEnqueue) {
         void import("@/lib/plServerAttachmentUploadQueue").then(({ enqueuePlServerAttachmentUpload }) => {
           enqueuePlServerAttachmentUpload(normalizedPayload);
@@ -890,7 +1026,11 @@ export async function putPendingFile(
  * phir SQLite index turant flush — agla file / reload se pehle bytes safe rahein.
  */
 export async function saveRestoredAttachmentFile(payload: PendingFilePayload): Promise<string> {
-  await putPendingFile({ ...payload, requireSqliteIndex: true });
+  // Restore ke dauran PL/Firebase upload queue mat chalao — orphan sync bytes delete kar deta tha.
+  await putPendingFile(
+    { ...payload, requireSqliteIndex: true },
+    { skipPlServerAttachmentUploadEnqueue: true }
+  );
   const localRef = `${LOCAL_FILE_PREFIX}${payload.id}`;
   if (usesEmbeddedNativeAttachmentStorage()) {
     const row = await getAttachmentFileRef("pending_file", payload.id);
@@ -1002,6 +1142,9 @@ export async function removePendingFile(id: string): Promise<void> {
 export async function syncOnePendingFile(
   item: PendingFilePayload
 ): Promise<{ success: boolean; error?: string }> {
+  if (isFirebaseLedgerDataSyncDisabled()) {
+    return { success: false, error: "Cloud data sync is off — attachment upload skipped." };
+  }
   try {
     const preData = await resolvePendingTargetDocOrRemoveOrphan(item.docPath, item.id);
     if (!preData) {
@@ -1126,6 +1269,9 @@ export async function syncPendingFiles(): Promise<{
   /** Pehla failure reason — mobile sync status UI me generic count ke saath detail. */
   lastError?: string;
 }> {
+  if (isFirebaseLedgerDataSyncDisabled()) {
+    return { synced: 0, failed: 0 };
+  }
   const pending = await getPendingFiles();
   let synced = 0;
   let failed = 0;
@@ -1196,6 +1342,9 @@ export async function syncPendingFilesForCompany(
 }> {
   const cid = String(companyId || "").trim();
   if (!cid) return { synced: 0, failed: 0 };
+  if (isFirebaseLedgerDataSyncDisabled()) {
+    return { synced: 0, failed: 0 };
+  }
   const items = await listPendingFilesForCompany(cid);
   const total = items.length;
   let synced = 0;

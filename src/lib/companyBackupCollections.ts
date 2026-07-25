@@ -12,6 +12,7 @@ export const COLLECTIONS_TO_BACKUP = [
   "tax_groups",
   "expense_accounts",
   "expense_groups",
+  "unassigned_documents",
   "vouchers",
   /** Auto Monthly schedule + enabled flag — restore ke baad app-open recurring chale. */
   "recurring_voucher_templates",

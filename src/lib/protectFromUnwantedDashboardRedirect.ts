@@ -176,10 +176,25 @@ export function armDashboardRedirectGuard(
   const restoreIfNeeded = () => {
     if (typeof window === "undefined") return;
     const nowPath = normalizePath(window.location.pathname || "/");
+    const targetPath = normalizePath((guard.targetHref || "").split("?")[0] || "/");
+    // Sidebar / intentional nav: user fallback se door kisi aur page pe gaya — restore mat karo, guard chhod do.
+    if (
+      nowPath &&
+      targetPath &&
+      nowPath !== targetPath &&
+      !isUnexpectedFallbackRedirectPath(nowPath)
+    ) {
+      plNavDbg("dashboardGuard.disarmed.intentionalNav", {
+        nowPath,
+        targetPath,
+      });
+      clearGuardInternal();
+      return;
+    }
     if (!isUnexpectedFallbackRedirectPath(nowPath)) return;
     // Target empty / ya fallback hi ho to skip.
     if (!guard.targetHref) return;
-    if (isUnexpectedFallbackRedirectPath(normalizePath(guard.targetHref.split("?")[0] || "/"))) return;
+    if (isUnexpectedFallbackRedirectPath(targetPath)) return;
     try {
       const now = Date.now();
       if (now - lastDashboardGuardRestoreLogAt > 2400) {

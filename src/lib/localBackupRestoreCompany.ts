@@ -1,10 +1,14 @@
 "use client";
 
+import { deleteDoc, doc, getDoc } from "firebase/firestore";
+import { firestore } from "@/lib/firebase";
 import { isDeviceLocalCompany } from "@/lib/companyStorageKind";
 
 /** Online / Firebase / Drive link fields — local backup-restore company row me nahi rehne chahiye. */
 export const ONLINE_LINK_FIELDS_STRIPPED_FOR_LOCAL_BACKUP = [
   "authoritativeCompanyId",
+  /** Online Manage Sharing list — local PL server users alag (`localCompanyUsers`). */
+  "sharedWith",
   "cloudSyncLastSyncAt",
   "cloudSyncStatus",
   "cloudSyncLastError",
@@ -26,7 +30,28 @@ export const ONLINE_LINK_FIELDS_STRIPPED_FOR_LOCAL_BACKUP = [
   "demoteReason",
   "demotedFromOnlineAt",
   "backupOfflineFiles",
+  /** Restore-as-local: purani online company id / mirror stamp mat chipkao. */
+  "firestoreCompanyId",
+  "onlineCompanyId",
+  "cloudCompanyId",
 ] as const;
+
+/** Voucher / master rows: online-only sync stamps — local SQLite restore par hatao. */
+const ONLINE_DOC_FIELDS_STRIPPED_ON_LOCAL_RESTORE = [
+  "syncPendingFiles",
+  "firestoreSyncPending",
+  "cloudSyncPending",
+  "authoritativeCompanyId",
+  "crossCompanySourceRef",
+] as const;
+
+export function stripOnlineFieldsFromBackupLedgerDoc(
+  row: Record<string, unknown>
+): Record<string, unknown> {
+  const out = { ...row };
+  for (const k of ONLINE_DOC_FIELDS_STRIPPED_ON_LOCAL_RESTORE) delete out[k];
+  return out;
+}
 
 export function stripOnlineLinkFieldsFromCompanyRow(row: Record<string, unknown>): Record<string, unknown> {
   const out = { ...row };
@@ -70,6 +95,31 @@ export function finalizeLocalCompanyRowAfterBackupRestore(
 /** Post-restore reload: listRecovery ko turant clearCompanyId se bachane ke liye (sessionStorage, ~20s). */
 export const LOCAL_BACKUP_RESTORE_SELECTION_GRACE_KEY = "pl-local-backup-restore-selection-grace";
 
+/**
+ * Online company → restore as local (replace current): Firestore root doc hatao taaki
+ * permission/share purani cloud row se dubara mirror na ho. Subcollections Firebase par reh sakti hain.
+ */
+export async function tryDetachOnlineCompanyDocAfterLocalRestore(
+  companyId: string,
+  ownerUid: string
+): Promise<{ detached: boolean; reason?: string }> {
+  const cid = String(companyId || "").trim();
+  const uid = String(ownerUid || "").trim();
+  if (!cid || !uid) return { detached: false, reason: "missing_id" };
+  try {
+    const ref = doc(firestore, "companies", cid);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return { detached: false, reason: "no_firestore_doc" };
+    const data = snap.data() as { ownerId?: unknown } | undefined;
+    const docOwner = String(data?.ownerId || "").trim();
+    if (docOwner && docOwner !== uid) return { detached: false, reason: "not_owner" };
+    await deleteDoc(ref);
+    return { detached: true };
+  } catch (e) {
+    return { detached: false, reason: e instanceof Error ? e.message : "delete_failed" };
+  }
+}
+
 export function markLocalBackupRestoreSelectionGrace(companyId: string): void {
   if (typeof window === "undefined") return;
   const id = String(companyId || "").trim();
@@ -102,6 +152,39 @@ export function readLocalBackupRestoreSelectionGrace(
   } catch {
     return false;
   }
+}
+
+/**
+ * Backup restore: attachments vouchers se pehle disk pe likhe jate hain.
+ * Us window me pending "orphan" sync files delete na kare — warna local: preview toot jata hai.
+ */
+const attachmentRestoreHoldCompanies = new Set<string>();
+let attachmentRestoreHoldUntilMs = 0;
+
+export function beginLocalAttachmentRestoreHold(companyId: string): void {
+  const id = String(companyId || "").trim();
+  if (!id) return;
+  attachmentRestoreHoldCompanies.add(id);
+  attachmentRestoreHoldUntilMs = Math.max(attachmentRestoreHoldUntilMs, Date.now() + 180_000);
+}
+
+export function endLocalAttachmentRestoreHold(companyId?: string): void {
+  const id = String(companyId || "").trim();
+  if (id) attachmentRestoreHoldCompanies.delete(id);
+  else attachmentRestoreHoldCompanies.clear();
+  if (attachmentRestoreHoldCompanies.size === 0) attachmentRestoreHoldUntilMs = 0;
+}
+
+export function isLocalAttachmentRestoreHoldActive(companyId?: string): boolean {
+  if (typeof window === "undefined") return false;
+  if (Date.now() > attachmentRestoreHoldUntilMs) {
+    attachmentRestoreHoldCompanies.clear();
+    attachmentRestoreHoldUntilMs = 0;
+    return false;
+  }
+  const id = String(companyId || "").trim();
+  if (!id) return attachmentRestoreHoldCompanies.size > 0;
+  return attachmentRestoreHoldCompanies.has(id);
 }
 
 /** Owner ki local backup company — periodic Firestore ghost purge / online mirror stamp se protect. */

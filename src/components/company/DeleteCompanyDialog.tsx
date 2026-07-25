@@ -16,14 +16,14 @@ import {
 import { Button } from "../ui/button";
 import { Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { doc, serverTimestamp, updateDoc } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import type { Company as CompanyData } from "@/hooks/useCompany";
 import { DEFAULT_PLANS, type PlanId } from "@/config/plans";
 import { Input } from "../ui/input";
 import { deleteCompanyComplete } from "@/lib/actions/deleteCompanyAction";
 import { useAuth } from "@/hooks/useAuth";
+import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
+import { isDeviceLocalCompany } from "@/lib/companyStorageKind";
 
 export function DeleteCompanyDialog({
   company,
@@ -59,6 +59,29 @@ export function DeleteCompanyDialog({
     setIsLoading(true);
 
     try {
+      const localRow = await getLocalCompanyById(company.id, { includeDeleted: true });
+      const isLocalCompany =
+        isDeviceLocalCompany(company) ||
+        isDeviceLocalCompany(localRow as Parameters<typeof isDeviceLocalCompany>[0]);
+      if (isLocalCompany) {
+        await upsertLocalCompany({
+          ...(localRow || company),
+          id: company.id,
+          name: company.name,
+          isDeleted: true,
+          deletedAt: Date.now(),
+          movedToAdminRecycleAt: null,
+        } as Parameters<typeof upsertLocalCompany>[0]);
+        toast({
+          title: "Company Moved to Bin",
+          description: `"${company.name}" has been moved to the recycle bin.`,
+        });
+        clearCompanyId();
+        onCompanyDeleted();
+        onOpenChange(false);
+        return;
+      }
+
       const result = await deleteCompanyComplete(company.id, user.uid);
 
       if (result.success) {

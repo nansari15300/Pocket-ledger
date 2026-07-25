@@ -18,6 +18,14 @@ contextBridge.exposeInMainWorld("plElectronTabBridge", {
       ipcRenderer.send("pl-tab-strip-sync-done-from-app");
     } catch (_) {}
   },
+  /** Gate → Open gate: sharing URL nayi EXE BrowserView tab me kholo. */
+  openUrlInNewTab: (url) => ipcRenderer.invoke("pl-open-url-in-new-tab", { url }),
+  onLiveSyncResume: (callback) => {
+    if (typeof callback !== "function") return () => {};
+    const listener = (_event, payload) => callback(payload || {});
+    ipcRenderer.on("pl-live-sync-resume", listener);
+    return () => ipcRenderer.removeListener("pl-live-sync-resume", listener);
+  },
 });
 
 /** Multi-device / Firestore label: renderer `os.hostname` nahi padh sakta — main IPC se string. */
@@ -61,6 +69,18 @@ contextBridge.exposeInMainWorld("plElectronGate", {
       return { ok: false };
     }
   },
+  /** Ek tab gate delete/add — baaki saari tabs (3000 + 3001) ko snapshot sync. */
+  publishGateStoreSnapshot: (snapshot) => {
+    try {
+      ipcRenderer.send("pl-gate-store-snapshot", snapshot);
+    } catch (_) {}
+  },
+  /** SQLite bump — saari EXE tabs live UI refresh (user save / remote push). */
+  publishBrowserDbCollectionBump: (payload) => {
+    try {
+      ipcRenderer.send("pl-browser-db-collection-bump", payload);
+    } catch (_) {}
+  },
 });
 
 /** Host UI → hidden bridge: authoritative Local Company SQLite writes when sharing is on. */
@@ -83,4 +103,17 @@ contextBridge.exposeInMainWorld("plElectronLocalServer", {
   getAccessTokenSecret: (id) => ipcRenderer.invoke("pl-local-server-get-access-token-secret", id),
   rotateAccessToken: (id, input) => ipcRenderer.invoke("pl-local-server-rotate-access-token", { id, input }),
   revokeAccessToken: (id) => ipcRenderer.invoke("pl-local-server-revoke-access-token", id),
+  saveShareableCompaniesSnapshot: (companies) =>
+    ipcRenderer.invoke("pl-local-server-save-shareable-snapshot", companies),
+});
+
+/** EXE trace log — gate Test / Open gate debug (memory + pl-trace.log file). */
+contextBridge.exposeInMainWorld("plElectronTrace", {
+  log: (tag, event, detail) => {
+    try {
+      ipcRenderer.send("pl-trace-log-client", { tag, event, detail });
+    } catch (_) {}
+  },
+  getRecentLogs: (limit) => ipcRenderer.invoke("pl-trace-get-logs", limit),
+  getLogFilePath: () => ipcRenderer.invoke("pl-trace-get-log-file-path"),
 });

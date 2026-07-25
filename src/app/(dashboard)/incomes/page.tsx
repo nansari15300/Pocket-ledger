@@ -731,7 +731,7 @@ function IncomeExpensePageContent() {
                 "font-semibold",
                 totalBalance >= 0 ? "text-green-600" : "text-red-600"
             )}>
-                {formatCurrency(totalBalance, { showDrCr: true, noAnimation: true })}
+                {formatCurrency(totalBalance, { showDrCr: true })}
             </span>
         }
         tabs={isMobile ? undefined : incomesTabsEl}

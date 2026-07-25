@@ -9,6 +9,7 @@ import { storage } from "@/lib/firebase";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { companyRowUsesSqliteLedgerWrites, isServerGateCompany } from "@/lib/companyStorageKind";
 import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
+import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { generateLocalFileId, LOCAL_FILE_PREFIX, putPendingFile, removePendingFile, isLocalFileRef } from "@/lib/localPendingFiles";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
@@ -102,6 +103,7 @@ export async function shouldStageEntityProfileFilesLocally(
   companyId: string,
   company?: { storageOption?: string; plServerShared?: boolean } | null
 ): Promise<boolean> {
+  if (isFirebaseLedgerDataSyncDisabled()) return true;
   const cid = String(companyId || "").trim();
   if (!cid) return false;
   if (isPlServerThinStaffClient()) return true;

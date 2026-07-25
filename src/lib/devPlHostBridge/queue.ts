@@ -5,10 +5,14 @@ import { devHostBridgeQueueDir } from "@/lib/devPlHostBridge/readDevWebPort";
 
 export type DevHostBridgeJobType =
   | "validate_login"
-  | "export_mirror_collection"
-  | "export_mirror_bundle"
+  | "read_attachment"
+  | "write_attachment"
+  | "delta_push"
+  | "authoritative_upsert"
+  | "export_delta_collection"
+  | "export_delta_bundle"
   | "list_shareable_companies"
-  | "mirror_health";
+  | "delta_health";
 
 export type DevHostBridgeJob = {
   id: string;

@@ -12,6 +12,7 @@ export const COMPANY_COLLECTION_PATHS = [
   "bank_accounts",
   "taxes",
   "expense_accounts",
+  "unassigned_documents",
   "items",
   "item_groups",
   "groups",
@@ -144,5 +145,27 @@ export async function getCachedCompanyCollections(companyId: string) {
         reject(req.error);
       };
     });
+  });
+}
+
+export async function clearCachedCompanyDelta(companyId: string): Promise<void> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return;
+  const db = await openDB();
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction([COMPANY_STORE, COLLECTION_STORE], "readwrite");
+    tx.objectStore(COMPANY_STORE).delete(cid);
+    const collectionStore = tx.objectStore(COLLECTION_STORE);
+    for (const collectionPath of COMPANY_COLLECTION_PATHS) {
+      collectionStore.delete(`${cid}:${collectionPath}`);
+    }
+    tx.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error);
+    };
   });
 }

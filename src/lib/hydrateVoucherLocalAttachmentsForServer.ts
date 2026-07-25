@@ -15,6 +15,7 @@ import {
 import { Timestamp } from "firebase/firestore";
 import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";
 import { normalizeFileUrlsField } from "@/lib/voucherAttachmentNormalize";
+import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 
 function safeStorageFileName(name: string | undefined): string {
   const n = (name || "file").replace(/[/\\?%*:|"<>]/g, "_").trim();
@@ -27,6 +28,7 @@ export async function hydrateVoucherLocalAttachmentsForServer(
 ): Promise<Record<string, unknown>> {
   const cid = String(fsCompanyId || "").trim();
   if (!cid) return docFields;
+  if (isFirebaseLedgerDataSyncDisabled()) return docFields;
 
   const typeRaw = docFields.type;
   const voucherType =

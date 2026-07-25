@@ -44,6 +44,8 @@ import {
   isLocalFileRef,
 } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
+import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
+import { isFirebaseLedgerCompanyAttachmentSyncEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
 
 /** Forensic: build par `NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG=1` — cache HIT/MISS / stable-key proof (temporary trace only). */
 function offlineAttachmentForensicEnabled(): boolean {
@@ -188,6 +190,8 @@ export type AttachmentBlobForBackupOptions = {
   signal?: AbortSignal;
   /** Backup zip collect: sirf bytes chahiye — `pl-attachments` write skip (tez). */
   skipDiskWrite?: boolean;
+  /** Sirf device cache / pending — network fetch mat karo (SQLite-only backup scan). */
+  localOnly?: boolean;
 };
 
 /** Backup embed: cache/disk pehle; online par SDK/fetch (UI preview timeout se chhota). */
@@ -201,6 +205,8 @@ export async function getAttachmentBlobForBackupEmbed(
 
   const cached = await tryOfflineCachedAttachmentBlobMultiKey(trimmed);
   if (cached && cached.size > 0) return cached;
+
+  if (options?.localOnly === true) return null;
 
   if (typeof navigator !== "undefined" && !navigator.onLine) return null;
 
@@ -226,7 +232,7 @@ export async function getAttachmentBlobForBackupEmbed(
 export async function ensureOfflineCachedAttachmentDisplay(
   urlStr: string,
   signal?: AbortSignal,
-  options?: { companyId?: string; galleryUrls?: readonly string[] }
+  options?: { companyId?: string; galleryUrls?: readonly string[]; localOnly?: boolean }
 ): Promise<{
   displayUrl: string | null;
   blob: Blob | null;
@@ -263,6 +269,10 @@ export async function ensureOfflineCachedAttachmentDisplay(
   const cached = await tryOfflineCachedAttachmentBlobMultiKey(trimmed);
   if (cached && cached.size > 0) {
     return { displayUrl: null, blob: cached, contentType: cached.type || null };
+  }
+
+  if (options?.localOnly === true) {
+    return { displayUrl: null, blob: null, contentType: null };
   }
 
   const blob = await getRemoteAttachmentBlobPreferOfflineCache(trimmed, signal, {
@@ -882,7 +892,10 @@ async function putCachedBlob(urlStr: string, blob: Blob): Promise<boolean> {
       // Disk IPC fail: IndexedDB fallback taaki preview / offline reuse chale.
       const fbOk = await writeOfflineCacheBlobToIndexedDb(ids, urlStr, blob);
       if (fbOk) {
-        void import("@/lib/attachmentLoadReady").then((m) => m.markAttachmentUrlReady(urlStr));
+        void import("@/lib/attachmentLoadReady").then((m) => {
+          m.markAttachmentUrlReady(urlStr);
+          m.requestAttachmentUiRefresh();
+        });
       }
       return fbOk;
     }
@@ -900,12 +913,18 @@ async function putCachedBlob(urlStr: string, blob: Blob): Promise<boolean> {
         sha256Hex: null,
       });
     }
-    void import("@/lib/attachmentLoadReady").then((m) => m.markAttachmentUrlReady(urlStr));
+    void import("@/lib/attachmentLoadReady").then((m) => {
+      m.markAttachmentUrlReady(urlStr);
+      m.requestAttachmentUiRefresh();
+    });
     return true;
   }
   const ok = await writeOfflineCacheBlobToIndexedDb(ids, urlStr, blob);
   if (ok) {
-    void import("@/lib/attachmentLoadReady").then((m) => m.markAttachmentUrlReady(urlStr));
+    void import("@/lib/attachmentLoadReady").then((m) => {
+      m.markAttachmentUrlReady(urlStr);
+      m.requestAttachmentUiRefresh();
+    });
   }
   return ok;
 }
@@ -927,6 +946,8 @@ export type RemoteAttachmentBlobPreferCacheOptions = {
   companyId?: string;
   /** true = disk/IDB write complete hone ka wait (prefetch). false = turant blob return (preview). */
   awaitDiskWrite?: boolean;
+  /** Local company gallery: cache miss par Firebase/network mat chalao. */
+  localOnly?: boolean;
 };
 
 export async function getRemoteAttachmentBlobPreferOfflineCache(
@@ -995,6 +1016,27 @@ export async function getRemoteAttachmentBlobPreferOfflineCache(
       });
     }
     return null;
+  }
+
+  // Cloud data sync off / local company gallery: Firebase Storage network fetch mat karo — sirf local cache / `local:` / `drive:`.
+  const attachmentSyncCompanyId = String(preferCacheOptions?.companyId || "").trim();
+  if (
+    isFirebaseLedgerDataSyncDisabled() ||
+    preferCacheOptions?.localOnly === true ||
+    (attachmentSyncCompanyId && !isFirebaseLedgerCompanyAttachmentSyncEnabled(attachmentSyncCompanyId))
+  ) {
+    const isDeviceRef = isLocalFileRef(trimmed) || isDriveFileRef(trimmed);
+    if (!isDeviceRef) {
+      if (offlineAttachmentForensicEnabled()) {
+        console.warn("[FORENSIC_OFFLINE_CACHE_REMOTE_PREFER]", {
+          originalInput: urlStr,
+          trimmed,
+          outcome: "firebase_ledger_sync_disabled_no_network_fetch",
+          finalBlobSource: null,
+        });
+      }
+      return null;
+    }
   }
 
   const fetchTarget = altKey && altKey !== trimmed && !/^https?:\/\//i.test(trimmed) ? altKey : trimmed;
@@ -1079,6 +1121,13 @@ export async function prefetchHttpsAttachmentUrls(
     mirrorCompanyId?: string;
   }
 ): Promise<PrefetchAttachmentsProgress> {
+  const prefetchCompanyId = String(options?.mirrorCompanyId || "").trim();
+  if (
+    isFirebaseLedgerDataSyncDisabled() ||
+    (prefetchCompanyId && !isFirebaseLedgerCompanyAttachmentSyncEnabled(prefetchCompanyId))
+  ) {
+    return { cachedNew: 0, skippedAlreadyCached: 0, skippedBudget: 0, failed: 0 };
+  }
   const uniq = [
     ...new Set(
       [...urls]

@@ -12,6 +12,7 @@ const {
 } = require("./plWebPorts.cjs");
 const { packagedStaticServeHeaders } = require("./packagedStaticHeaders.cjs");
 const { fetchPublicIpAddress } = require("./fetchPublicIpAddress");
+const plTraceLog = require("./plTraceLog");
 
 const CONFIG_FILE = "pl-local-server-config.json";
 const TOKEN_FILE = "pl-local-app-client-token.json";
@@ -19,30 +20,36 @@ const PERSISTED_PORT_FILE = "pl-electron-static-port.json";
 const PL_CLIENT_HEADER = "x-pocket-ledger-app";
 const PL_ACCESS_HEADER = "x-pocket-ledger-access";
 const PL_ELECTRON_MARKER_HEADER = "x-pocket-ledger-client";
+const PL_APP_ACCOUNT_HEADER = "x-pocket-ledger-app-account";
+const PL_CLIENT_PING_HEADER = "x-pocket-ledger-client-ping-ms";
 const PL_ELECTRON_MARKER_VALUE = "pocket-ledger-electron";
 
 const DEFAULT_CONFIG = {
-  port: 3000,
+  /** Sharing port; packaged EXE keeps its localhost-only app UI on port 3000. */
+  port: 3001,
   /** EXE BrowserView origin — set once on first bind; sharing port change iske saath login break nahi karta. */
   appUiPort: null,
-  bindMode: "localhost",
-  appOnlyAccess: true,
+  /** Starting PLServer from a fresh EXE must be reachable by LAN clients. */
+  bindMode: "lan",
   autoStartOnBoot: false,
-  userWantsRunning: true,
+  /** Fresh install: sharing OFF until user taps Start server (or enables auto-start). */
+  userWantsRunning: false,
   appRole: "both",
   remoteServerUrl: "",
   clientAccessToken: "",
   publicHost: "",
-  requireRemoteAccessToken: true,
+  requireRemoteAccessToken: false,
   selectedInviteUrls: [],
+  sharedLocalCompanyIds: null,
+  showServerSwitchInHeader: false,
 };
 
 let appUiServer = null;
 let appUiServerPort = null;
 let sharingServer = null;
 let sharingServerPort = null;
-let companyMirrorExportProvider = null;
-let companyMirrorCollectionExportProvider = null;
+let companyDeltaExportProvider = null;
+let companyDeltaCollectionExportProvider = null;
 let clientToken = null;
 let staticPublicDir = "";
 let isPackaged = false;
@@ -50,13 +57,17 @@ let rewriteReconciliationDocumentUrl = null;
 let isAllowedFirebaseProxyTarget = null;
 let listShareableCompaniesProvider = null;
 let localCompanyAuthProvider = null;
+let companyLoginMetaProvider = null;
 let attachmentBlobProvider = null;
 let attachmentBlobWriteProvider = null;
-let companyMirrorPushProvider = null;
+let companyDeltaPushProvider = null;
 let authoritativeCompanyDocUpsertProvider = null;
+let companyRegistryPatchProvider = null;
 let mirrorHealthProvider = null;
+const mirrorEventClients = new Set();
+const serverClientStats = new Map();
 
-function setMirrorHealthProvider(fn) {
+function setDeltaHealthProvider(fn) {
   mirrorHealthProvider = typeof fn === "function" ? fn : null;
 }
 
@@ -68,6 +79,10 @@ function setLocalCompanyAuthProvider(fn) {
   localCompanyAuthProvider = typeof fn === "function" ? fn : null;
 }
 
+function setCompanyLoginMetaProvider(fn) {
+  companyLoginMetaProvider = typeof fn === "function" ? fn : null;
+}
+
 function setAttachmentBlobProvider(fn) {
   attachmentBlobProvider = typeof fn === "function" ? fn : null;
 }
@@ -76,20 +91,50 @@ function setAttachmentBlobWriteProvider(fn) {
   attachmentBlobWriteProvider = typeof fn === "function" ? fn : null;
 }
 
-function setCompanyMirrorPushProvider(fn) {
-  companyMirrorPushProvider = typeof fn === "function" ? fn : null;
+function setCompanyDeltaPushProvider(fn) {
+  companyDeltaPushProvider = typeof fn === "function" ? fn : null;
 }
 
 function setAuthoritativeCompanyDocUpsertProvider(fn) {
   authoritativeCompanyDocUpsertProvider = typeof fn === "function" ? fn : null;
 }
 
-function setCompanyMirrorExportProvider(fn) {
-  companyMirrorExportProvider = typeof fn === "function" ? fn : null;
+function setCompanyRegistryPatchProvider(fn) {
+  companyRegistryPatchProvider = typeof fn === "function" ? fn : null;
 }
 
-function setCompanyMirrorCollectionExportProvider(fn) {
-  companyMirrorCollectionExportProvider = typeof fn === "function" ? fn : null;
+function setCompanyDeltaExportProvider(fn) {
+  companyDeltaExportProvider = typeof fn === "function" ? fn : null;
+}
+
+function setCompanyDeltaCollectionExportProvider(fn) {
+  companyDeltaCollectionExportProvider = typeof fn === "function" ? fn : null;
+}
+
+const DELTA_EXPORT_HTTP_TIMEOUT_MS = {
+  bundle: 95_000,
+  vouchers: 125_000,
+  collection: 50_000,
+};
+
+function deltaCollectionHttpTimeoutMs(collection) {
+  return String(collection || "").trim() === "vouchers"
+    ? DELTA_EXPORT_HTTP_TIMEOUT_MS.vouchers
+    : DELTA_EXPORT_HTTP_TIMEOUT_MS.collection;
+}
+
+async function runDeltaExportProviderWithTimeout(providerPromise, timeoutMs, timeoutLabel) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      providerPromise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${timeoutLabel}_timeout`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function readJsonBody(req) {
@@ -118,20 +163,398 @@ function stubShareableCompaniesFromIds(allowedIds) {
   })).filter((row) => row.id);
 }
 
-async function shareableCompaniesForToken(allowedIds) {
+function normalizeSharedLocalCompanyIds(raw) {
+  if (raw === undefined || raw === null) return null;
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const id of raw) {
+    const s = String(id || "").trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+    if (out.length >= 200) break;
+  }
+  return out;
+}
+
+function filterShareableByHostConfig(all, cfg) {
+  const hostIds = normalizeSharedLocalCompanyIds(cfg && cfg.sharedLocalCompanyIds);
+  if (hostIds === null) return all;
+  if (!hostIds.length) return [];
+  const allowed = new Set(hostIds);
+  return all.filter((c) => c && c.id && allowed.has(String(c.id).trim()));
+}
+
+const SHAREABLE_COMPANIES_CACHE_MS = 4_000;
+/** Remote gate clients: allow bridge + disk snapshot before falling back. */
+const SHAREABLE_PROVIDER_TIMEOUT_MS = 8_000;
+let shareableCompaniesCache = { atMs: 0, cfgKey: "", rows: null };
+
+function normalizeAccountEmail(value) {
+  const email = String(value || "").trim().toLowerCase();
+  return email.includes("@") ? email : "";
+}
+
+function requestAppAccountEmail(req) {
+  const fromHeader = normalizeAccountEmail(headerValue(req, PL_APP_ACCOUNT_HEADER));
+  if (fromHeader) return fromHeader;
+  try {
+    const requestUrl = new URL(req.url || "/", "http://localhost");
+    return normalizeAccountEmail(requestUrl.searchParams.get("appAccount"));
+  } catch {
+    return "";
+  }
+}
+
+function cleanRemoteIp(req) {
+  const raw = String(req?.socket?.remoteAddress || "").trim();
+  return raw.replace(/^::ffff:/, "") || null;
+}
+
+function hashClientLabel(value) {
+  const s = String(value || "");
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return Math.abs(h).toString(36);
+}
+
+function requestCompanyId(req, requestUrl) {
+  try {
+    const u = requestUrl || new URL(req.url || "/", "http://localhost");
+    const fromQuery =
+      u.searchParams.get("companyId") ||
+      u.searchParams.get("company") ||
+      u.searchParams.get("pl_company") ||
+      "";
+    if (String(fromQuery || "").trim()) return String(fromQuery).trim();
+    const pathname = String(u.pathname || "");
+    const match = pathname.match(/^\/__pl_company_(?:delta|mirror)\/([^/]+)/);
+    if (match?.[1]) return decodeURIComponent(match[1]).trim();
+  } catch {
+    /* stats only */
+  }
+  return "";
+}
+
+function companyNameForStats(companyId) {
+  const cid = String(companyId || "").trim();
+  if (!cid || !Array.isArray(shareableCompaniesCache.rows)) return null;
+  const row = shareableCompaniesCache.rows.find((c) => String(c?.id || "").trim() === cid);
+  return row?.name ? String(row.name) : null;
+}
+
+function requestClientPingMs(req, requestUrl) {
+  const fromHeader = Number(headerValue(req, PL_CLIENT_PING_HEADER));
+  if (Number.isFinite(fromHeader) && fromHeader >= 0) return Math.round(fromHeader);
+  try {
+    const u = requestUrl || new URL(req.url || "/", "http://localhost");
+    const fromQuery = Number(u.searchParams.get("clientPingMs"));
+    if (Number.isFinite(fromQuery) && fromQuery >= 0) return Math.round(fromQuery);
+  } catch {
+    /* stats only */
+  }
+  return null;
+}
+
+function clientStatsIdentity(req, companyId = "") {
+  const ip = cleanRemoteIp(req);
+  const appEmail = requestAppAccountEmail(req);
+  const userAgent = headerValue(req, "user-agent");
+  const deviceFingerprint = `${ip || "unknown"}|${hashClientLabel(userAgent)}`;
+  const companyKey = String(companyId || "").trim() || "no_company";
+  let key = `${appEmail || "anon"}|${deviceFingerprint}|${companyKey}`;
+  if (!appEmail) {
+    for (const [existingKey, row] of serverClientStats.entries()) {
+      if (row?.email && row?.deviceFingerprint === deviceFingerprint && (row.companyKey || "no_company") === companyKey) {
+        key = existingKey;
+        break;
+      }
+    }
+  } else {
+    const anonKey = `anon|${deviceFingerprint}|${companyKey}`;
+    const anon = serverClientStats.get(anonKey);
+    if (anon && !serverClientStats.has(key)) {
+      serverClientStats.set(key, {
+        ...anon,
+        key,
+        email: appEmail,
+        user: appEmail.split("@")[0],
+        device: anon.device || requestDeviceLabel(req),
+      });
+      serverClientStats.delete(anonKey);
+    } else if (anon) {
+      const prev = serverClientStats.get(key);
+      serverClientStats.set(key, {
+        ...prev,
+        downloadBytes: Number(prev?.downloadBytes || 0) + Number(anon.downloadBytes || 0),
+        uploadBytes: Number(prev?.uploadBytes || 0) + Number(anon.uploadBytes || 0),
+        requestCount: Number(prev?.requestCount || 0) + Number(anon.requestCount || 0),
+      });
+      serverClientStats.delete(anonKey);
+    }
+  }
+  return { key, ip, appEmail, deviceFingerprint, companyKey };
+}
+
+function requestDeviceLabel(req) {
+  const ua = headerValue(req, "user-agent").toLowerCase();
+  if (headerValue(req, PL_ELECTRON_MARKER_HEADER) === PL_ELECTRON_MARKER_VALUE) return "EXE";
+  if (ua.includes("capacitor") || ua.includes("wv")) return "APK/WebView";
+  if (ua.includes("android")) return "Android";
+  if (ua.includes("iphone") || ua.includes("ipad") || ua.includes("ios")) return "iOS";
+  if (ua.includes("edg/")) return "Edge";
+  if (ua.includes("chrome/")) return "Chrome";
+  if (ua.includes("firefox/")) return "Firefox";
+  return "Web";
+}
+
+function base64PayloadByteLength(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return 0;
+  const comma = raw.indexOf(",");
+  const base64 = (comma >= 0 ? raw.slice(comma + 1) : raw).replace(/\s+/g, "");
+  if (!base64) return 0;
+  try {
+    return Buffer.byteLength(base64, "base64");
+  } catch {
+    return 0;
+  }
+}
+
+function recordServerClientTraffic(req, downloadBytes = 0, options = {}) {
+  const ip = cleanRemoteIp(req);
+  const appEmail = requestAppAccountEmail(req);
+  if (isRequestFromLocalhost(req) && !appEmail) return;
+  if (!ip && !appEmail) return;
+  const uploadBytes = options.countUploadBytes === true
+    ? Math.max(0, Number(options.uploadBytes ?? req?.headers?.["content-length"] ?? 0))
+    : 0;
+  const companyId = String(options.companyId || requestCompanyId(req) || "").trim();
+  const identity = clientStatsIdentity(req, companyId);
+  const key = identity.key;
+  const pingMs =
+    Number.isFinite(Number(options.pingMs)) && Number(options.pingMs) >= 0
+      ? Math.round(Number(options.pingMs))
+      : requestClientPingMs(req);
+  const prev = serverClientStats.get(key) || {
+    key,
+    email: appEmail || null,
+    user: appEmail ? appEmail.split("@")[0] : null,
+    ip,
+    device: requestDeviceLabel(req),
+    deviceFingerprint: identity.deviceFingerprint,
+    companyKey: identity.companyKey,
+    companyIds: [],
+    companyNames: [],
+    pingMs: null,
+    downloadBytes: 0,
+    uploadBytes: 0,
+    requestCount: 0,
+    lastSeenAtMs: 0,
+  };
+  const companyIds = Array.isArray(prev.companyIds) ? [...prev.companyIds] : [];
+  const companyNames = Array.isArray(prev.companyNames) ? [...prev.companyNames] : [];
+  if (companyId && !companyIds.includes(companyId)) companyIds.push(companyId);
+  const companyName = companyNameForStats(companyId);
+  if (companyName && !companyNames.includes(companyName)) companyNames.push(companyName);
+  serverClientStats.set(key, {
+    ...prev,
+    email: appEmail || prev.email || null,
+    user: appEmail ? appEmail.split("@")[0] : prev.user || null,
+    ip: ip || prev.ip || null,
+    device: prev.device || requestDeviceLabel(req),
+    deviceFingerprint: identity.deviceFingerprint || prev.deviceFingerprint || null,
+    companyKey: identity.companyKey || prev.companyKey || "no_company",
+    companyIds,
+    companyNames,
+    pingMs: pingMs != null ? pingMs : prev.pingMs ?? null,
+    downloadBytes: Number(prev.downloadBytes || 0) + Math.max(0, Number(downloadBytes || 0)),
+    uploadBytes: Number(prev.uploadBytes || 0) + Math.max(0, Number(uploadBytes || 0)),
+    requestCount: Number(prev.requestCount || 0) + 1,
+    lastSeenAtMs: Date.now(),
+  });
+}
+
+function recordServerClientDownload(req, downloadBytes = 0, options = {}) {
+  const bytes = Math.max(0, Number(downloadBytes || 0));
+  if (!bytes) return;
+  const ip = cleanRemoteIp(req);
+  const appEmail = requestAppAccountEmail(req);
+  if (!ip && !appEmail) return;
+  const key = clientStatsIdentity(req, options.companyId || requestCompanyId(req)).key;
+  const prev = serverClientStats.get(key);
+  if (!prev) {
+    recordServerClientTraffic(req, bytes);
+    return;
+  }
+  serverClientStats.set(key, {
+    ...prev,
+    downloadBytes: Number(prev.downloadBytes || 0) + bytes,
+    lastSeenAtMs: Date.now(),
+  });
+}
+
+function installServerClientDownloadMeter(req, res) {
+  if (!req || !res || res.__plDownloadMeterInstalled) return;
+  res.__plDownloadMeterInstalled = true;
+  const originalEnd = res.end;
+  res.end = function patchedEnd(chunk, encoding, cb) {
+    try {
+      let bytes = 0;
+      if (Buffer.isBuffer(chunk)) bytes = chunk.length;
+      else if (typeof chunk === "string") bytes = Buffer.byteLength(chunk, typeof encoding === "string" ? encoding : "utf8");
+      else if (chunk instanceof Uint8Array) bytes = chunk.byteLength;
+      recordServerClientDownload(req, bytes);
+    } catch {
+      /* telemetry only */
+    }
+    return originalEnd.call(this, chunk, encoding, cb);
+  };
+}
+
+function listServerClientStats() {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const [key, row] of Array.from(serverClientStats.entries())) {
+    if (Number(row?.lastSeenAtMs || 0) < cutoff) serverClientStats.delete(key);
+  }
+  return Array.from(serverClientStats.values()).sort(
+    (a, b) => Number(b.lastSeenAtMs || 0) - Number(a.lastSeenAtMs || 0)
+  );
+}
+
+function companyAllowsAppAccount(company, appEmail) {
+  if (!company || !appEmail) return false;
+  const email = normalizeAccountEmail(appEmail);
+  if (!email) return false;
+  const allowed = Array.isArray(company.accessEmails) ? company.accessEmails : [];
+  const direct = [company.ownerEmail, company.accessAccount];
+  if (direct.some((value) => normalizeAccountEmail(value) === email)) return true;
+  if (allowed.some((value) => normalizeAccountEmail(value) === email)) return true;
+  // Shared local user rows — accessEmails kabhi incomplete ho to bhi email-share match.
+  const localUsers = Array.isArray(company.localCompanyUsers) ? company.localCompanyUsers : [];
+  for (const user of localUsers) {
+    if (normalizeAccountEmail(user?.shareEmail) === email) return true;
+    const username = normalizeAccountEmail(user?.username);
+    if (username.includes("@") && username === email) return true;
+  }
+  return false;
+}
+
+function publicCompanySummary(company, appEmail) {
+  if (!company || typeof company !== "object") return company;
+  const { accessEmails, ...publicRow } = company;
+  void accessEmails;
+  return { ...publicRow, accessAccount: appEmail };
+}
+
+function companyClientDataDeleteCommandsForAppAccount(rows, appEmail) {
+  const email = normalizeAccountEmail(appEmail);
+  if (!email || !Array.isArray(rows)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const company of rows) {
+    const commands = Array.isArray(company?.clientDataDeleteCommands)
+      ? company.clientDataDeleteCommands
+      : [];
+    for (const raw of commands) {
+      if (!raw || typeof raw !== "object") continue;
+      const targetEmail = normalizeAccountEmail(raw.targetEmail);
+      const companyId = String(raw.companyId || company?.id || "").trim();
+      const id = String(raw.id || "").trim();
+      const deleteAtMs = Number(raw.deleteAtMs);
+      if (!id || !companyId || targetEmail !== email || !Number.isFinite(deleteAtMs)) continue;
+      const key = `${companyId}:${id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        id,
+        companyId,
+        companyName: raw.companyName || company?.name || null,
+        targetEmail,
+        requestedByEmail: normalizeAccountEmail(raw.requestedByEmail) || null,
+        requestedAtMs: Number.isFinite(Number(raw.requestedAtMs)) ? Number(raw.requestedAtMs) : deleteAtMs,
+        deleteAtMs,
+        source: raw.source === "online" ? "online" : "pl_server",
+        reason: "unshare",
+      });
+    }
+  }
+  return out;
+}
+
+function shareableCompaniesCacheKey(cfg) {
+  const hostIds = normalizeSharedLocalCompanyIds(cfg && cfg.sharedLocalCompanyIds);
+  return JSON.stringify(hostIds ?? null);
+}
+
+async function invokeShareableCompaniesProvider() {
+  if (!listShareableCompaniesProvider) return null;
+  const providerStartedMs = Date.now();
+  try {
+    const rows = await Promise.race([
+      listShareableCompaniesProvider(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("shareable_provider_timeout")), SHAREABLE_PROVIDER_TIMEOUT_MS)
+      ),
+    ]);
+    plTraceLog.traceLog("PL-SERVER", "shareable_companies_provider_done", {
+      ms: Date.now() - providerStartedMs,
+      count: Array.isArray(rows) ? rows.length : 0,
+    });
+    return Array.isArray(rows) ? rows : null;
+  } catch (e) {
+    plTraceLog.traceLog("PL-SERVER", "shareable_companies_provider_failed", {
+      ms: Date.now() - providerStartedMs,
+      error: String(e?.message || e),
+    });
+    return null;
+  }
+}
+
+async function shareableCompaniesForToken(allowedIds, cfg, options = {}) {
+  const hostIds = normalizeSharedLocalCompanyIds(cfg && cfg.sharedLocalCompanyIds);
+  const forceFresh = options && options.forceFresh === true;
   const idSet =
     Array.isArray(allowedIds) && allowedIds.length > 0
       ? new Set(allowedIds.map((x) => String(x || "").trim()).filter(Boolean))
       : null;
+  const cacheKey = shareableCompaniesCacheKey(cfg);
+  const now = Date.now();
   let all = [];
-  if (listShareableCompaniesProvider) {
-    try {
-      const rows = await listShareableCompaniesProvider();
-      if (Array.isArray(rows)) all = rows;
-    } catch (_) {
-      /* fallback below */
+  if (
+    !forceFresh &&
+    shareableCompaniesCache.rows &&
+    shareableCompaniesCache.cfgKey === cacheKey &&
+    now - shareableCompaniesCache.atMs < SHAREABLE_COMPANIES_CACHE_MS
+  ) {
+    all = shareableCompaniesCache.rows;
+  } else if (listShareableCompaniesProvider) {
+    if (!forceFresh && !idSet && Array.isArray(hostIds) && hostIds.length > 0) {
+      // Stale-while-revalidate: serve last good rows immediately.
+      if (shareableCompaniesCache.rows && shareableCompaniesCache.cfgKey === cacheKey) {
+        all = shareableCompaniesCache.rows;
+      }
+      void invokeShareableCompaniesProvider().then((rows) => {
+        if (Array.isArray(rows) && rows.length > 0) {
+          shareableCompaniesCache = { atMs: Date.now(), cfgKey: cacheKey, rows };
+        }
+      });
+    } else {
+      const rows = await invokeShareableCompaniesProvider();
+      if (Array.isArray(rows) && rows.length > 0) {
+        all = rows;
+        shareableCompaniesCache = { atMs: now, cfgKey: cacheKey, rows: all };
+      } else if (shareableCompaniesCache.rows && shareableCompaniesCache.cfgKey === cacheKey) {
+        // Timeout / empty bridge — keep last good list (EXE/APK/web remote Test).
+        all = shareableCompaniesCache.rows;
+      } else if (Array.isArray(rows)) {
+        all = rows;
+        shareableCompaniesCache = { atMs: now, cfgKey: cacheKey, rows: all };
+      }
     }
   }
+  all = filterShareableByHostConfig(all, cfg);
   const filtered = all.filter((c) => {
     if (!c || !c.id) return false;
     const id = String(c.id).trim();
@@ -139,6 +562,10 @@ async function shareableCompaniesForToken(allowedIds) {
     return idSet.has(id);
   });
   if (filtered.length > 0) return filtered;
+  // Email-less id stubs break remote app-account filter (empty Gate list) — only when we have nothing better.
+  if (!idSet && Array.isArray(hostIds) && hostIds.length > 0) {
+    return stubShareableCompaniesFromIds(hostIds);
+  }
   if (idSet?.size) return stubShareableCompaniesFromIds([...idSet]);
   return filtered;
 }
@@ -199,17 +626,18 @@ function loadConfig(userDataPath) {
       appUiPort:
         Number.isFinite(appUiPortRaw) && appUiPortRaw > 0 && appUiPortRaw < 65536 ? appUiPortRaw : null,
       bindMode: normalizeBindMode(raw.bindMode),
-      appOnlyAccess: raw.appOnlyAccess !== false,
       autoStartOnBoot: raw.autoStartOnBoot === true,
-      userWantsRunning: raw.userWantsRunning !== false,
+      userWantsRunning: raw.userWantsRunning === true,
       appRole: normalizeAppRole(raw.appRole),
       remoteServerUrl: typeof raw.remoteServerUrl === "string" ? raw.remoteServerUrl.trim() : "",
-      clientAccessToken: typeof raw.clientAccessToken === "string" ? raw.clientAccessToken.trim() : "",
+      clientAccessToken: "",
       publicHost: typeof raw.publicHost === "string" ? raw.publicHost.trim() : "",
-      requireRemoteAccessToken: raw.requireRemoteAccessToken !== false,
+      requireRemoteAccessToken: false,
       selectedInviteUrls: Array.isArray(raw.selectedInviteUrls)
         ? raw.selectedInviteUrls.map((u) => String(u || "").trim()).filter(Boolean)
         : [],
+      sharedLocalCompanyIds: normalizeSharedLocalCompanyIds(raw.sharedLocalCompanyIds),
+      showServerSwitchInHeader: raw.showServerSwitchInHeader === true,
     };
   } catch (_) {
     return { ...DEFAULT_CONFIG };
@@ -219,8 +647,14 @@ function loadConfig(userDataPath) {
 function saveConfig(userDataPath, partial) {
   const prev = loadConfig(userDataPath);
   const next = { ...prev, ...partial };
+  next.clientAccessToken = "";
+  next.requireRemoteAccessToken = false;
+  delete next["app" + "OnlyAccess"];
   if (partial && partial.appRole != null) next.appRole = normalizeAppRole(partial.appRole);
   if (partial && partial.bindMode != null) next.bindMode = normalizeBindMode(partial.bindMode);
+  if (partial && Object.prototype.hasOwnProperty.call(partial, "sharedLocalCompanyIds")) {
+    next.sharedLocalCompanyIds = normalizeSharedLocalCompanyIds(partial.sharedLocalCompanyIds);
+  }
   /** Auto-start ON ⇒ har app open / reboot par sharing resume (installer update ke baad bhi). */
   if (partial && partial.autoStartOnBoot === true) {
     next.userWantsRunning = true;
@@ -393,6 +827,110 @@ function isAccessTokenRequest(req, userDataPath) {
   return accessTokens.validateAccessToken(userDataPath, tok);
 }
 
+function matchShareableCompanyRow(requestCompanyId, rows) {
+  const id = String(requestCompanyId || "").trim();
+  if (!id || !Array.isArray(rows)) return null;
+  const exact = rows.find((row) => String(row?.id || "").trim() === id);
+  if (exact) return exact;
+  const lastUnderscore = id.lastIndexOf("_");
+  const slug = lastUnderscore > 0 ? id.slice(0, lastUnderscore) : "";
+  if (slug) {
+    const bySlug = rows.find((row) => String(row?.id || "").trim() === slug);
+    if (bySlug) return bySlug;
+    const byPrefix = rows.find((row) => String(row?.id || "").trim().startsWith(`${slug}_`));
+    if (byPrefix) return byPrefix;
+    const byName = rows.find((row) => {
+      const name = String(row?.name || "").trim();
+      return name === slug || name === id;
+    });
+    if (byName) return byName;
+  }
+  return rows.find((row) => String(row?.name || "").trim() === id) || null;
+}
+
+/**
+ * Remote API auth for Gate / EXE / APK / browser clients.
+ * - Localhost: always allowed
+ * - Remote clients are restricted to companies explicitly owned/shared with their app account.
+ */
+function authorizeRemoteDataAccess(req, userDataPath, cfg, companyId) {
+  if (isRequestFromLocalhost(req)) {
+    const resolvedCompanyId = companyId ? String(companyId).trim() : null;
+    return { ok: true, open: true, ids: null, rec: null, resolvedCompanyId };
+  }
+  void userDataPath;
+  void cfg;
+  const appEmail = requestAppAccountEmail(req);
+  if (!appEmail) return { ok: false, error: "missing_app_account" };
+  if (!companyId) return { ok: true, open: false, ids: null, rec: { label: appEmail }, resolvedCompanyId: null };
+  const rows = Array.isArray(shareableCompaniesCache.rows) ? shareableCompaniesCache.rows : [];
+  const company = matchShareableCompanyRow(companyId, rows);
+  if (!company || !companyAllowsAppAccount(company, appEmail)) {
+    return { ok: false, error: "company_not_shared_with_account" };
+  }
+  const resolvedCompanyId = String(company.id || "").trim();
+  return { ok: true, open: false, ids: [resolvedCompanyId], rec: { label: appEmail }, resolvedCompanyId };
+}
+
+async function authorizeRemoteDataAccessFresh(req, userDataPath, cfg, companyId) {
+  let auth = authorizeRemoteDataAccess(req, userDataPath, cfg, companyId);
+  if (auth.ok) return auth;
+  // Empty share cache / id mismatch: force list refresh then fuzzy-match again.
+  if (auth.error === "missing_app_account") return auth;
+  await shareableCompaniesForToken(null, cfg, { forceFresh: true });
+  auth = authorizeRemoteDataAccess(req, userDataPath, cfg, companyId);
+  if (auth.ok) return auth;
+  // Client kabhi local stub id bhejta hai — fuzzy match after refresh.
+  const appEmail = requestAppAccountEmail(req);
+  if (!appEmail || !companyId) return auth;
+  const rows = Array.isArray(shareableCompaniesCache.rows) ? shareableCompaniesCache.rows : [];
+  const company = matchShareableCompanyRow(companyId, rows);
+  if (company && companyAllowsAppAccount(company, appEmail)) {
+    return {
+      ok: true,
+      open: false,
+      ids: [String(company.id || "").trim()],
+      rec: { label: appEmail },
+      resolvedCompanyId: String(company.id || "").trim(),
+    };
+  }
+  return auth;
+}
+
+function sendRemoteAuthFailure(response, auth, asOkEnvelope) {
+  const error = auth && auth.error ? auth.error : "invalid_or_missing_token";
+  response.statusCode = 403;
+  response.setHeader("content-type", "application/json; charset=utf-8");
+  response.end(
+    asOkEnvelope ? JSON.stringify({ ok: false, error }) : JSON.stringify({ error })
+  );
+}
+
+function broadcastPlMirrorEvent(companyId, collection, source, docs, extra) {
+  const cid = String(companyId || "").trim();
+  const col = String(collection || "").trim();
+  if (!cid || !col) return;
+  const payload = JSON.stringify({
+    companyId: cid,
+    collection: col,
+    source: source || "pl_server_write",
+    docs: Array.isArray(docs) ? docs : undefined,
+    ...(extra && typeof extra === "object" ? extra : {}),
+    at: Date.now(),
+  });
+  for (const client of Array.from(mirrorEventClients)) {
+    if (!client || client.companyId !== cid) continue;
+    try {
+      client.response.write(`event: change\ndata: ${payload}\n\n`);
+    } catch (_) {
+      mirrorEventClients.delete(client);
+      try {
+        client.response.end();
+      } catch (_) {}
+    }
+  }
+}
+
 function requestHostname(req) {
   try {
     const host = headerValue(req, "host");
@@ -517,9 +1055,164 @@ function applyPlAccessContextCors(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    `Accept, Content-Type, ${PL_ACCESS_HEADER}, ${PL_CLIENT_HEADER}, ${PL_ELECTRON_MARKER_HEADER}`
+    `Accept, Content-Type, ${PL_ACCESS_HEADER}, ${PL_CLIENT_HEADER}, ${PL_ELECTRON_MARKER_HEADER}, ${PL_APP_ACCOUNT_HEADER}, ${PL_CLIENT_PING_HEADER}`
   );
   res.setHeader("Access-Control-Max-Age", "86400");
+}
+
+function shouldRedirectToRemoteClientUrl(req, requestUrl) {
+  if (req.method !== "GET" && req.method !== "HEAD") return false;
+  if (requestUrl.searchParams.get("pl_remote_client") === "1") return false;
+  /** Host hidden bridge — remote staff flag se ServerShareableCompaniesBridge skip na ho. */
+  if (requestUrl.searchParams.get("pl_server_data_bridge") === "1") return false;
+  const pathname = String(requestUrl.pathname || "/");
+  if (pathname.startsWith("/__") || pathname.startsWith("/api/") || pathname === "/favicon.ico") return false;
+  const assetExt = path.extname(pathname).toLowerCase();
+  if (
+    assetExt &&
+    ![".html", ".htm"].includes(assetExt)
+  ) {
+    return false;
+  }
+  const accept = headerValue(req, "accept").toLowerCase();
+  return !accept || accept.includes("text/html") || accept.includes("*/*");
+}
+
+const PL_SERVER_RELAY_TIMEOUT_MS = 180_000;
+const PL_SERVER_RELAY_MAX_BINARY_BYTES = 12 * 1024 * 1024;
+const PL_SERVER_RELAY_ALLOWED_PREFIXES = ["/__pl_", "/__firebase_blob_proxy"];
+const PL_SERVER_RELAY_SHARING_PORTS = new Set(["3001", "37123"]);
+
+function loopbackPlServerRelayUrl(raw) {
+  try {
+    const parsed = new URL(raw);
+    const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+    if (!PL_SERVER_RELAY_SHARING_PORTS.has(port)) return null;
+    if (!PL_SERVER_RELAY_ALLOWED_PREFIXES.some((prefix) => parsed.pathname.startsWith(prefix))) return null;
+    return `http://127.0.0.1:${port}${parsed.pathname}${parsed.search}`;
+  } catch {
+    return null;
+  }
+}
+
+function isAllowedPlServerRelayUrl(raw) {
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    return PL_SERVER_RELAY_ALLOWED_PREFIXES.some((prefix) => parsed.pathname.startsWith(prefix));
+  } catch {
+    return false;
+  }
+}
+
+async function readJsonRequestBody(request) {
+  const chunks = [];
+  for await (const chunk of request) {
+    chunks.push(chunk);
+  }
+  const text = Buffer.concat(chunks).toString("utf8");
+  if (!text.trim()) return {};
+  return JSON.parse(text);
+}
+
+/** EXE app UI port — same-origin relay for remote Gate / PL server HTTP (mirrors Next API route). */
+async function handlePlServerHttpRelay(request, response) {
+  if (request.method !== "POST") {
+    response.statusCode = 405;
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.end(JSON.stringify({ error: "method_not_allowed" }));
+    return;
+  }
+  let payload;
+  try {
+    payload = await readJsonRequestBody(request);
+  } catch {
+    response.statusCode = 400;
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.end(JSON.stringify({ error: "Invalid JSON body" }));
+    return;
+  }
+  const url = String(payload.url || "").trim();
+  if (!url || !isAllowedPlServerRelayUrl(url)) {
+    response.statusCode = 400;
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.end(JSON.stringify({ error: "Invalid or disallowed PL server URL" }));
+    return;
+  }
+  const method = String(payload.method || "GET").toUpperCase();
+  if (method !== "GET" && method !== "POST") {
+    response.statusCode = 400;
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.end(JSON.stringify({ error: "Only GET and POST are supported" }));
+    return;
+  }
+  const forwardHeaders = { Accept: "application/json" };
+  const incoming = payload.headers && typeof payload.headers === "object" ? payload.headers : {};
+  for (const [key, value] of Object.entries(incoming)) {
+    const k = String(key || "").trim();
+    if (!k || k.toLowerCase() === "host") continue;
+    forwardHeaders[k] = String(value ?? "");
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PL_SERVER_RELAY_TIMEOUT_MS);
+  const loopbackUrl = loopbackPlServerRelayUrl(url);
+  const candidateUrls = loopbackUrl && loopbackUrl !== url ? [loopbackUrl, url] : [url];
+  let lastErr = null;
+  try {
+    for (const targetUrl of candidateUrls) {
+      try {
+        const upstream = await fetch(targetUrl, {
+          method,
+          headers: forwardHeaders,
+          body: method === "POST" && payload.body != null ? String(payload.body) : undefined,
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (payload.responseMode === "binary") {
+          const buffer = Buffer.from(await upstream.arrayBuffer());
+          if (buffer.byteLength > PL_SERVER_RELAY_MAX_BINARY_BYTES) {
+            response.statusCode = 413;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ error: "Attachment too large for relay" }));
+            return;
+          }
+          response.statusCode = 200;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(
+            JSON.stringify({
+              status: upstream.status,
+              bodyBase64: buffer.toString("base64"),
+              contentType: upstream.headers.get("content-type"),
+            })
+          );
+          return;
+        }
+        const body = await upstream.text();
+        response.statusCode = 200;
+        response.setHeader("content-type", "application/json; charset=utf-8");
+        response.end(JSON.stringify({ status: upstream.status, body }));
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (targetUrl === candidateUrls[candidateUrls.length - 1]) break;
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr || "relay_fetch_failed"));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const timedOut = /abort|timeout/i.test(msg);
+    response.statusCode = 502;
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.end(
+      JSON.stringify({
+        error: timedOut
+          ? "Host server timed out — check that sharing is on and the address is reachable from the internet."
+          : "Cannot reach host server — verify public IP, port forwarding, and firewall.",
+      })
+    );
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function createRequestHandler(userDataPath) {
@@ -527,6 +1220,23 @@ function createRequestHandler(userDataPath) {
     const cfg = loadConfig(userDataPath);
     try {
       const requestUrl = new URL(request.url || "/", "http://localhost");
+      if (
+        requestUrl.pathname.startsWith("/__pl_") ||
+        requestUrl.pathname === "/api/pl-server-http-relay"
+      ) {
+        if (requestUrl.pathname !== "/__pl_server_ping") {
+          recordServerClientTraffic(request, 0);
+        }
+        plTraceLog.traceLog("PL-SERVER-HTTP", request.method || "GET", {
+          path: requestUrl.pathname,
+          remoteAddress: request.socket?.remoteAddress || null,
+          origin: request.headers.origin || null,
+        });
+      }
+      if (requestUrl.pathname === "/api/pl-server-http-relay") {
+        await handlePlServerHttpRelay(request, response);
+        return;
+      }
       if (requestUrl.pathname === "/__firebase_blob_proxy") {
         const target = requestUrl.searchParams.get("url") || "";
         if (!isAllowedFirebaseProxyTarget || !isAllowedFirebaseProxyTarget(target)) {
@@ -550,6 +1260,43 @@ function createRequestHandler(userDataPath) {
         response.end(buffer);
         return;
       }
+      if (requestUrl.pathname === "/__pl_server_ping") {
+        const clientPingMs = requestClientPingMs(request, requestUrl);
+        const pingCompanyId = requestCompanyId(request, requestUrl);
+        if (clientPingMs != null || pingCompanyId) {
+          recordServerClientTraffic(request, 0, { pingMs: clientPingMs, companyId: pingCompanyId });
+        }
+        applyPlAccessContextCors(request, response);
+        if (request.method === "OPTIONS") {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          response.statusCode = 405;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "method_not_allowed" }));
+          return;
+        }
+        const sharingPort = sharingServerPort || appUiServerPort || cfg.port || null;
+        response.statusCode = 200;
+        response.setHeader("content-type", "application/json; charset=utf-8");
+        response.setHeader("cache-control", "no-store");
+        response.end(
+          JSON.stringify({
+            ok: true,
+            ping: true,
+            sharingPort,
+            appUiPort: appUiServerPort || cfg.appUiPort || null,
+            ts: Date.now(),
+          })
+        );
+        plTraceLog.traceLog("PL-SERVER-HTTP", "ping_ok", {
+          remoteAddress: request.socket?.remoteAddress || null,
+          sharingPort,
+        });
+        return;
+      }
       if (requestUrl.pathname === "/__pl_access_context") {
         applyPlAccessContextCors(request, response);
         if (request.method === "OPTIONS") {
@@ -563,41 +1310,176 @@ function createRequestHandler(userDataPath) {
           response.end(JSON.stringify({ error: "method_not_allowed" }));
           return;
         }
-        const fromLocalhost = isRequestFromLocalhost(request);
-        if (fromLocalhost) {
+        const accessStartedMs = Date.now();
+        plTraceLog.traceLog("PL-SERVER-HTTP", "access_context_start", {
+          remoteAddress: request.socket?.remoteAddress || null,
+        });
+        const auth = authorizeRemoteDataAccess(request, userDataPath, cfg, null);
+        if (!auth.ok) {
+          plTraceLog.traceLog("PL-SERVER-HTTP", "access_context_denied", {
+            remoteAddress: request.socket?.remoteAddress || null,
+            ms: Date.now() - accessStartedMs,
+          });
+          sendRemoteAuthFailure(response, auth, false);
+          return;
+        }
+        if (auth.open) {
+          const companies = await shareableCompaniesForToken(null, cfg, { forceFresh: true });
           response.statusCode = 200;
           response.setHeader("content-type", "application/json; charset=utf-8");
           response.setHeader("cache-control", "no-store");
-          response.end(JSON.stringify({ unrestricted: true, allowedCompanyIds: null, label: null }));
+          response.end(
+            JSON.stringify({
+              unrestricted: true,
+              allowedCompanyIds: null,
+              label: null,
+              companies,
+            })
+          );
+          plTraceLog.traceLog("PL-SERVER-HTTP", "access_context_ok", {
+            remoteAddress: request.socket?.remoteAddress || null,
+            ms: Date.now() - accessStartedMs,
+            companyCount: Array.isArray(companies) ? companies.length : 0,
+          });
           return;
         }
-        const tok = tokenFromRequest(request);
-        const rec = accessTokens.getAccessTokenRecord(userDataPath, tok);
-        if (!rec) {
-          response.statusCode = 403;
-          response.setHeader("content-type", "application/json; charset=utf-8");
-          response.end(JSON.stringify({ error: "invalid_or_missing_token" }));
-          return;
-        }
-        accessTokens.validateAccessToken(userDataPath, tok);
-        const ids = accessTokens.normalizeCompanyIds(rec.allowedCompanyIds);
-        const companies = await shareableCompaniesForToken(ids);
+        const appEmail = requestAppAccountEmail(request);
+        const shareableRows = await shareableCompaniesForToken(auth.ids, cfg, { forceFresh: true });
+        const filterAudit = shareableRows.map((company) => {
+          const allowed = Boolean(appEmail) && companyAllowsAppAccount(company, appEmail);
+          const localUsers = Array.isArray(company?.localCompanyUsers) ? company.localCompanyUsers : [];
+          return {
+            id: String(company?.id || "").trim(),
+            name: String(company?.name || "").trim(),
+            appEmail,
+            ownerEmail: normalizeAccountEmail(company?.ownerEmail),
+            accessAccount: normalizeAccountEmail(company?.accessAccount),
+            accessEmailCount: Array.isArray(company?.accessEmails) ? company.accessEmails.length : 0,
+            localCompanyUserCount: localUsers.length,
+            localCompanyUsers: localUsers.slice(0, 10).map((u) => ({
+              username: String(u?.username || "").trim(),
+              shareEmail: normalizeAccountEmail(u?.shareEmail),
+              role: String(u?.role || "").trim(),
+            })),
+            allowed,
+            reason: !appEmail
+              ? "missing_app_email"
+              : allowed
+                ? "matched"
+                : "email_not_in_owner_or_access_list",
+          };
+        });
+        const companies = shareableRows
+          .filter((company) => companyAllowsAppAccount(company, appEmail))
+          .map((company) => publicCompanySummary(company, appEmail));
+        const clientDataDeleteCommands = companyClientDataDeleteCommandsForAppAccount(shareableRows, appEmail);
+        plTraceLog.traceLog("PL-SERVER-HTTP", "access_context_filter_audit", {
+          remoteAddress: request.socket?.remoteAddress || null,
+          appEmail,
+          sourceCompanyCount: shareableRows.length,
+          allowedCompanyCount: companies.length,
+          dataDeleteCommandCount: clientDataDeleteCommands.length,
+          rows: filterAudit.slice(0, 25),
+        });
+        const allowedCompanyIds = companies.map((company) => String(company.id));
         response.statusCode = 200;
         response.setHeader("content-type", "application/json; charset=utf-8");
         response.setHeader("cache-control", "no-store");
         response.end(
           JSON.stringify({
-            label: rec.label || null,
-            allowedCompanyIds: ids.length > 0 ? ids : null,
+            label: auth.rec?.label || null,
+            allowedCompanyIds,
             companies,
+            clientDataDeleteCommands,
           })
         );
+        plTraceLog.traceLog("PL-SERVER-HTTP", "access_context_ok", {
+          remoteAddress: request.socket?.remoteAddress || null,
+          ms: Date.now() - accessStartedMs,
+          companyCount: Array.isArray(companies) ? companies.length : 0,
+        });
+        return;
+      }
+      if (
+        requestUrl.pathname === "/__pl_company_delta_events" ||
+        requestUrl.pathname === "/__pl_company_mirror_events"
+      ) {
+        applyPlAccessContextCors(request, response);
+        if (request.method === "OPTIONS") {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+        if (request.method !== "GET") {
+          response.statusCode = 405;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "method_not_allowed" }));
+          return;
+        }
+        const companyId = String(requestUrl.searchParams.get("companyId") || "").trim();
+        if (!companyId) {
+          response.statusCode = 400;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "missing_company_id" }));
+          return;
+        }
+        const auth = await authorizeRemoteDataAccessFresh(request, userDataPath, cfg, companyId);
+        if (!auth.ok) {
+          plTraceLog.traceLog("PL-SERVER-HTTP", "delta_events_denied", {
+            remoteAddress: request.socket?.remoteAddress || null,
+            companyId,
+            appEmail: requestAppAccountEmail(request),
+            error: auth.error || null,
+          });
+          sendRemoteAuthFailure(response, auth, true);
+          return;
+        }
+        const sseCompanyId = String(auth.resolvedCompanyId || companyId).trim();
+        const sseOrigin = headerValue(request, "origin");
+        const sseCorsHeaders = {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-store, no-transform",
+          connection: "keep-alive",
+          "x-accel-buffering": "no",
+          "Access-Control-Allow-Origin": sseOrigin || "*",
+          Vary: "Origin",
+        };
+        response.writeHead(200, sseCorsHeaders);
+        if (typeof response.flushHeaders === "function") response.flushHeaders();
+        response.write(`: connected ${Date.now()}\n\n`);
+        response.write(`event: ready\ndata: ${JSON.stringify({ companyId: sseCompanyId, at: Date.now() })}\n\n`);
+        const client = { companyId: sseCompanyId, response };
+        mirrorEventClients.add(client);
+        let closed = false;
+        const cleanup = () => {
+          if (closed) return;
+          closed = true;
+          clearInterval(ping);
+          mirrorEventClients.delete(client);
+        };
+        const ping = setInterval(() => {
+          if (closed || response.writableEnded || response.destroyed) {
+            cleanup();
+            return;
+          }
+          try {
+            response.write(`event: ping\ndata: ${Date.now()}\n\n`);
+          } catch (_) {
+            cleanup();
+          }
+        }, 25000);
+        request.on("close", cleanup);
+        response.on("close", cleanup);
+        response.on("error", cleanup);
         return;
       }
       const mirrorCollectionMatch = requestUrl.pathname.match(
-        /^\/__pl_company_mirror\/([^/]+)\/([^/]+)\/?$/
+        /^\/__pl_company_(?:delta|mirror)\/([^/]+)\/([^/]+)\/?$/
       );
-      if (requestUrl.pathname === "/__pl_mirror_health") {
+      if (
+        requestUrl.pathname === "/__pl_delta_health" ||
+        requestUrl.pathname === "/__pl_mirror_health"
+      ) {
         applyPlAccessContextCors(request, response);
         if (request.method === "OPTIONS") {
           response.statusCode = 204;
@@ -617,29 +1499,15 @@ function createRequestHandler(userDataPath) {
           response.end(JSON.stringify({ ok: false, error: "missing_company_id" }));
           return;
         }
-        const fromLocalhost = isRequestFromLocalhost(request);
-        if (!fromLocalhost) {
-          const tok = tokenFromRequest(request);
-          const rec = accessTokens.getAccessTokenRecord(userDataPath, tok);
-          if (!rec) {
-            response.statusCode = 403;
-            response.setHeader("content-type", "application/json; charset=utf-8");
-            response.end(JSON.stringify({ ok: false, error: "invalid_or_missing_token" }));
-            return;
-          }
-          accessTokens.validateAccessToken(userDataPath, tok);
-          const ids = accessTokens.normalizeCompanyIds(rec.allowedCompanyIds);
-          if (ids.length > 0 && !ids.includes(companyId)) {
-            response.statusCode = 403;
-            response.setHeader("content-type", "application/json; charset=utf-8");
-            response.end(JSON.stringify({ ok: false, error: "company_not_allowed_for_token" }));
-            return;
-          }
+        const auth = await authorizeRemoteDataAccessFresh(request, userDataPath, cfg, companyId);
+        if (!auth.ok) {
+          sendRemoteAuthFailure(response, auth, true);
+          return;
         }
         if (!mirrorHealthProvider) {
           response.statusCode = 503;
           response.setHeader("content-type", "application/json; charset=utf-8");
-          response.end(JSON.stringify({ ok: false, error: "mirror_health_unavailable" }));
+          response.end(JSON.stringify({ ok: false, error: "delta_health_unavailable" }));
           return;
         }
         try {
@@ -651,7 +1519,7 @@ function createRequestHandler(userDataPath) {
         } catch (_) {
           response.statusCode = 500;
           response.setHeader("content-type", "application/json; charset=utf-8");
-          response.end(JSON.stringify({ ok: false, error: "mirror_health_failed" }));
+          response.end(JSON.stringify({ ok: false, error: "delta_health_failed" }));
         }
         return;
       }
@@ -676,33 +1544,54 @@ function createRequestHandler(userDataPath) {
           response.end(JSON.stringify({ error: "missing_company_or_collection" }));
           return;
         }
-        const fromLocalhost = isRequestFromLocalhost(request);
-        if (!fromLocalhost) {
-          const tok = tokenFromRequest(request);
-          const rec = accessTokens.getAccessTokenRecord(userDataPath, tok);
-          if (!rec) {
-            response.statusCode = 403;
-            response.setHeader("content-type", "application/json; charset=utf-8");
-            response.end(JSON.stringify({ error: "invalid_or_missing_token" }));
-            return;
-          }
-          accessTokens.validateAccessToken(userDataPath, tok);
-          const ids = accessTokens.normalizeCompanyIds(rec.allowedCompanyIds);
-          if (ids.length > 0 && !ids.includes(companyId)) {
-            response.statusCode = 403;
-            response.setHeader("content-type", "application/json; charset=utf-8");
-            response.end(JSON.stringify({ error: "company_not_allowed_for_token" }));
-            return;
-          }
+        const auth = await authorizeRemoteDataAccessFresh(request, userDataPath, cfg, companyId);
+        if (!auth.ok) {
+          sendRemoteAuthFailure(response, auth, false);
+          return;
         }
-        if (!companyMirrorCollectionExportProvider) {
+        const exportCompanyId = auth.resolvedCompanyId || companyId;
+        if (!companyDeltaCollectionExportProvider) {
           response.statusCode = 503;
           response.setHeader("content-type", "application/json; charset=utf-8");
-          response.end(JSON.stringify({ error: "mirror_collection_export_unavailable" }));
+          response.end(JSON.stringify({ error: "delta_collection_export_unavailable" }));
           return;
         }
         try {
-          const docs = await companyMirrorCollectionExportProvider(companyId, collection);
+          const exportStartedMs = Date.now();
+          plTraceLog.traceLog("PL-SERVER-HTTP", "delta_collection_export_start", {
+            remoteAddress: request.socket?.remoteAddress || null,
+            companyId,
+            collection,
+          });
+          let docs;
+          try {
+            docs = await runDeltaExportProviderWithTimeout(
+              companyDeltaCollectionExportProvider(exportCompanyId, collection),
+              deltaCollectionHttpTimeoutMs(collection),
+              "delta_collection_export"
+            );
+          } catch (exportErr) {
+            if (String(exportErr?.message || "").includes("timeout")) {
+              plTraceLog.traceLog("PL-SERVER-HTTP", "delta_collection_export_timeout", {
+                remoteAddress: request.socket?.remoteAddress || null,
+                companyId,
+                collection,
+                ms: Date.now() - exportStartedMs,
+              });
+              response.statusCode = 504;
+              response.setHeader("content-type", "application/json; charset=utf-8");
+              response.end(JSON.stringify({ error: "delta_collection_export_timeout" }));
+              return;
+            }
+            throw exportErr;
+          }
+          plTraceLog.traceLog("PL-SERVER-HTTP", "delta_collection_export_done", {
+            remoteAddress: request.socket?.remoteAddress || null,
+            companyId,
+            collection,
+            ms: Date.now() - exportStartedMs,
+            count: Array.isArray(docs) ? docs.length : null,
+          });
           if (docs == null) {
             response.statusCode = 404;
             response.setHeader("content-type", "application/json; charset=utf-8");
@@ -716,11 +1605,11 @@ function createRequestHandler(userDataPath) {
         } catch (_) {
           response.statusCode = 500;
           response.setHeader("content-type", "application/json; charset=utf-8");
-          response.end(JSON.stringify({ error: "mirror_collection_export_failed" }));
+          response.end(JSON.stringify({ error: "delta_collection_export_failed" }));
         }
         return;
       }
-      const mirrorMatch = requestUrl.pathname.match(/^\/__pl_company_mirror\/([^/]+)\/?$/);
+      const mirrorMatch = requestUrl.pathname.match(/^\/__pl_company_(?:delta|mirror)\/([^/]+)\/?$/);
       if (mirrorMatch) {
         applyPlAccessContextCors(request, response);
         if (request.method === "OPTIONS") {
@@ -741,33 +1630,41 @@ function createRequestHandler(userDataPath) {
           response.end(JSON.stringify({ error: "missing_company_id" }));
           return;
         }
-        const fromLocalhost = isRequestFromLocalhost(request);
-        if (!fromLocalhost) {
-          const tok = tokenFromRequest(request);
-          const rec = accessTokens.getAccessTokenRecord(userDataPath, tok);
-          if (!rec) {
-            response.statusCode = 403;
-            response.setHeader("content-type", "application/json; charset=utf-8");
-            response.end(JSON.stringify({ error: "invalid_or_missing_token" }));
-            return;
-          }
-          accessTokens.validateAccessToken(userDataPath, tok);
-          const ids = accessTokens.normalizeCompanyIds(rec.allowedCompanyIds);
-          if (ids.length > 0 && !ids.includes(companyId)) {
-            response.statusCode = 403;
-            response.setHeader("content-type", "application/json; charset=utf-8");
-            response.end(JSON.stringify({ error: "company_not_allowed_for_token" }));
-            return;
-          }
+        const auth = await authorizeRemoteDataAccessFresh(request, userDataPath, cfg, companyId);
+        if (!auth.ok) {
+          sendRemoteAuthFailure(response, auth, false);
+          return;
         }
-        if (!companyMirrorExportProvider) {
+        const exportCompanyId = auth.resolvedCompanyId || companyId;
+        if (!companyDeltaExportProvider) {
           response.statusCode = 503;
           response.setHeader("content-type", "application/json; charset=utf-8");
-          response.end(JSON.stringify({ error: "mirror_export_unavailable" }));
+          response.end(JSON.stringify({ error: "delta_export_unavailable" }));
           return;
         }
         try {
-          const bundle = await companyMirrorExportProvider(companyId);
+          const exportStartedMs = Date.now();
+          let bundle;
+          try {
+            bundle = await runDeltaExportProviderWithTimeout(
+              companyDeltaExportProvider(exportCompanyId),
+              DELTA_EXPORT_HTTP_TIMEOUT_MS.bundle,
+              "delta_export"
+            );
+          } catch (exportErr) {
+            if (String(exportErr?.message || "").includes("timeout")) {
+              plTraceLog.traceLog("PL-SERVER-HTTP", "delta_export_timeout", {
+                remoteAddress: request.socket?.remoteAddress || null,
+                companyId,
+                ms: Date.now() - exportStartedMs,
+              });
+              response.statusCode = 504;
+              response.setHeader("content-type", "application/json; charset=utf-8");
+              response.end(JSON.stringify({ error: "delta_export_timeout" }));
+              return;
+            }
+            throw exportErr;
+          }
           if (!bundle) {
             response.statusCode = 404;
             response.setHeader("content-type", "application/json; charset=utf-8");
@@ -781,7 +1678,7 @@ function createRequestHandler(userDataPath) {
         } catch (_) {
           response.statusCode = 500;
           response.setHeader("content-type", "application/json; charset=utf-8");
-          response.end(JSON.stringify({ error: "mirror_export_failed" }));
+          response.end(JSON.stringify({ error: "delta_export_failed" }));
         }
         return;
       }
@@ -796,25 +1693,43 @@ function createRequestHandler(userDataPath) {
         const refParam = String(requestUrl.searchParams.get("ref") || "").trim();
 
         async function validatePlAttachmentAccess(companyId) {
-          const fromLocalhost = isRequestFromLocalhost(request);
-          if (!fromLocalhost) {
-            const tok = tokenFromRequest(request);
-            const rec = accessTokens.getAccessTokenRecord(userDataPath, tok);
-            if (!rec) {
-              response.statusCode = 403;
-              response.setHeader("content-type", "application/json; charset=utf-8");
-              response.end(JSON.stringify({ error: "invalid_or_missing_token" }));
-              return false;
-            }
-            accessTokens.validateAccessToken(userDataPath, tok);
-            const ids = accessTokens.normalizeCompanyIds(rec.allowedCompanyIds);
-            if (ids.length > 0 && !ids.includes(companyId)) {
-              response.statusCode = 403;
-              response.setHeader("content-type", "application/json; charset=utf-8");
-              response.end(JSON.stringify({ error: "company_not_allowed_for_token" }));
-              return false;
+          let auth = authorizeRemoteDataAccess(request, userDataPath, cfg, companyId);
+          if (!auth.ok && auth.error === "company_not_shared_with_account") {
+            const appEmail = requestAppAccountEmail(request);
+            const freshRows = await shareableCompaniesForToken(null, cfg, { forceFresh: true });
+            const company = Array.isArray(freshRows)
+              ? freshRows.find((row) => String(row?.id || "").trim() === String(companyId).trim())
+              : null;
+            plTraceLog.traceLog("PL-SERVER-HTTP", "attachment_access_fresh_check", {
+              remoteAddress: request.socket?.remoteAddress || null,
+              companyId,
+              appEmail,
+              sourceCompanyCount: Array.isArray(freshRows) ? freshRows.length : 0,
+              matchedCompany: Boolean(company),
+              accessEmailCount: Array.isArray(company?.accessEmails) ? company.accessEmails.length : 0,
+              allowed: Boolean(company && companyAllowsAppAccount(company, appEmail)),
+            });
+            if (company && companyAllowsAppAccount(company, appEmail)) {
+              auth = { ok: true, open: false, ids: [String(companyId).trim()], rec: { label: appEmail } };
             }
           }
+          if (!auth.ok) {
+            plTraceLog.traceLog("PL-SERVER-HTTP", "attachment_access_denied", {
+              remoteAddress: request.socket?.remoteAddress || null,
+              companyId,
+              appEmail: requestAppAccountEmail(request),
+              error: auth.error || null,
+              ref: refParam,
+            });
+            sendRemoteAuthFailure(response, auth, false);
+            return false;
+          }
+          plTraceLog.traceLog("PL-SERVER-HTTP", "attachment_access_allowed", {
+            remoteAddress: request.socket?.remoteAddress || null,
+            companyId,
+            appEmail: requestAppAccountEmail(request),
+            ref: refParam,
+          });
           return true;
         }
 
@@ -864,6 +1779,11 @@ function createRequestHandler(userDataPath) {
             }
             response.statusCode = 200;
             response.setHeader("content-type", "application/json; charset=utf-8");
+            recordServerClientTraffic(request, 0, {
+              companyId,
+              countUploadBytes: true,
+              uploadBytes: base64PayloadByteLength(base64),
+            });
             response.end(JSON.stringify({ ok: true, deduped: out.deduped === true }));
           } catch (_) {
             response.statusCode = 500;
@@ -921,6 +1841,7 @@ function createRequestHandler(userDataPath) {
           response.setHeader("content-length", String(payload.buffer.length));
           response.setHeader("cache-control", "private, max-age=120");
           response.setHeader("Access-Control-Expose-Headers", "Content-Type, Content-Length");
+          recordServerClientDownload(request, payload.buffer.length, { companyId });
           response.end(payload.buffer);
         } catch (_) {
           response.statusCode = 500;
@@ -929,7 +1850,10 @@ function createRequestHandler(userDataPath) {
         }
         return;
       }
-      if (requestUrl.pathname === "/__pl_company_mirror_push") {
+      if (
+        requestUrl.pathname === "/__pl_company_delta_push" ||
+        requestUrl.pathname === "/__pl_company_mirror_push"
+      ) {
         applyPlAccessContextCors(request, response);
         if (request.method === "OPTIONS") {
           response.statusCode = 204;
@@ -940,13 +1864,6 @@ function createRequestHandler(userDataPath) {
           response.statusCode = 405;
           response.setHeader("content-type", "application/json; charset=utf-8");
           response.end(JSON.stringify({ ok: false, error: "method_not_allowed" }));
-          return;
-        }
-        const accessTok = tokenFromRequest(request);
-        if (!accessTok || !accessTokens.validateAccessToken(userDataPath, accessTok)) {
-          response.statusCode = 403;
-          response.setHeader("content-type", "application/json; charset=utf-8");
-          response.end(JSON.stringify({ ok: false, error: "invalid_or_missing_token" }));
           return;
         }
         try {
@@ -960,39 +1877,36 @@ function createRequestHandler(userDataPath) {
             response.end(JSON.stringify({ ok: false, error: "missing_fields" }));
             return;
           }
+          const auth = authorizeRemoteDataAccess(request, userDataPath, cfg, companyId);
+          if (!auth.ok) {
+            sendRemoteAuthFailure(response, auth, true);
+            return;
+          }
           const protoEval = evaluateMirrorProtocol(body.mirrorProtocol, PL_MIRROR_PROTOCOL_VERSION);
           if (protoEval.action === "reject") {
-            response.statusCode = 409;
-            response.setHeader("content-type", "application/json; charset=utf-8");
-            response.end(
-              JSON.stringify({
-                ok: false,
-                error: protoEval.code,
-                message: protoEval.message,
-                mirrorProtocol: PL_MIRROR_PROTOCOL_VERSION,
-              })
-            );
-            return;
+            // Older cached browser bundles can still send the same delta doc shape.
+            // Accept the write and avoid returning `mirrorProtocol` so those clients don't keep the queue stuck.
+            console.warn("[DeltaProtocol] accepting legacy push", protoEval.code, protoEval.message || "");
           }
           if (protoEval.action === "warn") {
-            console.warn("[MirrorProtocol]", protoEval.code, protoEval.message || "");
+            console.warn("[DeltaProtocol]", protoEval.code, protoEval.message || "");
           }
-          const rec = accessTokens.getAccessTokenRecord(userDataPath, accessTok);
-          const allowedIds = accessTokens.normalizeCompanyIds(rec?.allowedCompanyIds);
-          if (allowedIds.length > 0 && !allowedIds.includes(companyId)) {
-            response.statusCode = 403;
-            response.setHeader("content-type", "application/json; charset=utf-8");
-            response.end(JSON.stringify({ ok: false, error: "company_not_allowed_for_token" }));
-            return;
-          }
-          if (!companyMirrorPushProvider) {
+          if (!companyDeltaPushProvider) {
             response.statusCode = 503;
             response.setHeader("content-type", "application/json; charset=utf-8");
-            response.end(JSON.stringify({ ok: false, error: "mirror_push_unavailable" }));
+            response.end(JSON.stringify({ ok: false, error: "delta_push_unavailable" }));
             return;
           }
           const hostSelfPublish = body.hostSelfPublish === true;
-          const result = await companyMirrorPushProvider(companyId, collection, docs, { hostSelfPublish });
+          const result = await companyDeltaPushProvider(companyId, collection, docs, { hostSelfPublish });
+          if (result && typeof result === "object" && result.ok !== false) {
+            broadcastPlMirrorEvent(
+              companyId,
+              collection,
+              hostSelfPublish ? "pl_host_self_publish" : "pl_client_push",
+              hostSelfPublish ? docs : undefined
+            );
+          }
           response.statusCode = 200;
           response.setHeader("content-type", "application/json; charset=utf-8");
           response.setHeader("cache-control", "no-store");
@@ -1000,7 +1914,96 @@ function createRequestHandler(userDataPath) {
         } catch (_) {
           response.statusCode = 500;
           response.setHeader("content-type", "application/json; charset=utf-8");
-          response.end(JSON.stringify({ ok: false, error: "mirror_push_failed" }));
+          response.end(JSON.stringify({ ok: false, error: "delta_push_failed" }));
+        }
+        return;
+      }
+      if (requestUrl.pathname === "/__pl_company_meta_bump") {
+        applyPlAccessContextCors(request, response);
+        if (request.method === "OPTIONS") {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+        if (request.method !== "POST") {
+          response.statusCode = 405;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "method_not_allowed" }));
+          return;
+        }
+        try {
+          const body = await readJsonBody(request);
+          const companyId = String(body.companyId || "").trim();
+          if (!companyId) {
+            response.statusCode = 400;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "missing_company_id" }));
+            return;
+          }
+          const auth = authorizeRemoteDataAccess(request, userDataPath, cfg, companyId);
+          if (!auth.ok) {
+            sendRemoteAuthFailure(response, auth, true);
+            return;
+          }
+          broadcastPlMirrorEvent(companyId, "company_meta", "pl_host_company_meta", undefined, {
+            company: body.company && typeof body.company === "object" ? body.company : undefined,
+          });
+          response.statusCode = 200;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.setHeader("cache-control", "no-store");
+          response.end(JSON.stringify({ ok: true }));
+        } catch (_) {
+          response.statusCode = 500;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "company_meta_bump_failed" }));
+        }
+        return;
+      }
+      if (requestUrl.pathname === "/__pl_company_registry_patch") {
+        applyPlAccessContextCors(request, response);
+        if (request.method === "OPTIONS") {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+        if (request.method !== "POST") {
+          response.statusCode = 405;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "method_not_allowed" }));
+          return;
+        }
+        try {
+          const body = await readJsonBody(request);
+          const companyId = String(body.companyId || "").trim();
+          const customUnits = Array.isArray(body.customUnits)
+            ? body.customUnits.filter((x) => typeof x === "string" && String(x).trim())
+            : [];
+          if (!companyId || !customUnits.length) {
+            response.statusCode = 400;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "missing_fields" }));
+            return;
+          }
+          const auth = authorizeRemoteDataAccess(request, userDataPath, cfg, companyId);
+          if (!auth.ok) {
+            sendRemoteAuthFailure(response, auth, true);
+            return;
+          }
+          if (!companyRegistryPatchProvider) {
+            response.statusCode = 503;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: false, error: "registry_patch_unavailable" }));
+            return;
+          }
+          const result = await companyRegistryPatchProvider(companyId, { customUnits });
+          response.statusCode = 200;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.setHeader("cache-control", "no-store");
+          response.end(JSON.stringify(result && typeof result === "object" ? result : { ok: true }));
+        } catch (_) {
+          response.statusCode = 500;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ ok: false, error: "registry_patch_failed" }));
         }
         return;
       }
@@ -1017,13 +2020,6 @@ function createRequestHandler(userDataPath) {
           response.end(JSON.stringify({ ok: false, error: "method_not_allowed" }));
           return;
         }
-        const accessTok = tokenFromRequest(request);
-        if (!accessTok || !accessTokens.validateAccessToken(userDataPath, accessTok)) {
-          response.statusCode = 403;
-          response.setHeader("content-type", "application/json; charset=utf-8");
-          response.end(JSON.stringify({ ok: false, error: "invalid_or_missing_token" }));
-          return;
-        }
         try {
           const body = await readJsonBody(request);
           const companyId = String(body.companyId || "").trim();
@@ -1036,12 +2032,9 @@ function createRequestHandler(userDataPath) {
             response.end(JSON.stringify({ ok: false, error: "missing_fields" }));
             return;
           }
-          const rec = accessTokens.getAccessTokenRecord(userDataPath, accessTok);
-          const allowedIds = accessTokens.normalizeCompanyIds(rec?.allowedCompanyIds);
-          if (allowedIds.length > 0 && !allowedIds.includes(companyId)) {
-            response.statusCode = 403;
-            response.setHeader("content-type", "application/json; charset=utf-8");
-            response.end(JSON.stringify({ ok: false, error: "company_not_allowed_for_token" }));
+          const auth = authorizeRemoteDataAccess(request, userDataPath, cfg, companyId);
+          if (!auth.ok) {
+            sendRemoteAuthFailure(response, auth, true);
             return;
           }
           if (!authoritativeCompanyDocUpsertProvider) {
@@ -1061,6 +2054,9 @@ function createRequestHandler(userDataPath) {
             force: body.force,
           };
           const result = await authoritativeCompanyDocUpsertProvider(payload);
+          if (result && typeof result === "object" && result.ok !== false) {
+            broadcastPlMirrorEvent(companyId, collectionName, "pl_authoritative_upsert");
+          }
           response.statusCode = 200;
           response.setHeader("content-type", "application/json; charset=utf-8");
           response.setHeader("cache-control", "no-store");
@@ -1072,7 +2068,61 @@ function createRequestHandler(userDataPath) {
         }
         return;
       }
+      if (requestUrl.pathname === "/__pl_company_login_meta") {
+        applyPlAccessContextCors(request, response);
+        if (request.method === "OPTIONS") {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          response.statusCode = 405;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "method_not_allowed" }));
+          return;
+        }
+        const companyId = String(requestUrl.searchParams.get("companyId") || "").trim();
+        const appEmail = String(requestUrl.searchParams.get("appEmail") || "").trim();
+        if (!companyId) {
+          response.statusCode = 400;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "missing_company_id" }));
+          return;
+        }
+        const auth = authorizeRemoteDataAccess(request, userDataPath, cfg, companyId);
+        if (!auth.ok) {
+          sendRemoteAuthFailure(response, auth, false);
+          return;
+        }
+        if (!companyLoginMetaProvider) {
+          response.statusCode = 503;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "server_login_meta_unavailable" }));
+          return;
+        }
+        try {
+          const meta = await companyLoginMetaProvider(companyId, appEmail || null);
+          response.statusCode = 200;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.setHeader("cache-control", "no-store");
+          response.end(JSON.stringify(meta && typeof meta === "object" ? meta : { requiresLogin: true, usernameHint: null }));
+        } catch (_) {
+          response.statusCode = 500;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.end(JSON.stringify({ error: "login_meta_failed" }));
+        }
+        return;
+      }
       if (requestUrl.pathname === "/__pl_company_login") {
+        console.log("[PL-SERVER-LOGIN]", "request_received", {
+          method: request.method,
+          origin: request.headers.origin || null,
+          remoteAddress: request.socket?.remoteAddress || null,
+        });
+        plTraceLog.traceLog("PL-SERVER-HTTP", "company_login_start", {
+          remoteAddress: request.socket?.remoteAddress || null,
+          origin: request.headers.origin || null,
+        });
         applyPlAccessContextCors(request, response);
         if (request.method === "OPTIONS") {
           response.statusCode = 204;
@@ -1085,39 +2135,59 @@ function createRequestHandler(userDataPath) {
           response.end(JSON.stringify({ ok: false, error: "method_not_allowed" }));
           return;
         }
-        const accessTok = tokenFromRequest(request);
-        if (!accessTok || !accessTokens.validateAccessToken(userDataPath, accessTok)) {
-          response.statusCode = 403;
-          response.setHeader("content-type", "application/json; charset=utf-8");
-          response.end(JSON.stringify({ ok: false, error: "invalid_or_missing_token" }));
-          return;
-        }
         try {
           const body = await readJsonBody(request);
           const companyId = String(body.companyId || "").trim();
           const username = String(body.username || "").trim();
           const password = String(body.password || "").trim();
-          if (!companyId || !username || !password) {
+          console.log("[PL-SERVER-LOGIN]", "body_parsed", {
+            companyId,
+            username,
+            passwordPresent: Boolean(password),
+          });
+          if (!companyId) {
             response.statusCode = 400;
             response.setHeader("content-type", "application/json; charset=utf-8");
-            response.end(JSON.stringify({ ok: false, error: "missing_fields" }));
+            response.end(JSON.stringify({ ok: false, error: "missing_company_id" }));
             return;
           }
-          const rec = accessTokens.getAccessTokenRecord(userDataPath, accessTok);
-          const allowedIds = accessTokens.normalizeCompanyIds(rec?.allowedCompanyIds);
-          if (allowedIds.length > 0 && !allowedIds.includes(companyId)) {
-            response.statusCode = 403;
-            response.setHeader("content-type", "application/json; charset=utf-8");
-            response.end(JSON.stringify({ ok: false, error: "company_not_allowed_for_token" }));
+          const auth = authorizeRemoteDataAccess(request, userDataPath, cfg, companyId);
+          console.log("[PL-SERVER-LOGIN]", "remote_access_checked", {
+            companyId,
+            ok: auth.ok,
+            reason: auth.reason || null,
+          });
+          if (!auth.ok) {
+            sendRemoteAuthFailure(response, auth, true);
             return;
           }
           if (!localCompanyAuthProvider) {
+            console.warn("[PL-SERVER-LOGIN]", "provider_missing", { companyId });
             response.statusCode = 503;
             response.setHeader("content-type", "application/json; charset=utf-8");
             response.end(JSON.stringify({ ok: false, error: "server_login_unavailable" }));
             return;
           }
-          const authResult = await localCompanyAuthProvider(companyId, username, password);
+          console.log("[PL-SERVER-LOGIN]", "provider_start", { companyId, username });
+          plTraceLog.traceLog("PL-SERVER-HTTP", "company_login_provider_start", { companyId, username });
+          const authResult = await Promise.race([
+            localCompanyAuthProvider(companyId, username, password),
+            new Promise((resolve) =>
+              setTimeout(() => resolve({ ok: false, error: "server_login_provider_timeout" }), 60000)
+            ),
+          ]);
+          console.log("[PL-SERVER-LOGIN]", "provider_done", {
+            companyId,
+            ok: authResult?.ok === true,
+            error: authResult?.error || null,
+            hasToken: Boolean(authResult?.token),
+            hasUser: Boolean(authResult?.user),
+          });
+          plTraceLog.traceLog("PL-SERVER-HTTP", "company_login_provider_done", {
+            companyId,
+            ok: authResult?.ok === true,
+            error: authResult?.error || null,
+          });
           if (!authResult || authResult.ok !== true) {
             response.statusCode = 401;
             response.setHeader("content-type", "application/json; charset=utf-8");
@@ -1140,7 +2210,10 @@ function createRequestHandler(userDataPath) {
             })
           );
           return;
-        } catch (_) {
+        } catch (err) {
+          console.warn("[PL-SERVER-LOGIN]", "handler_failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
           response.statusCode = 400;
           response.setHeader("content-type", "application/json; charset=utf-8");
           response.end(JSON.stringify({ ok: false, error: "bad_request" }));
@@ -1163,30 +2236,6 @@ function createRequestHandler(userDataPath) {
       return;
     }
 
-    if (
-      cfg.appOnlyAccess &&
-      !fromLocalhost &&
-      !isElectronAppRequest(request) &&
-      !isAccessTokenRequest(request, userDataPath)
-    ) {
-      response.statusCode = 403;
-      response.setHeader("content-type", "text/html; charset=utf-8");
-      response.end(blockedExternalBrowserHtml());
-      return;
-    }
-
-    if (
-      isServerRole &&
-      cfg.requireRemoteAccessToken &&
-      !fromLocalhost &&
-      !isAccessTokenRequest(request, userDataPath)
-    ) {
-      response.statusCode = 403;
-      response.setHeader("content-type", "text/html; charset=utf-8");
-      response.end(blockedAccessTokenHtml(request, userDataPath));
-      return;
-    }
-
     attachPlAccessTokenCookie(request, response, userDataPath);
 
     try {
@@ -1199,6 +2248,20 @@ function createRequestHandler(userDataPath) {
       }
     } catch {
       /* fall through */
+    }
+
+    try {
+      const requestUrl = new URL(request.url || "/", "http://localhost");
+      if (shouldRedirectToRemoteClientUrl(request, requestUrl)) {
+        requestUrl.searchParams.set("pl_remote_client", "1");
+        response.statusCode = 302;
+        response.setHeader("location", `${requestUrl.pathname}${requestUrl.search}${requestUrl.hash}`);
+        response.setHeader("cache-control", "no-store");
+        response.end();
+        return;
+      }
+    } catch {
+      /* serve normally */
     }
 
     return handler(request, response, {
@@ -1334,6 +2397,7 @@ function startAppUiServer(userDataPath) {
     if (Number(cfg.appUiPort) !== port) {
       saveConfig(userDataPath, { appUiPort: port });
     }
+    plTraceLog.traceLog("PL-SERVER", "app_ui_listening", { port, host: "127.0.0.1" });
     return port;
   });
 }
@@ -1346,7 +2410,8 @@ function sharingServerMatchesConfig(cfg) {
   const hostOk =
     addr.address === expectedHost ||
     (expectedHost === "0.0.0.0" && (addr.address === "::" || addr.address === "0.0.0.0"));
-  return hostOk && Number(addr.port) === Number(cfg.port);
+  // A busy configured port may legitimately bind to the next packaged candidate.
+  return hostOk && Number(addr.port) === Number(sharingServerPort);
 }
 
 function startSharingServer(userDataPath) {
@@ -1366,9 +2431,8 @@ function startSharingServer(userDataPath) {
     const candidates = sharingPortCandidates(cfg);
     return tryListenWithCandidates(sharingServer, candidates, host).then((port) => {
       sharingServerPort = port;
-      if (Number(cfg.port) !== port) {
-        saveConfig(userDataPath, { port });
-      }
+      plTraceLog.traceLog("PL-SERVER", "sharing_listening", { port, host, configuredPort: cfg.port });
+      // Saved `cfg.port` mat badlo — busy port par fallback se refresh pe user ka port reset na ho.
       return port;
     });
   });
@@ -1453,7 +2517,6 @@ function getStatus(userDataPath) {
     sharingPort,
     configuredPort: cfg.port,
     bindMode: cfg.bindMode,
-    appOnlyAccess: cfg.appOnlyAccess,
     autoStartOnBoot: cfg.autoStartOnBoot,
     userWantsRunning: cfg.userWantsRunning,
     appRole: cfg.appRole,
@@ -1469,6 +2532,7 @@ function getStatus(userDataPath) {
     clientHeader: PL_CLIENT_HEADER,
     accessHeader: PL_ACCESS_HEADER,
     electronMarkerHeader: PL_ELECTRON_MARKER_HEADER,
+    clients: listServerClientStats(),
     portForwardHint:
       cfg.bindMode !== "localhost"
         ? "On your router, forward the external TCP port to this PC's LAN IP and server port. Allow the port in Windows Firewall."
@@ -1492,14 +2556,20 @@ module.exports = {
   PL_ELECTRON_MARKER_VALUE,
   setServerDeps,
   setShareableCompaniesProvider,
+  setCompanyLoginMetaProvider,
   setLocalCompanyAuthProvider,
   setAttachmentBlobProvider,
   setAttachmentBlobWriteProvider,
-  setCompanyMirrorPushProvider,
+  setCompanyDeltaPushProvider,
+  setCompanyMirrorPushProvider: setCompanyDeltaPushProvider,
   setAuthoritativeCompanyDocUpsertProvider,
-  setCompanyMirrorExportProvider,
-  setCompanyMirrorCollectionExportProvider,
-  setMirrorHealthProvider,
+  setCompanyRegistryPatchProvider,
+  setCompanyDeltaExportProvider,
+  setCompanyMirrorExportProvider: setCompanyDeltaExportProvider,
+  setCompanyDeltaCollectionExportProvider,
+  setCompanyMirrorCollectionExportProvider: setCompanyDeltaCollectionExportProvider,
+  setDeltaHealthProvider,
+  setMirrorHealthProvider: setDeltaHealthProvider,
   loadConfig,
   saveConfig,
   getOrCreateClientToken,

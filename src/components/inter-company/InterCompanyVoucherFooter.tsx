@@ -3,6 +3,7 @@
 /**
  * Inter Company voucher footer — create par save/approve; edit par Cancel | Delete | History (left).
  */
+import { useState } from "react";
 import { History, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -51,8 +52,10 @@ export type InterCompanyVoucherFooterProps = {
   isFormDirty?: boolean;
   onCancel: () => void;
   onDelete?: () => void;
-  /** Locked / target — other company se confirm delete */
+  /** Locked — other company se confirm delete (Send request flow) */
   onRequestDelete?: () => void;
+  /** Locked — sirf is company ki copy recycle bin */
+  onFinalDeleteLocal?: () => void;
   deleteRequestPending?: boolean;
   /** Inbox — peer ne delete request bheji; Confirm delete footer */
   canConfirmDelete?: boolean;
@@ -85,6 +88,7 @@ export function InterCompanyVoucherFooter({
   onCancel,
   onDelete,
   onRequestDelete,
+  onFinalDeleteLocal,
   deleteRequestPending = false,
   canConfirmDelete = false,
   onConfirmDelete,
@@ -95,6 +99,7 @@ export function InterCompanyVoucherFooter({
 }: InterCompanyVoucherFooterProps) {
   const isMobile = useIsMobile();
   const { canDeleteVoucher } = usePermissions();
+  const [deleteChoiceOpen, setDeleteChoiceOpen] = useState(false);
 
   const deleteDisabled =
     !voucher?.id ||
@@ -164,15 +169,59 @@ export function InterCompanyVoucherFooter({
   ) : null;
 
   const requestDeleteButton = showRequestDelete ? (
-    <Button
-      type="button"
-      variant="destructive"
-      className={cn("shrink-0 rounded-full", isMobile && !isEditViewOnly && "w-full")}
-      onClick={() => onRequestDelete?.()}
-    >
-      {!isMobile || isEditViewOnly ? <Trash2 className="mr-2 h-4 w-4" /> : null}
-      Request delete
-    </Button>
+    <AlertDialog open={deleteChoiceOpen} onOpenChange={setDeleteChoiceOpen}>
+      <AlertDialogTrigger asChild>
+        <Button
+          type="button"
+          variant="destructive"
+          className={cn("shrink-0 rounded-full", isMobile && !isEditViewOnly && "w-full")}
+        >
+          {!isMobile || isEditViewOnly ? <Trash2 className="mr-2 h-4 w-4" /> : null}
+          Delete
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete Inter Company voucher</AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="space-y-2 text-sm text-muted-foreground">
+              <p>
+                <span className="font-medium text-foreground">Final delete from my side</span> — only
+                this company&apos;s copy goes to the recycle bin. The other company keeps their copy.
+              </p>
+              <p>
+                <span className="font-medium text-foreground">Send request</span> — ask the other
+                company to confirm. When they confirm, both linked copies are deleted.
+              </p>
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter className="flex-col gap-2 sm:flex-col sm:items-stretch">
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={() => {
+              setDeleteChoiceOpen(false);
+              onFinalDeleteLocal?.();
+            }}
+          >
+            Final delete from my side
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="border-destructive text-destructive hover:bg-destructive/10"
+            onClick={() => {
+              setDeleteChoiceOpen(false);
+              onRequestDelete?.();
+            }}
+          >
+            Send request
+          </Button>
+          <AlertDialogCancel className="mt-0">Cancel</AlertDialogCancel>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   ) : deleteRequestPending && !canConfirmDelete ? (
     <>
       <Button type="button" variant="outline" className="shrink-0 rounded-full" disabled>

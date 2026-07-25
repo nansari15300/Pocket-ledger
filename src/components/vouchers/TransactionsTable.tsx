@@ -103,6 +103,37 @@ export { TransactionRow, getConversionFactor, formatQuantity };
 
 /** Spend-wise table-fixed: type pill ("direct expense") — 75px par voucher no overlap hota tha. */
 const SPEND_WISE_TYPE_COL_PX = 112;
+const TXN_FILE_COLUMN_VIEW_PREF_KEY = "pocket-ledger:transactions:file-column-view:v1";
+
+function readSavedFileColumnViewPrefs(): {
+  displayMode: FileColumnDisplayMode;
+  showAll: boolean;
+  filterMode: "all" | "with" | "without";
+} {
+  if (typeof window === "undefined") return { displayMode: "preview", showAll: false, filterMode: "all" };
+  try {
+    const raw = window.localStorage.getItem(TXN_FILE_COLUMN_VIEW_PREF_KEY);
+    if (!raw) return { displayMode: "preview", showAll: false, filterMode: "all" };
+    const parsed = JSON.parse(raw) as { displayMode?: unknown; showAll?: unknown; filterMode?: unknown };
+    const displayMode: FileColumnDisplayMode = parsed.displayMode === "tick" ? "tick" : "preview";
+    const filterMode = parsed.filterMode === "with" || parsed.filterMode === "without" ? parsed.filterMode : "all";
+    return { displayMode, showAll: displayMode === "preview" && parsed.showAll === true, filterMode };
+  } catch {
+    return { displayMode: "preview", showAll: false, filterMode: "all" };
+  }
+}
+
+function saveFileColumnViewPrefs(
+  displayMode: FileColumnDisplayMode,
+  showAll: boolean,
+  filterMode: "all" | "with" | "without"
+): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    TXN_FILE_COLUMN_VIEW_PREF_KEY,
+    JSON.stringify({ displayMode, showAll: displayMode === "preview" && showAll === true, filterMode })
+  );
+}
 
 /** Firestore Timestamp | plain `{seconds}` | Date | string — opening / period row; OB noon parse shared helper */
 function normalizeLedgerObDateField(v: unknown): Date | null {
@@ -360,8 +391,31 @@ export function TransactionsTable({
       context === "staff" ||
       (context === "group" && (groupEntityType === "party" || groupEntityType === "staff")));
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [fileDisplayMode, setFileDisplayMode] = useState<FileColumnDisplayMode>("preview");
+  const [fileDisplayMode, setFileDisplayMode] = useState<FileColumnDisplayMode>(
+    () => readSavedFileColumnViewPrefs().displayMode
+  );
+  const [fileShowAll, setFileShowAll] = useState(() => readSavedFileColumnViewPrefs().showAll);
+  /** File column filter popover — local open state so Save always closes even if parent filter state lags. */
+  const [fileFilterPopoverOpen, setFileFilterPopoverOpen] = useState(false);
+  const [internalActiveFilter, setInternalActiveFilter] = useState<string | null>(null);
+  const effectiveActiveFilter = activeFilter !== undefined ? activeFilter : internalActiveFilter;
+  const patchActiveFilter = setActiveFilter ?? setInternalActiveFilter;
   const tableContainerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (effectiveActiveFilter === "file") setFileFilterPopoverOpen(true);
+    else if (effectiveActiveFilter != null && effectiveActiveFilter !== "file") {
+      setFileFilterPopoverOpen(false);
+    }
+  }, [effectiveActiveFilter]);
+  useEffect(() => {
+    if (!setFilters) return;
+    const saved = readSavedFileColumnViewPrefs();
+    if (saved.filterMode === "all") return;
+    setFilters((prev: Record<string, string>) => {
+      if (prev.file === "with" || prev.file === "without") return prev;
+      return { ...prev, file: saved.filterMode };
+    });
+  }, [setFilters]);
   // Keep spend-wise blink/selection groups consistent for derived row ids.
   const normalizeSpendWiseRowBase = useCallback((id?: string) => {
     if (!id || typeof id !== "string") return id ?? "";
@@ -775,8 +829,6 @@ export function TransactionsTable({
     const fileFilterRaw = filters?.file ?? "";
     const fileFilterMode: "all" | "with" | "without" =
       fileFilterRaw === "with" || fileFilterRaw === "without" ? fileFilterRaw : "all";
-    const isFileFiltered = fileFilterMode !== "all";
-    const isFileMenuActive = isFileFiltered || fileDisplayMode !== "preview";
     const innerPadding = ensureMinGaps ? "px-[10px]" : "px-2";
     const setFileFilter = (mode: "all" | "with" | "without") => {
       if (!setFilters) return;
@@ -784,6 +836,14 @@ export function TransactionsTable({
         ...prev,
         file: mode === "all" ? "" : mode,
       }));
+    };
+    const saveFileView = (e?: React.MouseEvent) => {
+      e?.preventDefault();
+      e?.stopPropagation();
+      saveFileColumnViewPrefs(fileDisplayMode, fileShowAll, fileFilterMode);
+      toast.success("File view saved.");
+      setFileFilterPopoverOpen(false);
+      patchActiveFilter(null);
     };
 
     return (
@@ -796,15 +856,18 @@ export function TransactionsTable({
           className={cn(
             "flex items-center justify-center gap-1 font-bold py-3 whitespace-nowrap",
             innerPadding,
-            isFileMenuActive ? "text-red-600" : "text-black"
+            "text-black"
           )}
         >
           <span>File</span>
           {setFilters ? (
             <Popover
               modal
-              open={activeFilter === "file"}
-              onOpenChange={(open) => setActiveFilter && setActiveFilter(open ? "file" : null)}
+              open={fileFilterPopoverOpen}
+              onOpenChange={(open) => {
+                setFileFilterPopoverOpen(open);
+                patchActiveFilter(open ? "file" : null);
+              }}
             >
               <PopoverTrigger asChild>
                 <Button
@@ -814,10 +877,10 @@ export function TransactionsTable({
                   className={cn(txnTableIconBtnCn, "h-6 w-6")}
                   aria-label="Filter by file attachment"
                 >
-                  <CheckSquare className={cn("h-4 w-4", isFileMenuActive && "text-red-600")} />
+                  <CheckSquare className="h-4 w-4" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="p-2 w-52" align="center" onCloseAutoFocus={(e: Event) => e.preventDefault()}>
+              <PopoverContent className="p-2 w-64" align="center" onCloseAutoFocus={(e: Event) => e.preventDefault()}>
                 <div className="flex items-center gap-2 border-b pb-2 mb-1">
                   <Checkbox
                     id="txn-file-filter-all"
@@ -850,15 +913,34 @@ export function TransactionsTable({
                 </div>
                 <div className="mt-2 border-t pt-2">
                   <p className="mb-1 px-0.5 text-xs font-semibold uppercase text-muted-foreground">View</p>
-                  <div className="flex items-center gap-2 py-1">
-                    <Checkbox
-                      id="txn-file-display-preview"
-                      checked={fileDisplayMode === "preview"}
-                      onCheckedChange={() => setFileDisplayMode("preview")}
-                    />
-                    <label htmlFor="txn-file-display-preview" className="text-sm font-medium cursor-pointer flex-1">
-                      Preview
-                    </label>
+                  <div className="flex items-center gap-4 py-1">
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                      <Checkbox
+                        id="txn-file-display-preview"
+                        checked={fileDisplayMode === "preview"}
+                        onCheckedChange={() => setFileDisplayMode("preview")}
+                      />
+                      <label htmlFor="txn-file-display-preview" className="text-sm font-medium cursor-pointer flex-1">
+                        Preview
+                      </label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="txn-file-display-show-all"
+                        checked={fileShowAll}
+                        disabled={fileDisplayMode !== "preview"}
+                        onCheckedChange={(checked) => setFileShowAll(checked === true)}
+                      />
+                      <label
+                        htmlFor="txn-file-display-show-all"
+                        className={cn(
+                          "whitespace-nowrap text-sm font-medium cursor-pointer",
+                          fileDisplayMode !== "preview" && "cursor-not-allowed opacity-50"
+                        )}
+                      >
+                        Show all
+                      </label>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 py-1">
                     <Checkbox
@@ -869,6 +951,11 @@ export function TransactionsTable({
                     <label htmlFor="txn-file-display-tick" className="text-sm font-medium cursor-pointer flex-1">
                       Tick only
                     </label>
+                  </div>
+                  <div className="mt-2 border-t pt-2">
+                    <Button type="button" size="sm" className="h-8 w-full" onClick={(e) => saveFileView(e)}>
+                      Save
+                    </Button>
                   </div>
                 </div>
               </PopoverContent>
@@ -976,7 +1063,7 @@ export function TransactionsTable({
     const suffix = value >= 0 ? "Dr" : "Cr";
     return (
       <span className={cn("font-bold", value >= 0 ? "text-green-700" : "text-red-700")}>
-        {formatCurrency(absValue, { noSuffix: true, context: 'transaction', noAnimation: true })} {suffix}
+        {formatCurrency(absValue, { noSuffix: true, context: 'transaction' })} {suffix}
       </span>
     );
   };
@@ -1511,7 +1598,7 @@ export function TransactionsTable({
               className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
               onClick={(e) => e.stopPropagation()}
             >
-              <OpeningBalanceFileCellContent fileUrls={openingBalanceAttachmentUrls} displayMode={fileDisplayMode} />
+              <OpeningBalanceFileCellContent fileUrls={openingBalanceAttachmentUrls} displayMode={fileDisplayMode} showAll={fileShowAll} />
             </TableCell>
           )}
           {showCol("dr") && !hideDebitColumn && (
@@ -1560,6 +1647,7 @@ export function TransactionsTable({
             <OpeningBalanceFileCellContent
               fileUrls={showBookOpeningAboveDatedRow ? undefined : openingBalanceAttachmentUrls}
               displayMode={fileDisplayMode}
+              showAll={fileShowAll}
             />
           </TableCell>
         )}
@@ -1893,7 +1981,12 @@ export function TransactionsTable({
                     )}>
                       {context === "item" && stockView === "qty" && item
                         ? `${formatQuantity(Math.abs(masterBookSignedScaled))} ${displayUnit || ""}`
-                        : `${formatCurrency(Math.abs(masterBookSignedScaled), { noSuffix: true, context: "transaction", noAnimation: true })} ${masterBookSignedScaled >= 0 ? "Dr" : "Cr"}`}
+                        : (
+                          <>
+                            {formatCurrency(Math.abs(masterBookSignedScaled), { noSuffix: true, context: "transaction" })}{" "}
+                            {masterBookSignedScaled >= 0 ? "Dr" : "Cr"}
+                          </>
+                        )}
                     </span>
                   </div>
                 </div>
@@ -1945,7 +2038,12 @@ export function TransactionsTable({
                       {/* In this bill-wise mobile branch, context can be narrowed; rely on qty+item check only. */}
                       {stockView === "qty" && item
                         ? `${formatQuantity(Math.abs(displayOpeningForDrCr))} ${displayUnit || ""}`
-                        : `${formatCurrency(Math.abs(displayOpeningForDrCr), { noSuffix: true, context: "transaction", noAnimation: true })} ${displayOpeningForDrCr >= 0 ? "Dr" : "Cr"}`}
+                        : (
+                          <>
+                            {formatCurrency(Math.abs(displayOpeningForDrCr), { noSuffix: true, context: "transaction" })}{" "}
+                            {displayOpeningForDrCr >= 0 ? "Dr" : "Cr"}
+                          </>
+                        )}
                     </span>
                     {/* Same order as normal transaction: status and link above, running balance (Bal) below */}
                     <div className="flex flex-col items-end gap-0.5 mt-0.5">
@@ -1965,7 +2063,7 @@ export function TransactionsTable({
                           displayOpeningBalanceForRow >= 0 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200" : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200"
                         )}
                       >
-                        Bal:{formatCurrency(Math.abs(displayOpeningBalanceForRow), { noSuffix: true, context: "transaction", noAnimation: true })}{displayOpeningBalanceForRow >= 0 ? " Dr" : " Cr"}
+                        Bal:{formatCurrency(Math.abs(displayOpeningBalanceForRow), { noSuffix: true, context: "transaction" })}{displayOpeningBalanceForRow >= 0 ? " Dr" : " Cr"}
                       </Badge>
                     </div>
                     {/* Bill-wise OB mobile: linked vouchers Status→Balance wrap */}
@@ -1991,7 +2089,12 @@ export function TransactionsTable({
                         ? `${formatQuantity(Math.abs(displayOpeningForDrCr))} ${displayUnit || ""}`
                         : (() => {
                             const ob = isBillWiseCardContext ? displayOpeningBalanceForRow : displayOpeningForDrCr;
-                            return `${formatCurrency(Math.abs(ob), { noSuffix: true, context: "transaction", noAnimation: true })} ${ob >= 0 ? "Dr" : "Cr"}`;
+                            return (
+                              <>
+                                {formatCurrency(Math.abs(ob), { noSuffix: true, context: "transaction" })}{" "}
+                                {ob >= 0 ? "Dr" : "Cr"}
+                              </>
+                            );
                           })()}
                     </span>
                   </>
@@ -2185,7 +2288,7 @@ export function TransactionsTable({
                           className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <OpeningBalanceFileCellContent fileUrls={openingBalanceAttachmentUrls} displayMode={fileDisplayMode} />
+                          <OpeningBalanceFileCellContent fileUrls={openingBalanceAttachmentUrls} displayMode={fileDisplayMode} showAll={fileShowAll} />
                         </TableCell>
                       )}
                       {showCol("dr") && !hideDebitColumn && (
@@ -2236,6 +2339,7 @@ export function TransactionsTable({
                         <OpeningBalanceFileCellContent
                           fileUrls={showBookOpeningAboveDatedRow ? undefined : openingBalanceAttachmentUrls}
                           displayMode={fileDisplayMode}
+                          showAll={fileShowAll}
                         />
                       </TableCell>
                     )}
@@ -2413,6 +2517,7 @@ export function TransactionsTable({
                                           ensureMinGaps={ensureMinGaps}
                                           showFileColumn={showFileBySelection}
                                           fileDisplayMode={fileDisplayMode}
+                                          fileShowAll={fileShowAll}
                                           statusBillWiseOnly={statusBillWiseOnly}
                                           highlightPendingApproval={highlightPendingApproval}
                                           textSearchHighlight={transactionCardSearchHighlight}
@@ -2482,6 +2587,7 @@ export function TransactionsTable({
                           ensureMinGaps={ensureMinGaps}
                           showFileColumn={showFileBySelection}
                           fileDisplayMode={fileDisplayMode}
+                          fileShowAll={fileShowAll}
                           statusBillWiseOnly={statusBillWiseOnly}
                           highlightPendingApproval={highlightPendingApproval}
                           textSearchHighlight={transactionCardSearchHighlight}
@@ -2555,6 +2661,7 @@ export function TransactionsTable({
                         ensureMinGaps={ensureMinGaps}
                         showFileColumn={showFileBySelection}
                         fileDisplayMode={fileDisplayMode}
+                        fileShowAll={fileShowAll}
                         statusBillWiseOnly={statusBillWiseOnly}
                         highlightPendingApproval={highlightPendingApproval}
                         textSearchHighlight={transactionCardSearchHighlight}

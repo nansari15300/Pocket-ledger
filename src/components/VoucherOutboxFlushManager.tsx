@@ -9,9 +9,14 @@ import { useEffect } from "react";
 import { flushVoucherOutbox } from "@/lib/localVoucherOutbox";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
+import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 
 export function VoucherOutboxFlushManager() {
   useEffect(() => {
+    // PL Server staff: authoritative queue + SQLite mirror — Firestore outbox flush UI churn na kare.
+    if (isPlServerThinStaffClient()) return;
+    if (isFirebaseLedgerDataSyncDisabled()) return;
     // Capacitor + Firebase data source: `isLocalOnlyMode` may be false but outbox flush is still required, or masters stay stuck in the queue.
     if (!isLocalOnlyMode() && !apkEmbeddedSqliteFirstWritesPreferred()) return;
     // Local-first sync engine: default ON for online-category companies; disable with env flag.

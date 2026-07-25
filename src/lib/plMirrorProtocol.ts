@@ -1,5 +1,5 @@
 /**
- * P2P mirror protocol — keep in sync with electron/plMirrorProtocol.cjs
+ * P2P delta protocol — keep in sync with electron/plMirrorProtocol.cjs
  *
  * | Client vs Server | Action                          |
  * |------------------|---------------------------------|
@@ -24,7 +24,7 @@ export type MirrorProtocolEvaluation = {
   serverProtocol: number | null;
 };
 
-export type PlMirrorHealthPayload = {
+export type PlDeltaHealthPayload = {
   ok: boolean;
   mirrorProtocol?: number;
   serverBuild?: string;
@@ -64,7 +64,7 @@ export function evaluateMirrorProtocol(
     return {
       action: "reject",
       code: "mirror_protocol_major_mismatch",
-      message: `Mirror protocol major mismatch (client ${client}, server ${server}). Update Pocket Ledger on both PCs to the same version.`,
+      message: `Delta protocol major mismatch (client ${client}, server ${server}). Update Pocket Ledger on both PCs to the same version.`,
       ...base,
     };
   }
@@ -72,14 +72,14 @@ export function evaluateMirrorProtocol(
     return {
       action: "warn",
       code: "mirror_protocol_older_client",
-      message: `Client mirror protocol ${client} is older than server ${server}. Update the client app when possible.`,
+      message: `Client delta protocol ${client} is older than server ${server}. Update the client app when possible.`,
       ...base,
     };
   }
   return {
     action: "warn",
     code: "mirror_protocol_newer_client",
-    message: `Client mirror protocol ${client} is newer than server ${server}. Update the server PC app when possible.`,
+    message: `Client delta protocol ${client} is newer than server ${server}. Update the server PC app when possible.`,
     ...base,
   };
 }
@@ -101,26 +101,26 @@ export function logMirrorProtocolEvaluation(
     serverProtocol: evaluation.serverProtocol,
   };
   if (evaluation.action === "reject") {
-    console.error("[MirrorProtocol]", evaluation.message || evaluation.code, payload);
+    console.error("[DeltaProtocol]", evaluation.message || evaluation.code, payload);
     return;
   }
-  console.warn("[MirrorProtocol]", evaluation.message || evaluation.code, payload);
+  console.warn("[DeltaProtocol]", evaluation.message || evaluation.code, payload);
 }
 
-/** Remote diagnostics: GET /__pl_mirror_health */
-export async function fetchPlMirrorHealth(
+/** Remote diagnostics: GET /__pl_delta_health */
+export async function fetchPlDeltaHealth(
   baseUrl: string,
   accessToken: string,
   companyId: string
-): Promise<PlMirrorHealthPayload | null> {
+): Promise<PlDeltaHealthPayload | null> {
   const cid = String(companyId || "").trim();
-  if (!cid || !baseUrl || !accessToken) return null;
-  const url = `${baseUrl.replace(/\/$/, "")}/__pl_mirror_health?companyId=${encodeURIComponent(cid)}`;
+  if (!cid || !baseUrl) return null;
+  const url = `${baseUrl.replace(/\/$/, "")}/__pl_delta_health?companyId=${encodeURIComponent(cid)}`;
   const { gateHttpGet } = await import("@/lib/gates/gateServerFetch");
   const { status, body } = await gateHttpGet(url, accessToken);
   if (!status || status >= 400) return null;
   try {
-    const health = JSON.parse(body) as PlMirrorHealthPayload;
+    const health = JSON.parse(body) as PlDeltaHealthPayload;
     const evaluation = evaluateMirrorProtocol(PL_MIRROR_PROTOCOL_VERSION, health.mirrorProtocol);
     logMirrorProtocolEvaluation(evaluation, "health");
     return health;

@@ -37,7 +37,8 @@ import { generateLocalFileId, LOCAL_FILE_PREFIX, putPendingFile } from "@/lib/lo
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Calendar } from "@/components/ui/calendar";
-import { compressFile } from "@/lib/compression";
+import { compressVoucherAttachment } from "@/lib/compression";
+import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { FilePreview } from "../vouchers/FilePreview";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { doc, setDoc, serverTimestamp, Timestamp, collection, query, where, getDocs } from "firebase/firestore";
@@ -60,8 +61,6 @@ import { type LocalCompanyUserRecord, upsertUserInList } from "@/lib/localCompan
 import { planAllowsFirebaseOnline } from "@/lib/planSyncEntitlements";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
-
-const MAX_FILE_SIZE_MB = 0.5;
 
 const formSchema = z
   .object({
@@ -115,11 +114,12 @@ export function CreateCompanyForm({
   const [queuedCompanyUsers, setQueuedCompanyUsers] = useState<LocalCompanyUserDraft[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileToUpload, setFileToUpload] = useState<{ file: File; preview: string } | null>(null);
+  const [isFileProcessing, setIsFileProcessing] = useState(false);
   const router = useRouter();
   const { toast } = useToast();
   const { user, customUser } = useAuth();
   // `company` = abhi selected company (plan hint); owned list se highest tier — pehle hamesha "basic" plan check tha
-  const { setCompanyId, allCompanies, allCompaniesRegistry, company, reloadLocalCompanyRegistry } = useCompany();
+  const { setCompanyId, allCompanies, allCompaniesRegistry, company, reloadLocalCompanyRegistry, adoptNewLocalCompany } = useCompany();
   /** Gate-filtered `allCompanies` se alag — create form me local + online dono count/plan ke liye. */
   const companyRowsForCreate = useMemo(
     () => (allCompaniesRegistry?.length ? allCompaniesRegistry : allCompanies),
@@ -150,8 +150,9 @@ export function CreateCompanyForm({
   );
   /** Online company creation only; slot guard still applies. */
   const hasFreeOnlineSlot = allowFirebaseOnline && maxOnlineSlots > 0 && usedOnlineSlots < maxOnlineSlots;
+  const showCompanyTypeChoice = Boolean(user?.uid);
   const [storageMode, setStorageMode] = useState<"local" | "online">("local");
-  const willCreateAsLocal = !allowFirebaseOnline || storageMode === "local";
+  const willCreateAsLocal = !showCompanyTypeChoice || !allowFirebaseOnline || storageMode === "local";
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -213,20 +214,30 @@ export function CreateCompanyForm({
     const inputFile = e.target.files[0]; // Only one logo allowed
     if (!inputFile) return;
 
-    if (inputFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+    setIsFileProcessing(true);
+    try {
+      const maxBytes = attachmentMaxBytes();
+      const compressedFile = await compressVoucherAttachment(inputFile, maxBytes);
+      if (compressedFile.size > maxBytes) {
+        toast({
+          variant: "destructive",
+          ...attachmentStillTooLargeToastFields(),
+        });
+        e.target.value = "";
+        return;
+      }
+      const preview = URL.createObjectURL(compressedFile);
+      setFileToUpload({ file: compressedFile, preview });
+    } catch (error) {
       toast({
         variant: "destructive",
-        title: "File Too Large",
-        description: `Please select a file smaller than ${MAX_FILE_SIZE_MB}MB.`,
+        title: "Could not process file",
+        description: error instanceof Error ? error.message : "Compression or PDF read failed.",
       });
+    } finally {
       e.target.value = "";
-      return;
+      setIsFileProcessing(false);
     }
-
-    const compressedFile = await compressFile(inputFile);
-    const preview = URL.createObjectURL(compressedFile);
-    setFileToUpload({ file: compressedFile, preview });
-    e.target.value = ""; // Reset so same file can be re-selected; keeps single-file
   };
   
   const removeFile = () => {
@@ -352,8 +363,12 @@ export function CreateCompanyForm({
           title: "Using existing company",
           description: `"${values.companyName.trim()}" already exists. Opening it now.`,
         });
-        setCompanyId(existingId);
-        router.replace("/dashboard");
+        if (onCompanyCreated) {
+          onCompanyCreated(existingId);
+        } else {
+          setCompanyId(existingId);
+          router.replace("/dashboard");
+        }
         return;
       }
       toast({
@@ -440,7 +455,7 @@ export function CreateCompanyForm({
         }
         const currencyRow = getDefaultCurrencyForCountry(values.billingCurrencyCountry);
         // Static local-first: company root doc local table me store karo; Firebase write skip.
-        await upsertLocalCompany({
+        const localCompanyDoc = {
           id: companyId,
           name: values.companyName,
           interCompanyAccountNo,
@@ -458,13 +473,17 @@ export function CreateCompanyForm({
           // Local store JSON-safe date fields (invalid date se save fail na ho).
           fiscalYearStart: toLocalIso(values.fiscalYearStart),
           fiscalYearEnd: toLocalIso(values.fiscalYearEnd),
-          storageOption: "local",
-          syncPolicy: "offline",
+          storageOption: "local" as const,
+          syncPolicy: "offline" as const,
           syncedFromCloud: false,
+          localOnly: true,
+          localPersistence: "sqlite" as const,
+          firestoreSyncDisabled: true,
+          authoritativeCompanyId: "",
           ownerId: effectiveUserId,
           ownerEmail: effectiveUserEmail,
           createdAt: Date.now(),
-          sharedWith: [],
+          sharedWith: [] as string[],
           sharedWithEmails: [effectiveUserEmail].filter(Boolean),
           sharedWithEmailsLower: sharedWithEmailsLowerFromList(
             [effectiveUserEmail].filter(Boolean) as string[]
@@ -476,7 +495,9 @@ export function CreateCompanyForm({
           adminUsername:
             passwordEnabled && (values.password || "").trim() ? adminLoginUsername : null,
           localCompanyUsers,
-        });
+        };
+        await upsertLocalCompany(localCompanyDoc);
+        adoptNewLocalCompany(localCompanyDoc);
       } else {
         const currencyRowOnline = getDefaultCurrencyForCountry(values.billingCurrencyCountry);
         await setDoc(doc(firestore, "companies", companyId), {
@@ -574,14 +595,15 @@ export function CreateCompanyForm({
         description: `"${values.companyName}" has been saved.`,
       });
 
-      reloadLocalCompanyRegistry();
-
       if (onCompanyCreated) {
         onCompanyCreated(companyId);
       } else {
         setCompanyId(companyId);
         router.push("/dashboard");
       }
+
+      // Background registry mirror — selection/navigation ke baad taaki create dialog dubara na khule.
+      reloadLocalCompanyRegistry();
     } catch (error) {
       console.error("Error creating company:", error);
       const code = (error as { code?: string })?.code;
@@ -766,7 +788,7 @@ export function CreateCompanyForm({
           />
         </div>
 
-        {allowFirebaseOnline ? (
+        {showCompanyTypeChoice ? (
           <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
             <Label className="text-sm font-medium text-foreground">Company type</Label>
             <p className="text-xs text-muted-foreground">
@@ -790,20 +812,21 @@ export function CreateCompanyForm({
                   value="online"
                   id="create-storage-online"
                   className="mt-0.5"
-                  disabled={!hasFreeOnlineSlot}
+                  disabled={!allowFirebaseOnline || !hasFreeOnlineSlot}
                 />
-                <span className={!hasFreeOnlineSlot ? "text-muted-foreground" : ""}>
+                <span className={!allowFirebaseOnline || !hasFreeOnlineSlot ? "text-muted-foreground" : ""}>
                   <span className="font-medium text-foreground">Online (Firestore)</span> — cloud company; other
                   devices can sync when signed in with access.
                 </span>
               </label>
             </RadioGroup>
+            {!allowFirebaseOnline ? (
+              <p className="text-xs text-muted-foreground">
+                Online companies need a plan with cloud sync. Upgrade at Billing to enable the online option.
+              </p>
+            ) : null}
           </div>
-        ) : (
-          <p className="rounded-md border border-dashed border-muted-foreground/30 bg-muted/20 p-2 text-xs text-muted-foreground">
-            Your plan creates offline companies on this device only. Upgrade at Billing for online (cloud) companies.
-          </p>
-        )}
+        ) : null}
 
         {!willCreateAsLocal && !hasFreeOnlineSlot && (
           <p className="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 p-2 text-xs text-muted-foreground">
@@ -1184,6 +1207,7 @@ export function CreateCompanyForm({
             className="w-full"
             disabled={
               isLoading ||
+              isFileProcessing ||
               !form.formState.isValid ||
               (storageMode === "online" && !hasFreeOnlineSlot)
             }

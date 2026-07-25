@@ -4,7 +4,7 @@ import { gateHttpGet } from "@/lib/gates/gateServerFetch";
 import { normalizeServerUrl, getActiveGate } from "@/lib/gates/gateStore";
 import { resolveLocalServerGateAccessToken } from "@/lib/gates/gateRuntime";
 
-export type MirrorDocsFingerprint = {
+export type DeltaDocsFingerprint = {
   count: number;
   firstId: string | null;
   lastId: string | null;
@@ -13,7 +13,7 @@ export type MirrorDocsFingerprint = {
   datasetFingerprint: string;
 };
 
-function mirrorDocUpdatedAtMs(d: Record<string, unknown>): number {
+function deltaDocUpdatedAtMs(d: Record<string, unknown>): number {
   const raw = d.updatedAt ?? d.lastEditedAt ?? d.createdAt;
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
   if (typeof raw === "string") {
@@ -30,7 +30,7 @@ function mirrorDocUpdatedAtMs(d: Record<string, unknown>): number {
 }
 
 /** Canonical payload for dataset fingerprint (shared semantics with electron/main.js). */
-export function mirrorDocsFingerprintPayload(docs: Array<Record<string, unknown>>): string {
+export function deltaDocsFingerprintPayload(docs: Array<Record<string, unknown>>): string {
   return [...docs]
     .sort((a, b) => String(a.id || "").localeCompare(String(b.id || "")))
     .map((d) => {
@@ -57,19 +57,19 @@ async function sha1HexPrefix(input: string, prefixLen = 8): Promise<string> {
 }
 
 /** Dev/Test 5: voucher export dataset fingerprint — count + ID bounds + max updatedAt + SHA-1 dataset. */
-export async function fingerprintMirrorDocs(
+export async function fingerprintDeltaDocs(
   docs: Array<Record<string, unknown>>
-): Promise<MirrorDocsFingerprint> {
+): Promise<DeltaDocsFingerprint> {
   const ids = docs
     .map((d) => String(d.id || "").trim())
     .filter(Boolean)
     .sort();
   let maxUpdatedAt = 0;
   for (const d of docs) {
-    const ms = mirrorDocUpdatedAtMs(d);
+    const ms = deltaDocUpdatedAtMs(d);
     if (ms > maxUpdatedAt) maxUpdatedAt = ms;
   }
-  const datasetFingerprint = await sha1HexPrefix(mirrorDocsFingerprintPayload(docs));
+  const datasetFingerprint = await sha1HexPrefix(deltaDocsFingerprintPayload(docs));
   return {
     count: docs.length,
     firstId: ids[0] ?? null,
@@ -79,7 +79,7 @@ export async function fingerprintMirrorDocs(
   };
 }
 
-export function mirrorDocFingerprintsEqual(a: MirrorDocsFingerprint, b: MirrorDocsFingerprint): boolean {
+export function deltaDocFingerprintsEqual(a: DeltaDocsFingerprint, b: DeltaDocsFingerprint): boolean {
   return (
     a.count === b.count &&
     a.firstId === b.firstId &&
@@ -89,7 +89,7 @@ export function mirrorDocFingerprintsEqual(a: MirrorDocsFingerprint, b: MirrorDo
   );
 }
 
-async function fetchMirrorCollectionDocs(
+async function fetchDeltaCollectionDocs(
   companyId: string,
   collection: string
 ): Promise<Array<Record<string, unknown>> | null> {
@@ -97,8 +97,8 @@ async function fetchMirrorCollectionDocs(
   if (gate.type !== "local_server" || !gate.serverUrl) return null;
   const baseUrl = normalizeServerUrl(gate.serverUrl);
   const accessToken = resolveLocalServerGateAccessToken(gate);
-  if (!baseUrl || !accessToken) return null;
-  const url = `${baseUrl.replace(/\/$/, "")}/__pl_company_mirror/${encodeURIComponent(companyId)}/${encodeURIComponent(collection)}`;
+  if (!baseUrl) return null;
+  const url = `${baseUrl.replace(/\/$/, "")}/__pl_company_delta/${encodeURIComponent(companyId)}/${encodeURIComponent(collection)}`;
   const { status, body } = await gateHttpGet(url, accessToken);
   if (!status || status >= 400) return null;
   try {
@@ -110,36 +110,36 @@ async function fetchMirrorCollectionDocs(
 }
 
 /** Dev Test 5: do consecutive GET exports — fingerprints must match. */
-export async function debugCompareMirrorExportConsistency(
+export async function debugCompareDeltaExportConsistency(
   companyId: string,
   collection = "vouchers"
 ): Promise<{
   ok: boolean;
-  first: MirrorDocsFingerprint | null;
-  second: MirrorDocsFingerprint | null;
+  first: DeltaDocsFingerprint | null;
+  second: DeltaDocsFingerprint | null;
 }> {
-  const firstDocs = await fetchMirrorCollectionDocs(companyId, collection);
-  const secondDocs = await fetchMirrorCollectionDocs(companyId, collection);
+  const firstDocs = await fetchDeltaCollectionDocs(companyId, collection);
+  const secondDocs = await fetchDeltaCollectionDocs(companyId, collection);
   if (!firstDocs || !secondDocs) {
     return { ok: false, first: null, second: null };
   }
-  const first = await fingerprintMirrorDocs(firstDocs);
-  const second = await fingerprintMirrorDocs(secondDocs);
-  const ok = mirrorDocFingerprintsEqual(first, second);
+  const first = await fingerprintDeltaDocs(firstDocs);
+  const second = await fingerprintDeltaDocs(secondDocs);
+  const ok = deltaDocFingerprintsEqual(first, second);
   if (process.env.NODE_ENV === "development") {
-    console.log("[MirrorExportConsistency]", { collection, first, second, ok });
+    console.log("[DeltaExportConsistency]", { collection, first, second, ok });
   }
   return { ok, first, second };
 }
 
 /** Deterministic renderer ranking (mirrors electron/main.js). */
-export function mirrorExportScoreFromDocs(
+export function deltaExportScoreFromDocs(
   docs: Array<Record<string, unknown>>,
   rendererPriority: number
 ): number {
   let maxUpdatedAt = 0;
   for (const d of docs) {
-    const ms = mirrorDocUpdatedAtMs(d);
+    const ms = deltaDocUpdatedAtMs(d);
     if (ms > maxUpdatedAt) maxUpdatedAt = ms;
   }
   return 100_000 * docs.length + 1_000 * maxUpdatedAt + rendererPriority;

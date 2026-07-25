@@ -2,7 +2,7 @@
 
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { getEmbeddedLockShellKind } from "@/lib/embeddedDeviceLock";
-import { isLocalhostDevPreview } from "@/lib/localAppServerDevPreview";
+import { isBrowserLoopbackDevHost, isLocalhostDevPreview } from "@/lib/localAppServerDevPreview";
 import { createDevPlLocalServerClientApi } from "@/lib/devPlLocalServer/clientApi";
 
 export type LocalServerBindMode = "localhost" | "lan" | "internet";
@@ -11,7 +11,6 @@ export type LocalAppServerRole = "server" | "client" | "both";
 export type LocalAppServerConfig = {
   port: number;
   bindMode: LocalServerBindMode;
-  appOnlyAccess: boolean;
   autoStartOnBoot: boolean;
   userWantsRunning: boolean;
   appRole: LocalAppServerRole;
@@ -21,6 +20,10 @@ export type LocalAppServerConfig = {
   requireRemoteAccessToken: boolean;
   /** Normalized listing URLs to include in Messages share invites (empty = all available). */
   selectedInviteUrls?: string[];
+  /** Host: tick + save ki hui local companies — remote gate clients ko yahi dikhengi. */
+  sharedLocalCompanyIds?: string[] | null;
+  /** Show the server sharing start/stop switch in the desktop app header. */
+  showServerSwitchInHeader?: boolean;
 };
 
 export type LocalAppServerAccessTokenSummary = {
@@ -45,7 +48,6 @@ export type LocalAppServerStatus = {
   sharingPort?: number | null;
   configuredPort: number;
   bindMode: LocalServerBindMode;
-  appOnlyAccess: boolean;
   autoStartOnBoot: boolean;
   userWantsRunning: boolean;
   appRole: LocalAppServerRole;
@@ -57,6 +59,23 @@ export type LocalAppServerStatus = {
   accessHeader: string;
   electronMarkerHeader: string;
   portForwardHint: string | null;
+  clients?: LocalAppServerClientStats[];
+};
+
+export type LocalAppServerClientStats = {
+  key: string;
+  email: string | null;
+  user: string | null;
+  ip: string | null;
+  device?: string | null;
+  companyKey?: string | null;
+  companyIds?: string[];
+  companyNames?: string[];
+  pingMs?: number | null;
+  downloadBytes: number;
+  uploadBytes: number;
+  requestCount: number;
+  lastSeenAtMs: number;
 };
 
 export type PlElectronLocalServerApi = {
@@ -68,6 +87,9 @@ export type PlElectronLocalServerApi = {
   restart: (
     partial?: Partial<LocalAppServerConfig>
   ) => Promise<{ ok: boolean; port?: number; status?: LocalAppServerStatus }>;
+  saveShareableCompaniesSnapshot?: (
+    companies: Array<Record<string, unknown>>
+  ) => Promise<{ ok?: boolean; count?: number }>;
   listAccessTokens: () => Promise<LocalAppServerAccessTokenSummary[]>;
   createAccessToken: (input: {
     label?: string;
@@ -118,7 +140,10 @@ export function isElectronLocalServerApiAvailable(): boolean {
   if (electron) return true;
   if (getEmbeddedLockShellKind() === "exe") return true;
   if (isCapacitorNativeApp()) return false;
-  return isLocalhostDevPreview();
+  if (process.env.NODE_ENV === "development" || process.env.NEXT_PUBLIC_PL_DEV_LOCAL_SERVER === "1") {
+    return true;
+  }
+  return isBrowserLoopbackDevHost();
 }
 
 export function getElectronLocalServerApi(): PlElectronLocalServerApi | null {

@@ -146,6 +146,10 @@ export type StartCompanyBackupRunInput = {
   accountPlanId: string;
   includeAttachments: boolean;
   backupSourceMode?: import("@/lib/companyBackupCore").CompanyBackupSourceMode;
+  backupIntent?: import("@/lib/companyBackupCore").CompanyBackupIntent;
+  attachmentMissingPolicy?: import("@/lib/companyBackupCore").CompanyBackupAttachmentMissingPolicy;
+  backupRelativeDir?: string | null;
+  backupRestoreGmails?: string[] | null;
 };
 
 export async function startCompanyBackupRun(input: StartCompanyBackupRunInput): Promise<ExecuteCompanyBackupResult> {

@@ -13,7 +13,9 @@ import {
   getRemoteAttachmentBlobPreferOfflineCache,
   tryOfflineCachedAttachmentBlobMultiKey,
 } from "@/lib/offlineAttachmentUrlCache";
-import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
+import { isFirebaseLedgerLocalDeltaMode } from "@/lib/firebaseLedgerSyncMode";
+import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
+import { isFirebaseLedgerCompanyAttachmentSyncEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import { looksLikeFirebaseStorageDownloadUrl } from "@/lib/storageGetBlobFromDownloadUrl";
 import { usesEmbeddedNativeAttachmentStorage } from "@/lib/usesEmbeddedNativeAttachmentStorage";
 import type { AttachmentDisplayOptions, AttachmentDisplayResult } from "@/lib/companyAttachmentStrategies/types";
@@ -28,7 +30,7 @@ async function resolveCompanyId(explicit?: string): Promise<string | undefined> 
   return readActiveAttachmentCompanyId() ?? undefined;
 }
 
-/** Online/Firebase company: HTTPS remains primary; local refs are only offline/pending fallbacks. */
+/** Online/Firebase company: web uses HTTPS; embedded static clients use cache/blob first. */
 export async function resolveOnlineCompanyAttachmentDisplay(
   rawUrl: string,
   options?: AttachmentDisplayOptions
@@ -89,12 +91,20 @@ export async function resolveOnlineCompanyAttachmentDisplay(
     return { displayUrl: null, blob: null, contentType: null };
   }
 
+  // Cloud data sync off: browser ko seedha Firebase HTTPS mat do — sirf pehle se cached blob.
+  if (
+    isFirebaseLedgerDataSyncDisabled() ||
+    (companyId ? !isFirebaseLedgerCompanyAttachmentSyncEnabled(companyId) : false)
+  ) {
+    return { displayUrl: null, blob: null, contentType: null };
+  }
+
   return { displayUrl: url, blob: null, contentType: null };
 }
 
 export const onlineCompanyAttachmentStrategy = {
   mode: "online" as const,
-  usesSqliteFirstLedgerWrites: isEmbeddedOfflinePreloadClient,
+  usesSqliteFirstLedgerWrites: isFirebaseLedgerLocalDeltaMode,
   requiresLocalAttachmentUrlsOnly: false,
   prefersLocalAttachmentDisplayFirst: usesEmbeddedNativeAttachmentStorage,
   resolveAttachmentDisplay: resolveOnlineCompanyAttachmentDisplay,

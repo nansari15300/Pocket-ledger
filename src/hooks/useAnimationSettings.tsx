@@ -60,21 +60,28 @@ export function useAnimationSettings() {
 
   useEffect(() => {
     if (!userDocId) {
-      setSettings(defaultSettings);
-      setLoading(false);
+      window.queueMicrotask(() => {
+        setSettings(defaultSettings);
+        setLoading(false);
+      });
       return;
     }
 
     if (useLocalAnimationOnly) {
-      const fromLs = readAnimationFromLocalStorage(userDocId);
-      setSettings(fromLs ?? defaultSettings);
-      setLoading(false);
+      window.queueMicrotask(() => {
+        const fromLs = readAnimationFromLocalStorage(userDocId);
+        setSettings(fromLs ?? defaultSettings);
+        setLoading(false);
+      });
       return;
     }
 
-    // Offline / slow: turant device copy dikhao — snapshot error par bhi defaults nahi
-    const seeded = readAnimationFromLocalStorage(userDocId);
-    if (seeded) setSettings(seeded);
+    // Offline / slow / APK: turant device copy dikhao — snapshot error/par late Firestore se animation first paint miss na ho.
+    window.queueMicrotask(() => {
+      const seeded = readAnimationFromLocalStorage(userDocId);
+      setSettings(seeded ?? defaultSettings);
+      setLoading(false);
+    });
 
     const userDocRef = doc(firestore, "users", userDocId);
     const unsubscribe = onSnapshot(

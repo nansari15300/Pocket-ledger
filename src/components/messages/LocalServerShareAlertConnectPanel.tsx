@@ -41,14 +41,14 @@ export function LocalServerShareAlertConnectPanel({ notification, onConnected }:
   const [showPw, setShowPw] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const accessToken = String(notification.accessToken || "").trim();
+  const accessToken = "";
   const gateLabel = String(notification.gateLabel || notification.tokenLabel || "Shared server").trim();
   const companyId = String(notification.companyId || "").trim() || null;
   const serverPort = Number(notification.serverPort) || 0;
 
   useEffect(() => {
     const url = selectedUrl.trim();
-    if (!url || !accessToken) return;
+    if (!url) return;
     syncPlServerGateUrlForInvite({
       serverUrl: url,
       accessToken,
@@ -57,7 +57,7 @@ export function LocalServerShareAlertConnectPanel({ notification, onConnected }:
     });
   }, [selectedUrl, accessToken, gateLabel, serverPort]);
 
-  if (!urlOptions.length || !accessToken) return null;
+  if (!urlOptions.length) return null;
 
   const handleConnectClick = () => {
     if (!selectedUrl.trim()) {
@@ -95,7 +95,7 @@ export function LocalServerShareAlertConnectPanel({ notification, onConnected }:
       router.push(result.navigateTo);
     } catch (e) {
       toast.error("Could not connect", {
-        description: e instanceof Error ? e.message : "Check IP, token, and login details.",
+        description: e instanceof Error ? e.message : "Check IP and login details.",
       });
     } finally {
       setBusy(false);

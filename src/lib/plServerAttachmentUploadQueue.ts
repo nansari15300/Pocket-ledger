@@ -9,12 +9,21 @@ import {
   type PendingFilePayload,
 } from "@/lib/localPendingFiles";
 import { computeSha256HexFromBytes } from "@/lib/security/sha256Hex";
-import { resolvePlServerMirrorTransport } from "@/lib/plServerClientMirrorPush";
-import { resolvePlServerHostLoopbackTransport } from "@/lib/plServerHostMirrorPublish";
+import { resolvePlServerDeltaTransport } from "@/lib/plServerClientDeltaSync";
+import { resolvePlServerHostLoopbackTransport } from "@/lib/plServerHostDeltaPublish";
 
 const UPLOAD_DEBOUNCE_MS = 400;
 const UPLOAD_RETRY_MS = 4_000;
-const UPLOAD_SAVE_TIMEOUT_MS = 15_000;
+/** Base timeout — chhote files; bade files size se scale (pehle 15s → pl_server_post_timeout → voucher host pe nahi jata). */
+const UPLOAD_SAVE_TIMEOUT_MIN_MS = 60_000;
+const UPLOAD_SAVE_TIMEOUT_MAX_MS = 180_000;
+
+function attachmentUploadTimeoutMs(byteLength: number): number {
+  const n = Number.isFinite(byteLength) ? Math.max(0, byteLength) : 0;
+  // ~40 KB/s floor + 60s headroom for encode/bridge
+  const scaled = UPLOAD_SAVE_TIMEOUT_MIN_MS + Math.ceil(n / 40_000) * 1000;
+  return Math.min(UPLOAD_SAVE_TIMEOUT_MAX_MS, scaled);
+}
 
 type QueuedAttachment = {
   companyId: string;
@@ -72,9 +81,20 @@ async function resolvePlServerAttachmentUploadTransport(
   }
 
   if (!shouldFetchPlServerAccessContext()) return null;
-  const transport = resolvePlServerMirrorTransport(id);
+  const transport = resolvePlServerDeltaTransport(id);
   if (!transport) return null;
-  if (!transport.gateAllowed && !transport.unlockedLocally) return null;
+  let gateOk = transport.gateAllowed || transport.unlockedLocally;
+  if (!gateOk) {
+    try {
+      const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
+      const { isServerGateCompany } = await import("@/lib/companyStorageKind");
+      const row = await getLocalCompanyById(id, { includeDeleted: true });
+      if (row && isServerGateCompany(row)) gateOk = true;
+    } catch {
+      /* keep */
+    }
+  }
+  if (!gateOk) return null;
   return {
     baseUrl: transport.baseUrl,
     accessToken: transport.accessToken,
@@ -121,7 +141,11 @@ export function enqueuePlServerAttachmentUpload(payload: PendingFilePayload): vo
   void (async () => {
     const localId = String(payload.id || "").trim();
     if (!localId) return;
-    const companyId = resolvePendingPayloadCompanyId(payload);
+    // docPath kabhi host/authoritative id rakhta hai; queue key staff local SQLite company id se match hona chahiye.
+    const { resolveRegistryCompanyIdForPendingItem } = await import("@/lib/localPendingFiles");
+    const companyId =
+      (await resolveRegistryCompanyIdForPendingItem(payload)) ||
+      resolvePendingPayloadCompanyId(payload);
     if (!companyId) return;
     if (!(await shouldEnqueuePlServerAttachmentUpload(companyId))) return;
     queuedAttachments.set(queueKey(companyId, localId), {
@@ -193,6 +217,8 @@ async function flushPlServerAttachmentUploadQueue(
   }
 
   const url = `${transport.baseUrl.replace(/\/$/, "")}/__pl_attachment`;
+  const { resolvePlServerHostCompanyId } = await import("@/lib/plServerHostCompanyId");
+  const hostCompanyId = (await resolvePlServerHostCompanyId(cid)) || cid;
 
   let hadFailure = false;
   let uploaded = 0;
@@ -227,7 +253,7 @@ async function flushPlServerAttachmentUploadQueue(
     }
     try {
       const { status, body } = await gateHttpPost(url, transport.accessToken, {
-        companyId: cid,
+        companyId: hostCompanyId,
         id: item.localId,
         base64,
         sha256Hex,
@@ -236,7 +262,7 @@ async function flushPlServerAttachmentUploadQueue(
         storagePathPrefix: item.storagePathPrefix || pending.storagePathPrefix,
         docPath: item.docPath || pending.docPath,
         field: item.field || pending.field,
-      }, { timeoutMs: UPLOAD_SAVE_TIMEOUT_MS });
+      }, { timeoutMs: attachmentUploadTimeoutMs(pending.blob.size) });
       if (!status || status >= 400) {
         console.warn("[plServerAttachmentUpload] upload failed", {
           companyId: cid,
@@ -277,7 +303,10 @@ async function flushPlServerAttachmentUploadQueue(
       void import("@/lib/offlineAttachmentUrlCache").then(async (m) => {
         await m.seedOfflineAttachmentCacheFromBlob(localRef, pending.blob);
       });
-      void import("@/lib/attachmentLoadReady").then((m) => m.markAttachmentUrlReady(localRef));
+      void import("@/lib/attachmentLoadReady").then((m) => {
+        m.markAttachmentUrlReady(localRef);
+        m.requestAttachmentUiRefresh();
+      });
     } catch (e) {
       console.warn("[plServerAttachmentUpload] upload network error", {
         companyId: cid,

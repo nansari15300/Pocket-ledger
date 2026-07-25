@@ -15,6 +15,7 @@ import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadCl
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
 import { companyStrategyUsesSqliteFirstLedgerWrites } from "@/lib/staticAttachmentDisplayUrl";
+import { isFirebaseLedgerLocalDeltaMode } from "@/lib/firebaseLedgerSyncMode";
 
 /**
  * Voucher/attachment pipeline: `navigator.onLine === false` par Storage `uploadBytes` / `getDownloadURL` await mat karo —
@@ -35,7 +36,7 @@ export function shouldForceFirestoreWritesOnStaticOrApk(): boolean {
  * Web (dono false): company row ke hisaab se — local = SQLite, online Firestore = Firestore.
  */
 export function apkEmbeddedSqliteFirstWritesPreferred(): boolean {
-  return isEmbeddedOfflinePreloadClient();
+  return isFirebaseLedgerLocalDeltaMode() && isEmbeddedOfflinePreloadClient();
 }
 
 /** Voucher forms: duplicate check / backdate — Firestore `getDoc` offline mat. */

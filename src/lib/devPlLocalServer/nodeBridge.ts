@@ -1,31 +1,93 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import type { LocalAppServerConfig } from "@/lib/electronLocalServer";
+import { resolvePlDevProjectRoot } from "@/lib/devPlLocalServer/projectRoot";
 import {
   createAccessToken,
   getAccessTokenSecret,
   getDevStatus,
   listAccessTokens,
   loadDevConfig,
+  loadDevShareableCompaniesSnapshot,
   revokeAccessToken,
   rotateAccessToken,
   saveDevConfig,
+  saveDevShareableCompaniesSnapshot,
   updateAccessToken,
 } from "@/lib/devPlLocalServer/store";
 
 export function isDevPlLocalServerEnabled(): boolean {
-  return process.env.NODE_ENV === "development";
+  return (
+    process.env.NODE_ENV === "development" || process.env.NEXT_PUBLIC_PL_DEV_LOCAL_SERVER === "1"
+  );
+}
+
+function isLoopbackHostHeader(hostRaw: string | null | undefined): boolean {
+  const host = String(hostRaw || "")
+    .split(":")[0]
+    .toLowerCase()
+    .trim();
+  return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+}
+
+/** `next start` on localhost + browser web dev — static side-server ke bina bhi API chalu. */
+export function isDevPlLocalServerEnabledForRequest(req?: Request): boolean {
+  if (isDevPlLocalServerEnabled()) return true;
+  if (!req) return false;
+  const host = req.headers.get("host");
+  const fwd = (req.headers.get("x-forwarded-for") || "").split(",")[0]?.trim();
+  return isLoopbackHostHeader(host) || isLoopbackHostHeader(fwd);
+}
+
+const PL_DEV_CLI_RESULT_MARKER = "__PL_DEV_CLI_RESULT__";
+
+/** CLI stdout may include trace lines — extract first complete JSON object. */
+function parseDevPlCliStdout(text: string): unknown | null {
+  const markerIdx = text.indexOf(PL_DEV_CLI_RESULT_MARKER);
+  const scanFrom = markerIdx >= 0 ? markerIdx + PL_DEV_CLI_RESULT_MARKER.length : 0;
+  const start = text.indexOf("{", scanFrom);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (c === "\\") escape = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, i + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 async function runDevPlCli(action: string, payload: Record<string, unknown> = {}): Promise<unknown> {
-  const scriptPath = path.join(process.cwd(), "scripts", "dev-pl-local-server-cli.mjs");
+  const root = resolvePlDevProjectRoot();
+  const scriptPath = path.join(root, "scripts", "dev-pl-local-server-cli.mjs");
   const payloadJson = JSON.stringify(payload);
   /** start/restart daemon process exit nahi karta — stdout JSON par resolve karo, close ka wait mat karo. */
   const longRunningDaemon = action === "start" || action === "restart";
 
-  const electronModules = path.join(process.cwd(), "electron", "node_modules");
+  const electronModules = path.join(root, "electron", "node_modules");
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [scriptPath, action, payloadJson], {
-      cwd: process.cwd(),
+      cwd: root,
       env: {
         ...process.env,
         NODE_PATH: [electronModules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
@@ -47,15 +109,10 @@ async function runDevPlCli(action: string, payload: Record<string, unknown> = {}
       reject(err);
     };
     const tryResolveFromStdout = () => {
-      const trimmed = stdout.trim();
-      if (!trimmed) return;
-      try {
-        const parsed = JSON.parse(trimmed) as unknown;
-        if (longRunningDaemon) child.unref();
-        finishOk(parsed);
-      } catch {
-        /* incomplete JSON — wait for more chunks or process close */
-      }
+      const parsed = parseDevPlCliStdout(stdout);
+      if (parsed == null) return;
+      if (longRunningDaemon) child.unref();
+      finishOk(parsed);
     };
 
     child.stdout.on("data", (chunk) => {
@@ -72,11 +129,12 @@ async function runDevPlCli(action: string, payload: Record<string, unknown> = {}
         finishErr(new Error(stderr.trim() || `dev-pl-local-server-cli exited ${code}`));
         return;
       }
-      try {
-        finishOk(stdout.trim() ? JSON.parse(stdout) : {});
-      } catch {
+      const parsed = stdout.trim() ? parseDevPlCliStdout(stdout) : {};
+      if (parsed == null) {
         finishErr(new Error(`Invalid CLI output: ${stdout.slice(0, 200)}`));
+        return;
       }
+      finishOk(parsed);
     });
   });
 }
@@ -85,25 +143,50 @@ export { resolvePlAccessContextFromHeaders } from "@/lib/devPlLocalServer/store"
 
 export async function devPlLocalServerHandle(
   action: string,
-  payload: Record<string, unknown> = {}
+  payload: Record<string, unknown> = {},
+  opts: { requestAllowed?: boolean } = {}
 ): Promise<unknown> {
-  if (!isDevPlLocalServerEnabled()) {
+  if (!opts.requestAllowed && !isDevPlLocalServerEnabled()) {
     throw new Error("DEV_PL_LOCAL_SERVER_DISABLED");
   }
+  // Note: route handler gates with isDevPlLocalServerEnabledForRequest (loopback `next start`).
 
   switch (action) {
+    case "getConfig": {
+      /** Dev web me Settings page ka saved JSON hi source of truth rahe. */
+      return loadDevConfig();
+    }
     case "getStatus":
       return getDevStatus();
-    case "getConfig":
-      return loadDevConfig();
+    case "getShareableCompaniesSnapshot":
+      return loadDevShareableCompaniesSnapshot();
+    case "saveShareableCompaniesSnapshot":
+      return saveDevShareableCompaniesSnapshot(payload.companies);
     case "setConfig": {
       const partial = (payload.partial as Record<string, unknown>) || {};
-      return saveDevConfig(partial as Parameters<typeof saveDevConfig>[0]);
+      const saved = saveDevConfig(partial as Parameters<typeof saveDevConfig>[0]);
+      /** Host file = CLI path — refresh par wahi load ho. */
+      try {
+        await runDevPlCli("setConfig", { partial: saved });
+      } catch {
+        /* saveDevConfig already wrote disk */
+      }
+      return saved;
     }
     case "start":
-    case "stop":
-    case "restart":
+      saveDevConfig({ userWantsRunning: true });
       return runDevPlCli(action, payload);
+    case "stop":
+      saveDevConfig({ userWantsRunning: false });
+      return runDevPlCli(action, payload);
+    case "restart": {
+      const partial = (payload.partial as Partial<LocalAppServerConfig>) ?? {};
+      const saved =
+        partial && typeof partial === "object" && Object.keys(partial).length > 0
+          ? saveDevConfig(partial)
+          : loadDevConfig();
+      return runDevPlCli(action, { partial: saved });
+    }
     case "listAccessTokens":
       return listAccessTokens();
     case "createAccessToken":

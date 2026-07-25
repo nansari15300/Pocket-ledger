@@ -5,7 +5,7 @@
  * App static/offline mode me company CRUD isi store se karega.
  */
 
-import { getBrowserDb } from "@/lib/localSqlite";
+import { flushPendingBrowserDbSave, getBrowserDb } from "@/lib/localSqlite";
 import { mergePersistedLocalCloudSyncUserSettings } from "@/lib/localCloudSync/persistRegistryUserSettings";
 import { clearLocalAuth } from "@/lib/localApiClient";
 import { clearCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
@@ -33,6 +33,30 @@ export type LocalCompanyDoc = {
   [key: string]: unknown;
 };
 
+function shouldStampAsLocalOnly(row: LocalCompanyDoc | null | undefined): boolean {
+  if (!row) return false;
+  if ((row as { plServerShared?: unknown }).plServerShared === true) return false;
+  if ((row as { localOnly?: unknown }).localOnly === true) return true;
+  if ((row as { firestoreSyncDisabled?: unknown }).firestoreSyncDisabled === true) return true;
+  if (String((row as { localPersistence?: unknown }).localPersistence ?? "").toLowerCase().trim() === "sqlite") return true;
+  if (String((row as { storageOption?: unknown }).storageOption ?? "").toLowerCase().trim() === "local") return true;
+  if (String((row as { syncPolicy?: unknown }).syncPolicy ?? "").toLowerCase().trim() === "offline") return true;
+  return false;
+}
+
+function stampLocalOnlyCompanyDoc<T extends LocalCompanyDoc>(row: T): T {
+  return {
+    ...row,
+    localOnly: true,
+    localPersistence: "sqlite",
+    firestoreSyncDisabled: true,
+    storageOption: "local",
+    syncPolicy: "offline",
+    syncedFromCloud: false,
+    authoritativeCompanyId: "",
+  } as T;
+}
+
 function safeParseCompany(json: string): LocalCompanyDoc | null {
   try {
     return JSON.parse(json) as LocalCompanyDoc;
@@ -56,12 +80,31 @@ export async function upsertLocalCompany(company: LocalCompanyDoc): Promise<void
   const db = await getBrowserDb();
   if (!db || !company?.id) return;
   const now = Date.now();
-  const existingRow = db.prepare(`SELECT data FROM companies WHERE id = ?`).get(company.id) as
+  const existingLocalRow = db.prepare(`SELECT data FROM local_companies WHERE id = ?`).get(company.id) as
     | { data?: string }
     | undefined;
-  const existing = existingRow?.data ? safeParseCompany(existingRow.data) : null;
-  const merged = mergePersistedLocalCloudSyncUserSettings(existing, company);
-  // companies table keeps root company docs for local-only selector/context.
+  const existingCloudRow = db.prepare(`SELECT data FROM companies WHERE id = ?`).get(company.id) as
+    | { data?: string }
+    | undefined;
+  const existing = existingLocalRow?.data
+    ? safeParseCompany(existingLocalRow.data)
+    : existingCloudRow?.data
+      ? safeParseCompany(existingCloudRow.data)
+      : null;
+  const mergedRaw = mergePersistedLocalCloudSyncUserSettings(existing, company);
+  const merged = shouldStampAsLocalOnly(company) || shouldStampAsLocalOnly(existing)
+    ? stampLocalOnlyCompanyDoc(mergedRaw)
+    : mergedRaw;
+  if (shouldStampAsLocalOnly(merged)) {
+    db.prepare(
+      `INSERT INTO local_companies(id, data, updatedAt)
+       VALUES(?,?,?)
+       ON CONFLICT(id) DO UPDATE SET data = excluded.data, updatedAt = excluded.updatedAt`
+    ).run(merged.id, JSON.stringify(merged), now);
+    db.prepare(`DELETE FROM companies WHERE id = ?`).run(merged.id);
+    return;
+  }
+  // companies table keeps cloud-backed root docs; strict local rows live in local_companies.
   db.prepare(
     `INSERT INTO companies(id, data, updatedAt)
      VALUES(?,?,?)
@@ -75,7 +118,10 @@ export async function getLocalCompanyById(
 ): Promise<LocalCompanyDoc | null> {
   const db = await getBrowserDb();
   if (!db || !companyId) return null;
-  const row = db.prepare(`SELECT id, data FROM companies WHERE id = ?`).get(companyId) as { id: string; data: string } | undefined;
+  const localRow = db.prepare(`SELECT id, data FROM local_companies WHERE id = ?`).get(companyId) as
+    | { id: string; data: string }
+    | undefined;
+  const row = localRow ?? (db.prepare(`SELECT id, data FROM companies WHERE id = ?`).get(companyId) as { id: string; data: string } | undefined);
   if (!row?.data) return null;
   const parsed = safeParseCompany(row.data);
   if (!parsed) return null;
@@ -87,10 +133,24 @@ export async function getLocalCompanyById(
 export async function listLocalCompanies(options?: { includeDeleted?: boolean }): Promise<LocalCompanyDoc[]> {
   const db = await getBrowserDb();
   if (!db) return [];
-  const rows = db.prepare(`SELECT id, data FROM companies ORDER BY updatedAt DESC`).all() as Array<{ id: string; data: string }>;
+  const rows = [
+    ...(db.prepare(`SELECT id, data, updatedAt FROM local_companies ORDER BY updatedAt DESC`).all() as Array<{
+      id: string;
+      data: string;
+      updatedAt?: number;
+    }>),
+    ...(db.prepare(`SELECT id, data, updatedAt FROM companies ORDER BY updatedAt DESC`).all() as Array<{
+      id: string;
+      data: string;
+      updatedAt?: number;
+    }>),
+  ];
   const out: LocalCompanyDoc[] = [];
+  const seen = new Set<string>();
   const includeDeleted = options?.includeDeleted === true;
   for (const row of rows) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
     const parsed = safeParseCompany(row.data);
     if (!parsed) continue;
     if (!includeDeleted && localCompanyRowIsDeleted(parsed)) continue;
@@ -146,6 +206,7 @@ export async function removeLocalCompanyById(
   markLocalCompanyRecentlyRemoved(cid);
 
   db.prepare(`DELETE FROM company_docs WHERE company_id = ?`).run(cid);
+  db.prepare(`DELETE FROM company_docs_projection WHERE company_id = ?`).run(cid);
   db.prepare(`DELETE FROM company_users WHERE company_id = ?`).run(cid);
   db.prepare(`DELETE FROM sync_outbox WHERE company_id = ?`).run(cid);
   try {
@@ -153,6 +214,11 @@ export async function removeLocalCompanyById(
     db.prepare(`DELETE FROM cloud_sync_meta WHERE company_id = ?`).run(cid);
   } catch {
     /* pre-v3 DB */
+  }
+  try {
+    db.prepare(`DELETE FROM local_companies WHERE id = ?`).run(cid);
+  } catch {
+    /* pre-local_companies DB */
   }
   db.prepare(`DELETE FROM companies WHERE id = ?`).run(cid);
 
@@ -176,5 +242,10 @@ export async function removeLocalCompanyById(
     } catch {
       /* ignore */
     }
+  }
+  try {
+    await flushPendingBrowserDbSave();
+  } catch {
+    /* best-effort */
   }
 }

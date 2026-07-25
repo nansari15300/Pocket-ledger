@@ -10,6 +10,7 @@ import {
   isLocalFileRef,
   getLocalFileRefMeta,
   getLocalFileRefMetaSync,
+  getBlobFromLocalFileRef,
 } from "@/lib/localPendingFiles";
 import { useVoucherAttachmentFallback } from "@/contexts/VoucherAttachmentFallbackContext";
 import { getAttachmentFormatLabel, sniffBlobKindForPreview } from "@/lib/attachmentFormatLabel";
@@ -24,6 +25,7 @@ import { normalizeAttachmentUrlForDevicePreview } from "@/lib/attachmentHoldClip
 import { forgetHoverBlobUrl, peekHoverCachedBlobUrl, rememberHoverBlobUrl } from "@/lib/attachmentHoverBlobCache";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { useCompany } from "@/hooks/useCompany";
+import { readActiveAttachmentCompanyId } from "@/lib/firestorePermissionSuppress";
 import { canFetchPlServerAttachmentForCompany } from "@/lib/plServerAttachmentFetch";
 import { requestAttachmentUiRefresh } from "@/lib/attachmentLoadReady";
 import {
@@ -105,6 +107,7 @@ export async function prewarmVisibleAttachmentRefsForInstantOpen(
 
 /** EXE preview: download + disk write — isse zyada mat wait karo; retry dikhao. */
 const EMBEDDED_PREVIEW_DOWNLOAD_TIMEOUT_MS = 28_000;
+const PDF_HOVER_RASTER_TIMEOUT_MS = 20_000;
 
 /** EXE/APK: pl-attachments / blob cache; web: online par HTTPS allowed. */
 function HoverPreviewHttpsAwareImage(props: {
@@ -181,7 +184,7 @@ function HoverPreviewHttpsAwareImage(props: {
           cancelled = true;
         };
       }
-      setDisplaySrc("");
+      setDisplaySrc((prev) => prev || "");
       void resolveStaticAttachmentDisplay(u, {
         localLedgerOnly: localBytesOnly,
         companyMode: props.companyMode,
@@ -224,7 +227,7 @@ function HoverPreviewHttpsAwareImage(props: {
 
     // Online HTTPS: initial state already `u` — mat clear karo (warna 2–4s spinner).
     if (!canInstantHttps) {
-      setDisplaySrc("");
+      setDisplaySrc((prev) => prev || "");
     } else {
       setDisplaySrc((prev) => prev || u);
     }
@@ -356,13 +359,16 @@ function LocalPdfBlobHoverPreview({
   React.useEffect(() => {
     let cancelled = false;
     let created: string | null = null;
+    const ac = new AbortController();
+    const timeoutId = window.setTimeout(() => ac.abort(), PDF_HOVER_RASTER_TIMEOUT_MS);
     void (async () => {
       try {
         setLoading(true);
         let pdfBlob = blob && blob.size > 0 ? blob : null;
         if (!pdfBlob) {
-          pdfBlob = await fetch(sourceUrl).then((r) => r.blob());
+          pdfBlob = await fetch(sourceUrl, { signal: ac.signal }).then((r) => (r.ok ? r.blob() : null));
         }
+        if (ac.signal.aborted || cancelled) return;
         if (!pdfBlob?.size) throw new Error("empty_pdf");
         const kind = await sniffBlobKindForPreview(pdfBlob);
         if (kind !== "pdf") throw new Error("not_pdf");
@@ -371,7 +377,7 @@ function LocalPdfBlobHoverPreview({
         }
         const { convertPdfFirstPageToImage } = await import("@/lib/pdfToImage");
         const result = await convertPdfFirstPageToImage(pdfBlob, 0.85, 800);
-        if (cancelled) {
+        if (cancelled || ac.signal.aborted) {
           URL.revokeObjectURL(result.thumbnailUrl);
           return;
         }
@@ -385,6 +391,8 @@ function LocalPdfBlobHoverPreview({
     })();
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
+      ac.abort();
       if (created) {
         try {
           URL.revokeObjectURL(created);
@@ -439,43 +447,102 @@ export function LocalFileRefTooltipPreview({
   companyId?: string | null;
 }) {
   const voucherAttachmentFb = useVoucherAttachmentFallback();
-  const companyId = companyIdProp ?? voucherAttachmentFb?.companyId ?? null;
+  const { company } = useCompany();
+  const companyId =
+    companyIdProp ??
+    voucherAttachmentFb?.companyId ??
+    company?.id ??
+    readActiveAttachmentCompanyId() ??
+    null;
   const effectiveUrl = React.useMemo(() => normalizeAttachmentUrlForDevicePreview(url), [url]);
   const [state, setState] = React.useState<
     | { status: "loading" }
     | { status: "error" }
     | { status: "ready"; objectUrl: string; mime: string; blob?: Blob }
   >({ status: "loading" });
+  const [reloadKey, setReloadKey] = React.useState(0);
+  const galleryUrlsKey = gallery?.urls?.join("\x1e") ?? "";
+  const galleryDepKey =
+    gallery && gallery.urls.length > 1 ? `${gallery.startIndex}:${galleryUrlsKey}` : galleryUrlsKey;
 
   React.useEffect(() => {
     let cancelled = false;
     const urlRef = { current: null as string | null };
+    const ac = new AbortController();
+    const timeoutId = window.setTimeout(() => ac.abort(), EMBEDDED_PREVIEW_DOWNLOAD_TIMEOUT_MS);
+    const cid = companyId ?? readActiveAttachmentCompanyId() ?? undefined;
+
+    const cachedPreviewUrl =
+      peekHoverCachedBlobUrl(effectiveUrl) ?? peekHoverCachedBlobUrl(`${effectiveUrl}::cell-thumb`);
+    if (cachedPreviewUrl) {
+      const fmt = getAttachmentFormatLabel(effectiveUrl);
+      const cachedMime =
+        fmt === "PDF"
+          ? cachedPreviewUrl.includes("pdf") || peekHoverCachedBlobUrl(effectiveUrl)
+            ? "application/pdf"
+            : "image/jpeg"
+          : fmt === "FILE" || fmt === "OTHER"
+            ? "application/octet-stream"
+            : "image/jpeg";
+      setState({ status: "ready", objectUrl: cachedPreviewUrl, mime: cachedMime });
+    } else {
+      setState({ status: "loading" });
+    }
+
     void (async () => {
       try {
-        if (usesEmbeddedNativeAttachmentStorage() && isLocalFileRef(effectiveUrl)) {
+        // Always prefer real bytes + sniff — displayUrl early-return PDF ko "octet-stream"/FILE bana deta tha
+        // aur LocalPdfBlobHoverPreview ke paas blob nahi jata tha (txn row portal blank).
+        let blob: Blob | null = null;
+        const { isPlRemoteServerClientMode, isPlSharingServerPortOrigin } = await import(
+          "@/lib/plRemoteServerClient"
+        );
+        const staffRemote = isPlRemoteServerClientMode() || isPlSharingServerPortOrigin();
+        if (!staffRemote && isLocalFileRef(effectiveUrl)) {
+          blob = await getBlobFromLocalFileRef(effectiveUrl, {
+            companyId: cid,
+          });
+        }
+        if (
+          !staffRemote &&
+          (!blob || blob.size <= 0) &&
+          usesEmbeddedNativeAttachmentStorage() &&
+          isLocalFileRef(effectiveUrl)
+        ) {
           const meta = getLocalFileRefMetaSync(effectiveUrl) ?? (await getLocalFileRefMeta(effectiveUrl));
-          if (cancelled) return;
           if (meta?.displayUrl && (meta.filePath || meta.fileUri)) {
-            const mime = String(meta.contentType || "application/octet-stream").toLowerCase();
-            setState({ status: "ready", objectUrl: meta.displayUrl, mime });
-            return;
+            try {
+              const fetched = await fetch(meta.displayUrl, { signal: ac.signal }).then((r) =>
+                r.ok ? r.blob() : null
+              );
+              if (fetched && fetched.size > 0) blob = fetched;
+            } catch {
+              /* fall through */
+            }
           }
         }
-        const { resolvePlServerStaffAttachmentPreviewBlob } = await import("@/lib/plServerAttachmentFetch");
-        const blob = await resolvePlServerStaffAttachmentPreviewBlob(effectiveUrl, {
-          galleryUrls: gallery?.urls,
-          companyId: companyId ?? undefined,
-        });
+        if (!blob || blob.size <= 0) {
+          const { resolvePlServerStaffAttachmentPreviewBlob } = await import("@/lib/plServerAttachmentFetch");
+          blob = await resolvePlServerStaffAttachmentPreviewBlob(effectiveUrl, {
+            galleryUrls: gallery?.urls,
+            companyId: cid,
+            signal: ac.signal,
+          });
+        }
         if (cancelled) return;
         if (!blob || blob.size === 0) {
           setState({ status: "error" });
           return;
         }
         let mime = String(blob.type || "application/octet-stream").toLowerCase();
-        if (mime === "application/octet-stream" || !blob.type) {
+        if (mime === "application/octet-stream" || !blob.type || mime === "binary/octet-stream") {
           const kind = await sniffBlobKindForPreview(blob);
           if (kind === "pdf") mime = "application/pdf";
           else if (kind === "image") mime = "image/jpeg";
+        }
+        if (mime.includes("pdf") && blob.type !== "application/pdf") {
+          blob = new Blob([await blob.arrayBuffer()], { type: "application/pdf" });
+          mime = "application/pdf";
         }
         const objectUrl = URL.createObjectURL(blob);
         urlRef.current = objectUrl;
@@ -491,12 +558,14 @@ export function LocalFileRefTooltipPreview({
     })();
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
+      ac.abort();
       if (urlRef.current && !isCapacitorNativeApp()) {
         URL.revokeObjectURL(urlRef.current);
         urlRef.current = null;
       }
     };
-  }, [url, effectiveUrl, gallery?.urls, companyId]);
+  }, [url, effectiveUrl, galleryDepKey, companyId, reloadKey]);
 
   const openAttachment = React.useCallback(() => {
     const kind: "pdf" | "image" | "other" =
@@ -533,10 +602,19 @@ export function LocalFileRefTooltipPreview({
   if (state.status === "error") {
     return (
       <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-muted-foreground">
-        <span>{canRemoteFetch ? "File on server PC — Open to load preview" : "File stored on this device"}</span>
-        <Button type="button" size="sm" variant="secondary" onClick={openAttachment}>
-          Open
-        </Button>
+        <span>
+          {canRemoteFetch
+            ? "Could not load preview from server — try Open or Retry"
+            : "File stored on this device — try Open"}
+        </span>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <Button type="button" size="sm" variant="secondary" onClick={() => setReloadKey((n) => n + 1)}>
+            Retry
+          </Button>
+          <Button type="button" size="sm" variant="secondary" onClick={openAttachment}>
+            Open
+          </Button>
+        </div>
       </div>
     );
   }
@@ -584,11 +662,27 @@ export function LocalFileRefTooltipPreview({
  * Ek URL ke liye voucher File column / opening balance jaisa hover body —
  * party-bank stripes list+details avatar hover bhi yahi layout use karta hai.
  */
-export function MultiAttachmentPortalPreview({ urls }: { urls: readonly string[] }) {
+export function MultiAttachmentPortalPreview({
+  urls,
+  companyId: companyIdProp,
+}: {
+  urls: readonly string[];
+  companyId?: string | null;
+}) {
   const gallery = useAttachmentPreviewGallery();
+  const { companyId: shellCompanyId } = useCompany();
   const list = React.useMemo(
     () => urls.map((u) => String(u || "").trim()).filter(Boolean),
     [urls]
+  );
+  const urlsKey = React.useMemo(() => list.join("\x1e"), [list]);
+  const activeIndex =
+    gallery && gallery.urls.length > 1
+      ? Math.min(Math.max(gallery.index, 0), Math.max(list.length - 1, 0))
+      : 0;
+  const galleryOpts = React.useMemo(
+    () => (list.length > 1 ? { urls: list, startIndex: activeIndex } : undefined),
+    [urlsKey, activeIndex, list]
   );
 
   if (list.length === 0) {
@@ -600,16 +694,13 @@ export function MultiAttachmentPortalPreview({ urls }: { urls: readonly string[]
     );
   }
 
-  const activeIndex =
-    gallery && gallery.urls.length > 1
-      ? Math.min(Math.max(gallery.index, 0), list.length - 1)
-      : 0;
   const currentUrl = list[activeIndex] ?? list[0]!;
 
   return (
     <SingleAttachmentHoverPreviewBody
       url={currentUrl}
-      gallery={list.length > 1 ? { urls: list, startIndex: activeIndex } : undefined}
+      companyId={companyIdProp ?? shellCompanyId ?? readActiveAttachmentCompanyId()}
+      gallery={galleryOpts}
     />
   );
 }
@@ -617,9 +708,11 @@ export function MultiAttachmentPortalPreview({ urls }: { urls: readonly string[]
 export function SingleAttachmentHoverPreviewBody({
   url,
   gallery,
+  companyId: companyIdProp,
 }: {
   url: string;
   gallery?: AttachmentPreviewGalleryOpts;
+  companyId?: string | null;
 }) {
   const { company } = useCompany();
   const voucherAttachmentFb = useVoucherAttachmentFallback();
@@ -692,7 +785,7 @@ export function SingleAttachmentHoverPreviewBody({
         <LocalFileRefTooltipPreview
           url={u}
           gallery={galleryOpts}
-          companyId={voucherAttachmentFb?.companyId ?? company?.id}
+          companyId={companyIdProp ?? voucherAttachmentFb?.companyId ?? company?.id ?? readActiveAttachmentCompanyId()}
         />
       ) : isImage ? (
         <HoverPreviewHttpsAwareImage

@@ -48,9 +48,7 @@ export async function listShareableLocalCompaniesForHost(registry: Company[]): P
       byId.set(row.id, normalized);
       continue;
     }
-    if (!isLocalServerShareableCompany(existing)) {
-      byId.set(row.id, { ...existing, ...normalized });
-    }
+    byId.set(row.id, { ...existing, ...normalized });
   }
 
   return Array.from(byId.values());

@@ -31,7 +31,7 @@ import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
-import usePermissions, { canForRecycleBinLocalCompany } from "@/hooks/usePermissions";
+import usePermissions, { canForRecycleBinLocalCompany, type PermissionConfig } from "@/hooks/usePermissions";
 import { assertCan, PermissionDeniedError } from "@/lib/permissions/enforcePermission";
 import { PermissionButton } from "@/components/permission";
 import { cn } from "@/lib/utils";
@@ -47,6 +47,7 @@ import {
     listLocalCompanies,
     localCompanyRowIsDeleted,
     upsertLocalCompany,
+    type LocalCompanyDoc,
 } from "@/lib/localCompanyStore";
 import {
   permanentDeleteDriveFolderHint,
@@ -83,21 +84,29 @@ function isRecycleBinOwnerCompanyItem(
     return Boolean(ue && oe && ue === oe);
 }
 
-function assertRecycleBinAction(
+async function assertRecycleBinAction(
     item: DeletedItem,
     can: (p: Permission) => boolean,
     permission: Permission,
     user: { uid: string; email?: string | null } | null | undefined,
     customUser: { role?: string; email?: string | null } | null | undefined
-): void {
+): Promise<void> {
     const isCompanyRow = item.collectionPath === "companies" || item.isRootCollection === true;
     if (isCompanyRow && item.companyStorageSource === "local") {
+        let permissionConfig: PermissionConfig | undefined;
+        try {
+            const localRow = await getLocalCompanyById(item.id, { includeDeleted: true });
+            permissionConfig = (localRow as { permissionConfig?: PermissionConfig })?.permissionConfig;
+        } catch {
+            /* optional */
+        }
         const ok = canForRecycleBinLocalCompany(
             item.id,
             { ownerId: item.ownerId, ownerEmail: item.ownerEmail },
             user?.uid,
             user?.email ?? null,
-            permission
+            permission,
+            permissionConfig
         );
         if (!ok) {
             throw new PermissionDeniedError("No permission for this local company.");
@@ -168,6 +177,21 @@ async function ensureCompanyRecycleBinItemStorage(item: DeletedItem): Promise<De
             ? ("local" as const)
             : ("online" as const);
     return { ...item, companyStorageSource: src };
+}
+
+function localCompanyToRecycleBinItem(c: LocalCompanyDoc): DeletedItem {
+    const storage = String((c as { storageOption?: string }).storageOption ?? "local").toLowerCase();
+    return {
+        id: c.id,
+        name: String(c.name || "Unnamed Company"),
+        type: "Company",
+        deletedAt: coerceDeletedAtToDate(c.deletedAt) ?? undefined,
+        collectionPath: "companies",
+        isRootCollection: true,
+        ownerId: typeof c.ownerId === "string" ? c.ownerId : undefined,
+        ownerEmail: typeof c.ownerEmail === "string" ? c.ownerEmail : undefined,
+        companyStorageSource: storage === "local" ? "local" : "online",
+    };
 }
 
 async function finalizeOwnerDeletedCompanyOnline(
@@ -319,20 +343,7 @@ function RecycleBinContent() {
                         const companyItems: DeletedItem[] = rows
                             // Hidden-from-company-admin rows local recycle bin me dobara na dikhaye.
                             .filter((c) => localCompanyRowIsDeleted(c) && !(c as { movedToAdminRecycleAt?: unknown }).movedToAdminRecycleAt)
-                            .map((c) => {
-                                const storage = String((c as { storageOption?: string }).storageOption ?? "local").toLowerCase();
-                                return {
-                                    id: c.id,
-                                    name: String(c.name || "Unnamed Company"),
-                                    type: "Company",
-                                    deletedAt: coerceDeletedAtToDate(c.deletedAt) ?? undefined,
-                                    collectionPath: "companies",
-                                    isRootCollection: true,
-                                    ownerId: typeof c.ownerId === "string" ? c.ownerId : undefined,
-                                    ownerEmail: typeof c.ownerEmail === "string" ? c.ownerEmail : undefined,
-                                    companyStorageSource: storage === "local" ? ("local" as const) : ("online" as const),
-                                };
-                            });
+                            .map(localCompanyToRecycleBinItem);
                         setDeletedItems((prev) => {
                             const otherItems = prev.filter((item) => item.collectionPath !== "companies");
                             return [...otherItems, ...companyItems];
@@ -353,7 +364,9 @@ function RecycleBinContent() {
                     customUser?.role === "SuperAdmin" && user.email ? emailDocsRef.current : [];
                 const companyItems = mergeDeletedCompanyFirestoreDocs(ownerDocsRef.current, emailDocs);
                 setDeletedItems((prev) => {
-                    const otherItems = prev.filter((item) => item.collectionPath !== "companies");
+                    const otherItems = prev.filter(
+                        (item) => item.collectionPath !== "companies" || item.companyStorageSource === "local"
+                    );
                     return [...otherItems, ...companyItems];
                 });
                 setLoading(false);
@@ -405,6 +418,42 @@ function RecycleBinContent() {
                 clearTimeout(timeout);
             };
         }, [user?.uid, user?.email, customUser?.role, localCompanyRegistryEpoch]);
+
+    // Local companies can exist while the app is in Online/Server gate mode; keep their recycle-bin rows merged too.
+    useEffect(() => {
+        if (!user?.uid) return;
+        let cancelled = false;
+        listLocalCompanies({ includeDeleted: true })
+            .then((rows) => {
+                if (cancelled) return;
+                const localDeletedCompanies = rows
+                    .filter((c) => localCompanyRowIsDeleted(c) && !(c as { movedToAdminRecycleAt?: unknown }).movedToAdminRecycleAt)
+                    .filter((c) => String((c as { storageOption?: string }).storageOption ?? "local").toLowerCase() === "local")
+                    .map(localCompanyToRecycleBinItem);
+                setDeletedItems((prev) => {
+                    const byKey = new Map<string, DeletedItem>();
+                    for (const item of prev) {
+                        const isLocalCompany =
+                            (item.collectionPath === "companies" || item.isRootCollection === true) &&
+                            item.companyStorageSource === "local";
+                        if (!isLocalCompany) byKey.set(`${item.collectionPath}:${item.id}`, item);
+                    }
+                    for (const item of localDeletedCompanies) {
+                        byKey.set(`${item.collectionPath}:${item.id}`, item);
+                    }
+                    return [...byKey.values()];
+                });
+            })
+            .catch((error) => {
+                console.error("Error merging deleted local companies:", error);
+            })
+            .finally(() => {
+                if (!cancelled && isLocalOnlyMode()) setLoading(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [user?.uid, localCompanyRegistryEpoch]);
 
     // Online app: Firestore `storageOption` miss ho to SQLite se Local/Online badge align karo.
     useEffect(() => {
@@ -740,7 +789,7 @@ function RecycleBinContent() {
         if (!viewVoucherBinItem || !companyId) return;
         setViewVoucherRestoring(true);
         try {
-            assertRecycleBinAction(viewVoucherBinItem, can, "delete_records", user, customUser);
+            await assertRecycleBinAction(viewVoucherBinItem, can, "delete_records", user, customUser);
         } catch (error) {
             if (error instanceof PermissionDeniedError) {
                 toast({ variant: "destructive", title: "Permission Denied", description: error.message });
@@ -775,7 +824,7 @@ function RecycleBinContent() {
         if (!companyId && !isCompany) return;
 
         try {
-            assertRecycleBinAction(resolvedItem, can, "delete_records", user, customUser);
+            await assertRecycleBinAction(resolvedItem, can, "delete_records", user, customUser);
         } catch (error) {
             if (error instanceof PermissionDeniedError) {
                 toast({
@@ -795,7 +844,7 @@ function RecycleBinContent() {
         }
 
         if (isCompany && user?.uid) {
-            if (isLocalOnlyMode()) {
+            if (await deletedCompanyUsesLocalStorageOnly(resolvedItem)) {
                 const nonDeletedLocalCompanies = await listLocalCompanies();
                 const currentCount = nonDeletedLocalCompanies.length;
                 // Create company jaisa: pehli local row ka planId account tier se match na ho to galat cap — highest owned SKU use karo.
@@ -853,8 +902,8 @@ function RecycleBinContent() {
         
         setIsProcessing(true);
         try {
-            if (isCompany && isLocalOnlyMode()) {
-                // Local-only mode: recycle bin se company restore local table par karo.
+            if (isCompany && (await deletedCompanyUsesLocalStorageOnly(resolvedItem))) {
+                // Local company: recycle bin se company restore local table par karo, gate mode koi bhi ho.
                 const localCompany = await getLocalCompanyById(resolvedItem.id, { includeDeleted: true });
                 if (!localCompany) throw new Error("Local company not found");
                 await upsertLocalCompany({
@@ -892,7 +941,7 @@ function RecycleBinContent() {
         if (!companyId && !isCompany) return;
         
         try {
-            assertRecycleBinAction(resolvedItem, can, "permanently_delete_records", user, customUser);
+            await assertRecycleBinAction(resolvedItem, can, "permanently_delete_records", user, customUser);
         } catch (error) {
             if (error instanceof PermissionDeniedError) {
                 toast({
@@ -1006,7 +1055,7 @@ function RecycleBinContent() {
         
         for (const item of resolvedBinItems) {
             try {
-                assertRecycleBinAction(item, can, "permanently_delete_records", user, customUser);
+                await assertRecycleBinAction(item, can, "permanently_delete_records", user, customUser);
             } catch (error) {
                 if (error instanceof PermissionDeniedError) {
                     toast({

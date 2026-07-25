@@ -26,7 +26,7 @@ import {
   STALE_LIVE_DATA_HANDLE_CODE,
   clearMirrorFolderWriteBlock,
   resetMirrorMissingDispatchedGate,
-  syncAllLocalCompanyMirrorsToFolder,
+  syncAllLocalCompanyDeltasToFolder,
 } from "@/lib/liveDataFolderMirror";
 import { storeWebLiveDataDirectoryHandle } from "@/lib/backupSaveLocation";
 
@@ -121,7 +121,7 @@ export function LiveMirrorFolderMissingDialog() {
         title: "Company removed from this device",
         description: "Local SQLite data for this company was deleted.",
       });
-      void syncAllLocalCompanyMirrorsToFolder();
+      void syncAllLocalCompanyDeltasToFolder();
     } catch (e) {
       toast({
         variant: "destructive",

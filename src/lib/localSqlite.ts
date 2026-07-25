@@ -62,6 +62,39 @@ function openIndexedDB(idbName: string): Promise<IDBDatabase> {
   });
 }
 
+/** APK/EXE update par purane IndexedDB scope se SQLite one-time import. */
+async function collectLegacySqliteIdbNames(scopedName: string): Promise<string[]> {
+  const names = new Set<string>();
+  names.add(LEGACY_IDB_NAME);
+  names.add(`${BASE_IDB_NAME}__${getHostPortScopeForLegacyFallback()}`);
+  if (isCapacitorNativeApp()) {
+    for (const suffix of [
+      "localhost",
+      "localhost-3000",
+      "localhost-8080",
+      "localhost-4173",
+      "localhost-5173",
+      "capacitor_localhost",
+      "unknown",
+    ]) {
+      names.add(`${BASE_IDB_NAME}__${suffix}`);
+    }
+    if (typeof indexedDB !== "undefined" && typeof indexedDB.databases === "function") {
+      try {
+        const dbs = await indexedDB.databases();
+        for (const meta of dbs) {
+          const n = String(meta.name || "").trim();
+          if (n.startsWith(BASE_IDB_NAME) && n !== scopedName) names.add(n);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  names.delete(scopedName);
+  return [...names];
+}
+
 /** IndexedDB se DB binary read karo. Nahi mile to null (nayi DB banayenge). */
 export function loadDbFromIndexedDB(): Promise<ArrayBuffer | null> {
   const readByName = (idbName: string): Promise<ArrayBuffer | null> =>
@@ -89,21 +122,25 @@ export function loadDbFromIndexedDB(): Promise<ArrayBuffer | null> {
   return (async () => {
     const scopedName = getScopedIdbName();
     const scoped = await readByName(scopedName);
-    if (scoped) return scoped;
-    // Scope migration safety: embedded/native fixed-scope par switch ke baad current host-port DB se one-time import.
-    const legacyHostScopedName = `${BASE_IDB_NAME}__${getHostPortScopeForLegacyFallback()}`;
-    if (legacyHostScopedName !== scopedName) {
-      const hostScoped = await readByName(legacyHostScopedName);
-      if (hostScoped) {
-        await saveDbToIndexedDB(new Uint8Array(hostScoped));
-        return hostScoped;
+    if (scoped && scoped.byteLength > 64) return scoped;
+
+    const legacyNames = await collectLegacySqliteIdbNames(scopedName);
+    let best: ArrayBuffer | null = null;
+    for (const name of legacyNames) {
+      try {
+        const buf = await readByName(name);
+        if (buf && buf.byteLength > 64 && (!best || buf.byteLength > best.byteLength)) {
+          best = buf;
+        }
+      } catch {
+        /* try next */
       }
     }
-    // First run after DB scoping change: legacy DB se one-time fallback read so offline companies immediately visible rahein.
-    const legacy = await readByName(LEGACY_IDB_NAME);
-    if (!legacy) return null;
-    await saveDbToIndexedDB(new Uint8Array(legacy));
-    return legacy;
+    if (best) {
+      await saveDbToIndexedDB(new Uint8Array(best));
+      return best;
+    }
+    return scoped;
   })();
 }
 
@@ -131,6 +168,13 @@ export function saveDbToIndexedDB(data: Uint8Array): Promise<void> {
 function initSchema(db: SqlJsDatabase): void {
   db.run(`
     CREATE TABLE IF NOT EXISTS companies (
+      id TEXT PRIMARY KEY,
+      data TEXT NOT NULL DEFAULT '{}',
+      updatedAt INTEGER
+    )
+  `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS local_companies (
       id TEXT PRIMARY KEY,
       data TEXT NOT NULL DEFAULT '{}',
       updatedAt INTEGER
@@ -425,9 +469,20 @@ export async function getBrowserDb(): Promise<BrowserDbWrapper | null> {
   }
 }
 
-/** Cache clear karo (e.g. logout / switch data source). */
+/** Cache clear karo (e.g. logout / switch data source / remote bridge write). */
 export function clearBrowserDbCache(): void {
+  if (pendingSaveTimer) {
+    clearTimeout(pendingSaveTimer);
+    pendingSaveTimer = null;
+  }
   cachedDb = null;
+  openBrowserDbPromise = null;
+}
+
+/** Hidden bridge ne IndexedDB likha — app tab apna sql.js dubara IDB se load kare. */
+export async function reloadBrowserDbFromIndexedDB(): Promise<BrowserDbWrapper | null> {
+  clearBrowserDbCache();
+  return getBrowserDb();
 }
 
 /** Debounced save pending ho to turant IndexedDB flush — refresh/tab close se company SQLite na ude. */
@@ -445,6 +500,17 @@ export async function flushPendingBrowserDbSave(): Promise<void> {
   await flushBrowserDbToIndexedDB();
   const { plPhase1bVerifyHook } = await import("@/lib/phase1bVerifyCapture");
   plPhase1bVerifyHook("onFlush");
+}
+
+/** Voucher save hot path — debounced IndexedDB export; Save button / dialog mat roko. */
+export function scheduleBrowserDbPersistAfterWrite(): void {
+  if (typeof window === "undefined") return;
+  if (!pendingSaveFn) return;
+  if (pendingSaveTimer != null) return;
+  pendingSaveTimer = setTimeout(() => {
+    pendingSaveTimer = null;
+    void pendingSaveFn?.().catch(() => undefined);
+  }, 250);
 }
 
 /** Restore / bulk write ke baad `reload` se pehle — `scheduleSave` async hai warna IndexedDB pura flush nahi hota */

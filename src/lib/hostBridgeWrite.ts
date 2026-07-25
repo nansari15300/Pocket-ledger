@@ -93,6 +93,6 @@ export async function invokeHostBridgeCompanyDocUpsert(
   if (!result?.ok) {
     throw new Error(result?.error || "bridge_upsert_failed");
   }
-  const { markPlServerLocalWrite } = await import("@/lib/plServerClientMirrorPush");
+  const { markPlServerLocalWrite } = await import("@/lib/plServerClientDeltaSync");
   markPlServerLocalWrite(companyId);
 }

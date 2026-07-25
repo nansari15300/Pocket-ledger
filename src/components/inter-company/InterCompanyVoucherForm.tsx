@@ -34,6 +34,7 @@ import {
 import { toast } from "sonner";
 import { formatVoucherNumber, parseVoucherNumberPart } from "@/lib/voucherNumberFormat";
 import {
+  deleteInterCompanyVoucherLocalCopyOnly,
   deleteInterCompanyVoucherPair,
   patchInterCompanyShareAttachmentsWithPeer,
   saveInterCompanyVoucherPair,
@@ -1436,7 +1437,7 @@ export function InterCompanyVoucherForm({
       });
       return;
     }
-    const toastId = toast.loading("Deleting�");
+    const toastId = toast.loading("Deleting…");
     setIsLoading(true);
     try {
       await deleteInterCompanyVoucherPair({
@@ -1447,6 +1448,40 @@ export function InterCompanyVoucherForm({
         deletedByUid: user.uid,
       });
       toast.success("Moved to recycle bin", { id: toastId });
+      onVoucherAction?.("cancelled");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Delete failed";
+      toast.error("Delete failed", { id: toastId, description: message });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleFinalDeleteLocalCopy = async () => {
+    const voucherId = String(
+      voucher?.id || savedSourceId || currentLinkedVoucherId || displayVoucher?.id || ""
+    ).trim();
+    if (!voucherId) {
+      toast.error("Voucher not found");
+      return;
+    }
+    if (!companyId) {
+      toast.error("Select a company first");
+      return;
+    }
+    if (!user?.uid) {
+      toast.error("Sign in to delete this voucher");
+      return;
+    }
+    const toastId = toast.loading("Deleting…");
+    setIsLoading(true);
+    try {
+      await deleteInterCompanyVoucherLocalCopyOnly({
+        companyId,
+        voucherId,
+        deletedByUid: user.uid,
+      });
+      toast.success("Moved to recycle bin on this company", { id: toastId });
       onVoucherAction?.("cancelled");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Delete failed";
@@ -1879,6 +1914,7 @@ export function InterCompanyVoucherForm({
             onCancel={() => onVoucherAction?.("cancelled")}
             onDelete={() => void handleDelete()}
             onRequestDelete={() => setDeleteDialogOpen(true)}
+            onFinalDeleteLocal={() => void handleFinalDeleteLocalCopy()}
             deleteRequestPending={deleteFlowState.pending && !incomingDeleteRequest}
             canConfirmDelete={!!incomingDeleteRequest}
             onConfirmDelete={() => void handleConfirmIncomingDelete()}

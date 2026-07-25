@@ -20,13 +20,16 @@ import {
 import { logFirestorePermissionDenied } from "@/lib/firestoreRuleDebug";
 import type { Role } from "@/utils/rbac";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { getLocalAuthUser } from "@/lib/localApiClient";
+import { clearAllLocalAuthSessions, getLocalAuthUser } from "@/lib/localApiClient";
 import { restoreRememberedLocalCompanyForFastBoot } from "@/lib/postAuthCompanyRoute";
 import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronEnvironment } from "@/hooks/use-mobile";
 import { clearEmbeddedSessionUnlock } from "@/lib/embeddedDeviceLock";
+import { writeAccountPlanLocalCache } from "@/lib/accountPlanLocalCache";
+import { writeCurrentAppAccountIdentity } from "@/lib/appAccountIdentity";
+import { clearSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 
 /** PWA offline: `await getDoc`/`getDocs` indefinitely hang sakta hai — pehle `onSnapshot` laga ke UI unblock (Firestore persistence + yaz fire-and-forget). */
 async function firebaseReadWithDeadline<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
@@ -69,6 +72,10 @@ export type AppUser = {
   country?: string
   online?: boolean
   lastSeen?: any
+  accountCanonicalPlanId?: string | null
+  accountCanonicalPlanExpiryMs?: number | null
+  accountCanonicalStripeCustomerId?: string | null
+  accountCanonicalStripeSubscriptionId?: string | null
 }
 
 /**
@@ -216,6 +223,11 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
 
     const bootstrapUserSession = (firebaseUser: User) => {
       fastLocalAuthRef.current = false;
+      const identity = writeCurrentAppAccountIdentity(firebaseUser.email || firebaseUser.uid);
+      if (identity.changed) {
+        clearAllLocalAuthSessions();
+        clearSelectedCompanyId();
+      }
       if (isLocalOnlyMode()) {
         // Local-only static/APK: Firebase session turant paint — mirror ke liye user + email zaroori.
         setUser(firebaseUser);
@@ -268,6 +280,26 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
           if (!resolvedRef) return;
           if (auth.currentUser?.uid !== firebaseUser.uid) return;
           const resolvedDocId = resolvedRef.id;
+          void (async () => {
+            const snap = await firebaseReadWithDeadline(getDoc(resolvedRef!), fetchCapMs);
+            if (!snap?.exists()) return;
+            const u = snap.data() as Record<string, unknown>;
+            const planId = typeof u.accountCanonicalPlanId === "string" ? u.accountCanonicalPlanId : "";
+            if (!planId.trim()) return;
+            writeAccountPlanLocalCache(firebaseUser.uid, {
+              planId,
+              planExpiryMs:
+                typeof u.accountCanonicalPlanExpiryMs === "number" && Number.isFinite(u.accountCanonicalPlanExpiryMs)
+                  ? u.accountCanonicalPlanExpiryMs
+                  : null,
+              stripeCustomerId:
+                typeof u.accountCanonicalStripeCustomerId === "string" ? u.accountCanonicalStripeCustomerId : null,
+              stripeSubscriptionId:
+                typeof u.accountCanonicalStripeSubscriptionId === "string"
+                  ? u.accountCanonicalStripeSubscriptionId
+                  : null,
+            });
+          })();
           setCustomUser((prev) =>
             prev && prev.uid === firebaseUser.uid ? { ...prev, userDocId: resolvedDocId } : prev,
           );
@@ -473,7 +505,31 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
               country: userData.country,
               online: userData.online,
               lastSeen: userData.lastSeen,
+              accountCanonicalPlanId:
+                typeof userData.accountCanonicalPlanId === "string" ? userData.accountCanonicalPlanId : null,
+              accountCanonicalPlanExpiryMs:
+                typeof userData.accountCanonicalPlanExpiryMs === "number" &&
+                Number.isFinite(userData.accountCanonicalPlanExpiryMs)
+                  ? userData.accountCanonicalPlanExpiryMs
+                  : null,
+              accountCanonicalStripeCustomerId:
+                typeof userData.accountCanonicalStripeCustomerId === "string"
+                  ? userData.accountCanonicalStripeCustomerId
+                  : null,
+              accountCanonicalStripeSubscriptionId:
+                typeof userData.accountCanonicalStripeSubscriptionId === "string"
+                  ? userData.accountCanonicalStripeSubscriptionId
+                  : null,
             };
+
+            if (newCustomUser.accountCanonicalPlanId) {
+              writeAccountPlanLocalCache(firebaseUser.uid, {
+                planId: newCustomUser.accountCanonicalPlanId,
+                planExpiryMs: newCustomUser.accountCanonicalPlanExpiryMs,
+                stripeCustomerId: newCustomUser.accountCanonicalStripeCustomerId,
+                stripeSubscriptionId: newCustomUser.accountCanonicalStripeSubscriptionId,
+              });
+            }
 
             setCustomUser((prevUser) => {
               if (prevUser &&
@@ -482,7 +538,9 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
                   prevUser.email === newCustomUser.email &&
                   prevUser.role === newCustomUser.role &&
                   prevUser.companyId === newCustomUser.companyId &&
-                  prevUser.isActive === newCustomUser.isActive
+                  prevUser.isActive === newCustomUser.isActive &&
+                  prevUser.accountCanonicalPlanId === newCustomUser.accountCanonicalPlanId &&
+                  prevUser.accountCanonicalPlanExpiryMs === newCustomUser.accountCanonicalPlanExpiryMs
                  ) {
                 // CRITICAL FIX: Ignore online/lastSeen changes from usePresence heartbeat
                 // These updates happen every 30 seconds and should NOT trigger re-renders

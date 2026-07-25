@@ -21,6 +21,8 @@ export type LocalCompanyUserRecord = {
   password: string;
   /** Firebase Auth uid — is app login par hi username/password valid (admin bypass alag). */
   uid?: string | null;
+  /** Invite/share Gmail — login username alag ho to bhi profile + online match ho sake. */
+  shareEmail?: string | null;
 };
 
 /** UI list ke liye password field hata do. */
@@ -48,8 +50,15 @@ export function parseLocalCompanyUserRows(raw: unknown): LocalCompanyUserRecord[
     const role = typeof o.role === "string" ? o.role : "manager";
     const password = typeof o.password === "string" ? o.password : "";
     const uid = typeof o.uid === "string" && o.uid.trim() ? o.uid.trim() : null;
+    const rawShareEmail =
+      typeof o.shareEmail === "string" && o.shareEmail.trim().includes("@")
+        ? o.shareEmail
+        : typeof o.email === "string" && o.email.trim().includes("@")
+          ? o.email
+          : "";
+    const shareEmail = rawShareEmail ? rawShareEmail.trim().toLowerCase() : null;
     if (!id || !username) continue;
-    out.push({ id, username, displayName, role, password, uid });
+    out.push({ id, username, displayName, role, password, uid, shareEmail });
   }
   return out;
 }
@@ -223,12 +232,24 @@ export function findLocalCompanyUserRowForAppUser(
 /** Same username par naya password/display update; naya user ho to push. */
 export function upsertUserInList(
   list: LocalCompanyUserRecord[],
-  entry: { username: string; displayName: string; role: string; password: string; uid?: string | null }
+  entry: {
+    username: string;
+    displayName: string;
+    role: string;
+    password: string;
+    uid?: string | null;
+    shareEmail?: string | null;
+  }
 ): LocalCompanyUserRecord[] {
   const u = entry.username.trim().toLowerCase();
   const idx = list.findIndex((x) => x.username.toLowerCase() === u);
   const id = idx >= 0 ? list[idx].id : `lcu_${clientRandomUUID()}`;
   const prevUid = idx >= 0 ? list[idx].uid : null;
+  const prevShareEmail = idx >= 0 ? list[idx].shareEmail : null;
+  const shareEmail =
+    entry.shareEmail !== undefined
+      ? entry.shareEmail
+      : prevShareEmail ?? null;
   const row: LocalCompanyUserRecord = {
     id,
     username: entry.username.trim(),
@@ -236,6 +257,7 @@ export function upsertUserInList(
     role: entry.role.trim().toLowerCase() || "manager",
     password: entry.password,
     uid: entry.uid !== undefined ? entry.uid : prevUid ?? null,
+    shareEmail,
   };
   const next = [...list];
   if (idx >= 0) next[idx] = row;
@@ -265,6 +287,9 @@ export async function removeLocalCompanyUserByIdClient(companyId: string, userId
     localCompanyUsers: next,
     updatedAt: Date.now(),
   } as LocalCompanyDoc);
+  void import("@/lib/plServerCompanyMetaSync").then(({ notifyPlServerHostCompanyMetaSaved }) =>
+    notifyPlServerHostCompanyMetaSaved(companyId)
+  );
 }
 
 /** Display name / role / password update — password khali chhodo to purana hi rahe. */
@@ -290,6 +315,9 @@ export async function updateLocalCompanyUserClient(
     localCompanyUsers: next,
     updatedAt: Date.now(),
   } as LocalCompanyDoc);
+  void import("@/lib/plServerCompanyMetaSync").then(({ notifyPlServerHostCompanyMetaSaved }) =>
+    notifyPlServerHostCompanyMetaSaved(companyId)
+  );
 }
 
 export async function appendLocalCompanyUserClient(
@@ -310,6 +338,9 @@ export async function appendLocalCompanyUserClient(
     localCompanyUsers: next,
     updatedAt: Date.now(),
   } as LocalCompanyDoc);
+  void import("@/lib/plServerCompanyMetaSync").then(({ notifyPlServerHostCompanyMetaSaved }) =>
+    notifyPlServerHostCompanyMetaSaved(companyId)
+  );
 }
 
 /**
@@ -320,8 +351,10 @@ export async function localAuthLoginClientOnly(
   companyId: string,
   username: string,
   password: string,
-  appUser?: { uid?: string | null; email?: string | null }
+  appUser?: { uid?: string | null; email?: string | null },
+  options?: { remoteGate?: boolean }
 ): Promise<{ token: string; user: { id: string; username: string; displayName?: string; role?: string } }> {
+  const remoteGate = options?.remoteGate === true;
   const u = username.trim().toLowerCase();
   const p = password.trim();
 
@@ -335,6 +368,35 @@ export async function localAuthLoginClientOnly(
   });
 
   const users = await getLocalCompanyUsersRecords(companyId);
+  const hasProtectPassword = Boolean(String((doc as { password?: string | null }).password ?? "").trim());
+  const hasLocalUsers = users.length > 0;
+
+  if (remoteGate && !hasProtectPassword && !hasLocalUsers) {
+    const token = `local_client_${companyId}_remote_open_${Date.now()}`;
+    return {
+      token,
+      user: {
+        id: "remote_viewer",
+        username: "guest",
+        displayName: "Guest",
+        role: "viewer",
+      },
+    };
+  }
+
+  if (remoteGate && !u && !p && !hasProtectPassword && !hasLocalUsers) {
+    const token = `local_client_${companyId}_remote_open_${Date.now()}`;
+    return {
+      token,
+      user: {
+        id: "remote_viewer",
+        username: "guest",
+        displayName: "Guest",
+        role: "viewer",
+      },
+    };
+  }
+
   let match = users.find((x) => x.username.toLowerCase() === u && x.password === p);
   if (!match) {
     match = users.find(
@@ -345,7 +407,7 @@ export async function localAuthLoginClientOnly(
   if (match) {
     const rowUid = String(match.uid || "").trim();
     const appUid = String(appUser?.uid || "").trim();
-    if (!isOwner && rowUid && appUid && rowUid !== appUid) {
+    if (!remoteGate && !isOwner && rowUid && appUid && rowUid !== appUid) {
       throw new Error("Invalid username or password");
     }
     const token = `local_client_${companyId}_${match.id}_${Date.now()}`;
@@ -372,7 +434,7 @@ export async function localAuthLoginClientOnly(
     adminLogin = oe.includes("@") ? oe.split("@")[0].trim() : "";
   }
 
-  if (adminLogin && u === adminLogin.toLowerCase() && isOwner) {
+  if (adminLogin && u === adminLogin.toLowerCase() && (isOwner || remoteGate)) {
     const token = `local_client_${companyId}_admin_fallback_${Date.now()}`;
     if (typeof window !== "undefined") {
       void setBackupEncryptionSessionFromLogin(companyId, username, password);
@@ -399,6 +461,7 @@ export async function localAuthLoginForCompanyContext(
   options?: {
     plServerGate?: GateRecord | null;
     forcePlServerRemote?: boolean;
+    skipPostLoginSync?: boolean;
     appUser?: { uid?: string | null; email?: string | null };
   }
 ): Promise<{ token: string; user: { id: string; username: string; displayName?: string; role?: string } }> {
@@ -412,8 +475,10 @@ export async function localAuthLoginForCompanyContext(
     (await shouldUsePlServerRemoteCompanyLogin(companyId, remoteOpts));
   if (useRemote) {
     const result = await plServerRemoteCompanyLogin(companyId, username, password, remoteOpts);
-    const { mirrorPlServerSharedCompanyById } = await import("@/lib/plServerClientCompanyMirror");
-    await mirrorPlServerSharedCompanyById(companyId, { pullFullLedger: true });
+    if (!options?.skipPostLoginSync) {
+      const { syncPlServerSharedCompanyById } = await import("@/lib/plServerClientCompanyDelta");
+      await syncPlServerSharedCompanyById(companyId, { pullFullLedger: true });
+    }
     if (typeof window !== "undefined") {
       const { setBackupEncryptionSessionFromLogin } = await import("@/lib/serverBackupEncryption");
       void setBackupEncryptionSessionFromLogin(companyId, username, password);

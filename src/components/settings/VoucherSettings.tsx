@@ -34,6 +34,7 @@ import usePermissions from "@/hooks/usePermissions";
 import { useState, useEffect, useMemo } from "react";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
+import { isPureLocalLedgerCompany } from "@/lib/companyStorageKind";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/useTheme";
 import { PRO_THEME_CLASS, proDashboardRibbonClass } from "@/lib/proTheme";
@@ -380,6 +381,18 @@ export function VoucherSettings() {
           runScope: data.recurringVoucherRunScope,
         },
       };
+      if (isPureLocalLedgerCompany(company)) {
+        const localRow = await getLocalCompanyById(companyId, { includeDeleted: true });
+        await upsertLocalCompany({
+          ...((localRow || company || {}) as Record<string, unknown>),
+          ...voucherSettingsPatch,
+          id: companyId,
+        } as unknown as Parameters<typeof upsertLocalCompany>[0]);
+        reloadLocalCompanyRegistry();
+        triggerSync();
+        toast({ title: "Success", description: "Voucher settings have been updated." });
+        return;
+      }
       await updateDoc(companyRef, voucherSettingsPatch);
       // SQLite mirror me bhi likho — refresh par company yahan se aaye to toggle + header sync rahein
       try {

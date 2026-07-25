@@ -4,12 +4,12 @@
 import * as React from "react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   Plus,
   Landmark,
   Briefcase,
   BookText,
-  ChevronsRight,
   Users,
   ChevronDown,
   ChevronUp,
@@ -28,12 +28,12 @@ import {
   FileText,
   Settings,
   RefreshCw,
+  Server,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
-import { auth, signOutWithFirestoreTeardown } from "@/lib/firebase";
 import { useEmbeddedLogout } from "@/contexts/EmbeddedLogoutContext";
 import { format } from "date-fns";
 import { CompanyActions } from "@/components/company/CompanySelector";
@@ -60,9 +60,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { estimateUserFirestoreBytes } from "@/lib/storageUsageClient";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { PermissionButton } from "@/components/permission";
-import Link from "next/link";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
-import { pruneRememberedLoginEmailIfDisabled } from "@/lib/loginRememberEmail";
 import type { Company } from "@/hooks/useCompany";
 import {
   DEFAULT_PLANS,
@@ -82,12 +80,16 @@ import { usePendingInterCompanySystemJoinCount } from "@/lib/interCompany/usePen
 import { useMasterDetailHeaderIdSnapshot } from "@/hooks/useMasterDetailHeaderIdSnapshot";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
-import { isLocalOnlyMode } from "@/lib/localMode";
 import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 import { isDeviceLocalCompany, isServerGateCompany, stampPureLocalDeviceCompanyRow } from "@/lib/companyStorageKind";
 import { listLocalCompanies } from "@/lib/localCompanyStore";
-import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
 import { highestPlanIdAmongOwnedCompanies, resolveEffectiveAccountPlanId, resolvePlanIdForActiveCompany } from "@/lib/accountPlanForOwner";
+import {
+  getElectronLocalServerApi,
+  resolveLocalAppServerSharingPort,
+  type LocalAppServerClientStats,
+  type LocalAppServerStatus,
+} from "@/lib/electronLocalServer";
 import {
   countLocalCompanySlotsForOwner,
   countOnlineCompanySlotsForOwner,
@@ -100,6 +102,8 @@ import { ShareForReconciliationHeaderButton } from "@/components/reconciliation/
 import { RenewProrationPills } from "@/components/billing/RenewProrationPills";
 import { useDisplayCurrency } from "@/hooks/useDisplayCurrency";
 import { getCompanyPlanExpiryMsFromDoc } from "@/lib/companyPlanExpiryMs";
+import { HeaderAttachmentPrefetchStrip } from "@/components/layout/HeaderAttachmentPrefetchStrip";
+import { readCurrentAppAccountIdentity } from "@/lib/appAccountIdentity";
 
 /** Electron desktop: header quick-action buttons strip collapsed — `main.js` View menu se bhi toggle */
 const PL_DESKTOP_QUICK_ACTIONS_KEY = "pl-desktop-header-quick-actions-collapsed";
@@ -415,6 +419,10 @@ function HeaderActions() {
   const { isMobile } = useMobileView();
   const { user } = useAuth();
   const { company } = useCompany();
+  // Inter Company vouchers are online-company only.
+  const interCompanyDisabled = Boolean(
+    company && (isDeviceLocalCompany(company) || isServerGateCompany(company))
+  );
   const pendingSystemJoinCount = usePendingInterCompanySystemJoinCount({
     ownerUserId: user?.uid,
     companyId: company?.id,
@@ -464,7 +472,7 @@ function HeaderActions() {
       </AddVoucherDialog>
 
       {/* Inter Company — Payment In / Out ke beech; voucher dialog inter_company tab */}
-      <AddVoucherDialog
+      {!interCompanyDisabled && <AddVoucherDialog
         defaultTab="inter_company"
         voucher={undefined}
         isOpen={openInterCompany}
@@ -485,7 +493,7 @@ function HeaderActions() {
             </span>
           ) : null}
         </PermissionButton>
-      </AddVoucherDialog>
+      </AddVoucherDialog>}
 
       {/* ✅ Payment Out */}
       <AddVoucherDialog defaultTab="payment_out" voucher={undefined} isOpen={openPaymentOut} onOpenChange={setOpenPaymentOut}>
@@ -509,25 +517,25 @@ function HeaderActions() {
       </AddVoucherDialog>
 
       <CreatePartyDialog onPartyCreated={() => {}} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen}>
-        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} data-theme-btn="add-party">
+        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} onClick={() => setIsCreatePartyOpen(true)} data-theme-btn="add-party">
           <Users className="mr-1 h-4 w-4" /> Add Party
         </PermissionButton>
       </CreatePartyDialog>
 
       <CreateItemDialog onItemCreated={() => {}} isOpen={isCreateItemOpen} onOpenChange={setIsCreateItemOpen}>
-        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} data-theme-btn="add-item">
+        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} onClick={() => setIsCreateItemOpen(true)} data-theme-btn="add-item">
           <BookText className="mr-1 h-4 w-4" /> Add Item
         </PermissionButton>
       </CreateItemDialog>
 
       <CreateBankAccountDialog onAccountCreated={() => {}} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
-        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} data-theme-btn="add-bank">
+        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} onClick={() => setIsCreateAccountOpen(true)} data-theme-btn="add-bank">
           <Landmark className="mr-1 h-4 w-4" /> Add Bank
         </PermissionButton>
       </CreateBankAccountDialog>
 
       <CreateStaffDialog onStaffCreated={() => {}} groups={[]} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen}>
-        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} data-theme-btn="add-staff">
+        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} onClick={() => setIsCreateStaffOpen(true)} data-theme-btn="add-staff">
           <Briefcase className="mr-1 h-4 w-4" /> Add Staff
         </PermissionButton>
       </CreateStaffDialog>
@@ -634,6 +642,7 @@ function UserProfileButton() {
   const profileHoverOpenEnabled = filePreviewMode === "hover";
   const [profileOpen, setProfileOpen] = useState(false);
   const [userStorageUsedBytes, setUserStorageUsedBytes] = useState<number | null>(null);
+  const [profileNowMs, setProfileNowMs] = useState(() => Date.now());
   /** Avatar menu: manual Firestore → local plan sync (SQLite/cache align). */
   const [planManualSyncing, setPlanManualSyncing] = useState(false);
   /** Delayed close so mouse can move from avatar to portaled menu without flashing shut. */
@@ -678,8 +687,8 @@ function UserProfileButton() {
     requestEmbeddedLogout();
   };
 
-  /** Avatar menu: POST `/api/company/sync-plan` — SQLite + plan cache ko Firestore authoritative row se align (checkout/profile mismatch fix). */
-  const handleManualPlanSync = async () => {
+  /** Avatar menu: hosted sync-plan ya PL Server host owner plan → SQLite align. */
+  const handleManualPlanSync = async (scope: "account" | "sharedOwner" = "account") => {
     if (!company || planManualSyncing || !isOnline) return;
     clearProfileHoverClose();
     setPlanManualSyncing(true);
@@ -688,7 +697,10 @@ function UserProfileButton() {
       if (r.ok && r.applied) {
         toast({
           title: "Plan synced",
-          description: "Local row updated from the server for this company.",
+          description:
+            scope === "sharedOwner"
+              ? "Owner plan updated from the shared company server."
+              : "Local row updated from the server for this company.",
         });
       } else if (r.ok && !r.applied) {
         toast({
@@ -696,7 +708,11 @@ function UserProfileButton() {
           description:
             r.reason === "no_local_sqlite_row"
               ? "No offline copy of this company to patch."
-              : "Server responded; nothing to change locally.",
+              : r.reason === "no_shared_summary"
+                ? "Could not reach the shared company on the server."
+                : r.reason === "no_plan_fields"
+                  ? "Server responded; no owner plan details to apply."
+                  : "Server responded; nothing to change locally.",
         });
       } else {
         // Offline / flight mode: sirf short copy — raw `network` machine reason mat dikhao (APK profile toast).
@@ -718,23 +734,44 @@ function UserProfileButton() {
     }
   };
 
+  const allCompanyIds = useMemo(() => allCompanies.map((c) => c.id), [allCompanies]);
+
   useEffect(() => {
-    if (!profileOpen || allCompanies.length === 0) {
-      setUserStorageUsedBytes(null);
-      return;
+    if (!profileOpen) return;
+    const timer = window.setTimeout(() => setProfileNowMs(Date.now()), 0);
+    return () => window.clearTimeout(timer);
+  }, [profileOpen]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!profileOpen || allCompanyIds.length === 0) {
+      window.queueMicrotask(() => {
+        if (!cancelled) setUserStorageUsedBytes(null);
+      });
+      return () => {
+        cancelled = true;
+      };
     }
-    const companyIds = allCompanies.map((c) => c.id);
-    estimateUserFirestoreBytes(companyIds)
-      .then(setUserStorageUsedBytes)
-      .catch(() => setUserStorageUsedBytes(null));
-  }, [profileOpen, allCompanies.length, allCompanies.map((c) => c.id).join(",")]);
+    estimateUserFirestoreBytes(allCompanyIds)
+      .then((value) => {
+        if (!cancelled) setUserStorageUsedBytes(value);
+      })
+      .catch(() => {
+        if (!cancelled) setUserStorageUsedBytes(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [profileOpen, allCompanyIds]);
 
   // Shared / no-owned fallback ke liye aggregate; **owner + apni company** par badge & caps = `selectedCompanyPlan*` (Billing page jaisa — doosri owned row ka pro-plus yahan mix na ho).
-  const accountPlanId = user?.uid
-    ? resolveEffectiveAccountPlanId(allCompanies, user.uid, company?.planId)
+  const userUid = user?.uid ?? "";
+  const userEmail = user?.email ?? "";
+  const accountPlanId = userUid
+    ? resolveEffectiveAccountPlanId(allCompanies, userUid, company?.planId)
     : ((company?.planId as PlanId) || "basic");
-  const selectedCompanyPlanId: PlanId = company && user?.uid
-    ? resolvePlanIdForActiveCompany(company, allCompanies, user.uid, user.email)
+  const selectedCompanyPlanId: PlanId = company && userUid
+    ? resolvePlanIdForActiveCompany(company, allCompanies, userUid, userEmail)
     : normalizePlanIdForClient(company?.planId);
   const selectedCompanyPlanName = DEFAULT_PLANS[selectedCompanyPlanId]?.name ?? String(selectedCompanyPlanId);
   // Profile dropdown: selected company local ho to uske liye *Local caps dikhao (admin Plans).
@@ -743,17 +780,17 @@ function UserProfileButton() {
     () =>
       allCompanies.filter(
         (c) =>
-          c.isOwned === true && !!user?.uid && String(c.ownerId || "").trim() === String(user.uid).trim()
+          c.isOwned === true && !!userUid && String(c.ownerId || "").trim() === String(userUid).trim()
       ),
-    [allCompanies, user?.uid]
+    [allCompanies, userUid]
   );
   const hasOwnedCompanies = ownedForUsage.length > 0;
   const isSelectedCompanyOwned =
     !!company &&
-    (company.ownerId === user?.uid || (!!user?.email && company.ownerEmail === user.email));
+    (company.ownerId === userUid || (!!userEmail && company.ownerEmail === userEmail));
 
   const ownedOnlyPlanId: PlanId = (() => {
-    const best = user?.uid ? highestPlanIdAmongOwnedCompanies(allCompanies, user.uid) : null;
+    const best = userUid ? highestPlanIdAmongOwnedCompanies(allCompanies, userUid) : null;
     return best ?? "basic";
   })();
 
@@ -807,10 +844,14 @@ function UserProfileButton() {
     numericEntitlement(ownedPlanLive.entitlements, "maxUsers", true) || 1
   );
   const ownedOnlineSlotMax = maxOnlineCompaniesForPlan(ownedOnlyPlanId, ownedPlanLive);
-  const ownedCanUpgrade = getNextPaidUpgrade(ownedOnlyPlanId) != null;
 
-  /** Shared: "Your account" = best owned tier; zero-owned shared = `resolveEffectiveAccountPlanId` fallback. */
-  const sharedProfilePlanId: PlanId = hasOwnedCompanies ? ownedOnlyPlanId : accountPlanId;
+  /** Shared: "Your account" = best owned tier; zero-owned shared = active company's owner plan (not account cache). */
+  const sharedProfilePlanId: PlanId =
+    hasOwnedCompanies
+      ? ownedOnlyPlanId
+      : !isSelectedCompanyOwned
+        ? selectedCompanyPlanId
+        : accountPlanId;
   const sharedProfilePlanName =
     DEFAULT_PLANS[sharedProfilePlanId]?.name ?? String(sharedProfilePlanId);
   const sharedProfileCanUpgrade = getNextPaidUpgrade(sharedProfilePlanId) != null;
@@ -1032,7 +1073,7 @@ function UserProfileButton() {
                       const expiryMs =
                         profileProrationExpiryMs ??
                         (Number.isFinite(expiryDate.getTime()) ? expiryDate.getTime() : null);
-                      const nowMsExp = Date.now();
+                      const nowMsExp = profileNowMs;
                       // Pill par sirf expiry date — din count Balance/Usage pills mein; yahan past date = Expired.
                       const expiredPlan = expiryMs != null && expiryMs <= nowMsExp;
                       return (
@@ -1123,7 +1164,7 @@ function UserProfileButton() {
                       const expiryMsOwned =
                         getCompanyPlanExpiryMsFromDoc(ownedPlanExpiryCompany) ??
                         (Number.isFinite(expiryDate.getTime()) ? expiryDate.getTime() : null);
-                      const nowMsOwn = Date.now();
+                      const nowMsOwn = profileNowMs;
                       const expiredOwned = expiryMsOwned != null && expiryMsOwned <= nowMsOwn;
                       return (
                         <div className="text-xs text-muted-foreground mt-1.5">
@@ -1219,7 +1260,24 @@ function UserProfileButton() {
                     </div>
                     <div className="flex items-center justify-between gap-2 flex-wrap">
                       <span className="text-xs text-muted-foreground">Owner plan</span>
-                      <Badge variant="outline" className="shrink-0 text-xs">{selectedCompanyPlanName}</Badge>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Badge variant="outline" className="shrink-0 text-xs">{selectedCompanyPlanName}</Badge>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-7 w-7 shrink-0"
+                          title="Sync owner plan from server"
+                          aria-label="Sync owner plan from server"
+                          disabled={!isOnline || planManualSyncing || !company}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            void handleManualPlanSync("sharedOwner");
+                          }}
+                        >
+                          <RefreshCw className={cn("h-3.5 w-3.5", planManualSyncing && "animate-spin")} />
+                        </Button>
+                      </div>
                     </div>
                     <div className="text-xs text-muted-foreground">
                       Sync devices (owner plan): up to{" "}
@@ -1406,9 +1464,441 @@ function HeaderCompanyPickerIsland({
   );
 }
 
+function HeaderServerSwitch() {
+  const { toast } = useToast();
+  const { allCompanies } = useCompany();
+  const { isMobile } = useMobileView();
+  const [visible, setVisible] = useState(false);
+  const [status, setStatus] = useState<LocalAppServerStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [pingMs, setPingMs] = useState<number | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+
+  const refresh = useCallback(async () => {
+    if (!isElectronDesktopApp()) return;
+    const api = getElectronLocalServerApi();
+    if (!api) return;
+    try {
+      const [config, nextStatus] = await Promise.all([api.getConfig(), api.getStatus()]);
+      setVisible(config.showServerSwitchInHeader === true);
+      setStatus(nextStatus);
+    } catch {
+      /* Header control is optional. */
+    }
+  }, []);
+
+  useEffect(() => {
+    const initial = window.setTimeout(() => void refresh(), 0);
+    const onConfigChanged = () => void refresh();
+    window.addEventListener("pl-server-header-switch-config-changed", onConfigChanged);
+    return () => {
+      window.clearTimeout(initial);
+      window.removeEventListener("pl-server-header-switch-config-changed", onConfigChanged);
+    };
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!visible) return;
+    const api = getElectronLocalServerApi();
+    if (!api) return;
+    let cancelled = false;
+    let timer: number | null = null;
+    const check = async () => {
+      if (cancelled) return;
+      let nextMs = 15_000;
+      try {
+        const nextStatus = await api.getStatus();
+        if (cancelled) return;
+        setStatus(nextStatus);
+        const port = resolveLocalAppServerSharingPort(nextStatus);
+        if (!port) {
+          setPingMs(null);
+        } else {
+          nextMs = 2_000;
+          const started = performance.now();
+          const response = await fetch(`http://127.0.0.1:${port}/__pl_server_ping`, {
+            cache: "no-store",
+          });
+          if (!cancelled) {
+            setPingMs(response.ok ? Math.max(1, Math.round(performance.now() - started)) : null);
+          }
+        }
+      } catch {
+        if (!cancelled) setPingMs(null);
+      }
+      if (!cancelled) timer = window.setTimeout(() => void check(), nextMs);
+    };
+    void check();
+    return () => {
+      cancelled = true;
+      if (timer != null) window.clearTimeout(timer);
+    };
+  }, [visible]);
+
+  const sharing = status?.sharingActive ?? status?.running ?? false;
+  if (isMobile || !visible) return null;
+
+  return (
+    <div className="flex h-9 min-w-[150px] shrink-0 items-center gap-2 rounded-md border bg-background px-2" title="Server sharing">
+      <Server className="h-4 w-4" aria-hidden />
+      <button
+        type="button"
+        className="shrink-0 text-xs font-semibold text-emerald-700 underline-offset-2 hover:underline"
+        onClick={() => setDetailsOpen(true)}
+      >
+        Details
+      </button>
+      <Switch
+        checked={sharing}
+        disabled={busy}
+        aria-label={sharing ? "Stop server sharing" : "Start server sharing"}
+        onCheckedChange={(checked) => {
+          const api = getElectronLocalServerApi();
+          if (!api) return;
+          setBusy(true);
+          void (checked ? api.start() : api.stop())
+            .then((result) => {
+              if (result.status) setStatus(result.status);
+              if (!checked) setPingMs(null);
+              toast({ title: checked ? "Server started" : "Server stopped" });
+            })
+            .catch((error) => {
+              toast({
+                variant: "destructive",
+                title: "Server switch failed",
+                description: error instanceof Error ? error.message : "Try again.",
+              });
+              void refresh();
+            })
+            .finally(() => setBusy(false));
+        }}
+      />
+      {detailsOpen ? (
+        <ServerDetailsPopup
+          status={status}
+          sharing={sharing}
+          busy={busy}
+          pingMs={pingMs}
+          companies={allCompanies}
+          onClose={() => setDetailsOpen(false)}
+          onToggle={(checked) => {
+            const api = getElectronLocalServerApi();
+            if (!api) return;
+            setBusy(true);
+            void (checked ? api.start() : api.stop())
+              .then((result) => {
+                if (result.status) setStatus(result.status);
+                if (!checked) setPingMs(null);
+                toast({ title: checked ? "Server started" : "Server stopped" });
+              })
+              .catch((error) => {
+                toast({
+                  variant: "destructive",
+                  title: "Server switch failed",
+                  description: error instanceof Error ? error.message : "Try again.",
+                });
+                void refresh();
+              })
+              .finally(() => setBusy(false));
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ServerDetailsPopup({
+  status,
+  sharing,
+  busy,
+  pingMs,
+  companies,
+  onClose,
+  onToggle,
+}: {
+  status: LocalAppServerStatus | null;
+  sharing: boolean;
+  busy: boolean;
+  pingMs: number | null;
+  companies: Company[];
+  onClose: () => void;
+  onToggle: (checked: boolean) => void;
+}) {
+  const [companyFilter, setCompanyFilter] = useState("all");
+  const rawClients = useMemo(() => (Array.isArray(status?.clients) ? status.clients : []), [status]);
+  const companyOptions = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const company of companies || []) {
+      if (company?.id) byId.set(company.id, company.name || company.id);
+    }
+    for (const client of rawClients) {
+      const ids = Array.isArray(client.companyIds) ? client.companyIds : [];
+      const names = Array.isArray(client.companyNames) ? client.companyNames : [];
+      ids.forEach((id, index) => {
+        const cleanId = String(id || "").trim();
+        if (cleanId && !byId.has(cleanId)) byId.set(cleanId, String(names[index] || cleanId));
+      });
+    }
+    return Array.from(byId.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [companies, rawClients]);
+  const clients = useMemo(() => {
+    return expandServerDetailClientRows(rawClients)
+      .filter((client) => {
+        if (companyFilter === "all") return true;
+        return Array.isArray(client.companyIds) && client.companyIds.includes(companyFilter);
+      })
+      .slice()
+      .sort((a, b) => {
+        const aLabel = `${a.email || ""}|${a.user || ""}|${a.ip || ""}|${a.key || ""}`;
+        const bLabel = `${b.email || ""}|${b.user || ""}|${b.ip || ""}|${b.key || ""}`;
+        return aLabel.localeCompare(bLabel);
+      });
+  }, [companyFilter, rawClients]);
+  const showCompanyColumn = companyFilter === "all";
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] flex items-start justify-end bg-black/25 p-4 pt-20" onClick={onClose}>
+      <div
+        className="w-[90vw] max-w-[1100px] rounded-lg border border-emerald-400 bg-gradient-to-br from-emerald-50 via-white to-cyan-50 p-4 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold">Users details</h2>
+            <p className="text-xs text-muted-foreground">
+              {sharing ? `Server online - ${pingMs != null ? formatServerPing(pingMs) : "ping pending"}` : "Server offline"}
+            </p>
+          </div>
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-3">
+            <div className="flex max-w-[min(520px,100%)] flex-wrap items-center gap-1 rounded-md border bg-white/70 p-1">
+              <button
+                type="button"
+                className={cn(
+                  "h-7 shrink-0 rounded px-2 text-xs font-semibold",
+                  companyFilter === "all" ? "bg-emerald-500 text-white" : "text-slate-700 hover:bg-emerald-100"
+                )}
+                onClick={() => setCompanyFilter("all")}
+              >
+                All
+              </button>
+              {companyOptions.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={cn(
+                    "h-7 max-w-32 shrink-0 truncate rounded px-2 text-xs font-semibold",
+                    companyFilter === option.id ? "bg-emerald-500 text-white" : "text-slate-700 hover:bg-emerald-100"
+                  )}
+                  title={option.name}
+                  onClick={() => setCompanyFilter(option.id)}
+                >
+                  {option.name}
+                </button>
+              ))}
+            </div>
+            <span className="text-sm font-medium">{sharing ? "Server on" : "Server off"}</span>
+            <Switch
+              checked={sharing}
+              disabled={busy}
+              aria-label={sharing ? "Stop server sharing" : "Start server sharing"}
+              onCheckedChange={onToggle}
+            />
+            <Button type="button" variant="outline" size="sm" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </div>
+        <div className="overflow-x-auto rounded-md border bg-white/70">
+          <table className="w-full min-w-[760px] table-fixed text-sm">
+            <thead className="bg-emerald-100/80">
+              <tr>
+                <th className="w-[210px] px-3 py-2 text-left">Email</th>
+                <th className="w-[140px] px-3 py-2 text-left">User</th>
+                <th className="w-[105px] px-3 py-2 text-left">Device</th>
+                <th className="w-[125px] px-3 py-2 text-left">IP</th>
+                {showCompanyColumn ? <th className="w-[130px] px-3 py-2 text-left">Company</th> : null}
+                <th className="w-[80px] px-3 py-2 text-left">Ping</th>
+                <th className="w-[105px] px-3 py-2 text-left">Download</th>
+                <th className="w-[105px] px-3 py-2 text-left">Upload</th>
+              </tr>
+            </thead>
+            <tbody>
+              {clients.length > 0 ? (
+                clients.map((client) => (
+                  <ServerDetailsRow key={client.key} client={client} showCompanyColumn={showCompanyColumn} />
+                ))
+              ) : (
+                <tr>
+                  <td className="px-3 py-5 text-center text-muted-foreground" colSpan={showCompanyColumn ? 8 : 7}>
+                    No shared user traffic yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function ServerDetailsRow({
+  client,
+  showCompanyColumn,
+}: {
+  client: LocalAppServerClientStats;
+  showCompanyColumn: boolean;
+}) {
+  const companyLabel = formatClientCompanies(client);
+  return (
+    <tr className="h-10 border-t">
+      <td className="max-w-56 truncate px-3 py-2 align-middle" title={client.email || "-"}>
+        {client.email || "-"}
+      </td>
+      <td className="max-w-40 truncate px-3 py-2 align-middle" title={client.user || "-"}>
+        {client.user || "-"}
+      </td>
+      <td className="truncate px-3 py-2 align-middle" title={client.device || "-"}>
+        {client.device || "-"}
+      </td>
+      <td className="whitespace-nowrap px-3 py-2 align-middle">{client.ip || "-"}</td>
+      {showCompanyColumn ? (
+        <td className="truncate px-3 py-2 align-middle" title={companyLabel}>
+          {companyLabel}
+        </td>
+      ) : null}
+      <td className="whitespace-nowrap px-3 py-2 align-middle tabular-nums">
+        {client.pingMs != null ? formatServerPing(client.pingMs) : "-"}
+      </td>
+      <td className="whitespace-nowrap px-3 py-2 align-middle tabular-nums">{formatBytes3(client.downloadBytes)}</td>
+      <td className="whitespace-nowrap px-3 py-2 align-middle tabular-nums">{formatBytes3(client.uploadBytes)}</td>
+    </tr>
+  );
+}
+
+function expandServerDetailClientRows(clients: LocalAppServerClientStats[]): LocalAppServerClientStats[] {
+  const expanded: LocalAppServerClientStats[] = [];
+  for (const client of clients) {
+    const ids = Array.isArray(client.companyIds) ? client.companyIds.filter(Boolean) : [];
+    const names = Array.isArray(client.companyNames) ? client.companyNames.filter(Boolean) : [];
+    if (ids.length <= 1) {
+      expanded.push(client);
+      continue;
+    }
+    ids.forEach((id, index) => {
+      expanded.push({
+        ...client,
+        key: `${client.key}:${id}`,
+        companyKey: id,
+        companyIds: [id],
+        companyNames: [names[index] || id],
+      });
+    });
+  }
+  return expanded;
+}
+
+function formatClientCompanies(client: LocalAppServerClientStats): string {
+  const names = Array.isArray(client.companyNames) ? client.companyNames.filter(Boolean) : [];
+  const ids = Array.isArray(client.companyIds) ? client.companyIds.filter(Boolean) : [];
+  const values = names.length ? names : ids;
+  if (!values.length) return "-";
+  if (values.length <= 2) return values.join(", ");
+  return `${values.slice(0, 2).join(", ")} +${values.length - 2}`;
+}
+
+function formatBytes3(bytes: number): string {
+  const b = Math.max(0, Number(bytes || 0));
+  if (b < 1024) return `${b.toFixed(3)} B`;
+  const kb = b / 1024;
+  if (kb < 1024) return `${kb.toFixed(3)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(3)} MB`;
+  return `${(mb / 1024).toFixed(3)} GB`;
+}
+
+function formatServerPing(ms: number): string {
+  const rounded = Math.max(0, Math.round(ms));
+  return rounded < 1_000 ? `${String(rounded).padStart(3, "0")} ms` : `${(rounded / 1_000).toFixed(2)} s`;
+}
+
+function serverHostLabel(serverUrl: string): string {
+  try {
+    return new URL(serverUrl).hostname || serverUrl;
+  } catch {
+    return serverUrl.replace(/^https?:\/\//i, "").split("/")[0].split(":")[0];
+  }
+}
+
+function PlServerCompanyConnectionStatus() {
+  const { company } = useCompany();
+  const serverUrl = String(
+    (company as (Company & { plServerGateServerUrl?: string }) | null | undefined)?.plServerGateServerUrl || ""
+  ).trim().replace(/\/$/, "");
+  const show = Boolean(company && serverUrl && isServerGateCompany(company));
+  const hostLabel = serverHostLabel(serverUrl);
+  const [pingMs, setPingMs] = useState<number | null>(null);
+  const lastPingMsRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!show) return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const pingUrl = new URL(`${serverUrl}/__pl_server_ping`);
+        if (company?.id) pingUrl.searchParams.set("companyId", company.id);
+        if (lastPingMsRef.current != null) pingUrl.searchParams.set("clientPingMs", String(lastPingMsRef.current));
+        const appAccount = readCurrentAppAccountIdentity();
+        const headers: Record<string, string> = {};
+        if (appAccount) headers["x-pocket-ledger-app-account"] = appAccount;
+        const started = performance.now();
+        const response = await fetch(pingUrl.toString(), { cache: "no-store", headers });
+        const measuredMs = response.ok ? Math.max(1, Math.round(performance.now() - started)) : null;
+        if (!cancelled) {
+          lastPingMsRef.current = measuredMs;
+          setPingMs(measuredMs);
+        }
+      } catch {
+        if (!cancelled) {
+          lastPingMsRef.current = null;
+          setPingMs(null);
+        }
+      }
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [company?.id, show, serverUrl]);
+
+  if (!show) return null;
+  return (
+    <div
+      className="flex h-9 min-w-0 shrink items-center gap-2 rounded-md border bg-background px-2"
+      title={`PLServer: ${hostLabel}`}
+    >
+      <Server className="h-4 w-4 shrink-0" aria-hidden />
+      <span className="max-w-44 truncate text-xs text-muted-foreground">{hostLabel}</span>
+      <span className={cn("shrink-0 text-xs tabular-nums", pingMs != null ? "text-emerald-600" : "text-destructive")}>
+        {pingMs != null ? formatServerPing(pingMs) : "Offline"}
+      </span>
+    </div>
+  );
+}
+
 export function DesktopAppHeader() {
   const { user, customUser } = useAuth();
-  const { allCompanies: contextCompanies, allCompaniesRegistry, loading: companyContextLoading, localCompanyRegistryEpoch } = useCompany();
+  const {
+    companyId,
+    allCompanies: contextCompanies,
+    allCompaniesRegistry,
+    loading: companyContextLoading,
+    localCompanyRegistryEpoch,
+  } = useCompany();
   // Firestore merge alag; pathname sirf HeaderCompanyPickerIsland — sidebar navigate par parent header strip unnecessary re-render na ho.
   const [unfilteredHeaderCompanies, setUnfilteredHeaderCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1423,14 +1913,22 @@ export function DesktopAppHeader() {
   // Header company list: context + SQLite local rows (naya offline create Firestore snapshot ke bina bhi dikhe).
   useEffect(() => {
     let cancelled = false;
-    setLoading(Boolean(companyContextLoading));
     if (!user?.uid) {
-      setUnfilteredHeaderCompanies([]);
-      if (!companyContextLoading) setLoading(false);
-      return;
+      window.queueMicrotask(() => {
+        if (cancelled) return;
+        setLoading(Boolean(companyContextLoading));
+        setUnfilteredHeaderCompanies([]);
+        if (!companyContextLoading) setLoading(false);
+      });
+      return () => {
+        cancelled = true;
+      };
     }
     const shareUser = { uid: user.uid, email: user.email ?? null };
     void (async () => {
+      await Promise.resolve();
+      if (cancelled) return;
+      setLoading(Boolean(companyContextLoading));
       const mappedBase = (contextCompanies || [])
         .filter((c) => isCompanyVisibleInHeader(c as Company & { movedToAdminRecycleAt?: unknown }))
         .map((c) => ({
@@ -1566,10 +2064,11 @@ export function DesktopAppHeader() {
                 <AddNewButtonOnReportPage />
               </div>
             </div>
-            <div className="ml-2 flex shrink-0 items-center gap-1">
-              <DriveCloudSyncHeaderIndicator />
-              <UserProfileButton />
-            </div>
+              <div className="ml-2 flex shrink-0 items-center gap-1">
+                <PlServerCompanyConnectionStatus />
+                <DriveCloudSyncHeaderIndicator />
+                <UserProfileButton />
+              </div>
           </div>
         ) : (
           <div className="flex w-full min-w-0 flex-wrap items-center gap-2">
@@ -1620,6 +2119,8 @@ export function DesktopAppHeader() {
               {/* Desktop: pehle Add New (mobile pe stripe me profile ke pehle) — purani daen-cluster order */}
               <AddNewButtonOnReportPage />
               <DriveCloudSyncHeaderIndicator />
+              <PlServerCompanyConnectionStatus />
+              <HeaderServerSwitch />
               <UserProfileButton />
               <CopyLedgerHeaderButton />
               <ShareForReconciliationHeaderButton />
@@ -1629,6 +2130,7 @@ export function DesktopAppHeader() {
           </div>
         )}
       </div>
+      <HeaderAttachmentPrefetchStrip companyId={companyId} />
     </header>
   );
 }
