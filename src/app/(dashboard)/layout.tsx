@@ -841,14 +841,16 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
       };
     }, [isMobile, router]);
 
-    const noLayoutPages = ["/company", "/company/create"];
+    // Company picker needs the app sidebar too, so users can see/toggle
+    // Firebase cloud-data sync before choosing an Online company.
+    const noLayoutPages = ["/company/create"];
     const isEmbedRoute = pathname?.startsWith("/embed");
 
     if (noLayoutPages.includes(pathname)) {
         return (
             <>
                 <GlobalLeftEdgeOpenAppMenuSwipe />
-                {/* Mobile: `/company` par bhi horizontal edge “back” kam — `app-container` yahan nahi */}
+                {/* Mobile bare routes: horizontal edge “back” kam — `app-container` yahan nahi */}
                 <div className={cn(isMobile && "overscroll-x-none h-full min-h-0 w-full min-w-0")}>{children}</div>
             </>
         );
