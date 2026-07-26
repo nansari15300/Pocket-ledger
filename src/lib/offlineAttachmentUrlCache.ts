@@ -167,6 +167,14 @@ function isEligibleAttachmentHttpsUrl(raw: string): boolean {
 /** Raw Firebase object-path (`voucher-files/...`) ko SDK se blob me resolve karo for static/offline cache warm. */
 async function getBlobFromFirebaseObjectPath(path: string): Promise<Blob | null> {
   try {
+    const { blockFirebaseStorageHitOnPlServer } = await import("@/lib/plServerFirebaseHitTrace");
+    if (blockFirebaseStorageHitOnPlServer("getBlobFromFirebaseObjectPath", path)) {
+      return null;
+    }
+  } catch {
+    /* optional */
+  }
+  try {
     const storageRef = ref(storage, path);
     const blob = await getBlob(storageRef);
     return blob && blob.size > 0 ? blob : null;

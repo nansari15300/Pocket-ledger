@@ -85,13 +85,17 @@ import {
   pickGateAwareAutoSelectCompanyId,
   activateGate,
 } from "@/lib/gates/gateRuntime";
-import { mergePlServerSharedCompaniesIntoRegistry, getPlServerContextGateId, shouldMergePlServerSharedIntoRegistry, PL_SERVER_ACCESS_CONTEXT_EVENT } from "@/lib/plServerAccessContext";
+import { mergePlServerSharedCompaniesIntoRegistry, getPlServerContextGateId, shouldMergePlServerSharedIntoRegistry, PL_SERVER_ACCESS_CONTEXT_EVENT, isListedPlServerSharedCompany } from "@/lib/plServerAccessContext";
 import { isServerGateCompany } from "@/lib/companyStorageKind";
 import {
   isCompanyAllowedOnActiveServerGate,
   shouldRetainServerGateCompanySelection,
 } from "@/lib/plServerRemoteCompanyLogin";
 import { PL_SERVER_CLIENT_DELTA_EVENT } from "@/lib/plServerClientCompanyDelta";
+import {
+  shouldSkipFirestoreCompanyRegistryOnPlStaff,
+  tracePlServerFirebaseHit,
+} from "@/lib/plServerFirebaseHitTrace";
 import { companyRowMatchesSelectionId } from "@/lib/plServerHostCompanyId";
 import { PL_GATE_CHANGED_EVENT } from "@/lib/gates/gateTypes";
 import { sharedCompanyQueryKey, sharedCompanyQuerySpecs, resolveFirestoreAuthEmail } from "@/lib/sharedWithEmailsQuery";
@@ -1272,6 +1276,14 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   type LocalRegistryMirrorMode = "deferred" | "immediate-empty" | "registry-bump";
   const performLocalRegistryFirestoreMirror = useCallback(
     async (opts: { mode: LocalRegistryMirrorMode }) => {
+      // Staff PL gate: Firestore companies mirror mat chalao — PL share + SQLite only.
+      if (shouldSkipFirestoreCompanyRegistryOnPlStaff()) {
+        tracePlServerFirebaseHit("firestore_companies", {
+          source: `performLocalRegistryFirestoreMirror:${opts.mode}`,
+          action: "blocked",
+        });
+        return;
+      }
       const touchLoading = opts.mode === "immediate-empty";
       if (touchLoading) setLoading(true);
       try {
@@ -1315,9 +1327,18 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           storageOption: "firebase",
           syncedFromCloud: true,
         });
+        /** Staff PL-share: Firestore me same id online company zinda ho to UI/SQLite pe cloud stamp mat chipkao. */
+        const preferPlServerOverCloud = (row: { id?: string; plServerHostCompanyId?: string; plServerShared?: boolean } | null | undefined) =>
+          Boolean(row) &&
+          (row!.plServerShared === true ||
+            isServerGateCompany(row as Company) ||
+            isListedPlServerSharedCompany(row));
 
         const companyById = new Map<string, Company>();
         for (const row of mirroredRows) {
+          // Staff device: PL share list me ye company hai to Firestore mirror row skip —
+          // warna pehle firebase stamp → baad me local server-gate → A↔B flip.
+          if (preferPlServerOverCloud({ id: row.id, plServerShared: false })) continue;
           const norm = normalizeLocalCompany({
             id: row.id,
             ...row.data,
@@ -1350,6 +1371,18 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
               localPersistence: "sqlite",
               firestoreSyncDisabled: true,
               authoritativeCompanyId: "",
+            } as Company);
+            continue;
+          }
+          // Heal: pehle cloud stamp se `syncedFromCloud:true` chipak gaya ho to bhi PL-share row ko local server-gate rakho.
+          if (preferPlServerOverCloud(norm)) {
+            companyById.set(norm.id, {
+              ...norm,
+              isOwned: false,
+              storageOption: "local",
+              syncPolicy: "offline",
+              syncedFromCloud: false,
+              plServerShared: true,
             } as Company);
             continue;
           }
@@ -2097,8 +2130,19 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     }
 
     const companyMap = new Map<string, Company>();
-    owned.forEach((c: Company) => companyMap.set(c.id, { ...c, isOwned: true, ownerId: c.ownerId || user?.uid || '', ownerEmail: c.ownerEmail || user?.email || '' }));
+    const preferPlServerOverCloudSnap = (row: { id?: string; plServerHostCompanyId?: string; plServerShared?: boolean } | null | undefined) =>
+      Boolean(row) &&
+      (row!.plServerShared === true ||
+        isServerGateCompany(row as Company) ||
+        isListedPlServerSharedCompany(row));
+
+    owned.forEach((c: Company) => {
+      // Staff PL-share same id — Firestore owned snap se online mat banao (owner Firebase login + staff share race).
+      if (preferPlServerOverCloudSnap(c)) return;
+      companyMap.set(c.id, { ...c, isOwned: true, ownerId: c.ownerId || user?.uid || '', ownerEmail: c.ownerEmail || user?.email || '' });
+    });
     ownedByEmail.forEach((c: Company) => {
+      if (preferPlServerOverCloudSnap(c)) return;
       const prev = companyMap.get(c.id);
       if (!prev) {
         companyMap.set(c.id, { ...c, isOwned: true });
@@ -2108,6 +2152,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       companyMap.set(c.id, { ...prev, ...c, isOwned: true });
     });
     shared.forEach((c: Company) => {
+        if (preferPlServerOverCloudSnap(c)) return;
         if (!companyMap.has(c.id)) {
             companyMap.set(c.id, {
               ...c,
@@ -2140,7 +2185,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       const normalized = normalizeLocalCompany(c);
       const row = c as unknown as import("@/lib/localCompanyStore").LocalCompanyDoc;
       const isStrictLocalOnlyRow = isStrictLocalOnlyCompany(row as Company);
-      if (deletedOnFirestore.has(c.id) && !isStrictLocalOnlyRow) continue;
+      const isPlServerRow =
+        isServerGateCompany(row as Company) ||
+        (row as { plServerShared?: unknown }).plServerShared === true ||
+        isListedPlServerSharedCompany(row as Company);
+      // Firestore recycle/delete markers PL-server / restored-local staff rows ko list se mat hatao.
+      if (deletedOnFirestore.has(c.id) && !isStrictLocalOnlyRow && !isPlServerRow) continue;
       if (isStrictLocalOnlyRow) {
         companyMap.set(c.id, {
           ...normalized,
@@ -2156,7 +2206,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         continue;
       }
       // Server-gate mirrored row — Firestore doc nahi; shared-local ghost purge se mat hatao.
-      if (isServerGateCompany(row as Company)) {
+      // Heal corrupted `syncedFromCloud:true` too (staff flip root).
+      if (isPlServerRow) {
         const existingSg = companyMap.get(c.id);
         companyMap.set(c.id, {
           ...(existingSg ?? normalized),
@@ -2164,6 +2215,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           plServerShared: true,
           isOwned: false,
           storageOption: "local",
+          syncPolicy: "offline",
+          syncedFromCloud: false,
         } as Company);
         continue;
       }
@@ -2248,9 +2301,14 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       ledgerShield: shouldSuppressTransientCompanyClear(),
     });
     // Sync engine: persist all online-category companies to local DB on every server snapshot update.
-    const onlineCompanies = mergedCompanies.filter(
-      (c) => ((c.storageOption || "firebase") as string).toLowerCase() !== "local"
-    );
+    // PL-server shared rows kabhi bhi yahan se firebase mat likho (staff flip).
+    const onlineCompanies = mergedCompanies.filter((c) => {
+      if (((c.storageOption || "firebase") as string).toLowerCase() === "local") return false;
+      if ((c as { plServerShared?: unknown }).plServerShared === true) return false;
+      if (isListedPlServerSharedCompany(c)) return false;
+      if (isServerGateCompany(c)) return false;
+      return true;
+    });
     // IMPORTANT: company selector/active company ko mirror writes ka wait na karna pade.
     // Pehle UI list hydrate karo, phir SQLite mirror writes background me chalao.
     setAllCompanies(mergedCompanies);
@@ -2265,10 +2323,24 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           ? ((c as { sharedWith: unknown[] }).sharedWith as any[])
           : [];
         const mergedLocalUsers = mergeSharedWithIntoLocalCompanyUsers(prevUsers, sw);
-        // Device-local / Drive-sync row — Firestore mirror se storageOption mat overwrite karo.
-        if (existing && isStructuralSqliteOnlyLedgerCompany(existing as Company)) {
+        // Device-local / Drive-sync / PL-server row — Firestore mirror se storageOption mat overwrite karo.
+        if (
+          existing &&
+          (isStructuralSqliteOnlyLedgerCompany(existing as Company) ||
+            (existing as { plServerShared?: unknown }).plServerShared === true ||
+            isListedPlServerSharedCompany(existing as Company))
+        ) {
           await upsertLocalCompany({
             ...existing,
+            ...(isListedPlServerSharedCompany(existing as Company) ||
+            (existing as { plServerShared?: unknown }).plServerShared === true
+              ? {
+                  storageOption: "local",
+                  syncPolicy: "offline",
+                  syncedFromCloud: false,
+                  plServerShared: true,
+                }
+              : {}),
             localCompanyUsers: mergedLocalUsers,
           } as import("@/lib/localCompanyStore").LocalCompanyDoc);
           return;
@@ -2291,6 +2363,42 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     // Static/APK offline: SQLite registry (upar wala effect). Online + web: live Firestore onSnapshot.
     if (!isLiveFirestoreCompanyRegistry(isBrowserOnline)) {
       return;
+    }
+    // PL thin staff / remote client: company filter PL share list + SQLite se —
+    // Firestore `companies` owned/shared listeners mat chalao (email→firebase share doc race).
+    if (shouldSkipFirestoreCompanyRegistryOnPlStaff()) {
+      tracePlServerFirebaseHit("firestore_companies", {
+        source: "useCompany.liveCompanyRegistry",
+        action: "blocked",
+      });
+      let cancelled = false;
+      void (async () => {
+        try {
+          const rawLocals = await listLocalCompanies();
+          if (cancelled) return;
+          const normalizedLocalCompanies = rawLocals
+            .filter((c) => isLocalCompanyVisibleToAppAccount(c, user))
+            .map((c) => normalizeLocalCompany(c as unknown as Company))
+            .filter(isCompanyVisibleInMainApp);
+          latestLocalNormalizedCompaniesRef.current = normalizedLocalCompanies;
+          setAllCompaniesRegistry(normalizedLocalCompanies);
+          setAllCompanies(
+            filterSharedOnlyCompaniesForSuperAdminInMainApp(
+              normalizedLocalCompanies,
+              user,
+              isSuperAdminUser,
+              pathnameRef.current
+            )
+          );
+        } catch {
+          /* SQLite optional */
+        } finally {
+          if (!cancelled) setLoading(false);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
     }
     if (authLoading) return;
     if (!user?.uid) {
@@ -2481,7 +2589,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         sharedSnapByVariantRef.current.clear();
         ownedByEmailSnapRef.current = null;
     }
-}, [user?.uid, user?.email, customUser?.userDocId, authLoading, isSuperAdmin, handleSnapshotUpdate, registryVersion, companyFirestoreListenerRetryEpoch, scheduleCompanyFirestoreListenerRetry, isBrowserOnline]);
+}, [user?.uid, user?.email, customUser?.userDocId, authLoading, isSuperAdmin, handleSnapshotUpdate, registryVersion, companyFirestoreListenerRetryEpoch, scheduleCompanyFirestoreListenerRetry, isBrowserOnline, gateEpoch, user, normalizeLocalCompany, isSuperAdminUser]);
 
   // Cloud data sync toggle: registry dubara merge — online companies Local tab me mat leak hon.
   useEffect(() => {

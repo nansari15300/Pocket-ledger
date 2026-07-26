@@ -55,6 +55,8 @@ import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
+import { shouldBindFirebaseLedgerCollectionLiveListeners } from "@/lib/firebaseLedgerSyncPolicy";
+import { listCompanyDocsFromBrowserDb, BROWSER_DB_COLLECTION_BUMP } from "@/lib/localCompanyDocMirror";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
 import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
@@ -65,7 +67,6 @@ import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { loadVoucherDataForDeletePreCheck, resolveVoucherDeleteBackdateDate } from "@/lib/voucherDeletePreCheck";
 import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
-import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import {
   appendLocalOnlyVoucherFilesToUrls,
   shouldDeferStorageIncrementUntilPendingUpload,
@@ -342,7 +343,7 @@ export function CreatePurchaseForm({
   /* ------------------------------ HOOKS/STATE ----------------------------- */
   const isMounted = useRef(true);
   type ProcessedItem = Item & { stockInQty?: number; stockOutQty?: number; stockQty?: number; displayStockQty?: number; };
-  const { vouchers, processedParties, processedPartiesForSelection, processedTaxes, processedAccounts, expenseAccounts, processedExpenseGroups, loading: vouchersLoading } = useVouchers();
+  const { vouchers, processedParties, processedPartiesForSelection, processedTaxes, processedAccounts, expenseAccounts, processedExpenseGroups, processedItems, loading: vouchersLoading } = useVouchers();
   const [items, setItems] = useState<Item[]>([]);
   const { toast } = useToast();
   const { company, companyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
@@ -706,6 +707,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
     itemsListHydratedRef.current = false;
 
+    if (!shouldBindFirebaseLedgerCollectionLiveListeners()) {
+      const applyRows = (rows: Item[]) => {
+        itemsListHydratedRef.current = true;
+        setItems(rows.filter((i) => !i.isDeleted));
+      };
+      applyRows(processedItems as Item[]);
+      const onBump = (ev: Event) => {
+        const d = (ev as CustomEvent<{ companyId?: string; collection?: string }>).detail;
+        if (!d || d.companyId !== companyId || d.collection !== "items") return;
+        void listCompanyDocsFromBrowserDb(companyId, "items", { forBackupMerge: true })
+          .then((cached) => applyRows(cached as Item[]))
+          .catch(() => {});
+      };
+      window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
+      return () => window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
+    }
+
      const unsubItems = onSnapshot(
       query(collection(firestore, `companies/${companyId}/items`)),
       (snapshot) => {
@@ -717,7 +735,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     return () => {
       unsubItems();
     };
-  }, [companyId]);
+  }, [companyId, processedItems]);
 
   // Voucher reset: isFormDirty deps mat — file add se dirty → effect → party "" set hone se bug (sale jaisa)
   useEffect(() => {

@@ -1,11 +1,12 @@
 import { doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { deleteCompanyComplete } from "@/lib/actions/deleteCompanyAction";
+import { resolveCompanyRecycleRootForId, companyRecycleMustSkipFirestore } from "@/lib/companyRecycleRoot";
 
 /**
  * Recycle bin se company permanently hataane ke baad Firestore align karo.
- * Local-only APK me sirf `removeLocalCompanyById` se SQLite saaf ho jata tha lekin cloud doc reh jata tha —
- * refresh par `useCompany` mirror wahi soft-deleted row dubara SQLite me bhar deta tha.
+ * Local / PL-server: yahan Firestore mat chhedo (same-id online production doc corrupt).
+ * Online only: soft-hide (`movedToAdminRecycleAt`) ya hard delete.
  */
 export async function finalizeCompanyPermanentDeleteOnServer(
     companyId: string,
@@ -18,6 +19,11 @@ export async function finalizeCompanyPermanentDeleteOnServer(
     if (!uid) return { ok: false, error: "Not signed in" };
 
     try {
+        const { root } = await resolveCompanyRecycleRootForId(cid);
+        if (companyRecycleMustSkipFirestore(root)) {
+            return { ok: true };
+        }
+
         const snap = await getDoc(doc(firestore, "companies", cid));
         if (!snap.exists()) {
             return { ok: true };

@@ -10,15 +10,12 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import { useCompany } from "@/hooks/useCompany";
-import { isServerGateCompany } from "@/lib/companyStorageKind";
-import { isCloudBackedCompanyShape } from "@/lib/offlineFullWarmSync";
 import {
   FIREBASE_LEDGER_SYNC_MODE_CHANGED_EVENT,
-  getFirebaseLedgerSyncMode,
   setFirebaseLedgerSyncMode,
   type FirebaseLedgerSyncMode,
 } from "@/lib/firebaseLedgerSyncMode";
+import { resolveFirebaseLedgerSyncPolicy } from "@/lib/firebaseLedgerSyncPolicy";
 
 type Props = {
   sidebarOpen: boolean;
@@ -26,19 +23,17 @@ type Props = {
 };
 
 const RULE_TEXT =
-  "deltaa: the app reads and writes ledger data from local SQLite first. Saves are queued to Firebase immediately in the background. Remote edits are detected through a small change feed and only changed documents are downloaded to SQLite, which reduces Firebase reads. live: the old live Firebase collection listeners are used and screens read directly from online snapshots.";
+  "deltaa: SQLite first on every platform (web/EXE/APK/iOS). Saves queue to Firebase; remote edits use only the _pl_change_log feed (no collection live listeners). live: full Firebase collection listeners — higher read cost. Mode can later be forced from Admin → plan settings.";
 
 export function FirebaseLedgerSyncModeSwitch({ sidebarOpen, compact }: Props) {
   const { toast } = useToast();
-  const { company } = useCompany();
   const [mode, setMode] = useState<FirebaseLedgerSyncMode>("local");
-
-  // Sirf online (Firebase/cloud) company — local + PL Server pe hide.
-  const showForOnlineCompany =
-    Boolean(company) && isCloudBackedCompanyShape(company) && !isServerGateCompany(company);
+  const [allowSwitch, setAllowSwitch] = useState(true);
 
   const refresh = useCallback(() => {
-    setMode(getFirebaseLedgerSyncMode());
+    const policy = resolveFirebaseLedgerSyncPolicy();
+    setMode(policy.syncMode);
+    setAllowSwitch(policy.allowUserModeSwitch);
   }, []);
 
   useEffect(() => {
@@ -52,14 +47,20 @@ export function FirebaseLedgerSyncModeSwitch({ sidebarOpen, compact }: Props) {
     };
   }, [refresh]);
 
-  if (!showForOnlineCompany) return null;
-
   const fullOnline = mode === "full_online";
   const title = fullOnline
-    ? "live: Firebase listeners"
-    : "deltaa: SQLite first with background delta sync";
+    ? "live: Firebase collection listeners"
+    : "deltaa: SQLite + change-feed only (no collection snapshots)";
 
   const onCheckedChange = (checked: boolean) => {
+    if (!allowSwitch) {
+      toast({
+        title: "Sync mode locked",
+        description: "Your plan controls deltaa/live. Change it in Admin plan settings when available.",
+        variant: "destructive",
+      });
+      return;
+    }
     const next: FirebaseLedgerSyncMode = checked ? "full_online" : "local";
     setFirebaseLedgerSyncMode(next);
     setMode(next);
@@ -67,8 +68,8 @@ export function FirebaseLedgerSyncModeSwitch({ sidebarOpen, compact }: Props) {
       title: next === "local" ? "deltaa mode" : "live mode",
       description:
         next === "local"
-          ? "SQLite is primary. Firebase is used for background upload and small delta downloads."
-          : "Full online Firebase listener mode is active.",
+          ? "Collection snapshots off. Only _pl_change_log detects remote edits."
+          : "Full online Firebase collection listeners are active.",
     });
   };
 
@@ -113,6 +114,7 @@ export function FirebaseLedgerSyncModeSwitch({ sidebarOpen, compact }: Props) {
         <Switch
           checked={fullOnline}
           onCheckedChange={onCheckedChange}
+          disabled={!allowSwitch}
           aria-label={title}
           className={cn(
             "w-[64px]",

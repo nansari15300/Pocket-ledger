@@ -11,7 +11,7 @@ import {
 } from "@/lib/plServerAccessContext";
 import { isPlRemoteServerClientMode, isPlSharingServerPortOrigin } from "@/lib/plRemoteServerClient";
 
-type CompanyStorageRow = {
+export type CompanyStorageRow = {
   id?: string;
   name?: string;
   ownerId?: string;
@@ -20,6 +20,7 @@ type CompanyStorageRow = {
   syncPolicy?: string | null;
   syncedFromCloud?: boolean;
   isOwned?: boolean;
+  isDeleted?: boolean;
   plServerShared?: boolean;
   plServerGateId?: string;
   plServerGateServerUrl?: string;

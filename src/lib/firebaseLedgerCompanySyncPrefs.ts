@@ -8,11 +8,14 @@ export const FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT =
 export const FIREBASE_LEDGER_COMPANY_REGISTRY_PULL_EVENT = "pl-firebase-ledger-company-registry-pull";
 
 export type FirebaseLedgerCompanySyncEntry = {
-  /** Company selected for cloud sync. */
+  /**
+   * Legacy “Sync” column — now mirrors Data (UI no longer shows Sync).
+   * Keep field so older builds / listeners stay compatible.
+   */
   selected: boolean;
-  /** Ledger / SQLite doc sync (no attachment files). */
+  /** Ledger / SQLite doc sync (no attachment files). Default off until user ticks + Save. */
   data: boolean;
-  /** Attachment file upload/download — requires data. */
+  /** Attachment file upload/download — requires Data. */
   attachments: boolean;
 };
 
@@ -29,10 +32,10 @@ const EMPTY_ENTRY: FirebaseLedgerCompanySyncEntry = {
 function normalizeEntry(raw: unknown): FirebaseLedgerCompanySyncEntry {
   if (!raw || typeof raw !== "object") return { ...EMPTY_ENTRY };
   const row = raw as Partial<FirebaseLedgerCompanySyncEntry>;
-  const selected = row.selected === true;
-  const data = selected && row.data === true;
+  // Data is the user-facing tick; selected follows data (Sync column removed).
+  const data = row.data === true;
   const attachments = data && row.attachments === true;
-  return { selected, data, attachments };
+  return { selected: data, data, attachments };
 }
 
 export function readFirebaseLedgerCompanySyncPrefs(): FirebaseLedgerCompanySyncPrefs {
@@ -90,27 +93,36 @@ export function patchFirebaseLedgerCompanySyncEntry(
   const prefs = readFirebaseLedgerCompanySyncPrefs();
   if (!id) return prefs;
   const prev = prefs.companies[id] ?? { ...EMPTY_ENTRY };
-  let next: FirebaseLedgerCompanySyncEntry = normalizeEntry({ ...prev, ...patch });
-  if (!next.selected) {
-    next = { selected: false, data: false, attachments: false };
-  } else if (!next.data) {
-    next = { ...next, attachments: false };
+  const next = normalizeEntry({ ...prev, ...patch });
+  const out = { companies: { ...prefs.companies, [id]: next } };
+  saveFirebaseLedgerCompanySyncPrefs(out);
+  return out;
+}
+
+/** Replace many company entries at once (Online tab Save). */
+export function replaceFirebaseLedgerCompanySyncEntries(
+  entries: Record<string, FirebaseLedgerCompanySyncEntry>
+): FirebaseLedgerCompanySyncPrefs {
+  const prefs = readFirebaseLedgerCompanySyncPrefs();
+  const companies = { ...prefs.companies };
+  for (const [id, entry] of Object.entries(entries || {})) {
+    const cid = String(id || "").trim();
+    if (!cid) continue;
+    companies[cid] = normalizeEntry(entry);
   }
-  const companies = { ...prefs.companies, [id]: next };
   const out = { companies };
   saveFirebaseLedgerCompanySyncPrefs(out);
   return out;
 }
 
-/** Global switch ON + company ticked + data ticked. */
+/** Global switch ON + company Data ticked (after Save). */
 export function isFirebaseLedgerCompanyDataSyncEnabled(companyId: string): boolean {
   if (isFirebaseLedgerDataSyncDisabled()) return false;
-  const entry = getFirebaseLedgerCompanySyncEntry(companyId);
-  return entry.selected && entry.data;
+  return getFirebaseLedgerCompanySyncEntry(companyId).data === true;
 }
 
-/** Requires data sync; attachment file sync only when this is true. */
+/** Requires Data; attachment file sync only when Files is ticked. */
 export function isFirebaseLedgerCompanyAttachmentSyncEnabled(companyId: string): boolean {
   if (!isFirebaseLedgerCompanyDataSyncEnabled(companyId)) return false;
-  return getFirebaseLedgerCompanySyncEntry(companyId).attachments;
+  return getFirebaseLedgerCompanySyncEntry(companyId).attachments === true;
 }

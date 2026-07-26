@@ -37,6 +37,11 @@ import { PermissionButton } from "@/components/permission";
 import { cn } from "@/lib/utils";
 import { useVouchers } from "@/hooks/useVouchers";
 import { deleteCompanyComplete } from "@/lib/actions/deleteCompanyAction";
+import {
+    companyRecycleMustSkipFirestore,
+    resolveCompanyRecycleRootForId,
+    restoreCompanyFromRecycleBin,
+} from "@/lib/companyRecycleRoot";
 import { getRecycleBinConfig, subscribeRecycleBinConfig, type RecycleBinConfig } from "@/lib/recycleBinConfig";
 import { removeRecycleBinAlerts } from "@/lib/transactionAlerts";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
@@ -54,7 +59,6 @@ import {
   permanentDeleteLocalCompanyWithDriveCleanup,
 } from "@/lib/localCompanyPermanentDelete";
 import { coerceDeletedAtToDate } from "@/lib/coerceDeletedAt";
-import { finalizeCompanyPermanentDeleteOnServer } from "@/lib/recycleBinCompanyFirestoreFinalize";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { BROWSER_DB_COLLECTION_BUMP, deleteCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import {
@@ -902,16 +906,13 @@ function RecycleBinContent() {
         
         setIsProcessing(true);
         try {
-            if (isCompany && (await deletedCompanyUsesLocalStorageOnly(resolvedItem))) {
-                // Local company: recycle bin se company restore local table par karo, gate mode koi bhi ho.
-                const localCompany = await getLocalCompanyById(resolvedItem.id, { includeDeleted: true });
-                if (!localCompany) throw new Error("Local company not found");
-                await upsertLocalCompany({
-                    ...localCompany,
-                    id: resolvedItem.id,
-                    isDeleted: false,
-                    deletedAt: null,
+            if (isCompany) {
+                const restored = await restoreCompanyFromRecycleBin(resolvedItem.id, {
+                    companyStorageSource: resolvedItem.companyStorageSource,
                 });
+                if (!restored.ok) {
+                    throw new Error(("error" in restored ? restored.error : null) || "Restore failed");
+                }
             } else if (companyId) {
                 await restoreCompanySubdocFromRecycleBin(companyId, resolvedItem.collectionPath, resolvedItem.id);
             } else {
@@ -929,7 +930,11 @@ function RecycleBinContent() {
             toast({ title: "Restored!", description: `"${resolvedItem.name}" has been restored.` });
         } catch (error) {
             console.error('Restore failed:', error);
-            toast({ variant: 'destructive', title: "Error", description: "Failed to restore item." });
+            toast({
+                variant: 'destructive',
+                title: "Error",
+                description: error instanceof Error && error.message ? error.message : "Failed to restore item.",
+            });
         }
         setItemToConfirm(null);
         setIsProcessing(false);
@@ -966,12 +971,11 @@ function RecycleBinContent() {
         setIsProcessing(true);
         try {
             if (isCompany) {
-                if (!isLocalOnlyMode() && (await deletedCompanyUsesLocalStorageOnly(resolvedItem))) {
-                    try {
-                        await finalizeCompanyPermanentDeleteOnServer(resolvedItem.id, quickDelete, user?.uid || "");
-                    } catch {
-                        /* optional cloud row / rules — SQLite hataana zaroori */
-                    }
+                const { root } = await resolveCompanyRecycleRootForId(resolvedItem.id, {
+                    companyStorageSource: resolvedItem.companyStorageSource,
+                });
+                // Local / PL-server: SQLite (+ Drive) only — same-id online Firestore doc mat chhedo.
+                if (companyRecycleMustSkipFirestore(root) || (await deletedCompanyUsesLocalStorageOnly(resolvedItem))) {
                     const driveDel = await permanentDeleteLocalCompanyWithDriveCleanup(resolvedItem.id, {
                         firebaseUid: user?.uid ?? null,
                     });
@@ -985,24 +989,28 @@ function RecycleBinContent() {
                     });
                     return;
                 }
-                if (isLocalOnlyMode()) {
-                    // Pehle Firestore (cloud row ab bhi `isDeleted` ke saath ho sakta hai) — warna refresh par mirror SQLite me wapas bhar deta hai.
-                    const fin = await finalizeCompanyPermanentDeleteOnServer(resolvedItem.id, quickDelete, user?.uid || "");
-                    if (fin.ok === false) throw new Error(fin.error);
-                    const driveDelLocal = await permanentDeleteLocalCompanyWithDriveCleanup(resolvedItem.id, {
-                        firebaseUid: user?.uid ?? null,
-                    });
-                    removeDeletedItemFromState(resolvedItem);
-                    reloadLocalCompanyRegistry();
-                    toast({
-                        title: "Deleted permanently",
-                        description: `"${resolvedItem.name}" has been removed from your recycle bin.${permanentDeleteDriveFolderHint(driveDelLocal)}`,
-                    });
-                    return;
-                }
                 if (!user) throw new Error("Please sign in to delete.");
                 const finOnline = await finalizeOwnerDeletedCompanyOnline(resolvedItem.id, user, quickDelete);
                 if (!finOnline.success) throw new Error(finOnline.error || "Permanent delete failed.");
+                // Mirror SQLite soft/permanent markers for online companies that also have a local row.
+                try {
+                    const localRow = await getLocalCompanyById(resolvedItem.id, { includeDeleted: true });
+                    if (localRow) {
+                        if (quickDelete) {
+                            await permanentDeleteLocalCompanyWithDriveCleanup(resolvedItem.id, {
+                                firebaseUid: user?.uid ?? null,
+                            });
+                        } else {
+                            await upsertLocalCompany({
+                                ...localRow,
+                                id: resolvedItem.id,
+                                movedToAdminRecycleAt: Date.now(),
+                            });
+                        }
+                    }
+                } catch {
+                    /* optional mirror */
+                }
                 removeDeletedItemFromState(resolvedItem);
                 if (quickDelete) {
                     toast({ title: "Success", description: `"${resolvedItem.name}" deleted permanently.` });
@@ -1091,14 +1099,8 @@ function RecycleBinContent() {
 
         try {
             if (isLocalOnlyMode()) {
-                // Har company: pehle Firestore finalize, phir SQLite — taaki refresh par mirror dubara bin me na laaye.
+                // Local-only gate: SQLite (+ Drive) — Firestore companies/{id} mat chhedo (same-id online row).
                 for (const cid of companyIds) {
-                    const fin = await finalizeCompanyPermanentDeleteOnServer(cid, quickDelete, user?.uid || "");
-                    if (fin.ok === false) {
-                        toast({ variant: "destructive", title: "Error", description: fin.error || "Failed to delete company." });
-                        setIsProcessing(false);
-                        return;
-                    }
                     await permanentDeleteLocalCompanyWithDriveCleanup(cid, { firebaseUid: user?.uid ?? null });
                 }
                 if (companyIds.length > 0) {
@@ -1129,12 +1131,10 @@ function RecycleBinContent() {
                     return;
                 }
                 for (const cid of firestoreCompanyIds) {
-                    if (await recycleBinCompanyIdIsLocalStorageOnly(cid, resolvedBinItems)) {
-                        try {
-                            await finalizeCompanyPermanentDeleteOnServer(cid, quickDelete, user?.uid || "");
-                        } catch {
-                            /* ignore */
-                        }
+                    const { root } = await resolveCompanyRecycleRootForId(cid, {
+                        companyStorageSource: resolvedBinItems.find((i) => i.id === cid)?.companyStorageSource,
+                    });
+                    if (companyRecycleMustSkipFirestore(root) || (await recycleBinCompanyIdIsLocalStorageOnly(cid, resolvedBinItems))) {
                         await permanentDeleteLocalCompanyWithDriveCleanup(cid, { firebaseUid: user?.uid ?? null });
                         continue;
                     }
@@ -1161,12 +1161,10 @@ function RecycleBinContent() {
                     return;
                 }
                 for (const cid of firestoreCompanyIds) {
-                    if (await recycleBinCompanyIdIsLocalStorageOnly(cid, resolvedBinItems)) {
-                        try {
-                            await finalizeCompanyPermanentDeleteOnServer(cid, quickDelete, user?.uid || "");
-                        } catch {
-                            /* ignore */
-                        }
+                    const { root } = await resolveCompanyRecycleRootForId(cid, {
+                        companyStorageSource: resolvedBinItems.find((i) => i.id === cid)?.companyStorageSource,
+                    });
+                    if (companyRecycleMustSkipFirestore(root) || (await recycleBinCompanyIdIsLocalStorageOnly(cid, resolvedBinItems))) {
                         await permanentDeleteLocalCompanyWithDriveCleanup(cid, { firebaseUid: user?.uid ?? null });
                         continue;
                     }

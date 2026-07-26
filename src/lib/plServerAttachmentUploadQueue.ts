@@ -300,6 +300,10 @@ async function flushPlServerAttachmentUploadQueue(
       queuedAttachments.delete(key);
       uploaded += 1;
       const localRef = localRefFromPendingId(item.localId);
+      // Pehle 404 mila tha to negative cache hata do — bytes ab host par hain.
+      void import("@/lib/plServerAttachmentFetch").then((m) =>
+        m.clearPlServerAttachmentMissCache(item.localId)
+      );
       void import("@/lib/offlineAttachmentUrlCache").then(async (m) => {
         await m.seedOfflineAttachmentCacheFromBlob(localRef, pending.blob);
       });

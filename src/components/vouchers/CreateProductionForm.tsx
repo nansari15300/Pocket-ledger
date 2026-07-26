@@ -21,6 +21,8 @@ import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
+import { shouldBindFirebaseLedgerCollectionLiveListeners } from "@/lib/firebaseLedgerSyncPolicy";
+import { listCompanyDocsFromBrowserDb, BROWSER_DB_COLLECTION_BUMP } from "@/lib/localCompanyDocMirror";
 import { saveVoucher, isVoucherLimitError, patchVoucherFields, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
@@ -243,12 +245,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   useEffect(() => {
     if (!companyId) return;
+    if (!shouldBindFirebaseLedgerCollectionLiveListeners()) {
+      setItems((processedItems as Item[]) || []);
+      const onBump = (ev: Event) => {
+        const d = (ev as CustomEvent<{ companyId?: string; collection?: string }>).detail;
+        if (!d || d.companyId !== companyId || d.collection !== "items") return;
+        void listCompanyDocsFromBrowserDb(companyId, "items", { forBackupMerge: true })
+          .then((cached) => setItems(cached as Item[]))
+          .catch(() => {});
+      };
+      window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
+      return () => window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
+    }
     const itemsQuery = query(collection(firestore, `companies/${companyId}/items`));
     const unsub = onSnapshot(itemsQuery, (snap) => {
       setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Item)));
     });
     return () => unsub();
-  }, [companyId]);
+  }, [companyId, processedItems]);
 
   const fetchVoucherNumber = useCallback(async (selectedPrefix?: string) => {
     if (!companyId || !company || !isAutoVoucherEnabled) return;

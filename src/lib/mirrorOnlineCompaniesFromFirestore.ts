@@ -29,11 +29,12 @@ import {
   isCurrentUserOwnerOfCompanyRow,
   isCurrentUserSharedOnCompanyRow,
 } from "@/lib/companyOnlineIntegrity";
-import { isDeviceLocalCompany, isStrictLocalOnlyCompany } from "@/lib/companyStorageKind";
+import { isDeviceLocalCompany, isServerGateCompany, isStrictLocalOnlyCompany } from "@/lib/companyStorageKind";
 import { isLocalBackupRestoredCompanyRow } from "@/lib/localBackupRestoreCompany";
 import { isProtectedDriveLocalRegistryRow } from "@/lib/driveRestoredLocalCompany";
 import { pullSharedOnlineCompaniesFromFirestore } from "@/lib/sharedCompaniesFirestorePull";
 import { sharedCompanyQuerySpecs } from "@/lib/sharedWithEmailsQuery";
+import { isListedPlServerSharedCompany } from "@/lib/plServerAccessContext";
 
 export type MirrorOnlineUser = {
   uid: string;
@@ -146,6 +147,26 @@ async function upsertCloudCompanyDoc(
   const isCloudDeleted = raw.isDeleted === true;
   const existing = await getLocalCompanyById(rid, { includeDeleted: true });
   if (isStrictLocalOnlyCompany(existing)) return;
+  // Same companyId Firestore par bhi maujood ho sakti hai (online company ka backup local pe restore hua,
+  // ya wahi company PL server se share ho rahi hai). Aise rows ko dubara `storageOption: firebase` mat banao:
+  // LAN/local classification tootti hai → selector bucket + gate filter row ko drop karte hain → clear,
+  // phir PL delta / local registry use wapas local bana deti hai → company A↔B flip loop.
+  // Attachment mode bhi server↔cloud flip karta hai, isliye host se aise `local:` refs mange jate hain
+  // jo us machine par nahi hote (repeat `/__pl_attachment` 404).
+  //
+  // Staff side: `isServerGateCompany` syncFromCloud:true corruption par false ho jata hai —
+  // isliye `plServerShared` flag + live PL share list dono se guard karo (owner restore pe nahi,
+  // shared user device pe hi ye race dikhti hai).
+  const existingPlShared = (existing as { plServerShared?: unknown } | null)?.plServerShared === true;
+  if (
+    isServerGateCompany(existing) ||
+    existingPlShared ||
+    isListedPlServerSharedCompany({ id: rid, plServerHostCompanyId: (existing as { plServerHostCompanyId?: string } | null)?.plServerHostCompanyId }) ||
+    (isLocalBackupRestoredCompanyRow(existing as unknown as Record<string, unknown>) &&
+      isDeviceLocalCompany(existing))
+  ) {
+    return;
+  }
   const localMs =
     typeof (existing as unknown as { updatedAt?: unknown })?.updatedAt === "number"
       ? (existing as unknown as { updatedAt: number }).updatedAt

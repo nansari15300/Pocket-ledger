@@ -81,6 +81,7 @@ function PresenceManager() {
 export function Providers({ children }: { children: React.ReactNode }) {
     useEffect(() => {
       ensureClientRandomUUIDPolyfill();
+      void import("@/lib/plServerFirebaseHitTrace").then((m) => m.installPlServerFirebaseNetworkTrace());
       if (process.env.NODE_ENV !== "production") {
         // Root client mount — agar har navigation par dubara dikhe to remount/root cause alag.
         console.log("[APP_BOOTSTRAP]", "Providers mount (client)");

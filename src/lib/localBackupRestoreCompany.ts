@@ -34,6 +34,15 @@ export const ONLINE_LINK_FIELDS_STRIPPED_FOR_LOCAL_BACKUP = [
   "firestoreCompanyId",
   "onlineCompanyId",
   "cloudCompanyId",
+  /** Online share evidence — inhi emails se Firestore shared-company queries row ko dubara cloud bana deti hain. */
+  "sharedWithEmails",
+  "sharedWithEmailsLower",
+  /** Admin recycle / delete markers: restored local company invisible ho jati thi (selector se drop). */
+  "movedToAdminRecycleAt",
+  "isDeleted",
+  "deletedAt",
+  /** Plan sync ka cloud company pointer — local row ki identity nahi. */
+  "planSyncFirestoreCompanyId",
 ] as const;
 
 /** Voucher / master rows: online-only sync stamps — local SQLite restore par hatao. */
@@ -43,6 +52,8 @@ const ONLINE_DOC_FIELDS_STRIPPED_ON_LOCAL_RESTORE = [
   "cloudSyncPending",
   "authoritativeCompanyId",
   "crossCompanySourceRef",
+  /** Firestore mirror stamp — restore hui doc ko cloud-backed maan kar attachment cloud se mat khojo. */
+  "__mirrorBackedByFirestore",
 ] as const;
 
 export function stripOnlineFieldsFromBackupLedgerDoc(

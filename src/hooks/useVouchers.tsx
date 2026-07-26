@@ -23,10 +23,15 @@ import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticApkLedgerTransportMode } from "@/lib/staticApkLedgerArchitecture";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import {
+  FIREBASE_LEDGER_SYNC_MODE_CHANGED_EVENT,
+} from "@/lib/firebaseLedgerSyncMode";
+import { shouldBindFirebaseLedgerCollectionLiveListeners } from "@/lib/firebaseLedgerSyncPolicy";
+import {
   BROWSER_DB_COLLECTION_BUMP,
   listCompanyDocsFromBrowserDb,
   listVoucherSummaryProjectionFromBrowserDb,
   mirrorCollectionDocsToBrowserDbSilent,
+  notifyBrowserDbCollectionUpdated,
   type BrowserDbCollectionBumpDetail,
 } from "@/lib/localCompanyDocMirror";
 import { getLocalAuthToken, getLocalAuthUser, LOCAL_AUTH_CHANGED_EVENT } from "@/lib/localApiClient";
@@ -576,6 +581,12 @@ export const VoucherProvider = ({
     const bump = () => setLocalAuthEpoch((n) => n + 1);
     window.addEventListener(LOCAL_AUTH_CHANGED_EVENT, bump);
     return () => window.removeEventListener(LOCAL_AUTH_CHANGED_EVENT, bump);
+  }, []);
+  const [ledgerSyncModeEpoch, setLedgerSyncModeEpoch] = useState(0);
+  useEffect(() => {
+    const bump = () => setLedgerSyncModeEpoch((n) => n + 1);
+    window.addEventListener(FIREBASE_LEDGER_SYNC_MODE_CHANGED_EVENT, bump);
+    return () => window.removeEventListener(FIREBASE_LEDGER_SYNC_MODE_CHANGED_EVENT, bump);
   }, []);
 
   const [vouchers, setVouchers] = useState<any[]>([]);
@@ -1129,7 +1140,89 @@ export const VoucherProvider = ({
       };
     }
 
-    // Hybrid Firestore ↔ SQLite — native/APK bundled: wifi off par bhi snapshots bind (snapshot error → SQLite merge niche).
+    const allowCollectionLiveListeners = shouldBindFirebaseLedgerCollectionLiveListeners();
+
+    /**
+     * deltaa (web/EXE/APK/iOS): SQLite UI + one-shot getDocs transport pull.
+     * No collection `onSnapshot` — remote edits only via `_pl_change_log`.
+     */
+    if (!allowCollectionLiveListeners) {
+      if (!shouldUseLocalCompanyData && !isExplicitLocalRegistryRow) {
+        if (!keepWarmUi) setLoading(true);
+        const CRITICAL_SQLITE_PATHS = new Set([
+          "parties",
+          "groups",
+          "bank_accounts",
+          "staff",
+          "taxes",
+          "expense_accounts",
+        ]);
+        const loadSqliteChunk = (items: typeof collectionsToPrefetch) =>
+          Promise.all(
+            items.map(({ path, setter, orderByField }) =>
+              listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
+                .then((cached) => {
+                  applySqliteRows(setter, cached, orderByField);
+                })
+                .catch(() => {})
+            )
+          );
+        const critical = collectionsToPrefetch.filter((c) => CRITICAL_SQLITE_PATHS.has(c.path));
+        const secondary = collectionsToPrefetch.filter((c) => !CRITICAL_SQLITE_PATHS.has(c.path));
+        void loadSqliteChunk(critical).finally(() => {
+          if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) {
+            hasWarmLedgerDataRef.current = true;
+            setLoading(false);
+          }
+        });
+        void loadSqliteChunk(secondary);
+      } else if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) {
+        hasWarmLedgerDataRef.current = true;
+        setLoading(false);
+      }
+
+      const online =
+        typeof navigator === "undefined" || navigator.onLine !== false;
+      if (online && isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape)) {
+        void (async () => {
+          const CONCURRENCY = 4;
+          for (let i = 0; i < collectionsToPrefetch.length; i += CONCURRENCY) {
+            if (cancelled) break;
+            const chunk = collectionsToPrefetch.slice(i, i + CONCURRENCY);
+            await Promise.all(
+              chunk.map(async ({ path, setter, orderByField }) => {
+                try {
+                  const remoteData = await pullCompanySubcollectionFromFirestoreToLocalDb(
+                    fsCompanyId,
+                    companyId,
+                    path,
+                    companyRef.current,
+                    orderByField
+                  );
+                  if (cancelled || !remoteData.length) return;
+                  commitEntityListSetter(
+                    setter,
+                    sqliteCachedRowsForSetter(remoteData, orderByField) as any[]
+                  );
+                  notifyBrowserDbCollectionUpdated(companyId, path, {
+                    immediate: true,
+                    source: "firebase_delta_pull",
+                  });
+                } catch {
+                  /* change-feed will retry per-doc */
+                }
+              })
+            );
+          }
+        })();
+      }
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    // Hybrid Firestore ↔ SQLite — live mode only (collection onSnapshot).
     const unsubRef = { current: [] as (() => void)[] };
 
     const companyRootDocRef = doc(firestore, "companies", fsCompanyId);
@@ -1479,7 +1572,7 @@ export const VoucherProvider = ({
       unsubRef.current.forEach(u => u());
       unsubRef.current = [];
     };
-  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch, pathname, voucherFormMasterScope, sqliteLedgerRouteHint.usesSqlite, sqliteLedgerRouteHint.ownerMatchesUser, company?.storageOption, company?.syncPolicy, company?.syncedFromCloud, company?.ownerId]);
+  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch, ledgerSyncModeEpoch, pathname, voucherFormMasterScope, sqliteLedgerRouteHint.usesSqlite, sqliteLedgerRouteHint.ownerMatchesUser, company?.storageOption, company?.syncPolicy, company?.syncedFromCloud, company?.ownerId]);
 
   // Single-doc / write-path upsert ke baad merge (notify) — collections ke hisaab se state update.
   useEffect(() => {
@@ -1589,6 +1682,7 @@ export const VoucherProvider = ({
       if (!d || d.companyId !== companyId || !d.collection) return;
       const coll = d.collection;
       const remoteHostWrite = d.source === "pl_host_remote_write";
+      const firebaseDeltaPull = d.source === "firebase_delta_pull";
       if (remoteHostWrite) {
         void import("@/lib/plServerLiveChangeTrace")
           .then(({ plServerLiveChangeTrace }) =>
@@ -1599,8 +1693,8 @@ export const VoucherProvider = ({
           )
           .catch(() => undefined);
       }
-      if (isServerGateCompanyContext || d.immediate === true || remoteHostWrite) {
-        mergeCollectionFromSqliteBump(coll, { remoteIncoming: remoteHostWrite });
+      if (isServerGateCompanyContext || d.immediate === true || remoteHostWrite || firebaseDeltaPull) {
+        mergeCollectionFromSqliteBump(coll, { remoteIncoming: remoteHostWrite || firebaseDeltaPull });
         return;
       }
       // Active page ke bahar collection bump ignore — unnecessary background merge avoid.

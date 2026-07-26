@@ -40,6 +40,11 @@ export function PermissionRouteGuard({
     return <>{children}</>;
   }
 
+  // SuperAdmin / CompanyAdmin — company select na ho to bhi recycle-bin / admin routes
+  if (customUser?.role === "SuperAdmin" || customUser?.role === "CompanyAdmin") {
+    return <>{children}</>;
+  }
+
   // Still loading permissions
   if (isChecking || authLoading) {
     return <LoadingSpinner />;

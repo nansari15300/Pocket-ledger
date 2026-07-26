@@ -1,12 +1,7 @@
 "use client";
 
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
-import { isFirebaseLedgerLocalDeltaMode } from "@/lib/firebaseLedgerSyncMode";
-
-/**
- * Firebase / Storage billing knobs — safe defaults reduce reads, duplicate uploads, and sync churn.
- * Override via env only when debugging legacy behaviour.
- */
+import { isFirebaseLedgerDeltaSqliteTransportMode } from "@/lib/firebaseLedgerSyncPolicy";
 
 /**
  * Background full warm sync (Firestore → SQLite mirror + attachment bytes cache).
@@ -18,7 +13,7 @@ export function backgroundWarmSyncEnabled(): boolean {
   const raw = String(process.env.NEXT_PUBLIC_BACKGROUND_WARM_SYNC || "").trim();
   if (raw === "0") return false;
   if (raw === "1") return true;
-  if (!isFirebaseLedgerLocalDeltaMode()) return false;
+  if (!isFirebaseLedgerDeltaSqliteTransportMode()) return false;
   if (process.env.NEXT_PUBLIC_STATIC_BUILD === "1") return true;
   if (typeof window !== "undefined" && isEmbeddedOfflinePreloadClient()) return true;
   return false;

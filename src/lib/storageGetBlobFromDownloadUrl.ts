@@ -71,6 +71,14 @@ export async function tryGetBlobFromFirebaseStorageDownloadUrl(
   if (!url.startsWith("http://") && !url.startsWith("https://")) return null;
   if (!looksLikeFirebaseStorageDownloadUrl(url)) return null;
   if (signal?.aborted) return null;
+  try {
+    const { blockFirebaseStorageHitOnPlServer } = await import("@/lib/plServerFirebaseHitTrace");
+    if (blockFirebaseStorageHitOnPlServer("tryGetBlobFromFirebaseStorageDownloadUrl", url)) {
+      return null;
+    }
+  } catch {
+    /* optional guard */
+  }
   const objectPath = tryGetStoragePathFromFirebaseDownloadUrl(url);
   if (!objectPath) {
     // Some Firebase/GCS URL variants may not decode into object path; still attempt network fallback.

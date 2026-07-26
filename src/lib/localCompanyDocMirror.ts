@@ -39,7 +39,7 @@ export type BrowserDbCollectionBumpDetail = {
   collection: string;
   /** User save / refresh: debounce skip — ledger turant merge. */
   immediate?: boolean;
-  source?: "local_write" | "pl_host_remote_write" | "pl_server_pull" | string;
+  source?: "local_write" | "pl_host_remote_write" | "pl_server_pull" | "firebase_delta_pull" | string;
 };
 
 /** After a Firestore-backed write mirror, allow lists to refresh (same tab). */

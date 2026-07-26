@@ -20,7 +20,7 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "
 import { Loader2, Trash2, CalendarIcon, PlusCircle, CheckCircle, History, Printer } from "lucide-react";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS, VOUCHER_PC_DATE_ROW, VOUCHER_PC_DATE_BOTH_SLOT, VOUCHER_PC_DATE_BS_PILL, VOUCHER_PC_DATE_AD_PILL } from "@/components/vouchers/voucherButtonStyles";
 import { FilePreview } from "./FilePreview";
-import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange, useVoucherAttachmentProcessing } from "@/lib/appendCompressedVoucherAttachments";
+import { appendCompressedVoucherAttachmentsToState, handleVoucherAttachmentInputChange } from "@/lib/appendCompressedVoucherAttachments";
 import { voucherAttachmentUrlsForFormState } from "@/lib/voucherAttachmentNormalize";
 import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
@@ -62,6 +62,8 @@ import { applyVoucherAttachmentsAfterFormSave } from "@/lib/voucherFormAttachmen
 import { toast as sonnerToast } from "sonner";
 import { replaceVoucherSaveLoadingWithShortSuccess, beginVoucherSaveLoadingOrBlock, voucherSaveErrorToast } from "@/lib/voucherSaveUi";
 import { useVouchers } from "@/hooks/useVouchers";
+import { shouldBindFirebaseLedgerCollectionLiveListeners } from "@/lib/firebaseLedgerSyncPolicy";
+import { listCompanyDocsFromBrowserDb, BROWSER_DB_COLLECTION_BUMP } from "@/lib/localCompanyDocMirror";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
 import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccountDialog";
@@ -69,7 +71,6 @@ import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
 import { CreateTaxDialog } from "@/components/tax/CreateTaxDialog";
 import { CreateItemDialog } from "@/components/items/CreateItemDialog";
 import { CreateExpenseAccountDialog } from "@/components/expenses/CreateExpenseAccountDialog";
-import type { CopyMasterDraftRequestPayload, CopyMissingMasterOpts } from "@/components/vouchers/AddVoucherDialog";
 
 const formSchema = z.object({
   voucherNumber: z.string().min(1, "Voucher number is required."),
@@ -139,11 +140,6 @@ export function CreateNoteForm({
     onApprove,
     isApproving = false,
     compactFooter = false,
-    copySaveTargetCompanyId,
-    copyMismatchCategories,
-    onCopyMissingCategory,
-    copyMasterDraftRequest,
-    onRefreshCopyMismatch,
     recurringVoucherSaveBlocked = false,
     recurringVoucherAuxiliaryDirty = false,
 }: {
@@ -160,11 +156,6 @@ export function CreateNoteForm({
     isApproving?: boolean,
     /** When true, hide History / Save & New / Save & Print / Delete (used in entity "Add a New Note for..." dialogs; keep full buttons in New Transaction → Note for edit) */
     compactFooter?: boolean,
-    copySaveTargetCompanyId?: string,
-    copyMismatchCategories?: string[],
-    onCopyMissingCategory?: (category: string, opts?: CopyMissingMasterOpts) => void,
-    copyMasterDraftRequest?: CopyMasterDraftRequestPayload | null,
-    onRefreshCopyMismatch?: () => void | Promise<void>,
     recurringVoucherSaveBlocked?: boolean,
     recurringVoucherAuxiliaryDirty?: boolean,
 }) {
@@ -172,19 +163,10 @@ export function CreateNoteForm({
   const { company, companyId } = useCompany();
   const { toast } = useToast();
   const { dateSystem, formatDate, formatDateBS } = useDate();
-  const {
-    vouchers,
-    processedParties,
-    processedAccounts,
-    processedStaff,
-    processedTaxes,
-    processedItems,
-    processedExpenseAccounts,
-  } = useVouchers();
+  const { vouchers } = useVouchers();
   const { can, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
   const isMobile = useIsMobile();
   const [isLoading, setIsLoading] = useState(false);
-  const isAttachmentProcessing = useVoucherAttachmentProcessing();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [parties, setParties] = useState<Party[]>([]);
@@ -240,7 +222,6 @@ export function CreateNoteForm({
   })();
   const isFormDirty = _isFormFieldsDirty || _isFileDirty || recurringVoucherAuxiliaryDirty;
   const selectedContext = form.watch("context");
-  const selectedEntityId = form.watch("entityId");
   // Page-level Add Note dialogs always use compact footer for consistent button set.
   const isEntityAddNoteDialog = !voucher?.id && Boolean(initialContext) && Boolean(initialEntityId);
   // Compact footer removes Delete/History/Save&New/Save&Print and keeps only Cancel/Save/Save&Approve.
@@ -334,6 +315,43 @@ export function CreateNoteForm({
 
   useEffect(() => {
     if (!companyId) return;
+    if (!shouldBindFirebaseLedgerCollectionLiveListeners()) {
+      let cancelled = false;
+      const load = async () => {
+        try {
+          const [p, a, s, t, i, e] = await Promise.all([
+            listCompanyDocsFromBrowserDb(companyId, "parties", { forBackupMerge: true }),
+            listCompanyDocsFromBrowserDb(companyId, "bank_accounts", { forBackupMerge: true }),
+            listCompanyDocsFromBrowserDb(companyId, "staff", { forBackupMerge: true }),
+            listCompanyDocsFromBrowserDb(companyId, "taxes", { forBackupMerge: true }),
+            listCompanyDocsFromBrowserDb(companyId, "items", { forBackupMerge: true }),
+            listCompanyDocsFromBrowserDb(companyId, "expense_accounts", { forBackupMerge: true }),
+          ]);
+          if (cancelled) return;
+          setParties(p as Party[]);
+          setAccounts(a as Account[]);
+          setStaff(s as Staff[]);
+          setTaxes(t as Tax[]);
+          setItems(i as Item[]);
+          setExpenseAccounts(
+            (e as ExpenseAccount[]).filter((row) => !(row as { isDeleted?: boolean }).isDeleted)
+          );
+        } catch {
+          /* SQLite optional */
+        }
+      };
+      void load();
+      const onBump = (ev: Event) => {
+        const d = (ev as CustomEvent<{ companyId?: string; collection?: string }>).detail;
+        if (!d || d.companyId !== companyId) return;
+        void load();
+      };
+      window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
+      return () => {
+        cancelled = true;
+        window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
+      };
+    }
     const unsubFns = [
       onSnapshot(query(collection(firestore, `companies/${companyId}/parties`)), (snap) => setParties(snap.docs.map(d=>({id: d.id, ...d.data()} as Party)))),
       onSnapshot(query(collection(firestore, `companies/${companyId}/bank_accounts`)), (snap) => setAccounts(snap.docs.map(d=>({id: d.id, ...d.data()} as Account)))),
@@ -346,77 +364,17 @@ export function CreateNoteForm({
   }, [companyId]);
 
   const getEntityOptions = useCallback(() => {
-    const partyRows = (processedParties?.length ? processedParties : parties) as Party[];
-    const accountRows = (processedAccounts?.length ? processedAccounts : accounts) as Account[];
-    const staffRows = (processedStaff?.length ? processedStaff : staff) as Staff[];
-    const taxRows = (processedTaxes?.length ? processedTaxes : taxes) as Tax[];
-    const itemRows = (processedItems?.length ? processedItems : items) as Item[];
-    const expenseRows = (processedExpenseAccounts?.length ? processedExpenseAccounts : expenseAccounts) as ExpenseAccount[];
     switch (selectedContext) {
-      case "Party": return partyRows.map(p => ({ value: p.id, label: p.name }));
-      case "Bank/Cash": return accountRows.map(a => ({ value: a.id, label: a.accountName }));
-      case "Staff": return staffRows.map(s => ({ value: s.id, label: s.name }));
-      case "Tax": return taxRows.map(t => ({ value: t.id, label: t.name }));
-      case "Items": return itemRows.map(i => ({ value: i.id, label: i.name }));
-      case "Income": return expenseRows.filter((a: ExpenseAccount) => a.type === "Income").map(a => ({ value: a.id, label: a.name }));
-      case "Expense": return expenseRows.filter((a: ExpenseAccount) => (a.type === "Expense" || a.type === "Salary" || !a.type)).map(a => ({ value: a.id, label: a.name }));
+      case "Party": return parties.map(p => ({ value: p.id, label: p.name }));
+      case "Bank/Cash": return accounts.map(a => ({ value: a.id, label: a.accountName }));
+      case "Staff": return staff.map(s => ({ value: s.id, label: s.name }));
+      case "Tax": return taxes.map(t => ({ value: t.id, label: t.name }));
+      case "Items": return items.map(i => ({ value: i.id, label: i.name }));
+      case "Income": return expenseAccounts.filter((a: ExpenseAccount) => a.type === "Income").map(a => ({ value: a.id, label: a.name }));
+      case "Expense": return expenseAccounts.filter((a: ExpenseAccount) => (a.type === "Expense" || a.type === "Salary" || !a.type)).map(a => ({ value: a.id, label: a.name }));
       default: return [];
     }
-  }, [
-    selectedContext,
-    parties,
-    accounts,
-    staff,
-    taxes,
-    items,
-    expenseAccounts,
-    processedParties,
-    processedAccounts,
-    processedStaff,
-    processedTaxes,
-    processedItems,
-    processedExpenseAccounts,
-  ]);
-
-  const noteCopyCategoryForContext = useCallback((context?: string) => {
-    switch (String(context || "").trim()) {
-      case "Party":
-        return "party";
-      case "Bank/Cash":
-        return "account_bank";
-      case "Staff":
-        return "staff";
-      case "Tax":
-        return "tax";
-      case "Items":
-        return "item";
-      case "Income":
-      case "Expense":
-        return "account_expense";
-      default:
-        return "";
-    }
-  }, []);
-
-  const noteCopyCategory = noteCopyCategoryForContext(selectedContext);
-  const entityOptions = useMemo(() => getEntityOptions(), [getEntityOptions]);
-  const noteHasSourceEntityMismatch = Boolean(
-    noteCopyCategory &&
-      (copyMismatchCategories?.includes(noteCopyCategory) ||
-        (noteCopyCategory === "account_bank" && copyMismatchCategories?.includes("account")) ||
-        (noteCopyCategory === "account_expense" && copyMismatchCategories?.includes("account")))
-  );
-  const noteSelectedEntityMissing = Boolean(
-    selectedContext &&
-      (!String(selectedEntityId || "").trim() ||
-        !entityOptions.some((opt: { value: string }) => String(opt.value) === String(selectedEntityId)))
-  );
-  const showCopyEntityFromSource = Boolean(
-    copySaveTargetCompanyId &&
-      onCopyMissingCategory &&
-      noteHasSourceEntityMismatch &&
-      noteSelectedEntityMissing
-  );
+  }, [selectedContext, parties, accounts, staff, taxes, items, expenseAccounts]);
 
   // Note → Specific entity Combobox: user ko typed filter dikhane ke liye context-specific placeholder
   const entityComboboxSearchPlaceholder = useMemo(() => {
@@ -488,92 +446,6 @@ export function CreateNoteForm({
     },
     [selectedContext]
   );
-
-  useEffect(() => {
-    if (!copyMasterDraftRequest || !copySaveTargetCompanyId) return;
-    const req = copyMasterDraftRequest;
-    const payload = req.sourceRowPayload;
-    const nm = String(req.sourceName || "").trim();
-    const sc = String(req.sourceCollection || "");
-    const fire = (event: string, detail: unknown) => {
-      setTimeout(() => document.dispatchEvent(new CustomEvent(event, { detail })), 90);
-    };
-    const setContextForSource = () => {
-      if (sc === "parties") form.setValue("context", "Party", { shouldDirty: true });
-      else if (sc === "bank_accounts") form.setValue("context", "Bank/Cash", { shouldDirty: true });
-      else if (sc === "staff") form.setValue("context", "Staff", { shouldDirty: true });
-      else if (sc === "taxes") form.setValue("context", "Tax", { shouldDirty: true });
-      else if (sc === "items") form.setValue("context", "Items", { shouldDirty: true });
-      else if (sc === "expense_accounts") {
-        const type = String((payload as any)?.type || "").toLowerCase();
-        form.setValue("context", type === "income" ? "Income" : "Expense", { shouldDirty: true });
-      }
-      form.setValue("entityId", "", { shouldDirty: true, shouldValidate: true });
-    };
-
-    if (req.existingTargetMasterId) {
-      setContextForSource();
-      form.setValue("entityId", req.existingTargetMasterId, { shouldDirty: true, shouldValidate: true });
-      void form.trigger("entityId");
-      void onRefreshCopyMismatch?.();
-      return;
-    }
-
-    setContextForSource();
-    if (payload && sc === "parties") {
-      setIsCreatePartyOpen(true);
-      fire("prefill-create-party-full", { rowPayload: payload });
-      return;
-    }
-    if (payload && sc === "bank_accounts") {
-      setIsCreateBankOpen(true);
-      fire("prefill-create-bank-account-full", { rowPayload: payload });
-      return;
-    }
-    if (payload && sc === "staff") {
-      setIsCreateStaffOpen(true);
-      fire("prefill-create-staff-full", { rowPayload: payload });
-      return;
-    }
-    if (payload && sc === "taxes") {
-      setIsCreateTaxOpen(true);
-      fire("prefill-create-tax-from-row", { rowPayload: payload });
-      return;
-    }
-    if (payload && sc === "items") {
-      setIsCreateItemOpen(true);
-      fire("prefill-create-item-from-row", { rowPayload: payload });
-      return;
-    }
-    if (payload && sc === "expense_accounts") {
-      const type = String((payload as any)?.type || "").toLowerCase();
-      if (type === "income") setIsCreateIncomeAccountOpen(true);
-      else setIsCreateExpenseAccountOpen(true);
-      fire("prefill-create-expense-account-full", { rowPayload: payload });
-      return;
-    }
-    if (!nm) return;
-    if (sc === "parties") {
-      setIsCreatePartyOpen(true);
-      fire("prefill-create-party-name", nm);
-    } else if (sc === "bank_accounts") {
-      setIsCreateBankOpen(true);
-      fire("prefill-create-bank-account-name", nm);
-    } else if (sc === "staff") {
-      setIsCreateStaffOpen(true);
-      fire("prefill-create-staff-name", nm);
-    } else if (sc === "taxes") {
-      setTaxCreatePrefillName(nm);
-      setIsCreateTaxOpen(true);
-    } else if (sc === "items") {
-      setIsCreateItemOpen(true);
-      fire("prefill-create-item-name", { name: nm, type: "item" });
-    } else if (sc === "expense_accounts") {
-      if (req.category === "account_expense") setIsCreateExpenseAccountOpen(true);
-      else setIsCreateIncomeAccountOpen(true);
-      fire("prefill-create-expense-account-name", nm);
-    }
-  }, [copyMasterDraftRequest, copySaveTargetCompanyId, form, onRefreshCopyMismatch]);
 
   // When Link to (context) changes, clear entityId if current value is not in the new options
   useEffect(() => {
@@ -1087,26 +959,11 @@ export function CreateNoteForm({
                      )} />
                     <FormField control={form.control} name="entityId" render={({ field }: any) => (
                       <FormItem>
-                        <FormLabel className="flex items-center justify-between gap-2">
-                          <span className={cn(showCopyEntityFromSource && "text-red-600")}>
-                            {selectedContext ? `Specific ${selectedContext}` : "Specific Party / Entity"}
-                          </span>
-                          {showCopyEntityFromSource && noteCopyCategory && (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-7 rounded-full border-red-400 bg-red-50 px-3 text-xs font-semibold text-red-600 hover:bg-red-100"
-                              onClick={() => onCopyMissingCategory?.(noteCopyCategory)}
-                            >
-                              Copy
-                            </Button>
-                          )}
-                        </FormLabel>
+                        <FormLabel>{selectedContext ? `Specific ${selectedContext}` : "Specific Party / Entity"}</FormLabel>
                         {/* Keep combobox in same section; disable until Link to context is selected. */}
                         <FormControl>
                           <Combobox
-                            options={entityOptions}
+                            options={getEntityOptions()}
                             value={field.value}
                             onChange={(id, newName) => {
                               if (id === "add-new") {
@@ -1246,17 +1103,17 @@ export function CreateNoteForm({
                       </AlertDialogContent>
                     </AlertDialog>
                     <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS, (!voucher || !showHistoryButton || !onOpenHistory) && "opacity-60")}>History</Button>
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading || isAttachmentProcessing || editingDisabled || !isFormValid} className={cn("w-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndPrint: true })} disabled={isLoading || isAttachmentProcessing || editingDisabled || !isFormValid} className={cn("w-full", BTN_PRINT_CLASS)}>Save & Print</Button>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("w-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndPrint: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("w-full", BTN_PRINT_CLASS)}>Save & Print</Button>
                   </>
                 )}
                 {/* Mobile row: Cancel | Save | Approve — approve daayen (baaki forms jaisa) */}
                 <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>Cancel</Button>
-                <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || !isFormValid || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>{isLoading ? "..." : "Save"}</Button>
+                <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || !isFormValid || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>{isLoading ? "..." : "Save"}</Button>
                 {voucher?.id ? (
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>{isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}</Button>
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>{isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}</Button>
                 ) : canShowCreateApproveButton ? (
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!canApproveTransactions || isLoading || isAttachmentProcessing || editingDisabled || !isFormValid} className={cn("w-full", BTN_APPROVE_CLASS)}>{isLoading ? "..." : "Save & Approve"}</Button>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!canApproveTransactions || isLoading || editingDisabled || !isFormValid} className={cn("w-full", BTN_APPROVE_CLASS)}>{isLoading ? "..." : "Save & Approve"}</Button>
                 ) : (
                   <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">—</Button>
                 )}
@@ -1289,16 +1146,16 @@ export function CreateNoteForm({
                 )}
                 <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
                   <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>Cancel</Button>
-                  {!useCompactFooter && <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading || isAttachmentProcessing || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>}
-                  {!useCompactFooter && <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndPrint: true })} disabled={isLoading || isAttachmentProcessing || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}><Printer className="mr-2 h-4 w-4" /> Save & Print</Button>}
-                  <Button type="submit" disabled={isLoading || isAttachmentProcessing || editingDisabled || recurringVoucherSaveBlocked || !isFormValid || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>{isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save</Button>
+                  {!useCompactFooter && <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>}
+                  {!useCompactFooter && <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndPrint: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}><Printer className="mr-2 h-4 w-4" /> Save & Print</Button>}
+                  <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || !isFormValid || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>{isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save</Button>
                   {voucher?.id ? (
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={isAttachmentProcessing || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                       {isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                   ) : (
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!canShowCreateApproveButton || !canApproveTransactions || isLoading || isAttachmentProcessing || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!canShowCreateApproveButton || !canApproveTransactions || isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       Save & Approve
                     </Button>
@@ -1317,7 +1174,6 @@ export function CreateNoteForm({
         setIsCreatePartyOpen(false);
         form.setValue("entityId", id);
         void form.trigger("entityId");
-        void onRefreshCopyMismatch?.();
       }}
     />
     <CreateBankAccountDialog
@@ -1327,7 +1183,6 @@ export function CreateNoteForm({
         setIsCreateBankOpen(false);
         form.setValue("entityId", id);
         void form.trigger("entityId");
-        void onRefreshCopyMismatch?.();
       }}
     />
     <CreateStaffDialog
@@ -1337,7 +1192,6 @@ export function CreateNoteForm({
         setIsCreateStaffOpen(false);
         form.setValue("entityId", id);
         void form.trigger("entityId");
-        void onRefreshCopyMismatch?.();
       }}
       groups={[]}
     >
@@ -1355,7 +1209,6 @@ export function CreateNoteForm({
         setTaxCreatePrefillName("");
         form.setValue("entityId", id);
         void form.trigger("entityId");
-        void onRefreshCopyMismatch?.();
       }}
     />
     <CreateItemDialog
@@ -1366,7 +1219,6 @@ export function CreateNoteForm({
         setIsCreateItemOpen(false);
         form.setValue("entityId", id);
         void form.trigger("entityId");
-        void onRefreshCopyMismatch?.();
       }}
     >
       <span className="hidden" />
@@ -1379,7 +1231,6 @@ export function CreateNoteForm({
         setIsCreateIncomeAccountOpen(false);
         form.setValue("entityId", id);
         void form.trigger("entityId");
-        void onRefreshCopyMismatch?.();
       }}
     >
       <span className="hidden" />
@@ -1392,7 +1243,6 @@ export function CreateNoteForm({
         setIsCreateExpenseAccountOpen(false);
         form.setValue("entityId", id);
         void form.trigger("entityId");
-        void onRefreshCopyMismatch?.();
       }}
     >
       <span className="hidden" />

@@ -38,14 +38,11 @@ import { Loader2, Trash2 } from "lucide-react";
 import { Input } from "../ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
-import { doc, deleteField, serverTimestamp, updateDoc } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
+import { softDeleteCompanyToRecycleBin } from "@/lib/companyRecycleRoot";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
-import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import type { Company } from "@/hooks/useCompany";
 import { sendRecycleBinMovedAlert } from "@/lib/transactionAlerts";
 import {
-  isOnlineCompanyRow,
   isDeviceLocalCompany,
   buildDuplicateNameCountMap,
   companySelectOptionLabel,
@@ -107,30 +104,12 @@ export function DangerZone() {
     const targetName = companyToDelete?.name ?? company?.name;
     setIsLoading(true);
     try {
-      const existingLocalCompany = await getLocalCompanyById(targetId, { includeDeleted: true });
-      const isOnline =
-        (targetCompany && isOnlineCompanyRow(targetCompany)) ||
-        (!!existingLocalCompany && isOnlineCompanyRow(existingLocalCompany as Company));
-
-      const moveToBinUpdate = {
-        isDeleted: true,
-        deletedAt: serverTimestamp(),
-        movedToAdminRecycleAt: deleteField(),
-      };
-
-      // Online: Firestore; local-only (basic/web SQLite): sirf upsert — web par Firestore doc nahi hota
-      if (isOnline) {
-        await updateDoc(doc(firestore, `companies/${targetId}`), moveToBinUpdate);
-      }
-      if (existingLocalCompany) {
-        await upsertLocalCompany({
-          ...existingLocalCompany,
-          id: targetId,
-          isDeleted: true,
-          deletedAt: Date.now(),
-        });
-      } else if (!isOnline) {
-        throw new Error("Local company not found");
+      const storageHint = targetCompany && isDeviceLocalCompany(targetCompany) ? "local" : undefined;
+      const moved = await softDeleteCompanyToRecycleBin(targetId, {
+        companyStorageSource: storageHint,
+      });
+      if (!moved.ok) {
+        throw new Error(("error" in moved ? moved.error : null) || "Failed to move company to bin.");
       }
       toast({
         title: "Company Moved to Bin",

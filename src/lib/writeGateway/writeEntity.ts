@@ -36,6 +36,7 @@ import { isSoftDeleteLedgerPatch, purgeGhostLocalCompanyDoc } from "@/lib/purgeG
 import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
 import { isPureLocalLedgerCompany, companyRowUsesSqliteLedgerWrites } from "@/lib/companyStorageKind";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
+import { companyStrategyUsesSqliteFirstLedgerWrites } from "@/lib/staticAttachmentDisplayUrl";
 
 export type WriteEntityOperation = "create" | "update" | "delete";
 
@@ -62,12 +63,13 @@ async function resolveFirestoreCompanyId(localCompanyId: string): Promise<string
   return raw || localCompanyId.trim();
 }
 
-/** Local-first: SQLite UPSERT + sync_outbox — local company web/static par bhi; online Firestore par seedha Firestore. */
+/** Local-first: SQLite UPSERT + sync_outbox — deltaa/all platforms; live web online = Firestore. */
 async function shouldWriteLocalLedgerFirst(localCompanyId: string): Promise<boolean> {
   if (isFirebaseLedgerDataSyncDisabled()) return true;
   if (shouldForceFirestoreWritesOnStaticOrApk()) return false;
   const reg = await getLocalCompanyById(localCompanyId, { includeDeleted: true });
   if (apkEmbeddedSqliteFirstWritesPreferred()) return !!reg;
+  if (reg && companyStrategyUsesSqliteFirstLedgerWrites(reg)) return true;
   if (isStaticAppBuild() && reg) return companyRowUsesSqliteLedgerWrites(reg);
   if (reg && companyRowUsesSqliteLedgerWrites(reg)) return true;
   if (reg && isPureLocalLedgerCompany(reg)) return true;

@@ -1,5 +1,11 @@
 "use client";
 
+/**
+ * Device preference for deltaa/live (sidebar → localStorage).
+ * Runtime gates use `resolveFirebaseLedgerSyncPolicy()` so Admin plan settings
+ * can later override via `getFirebaseLedgerSyncPlanOverride()` without rewriting call sites.
+ */
+
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 
 export type FirebaseLedgerSyncMode = "local" | "full_online";
@@ -38,6 +44,7 @@ export function getFirebaseLedgerSyncMode(): FirebaseLedgerSyncMode {
   return cachedMode;
 }
 
+/** Device preference (sidebar). Effective mode after plan override: `resolveFirebaseLedgerSyncPolicy()`. */
 export function isFirebaseLedgerLocalDeltaMode(): boolean {
   return getFirebaseLedgerSyncMode() === "local";
 }

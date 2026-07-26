@@ -24,6 +24,46 @@ let activePlServerAttachmentFetches = 0;
 const plServerAttachmentFetchQueue: Array<() => void> = [];
 const inFlightPlServerAttachmentFetches = new Map<string, Promise<Blob | null>>();
 
+/**
+ * Host par bytes nahi mile (404) to wahi ref har render / hover pe dobara mangna
+ * console + LAN ko flood karta hai. Miss ko short TTL ke liye yaad rakho.
+ */
+const PL_SERVER_ATTACHMENT_MISS_TTL_MS = 60_000;
+const plServerAttachmentMissUntil = new Map<string, number>();
+
+function plServerAttachmentMissKey(hostCompanyId: string, ref: string): string {
+  return `${hostCompanyId}|${ref}`;
+}
+
+function isPlServerAttachmentMissCached(hostCompanyId: string, ref: string): boolean {
+  const key = plServerAttachmentMissKey(hostCompanyId, ref);
+  const until = plServerAttachmentMissUntil.get(key);
+  if (!until) return false;
+  if (Date.now() < until) return true;
+  plServerAttachmentMissUntil.delete(key);
+  return false;
+}
+
+function rememberPlServerAttachmentMiss(hostCompanyId: string, ref: string): void {
+  plServerAttachmentMissUntil.set(
+    plServerAttachmentMissKey(hostCompanyId, ref),
+    Date.now() + PL_SERVER_ATTACHMENT_MISS_TTL_MS
+  );
+}
+
+/** Naya upload / restore ke baad wahi ref turant fetch ho sake. */
+export function clearPlServerAttachmentMissCache(ref?: string | null): void {
+  const needle = String(ref || "").trim();
+  if (!needle) {
+    plServerAttachmentMissUntil.clear();
+    return;
+  }
+  const id = needle.startsWith(LOCAL_FILE_PREFIX) ? needle.slice(LOCAL_FILE_PREFIX.length) : needle;
+  for (const key of Array.from(plServerAttachmentMissUntil.keys())) {
+    if (key.endsWith(`|${id}`)) plServerAttachmentMissUntil.delete(key);
+  }
+}
+
 function runWithPlServerAttachmentFetchSlot<T>(task: () => Promise<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const run = () => {
@@ -270,6 +310,7 @@ export async function fetchPlServerAttachmentBlob(
 
   const { resolvePlServerHostCompanyId } = await import("@/lib/plServerHostCompanyId");
   const hostCompanyId = (await resolvePlServerHostCompanyId(cid)) || cid;
+  if (isPlServerAttachmentMissCached(hostCompanyId, ref)) return null;
 
   const url = `${endpoint.baseUrl.replace(/\/$/, "")}/__pl_attachment?${new URLSearchParams({
     companyId: hostCompanyId,
@@ -282,7 +323,11 @@ export async function fetchPlServerAttachmentBlob(
     shared = runWithPlServerAttachmentFetchSlot(async () => {
       try {
         const { status, blob, contentType } = await gateHttpFetchBlob(url, endpoint.accessToken);
-        if (status >= 400 || !blob || blob.size <= 0) return null;
+        if (status >= 400 || !blob || blob.size <= 0) {
+          // 404 = bytes host par nahi (restore/foreign ref). Repeat request rok do.
+          if (status === 404 || status === 410) rememberPlServerAttachmentMiss(hostCompanyId, ref);
+          return null;
+        }
         const normalized = await normalizePlServerAttachmentBlob(blob, contentType);
         await seedPlServerAttachmentUiCaches(`${LOCAL_FILE_PREFIX}${ref}`, normalized);
         await persistFetchedPlServerAttachmentRef(cid, ref, normalized);

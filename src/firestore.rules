@@ -172,13 +172,26 @@ service cloud.firestore {
      */
     function isAdmin() {
       return isSignedIn() && (
-        (request.auth.token.email != null && request.auth.token.email == 'nansari15300@gmail.com')
+        (authEmailLower() == 'nansari15300@gmail.com')
         || (exists(/databases/$(database)/documents/app_settings/admin_config) &&
-            request.auth.token.email != null &&
-            request.auth.token.email in get(/databases/$(database)/documents/app_settings/admin_config).data.get('superAdminEmails', []))
+            authEmailLower() != '' &&
+            (request.auth.token.email in get(/databases/$(database)/documents/app_settings/admin_config).data.get('superAdminEmails', []) ||
+             authEmailLower() in get(/databases/$(database)/documents/app_settings/admin_config).data.get('superAdminEmails', [])))
         || (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') in ['SuperAdmin', 'CompanyAdmin'])
       );
+    }
+
+    /**
+     * Soft-delete / restore / admin-hide recycle markers on `companies/{id}` root.
+     * Console + client restore: isDeleted / deletedAt / movedToAdminRecycleAt only.
+     */
+    function companyRecycleFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['isDeleted', 'deletedAt', 'movedToAdminRecycleAt', 'updatedAt']);
+    }
+    function canManageCompanyRecycle(companyId) {
+      return isCompanyOwner(companyId) || isAdmin() || isSuperAdmin();
     }
 
     /**
@@ -187,11 +200,12 @@ service cloud.firestore {
      */
     function isSuperAdmin() {
       return isSignedIn() && (
-        (request.auth.token.email != null && request.auth.token.email == 'nansari15300@gmail.com')
-        || (request.auth.token.email != null && request.auth.token.email == 'nabiullah.ansari@gmail.com')
+        (authEmailLower() == 'nansari15300@gmail.com')
+        || (authEmailLower() == 'nabiullah.ansari@gmail.com')
         || (exists(/databases/$(database)/documents/app_settings/admin_config) &&
-            request.auth.token.email != null &&
-            request.auth.token.email in get(/databases/$(database)/documents/app_settings/admin_config).data.get('superAdminEmails', []))
+            authEmailLower() != '' &&
+            (request.auth.token.email in get(/databases/$(database)/documents/app_settings/admin_config).data.get('superAdminEmails', []) ||
+             authEmailLower() in get(/databases/$(database)/documents/app_settings/admin_config).data.get('superAdminEmails', [])))
         || (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'SuperAdmin')
       );
@@ -312,7 +326,9 @@ service cloud.firestore {
       allow list: if isSignedIn() && authEmailLower() != ''
         && resource.data.get('handoverTo', '').lower() == authEmailLower();
 
-      allow update: if isCompanyOwner(companyId) || isAdmin();
+      allow update: if isCompanyOwner(companyId) || isAdmin() || isSuperAdmin();
+      // Recycle bin soft-delete / restore / admin-hide — root fields only (permission-denied fix)
+      allow update: if canManageCompanyRecycle(companyId) && companyRecycleFieldsOnly();
       // Shared / handover member — Edit Company profile save (name, address, …)
       allow update: if isSignedIn()
         && isCompanyUser(companyId)

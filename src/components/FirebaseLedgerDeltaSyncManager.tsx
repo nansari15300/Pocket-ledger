@@ -9,17 +9,19 @@ import { isCloudBackedCompanyShape } from "@/lib/offlineFullWarmSync";
 import { pullCompanyDocFromFirestoreToLocalDb } from "@/lib/firestoreToLocalCompanyPull";
 import {
   FIREBASE_LEDGER_SYNC_MODE_CHANGED_EVENT,
-  getFirebaseLedgerSyncMode,
 } from "@/lib/firebaseLedgerSyncMode";
 import {
   FIREBASE_LEDGER_DATA_SYNC_CHANGED_EVENT,
   FIREBASE_LEDGER_DATA_SYNC_STORAGE_KEY,
-  isFirebaseLedgerDataSyncEnabled,
 } from "@/lib/firebaseLedgerDataSyncDisabled";
 import {
   FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT,
   isFirebaseLedgerCompanyDataSyncEnabled,
 } from "@/lib/firebaseLedgerCompanySyncPrefs";
+import {
+  shouldBindFirebaseLedgerChangeFeed,
+} from "@/lib/firebaseLedgerSyncPolicy";
+import { notifyBrowserDbCollectionUpdated } from "@/lib/localCompanyDocMirror";
 
 const VOUCHER_FORM_MASTER_COLLECTION_PATHS = new Set([
   "vouchers",
@@ -87,8 +89,8 @@ export function FirebaseLedgerDeltaSyncManager() {
   const activeCollections = useMemo(() => activeDeltaCollectionsForRoute(pathname), [pathname]);
 
   useEffect(() => {
-    if (getFirebaseLedgerSyncMode() !== "local") return;
-    if (!isFirebaseLedgerDataSyncEnabled()) return;
+    // Single live feed in deltaa — no collection onSnapshot (web/EXE/APK/iOS).
+    if (!shouldBindFirebaseLedgerChangeFeed()) return;
     if (!isFirebaseLedgerCompanyDataSyncEnabled(companyId)) return;
     if (typeof navigator !== "undefined" && !navigator.onLine) return;
     if (!companyId?.trim() || !company || !isCloudBackedCompanyShape(company)) return;
@@ -131,15 +133,22 @@ export function FirebaseLedgerDeltaSyncManager() {
             docId,
             company,
             { op: String(data.op || "") }
-          ).catch((e) => {
-            if (process.env.NODE_ENV !== "production") {
-              console.warn("[FirebaseLedgerDeltaSyncManager] delta pull failed", {
-                collectionName,
-                docId,
-                error: e instanceof Error ? e.message : String(e),
+          )
+            .then(() => {
+              notifyBrowserDbCollectionUpdated(localCompanyId, collectionName, {
+                immediate: true,
+                source: "firebase_delta_pull",
               });
-            }
-          });
+            })
+            .catch((e) => {
+              if (process.env.NODE_ENV !== "production") {
+                console.warn("[FirebaseLedgerDeltaSyncManager] delta pull failed", {
+                  collectionName,
+                  docId,
+                  error: e instanceof Error ? e.message : String(e),
+                });
+              }
+            });
         }
       },
       (error) => {

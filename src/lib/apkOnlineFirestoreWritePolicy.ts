@@ -11,11 +11,10 @@ import { companyRowUsesSqliteLedgerWrites } from "@/lib/companyStorageKind";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
-import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
 import { companyStrategyUsesSqliteFirstLedgerWrites } from "@/lib/staticAttachmentDisplayUrl";
-import { isFirebaseLedgerLocalDeltaMode } from "@/lib/firebaseLedgerSyncMode";
+import { isFirebaseLedgerDeltaSqliteTransportMode } from "@/lib/firebaseLedgerSyncPolicy";
 
 /**
  * Voucher/attachment pipeline: `navigator.onLine === false` par Storage `uploadBytes` / `getDownloadURL` await mat karo —
@@ -32,11 +31,11 @@ export function shouldForceFirestoreWritesOnStaticOrApk(): boolean {
 }
 
 /**
- * APK / static build / Electron EXE: vouchers/masters hamesha SQLite + outbox se save.
- * Web (dono false): company row ke hisaab se — local = SQLite, online Firestore = Firestore.
+ * deltaa (all platforms): vouchers/masters SQLite + outbox.
+ * live web: company row decide karta hai (local = SQLite, online = Firestore).
  */
 export function apkEmbeddedSqliteFirstWritesPreferred(): boolean {
-  return isFirebaseLedgerLocalDeltaMode() && isEmbeddedOfflinePreloadClient();
+  return isFirebaseLedgerDeltaSqliteTransportMode();
 }
 
 /** Voucher forms: duplicate check / backdate — Firestore `getDoc` offline mat. */
@@ -106,13 +105,14 @@ export function apkEntityWriteUsesLocalSqliteMirror(company: { storageOption?: s
 }
 
 /**
- * APK + Firestore company: master dialogs me dropdown lists SQLite mirror / warm-sync se —
- * redundant `onSnapshot` band taaki offline UI stable rahe aur network churn kam ho.
+ * Master dialogs: SQLite mirror lists — skip collection `onSnapshot` (billing + offline stability).
+ * deltaa: hamesha (web/EXE/APK/iOS). live APK local-only cloud: pehle jaisa.
  */
 export function apkCloudEntityMasterReadFromSqliteMirror(
   company: { storageOption?: string } | null | undefined
 ): boolean {
   if (isPlServerThinStaffClient()) return true;
+  if (isFirebaseLedgerDeltaSqliteTransportMode()) return true;
   return apkCloudFirestoreMasterWriteFromCompanyShape(company) && isLocalOnlyMode();
 }
 

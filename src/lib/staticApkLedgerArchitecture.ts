@@ -1,14 +1,12 @@
 "use client";
 
-import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
-import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
-import { isFirebaseLedgerLocalDeltaMode } from "@/lib/firebaseLedgerSyncMode";
+import { isFirebaseLedgerDeltaSqliteTransportMode } from "@/lib/firebaseLedgerSyncPolicy";
 
 /**
- * Static/APK/EXE embedded shell: ledger reads SQLite-first,
- * writes `writeEntity` -> SQLite + outbox; Firestore snapshots company_docs ko sirf mirror/update karte hain.
- * Normal web (`npm run dev` / cloud) par false — hybrid/live Firestore wahi rehta hai.
+ * Ledger SQLite-first transport (all platforms when deltaa is effective).
+ * Writes → SQLite + outbox; remote edits → `_pl_change_log` (no collection onSnapshot).
+ * Name kept for call-site compatibility; no longer limited to static/APK shells.
  */
 export function isStaticApkLedgerTransportMode(): boolean {
-  return isFirebaseLedgerLocalDeltaMode() && (isStaticAppBuild() || isEmbeddedOfflinePreloadClient());
+  return isFirebaseLedgerDeltaSqliteTransportMode();
 }

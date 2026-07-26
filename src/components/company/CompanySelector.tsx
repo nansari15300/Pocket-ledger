@@ -60,6 +60,7 @@ import { localAuthLoginForCompanyContext } from "@/lib/localCompanyUsers";
 import { isLocalCompanyVisibleToAppAccount } from "@/lib/localCompanyMembership";
 import { syncPlServerGateToLocalSqlite } from "@/lib/plServerClientCompanyDelta";
 import { tryNavigateToPlServerCompanyOnSelect, tryNavigateBackToAppHubForLocalOnlineCompany } from "@/lib/plServerCompanySelectNavigate";
+import { companyRowMatchesSelectionId } from "@/lib/plServerHostCompanyId";
 import { clearLocalAuth, getLocalAuthToken, setLocalAuthToken } from "@/lib/localApiClient";
 import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import {
@@ -1249,7 +1250,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   return (
     <>
       <div className="flex h-dvh max-h-dvh min-h-0 items-center justify-center overflow-hidden bg-background p-3 sm:p-4">
-        <Card className="flex h-[90dvh] max-h-[90dvh] w-full max-w-lg flex-col overflow-hidden">
+        <Card className="flex h-[90dvh] max-h-[90dvh] w-full max-w-2xl flex-col overflow-hidden">
           <CardHeader className="shrink-0 space-y-1 pb-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
@@ -2314,13 +2315,18 @@ export function CompanyActions({
     () => onlineList.filter((c) => isSharedOnlineCompany(c)),
     [onlineList]
   );
+  // `useCompany` bhi selection ko host-id aware fuzzy match se dekhta hai. Yahan strict `c.id === companyId`
+  // rehne se PL server / restored row par selector clear karta tha aur context wapas select — clear↔select loop.
   const selectedCompanyIsVisible = useMemo(
-    () => Boolean(companyId && selectorCompanies.some((c) => c.id === companyId)),
+    () => Boolean(companyId && selectorCompanies.some((c) => companyRowMatchesSelectionId(c, companyId))),
     [companyId, selectorCompanies]
   );
   const activeCompany =
     (selectedCompanyIsVisible && contextCompany?.id === companyId ? contextCompany : null) ||
-    (companyId ? selectorCompanies.find((c) => c.id === companyId) : null) ||
+    (companyId
+      ? (selectorCompanies.find((c) => c.id === companyId) ??
+        selectorCompanies.find((c) => companyRowMatchesSelectionId(c, companyId)))
+      : null) ||
     (!companyId ? selectorCompanies[0] : null);
   const [listTab, setListTab] = useState<CompanyListTab>(() => defaultSelectorTab(companyId, buckets));
   const [menuOpen, setMenuOpen] = useState(false);
@@ -2444,7 +2450,7 @@ export function CompanyActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuPortal>
-        <DropdownMenuContent className="w-[min(92vw,440px)]">
+        <DropdownMenuContent className="w-[min(96vw,560px)] max-h-[min(70vh,520px)] overflow-x-auto overflow-y-auto">
           <DropdownMenuGroup className="p-2">
               <CompanySelectorTabBar
                 compact
@@ -2661,7 +2667,11 @@ export function CompanyActions({
                   )}
                 </>
               ) : (
-                <div className="mt-2 rounded-md border bg-muted/20 p-2">
+                <div
+                  className="mt-2 rounded-md border bg-muted/20 p-2"
+                  onPointerDown={(e) => e.preventDefault()}
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <FirebaseLedgerOnlineCompanySyncList
                     compact
                     companies={onlineList}
