@@ -155,6 +155,25 @@ export async function applyPlServerLiveDeltaDocs(
   return applyDeltaCollectionDocsToStaffStore(id, collection, docs, { incomingWins: true });
 }
 
+function plServerClientCompanyMetaUnchanged(
+  existing: LocalCompanyDoc | null | undefined,
+  next: LocalCompanyDoc
+): boolean {
+  if (!existing) return false;
+  const keys = [
+    "name",
+    "ownerEmail",
+    "plServerShared",
+    "storageOption",
+    "syncedFromCloud",
+    "syncPolicy",
+    "plServerGateId",
+    "plServerGateServerUrl",
+    "plServerHostCompanyId",
+  ] as const;
+  return keys.every((k) => String((existing as Record<string, unknown>)[k] ?? "") === String((next as Record<string, unknown>)[k] ?? ""));
+}
+
 /** Server company row se cloud mirror fields hatao — client par Firestore pull na chale. */
 export function plServerClientLocalCompanyRow(
   id: string,
@@ -465,12 +484,15 @@ async function syncSharedCompanyRows(
     const id = String(row.id || "").trim();
     if (!id) continue;
     if (pullGeneration != null && isPlServerPullGenerationStale(id, pullGeneration)) break;
-    await upsertLocalCompany(
-      plServerClientLocalCompanyRow(id, String(row.name || id), row.ownerEmail, null, {
-        gate: options?.serverGate ?? null,
-        hostCompanyId: id,
-      })
-    );
+    const nextRow = plServerClientLocalCompanyRow(id, String(row.name || id), row.ownerEmail, null, {
+      gate: options?.serverGate ?? null,
+      hostCompanyId: id,
+    });
+    // Light poll: identical company meta pe upsert mat karo — updatedAt churn → list/UI blink.
+    const existingMeta = await getLocalCompanyById(id, { includeDeleted: true });
+    if (!plServerClientCompanyMetaUnchanged(existingMeta, nextRow)) {
+      await upsertLocalCompany(nextRow);
+    }
     synced += 1;
 
     if (focusCollections.length > 0 && baseUrl) {

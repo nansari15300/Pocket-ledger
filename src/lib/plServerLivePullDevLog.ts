@@ -20,8 +20,46 @@ function livePullLoggingEnabled(): boolean {
   return isElectronDesktopApp() || isCapacitorNativeApp();
 }
 
+/** Routine OK path — quiet in EXE/dev so real bugs stay visible. */
+const LIVE_PULL_ROUTINE_OK = new Set([
+  "component_mounted",
+  "component_unmounted",
+  "effect_run",
+  "scheduler_started",
+  "scheduler_stopped",
+  "scheduler_not_started",
+  "scheduler_epoch_bump",
+  "poll_started",
+  "poll_finished",
+  "pull_finished",
+  "pull_path_select",
+  "focus_collection_updated",
+  "browser_db_updated",
+  "route_pull_finished",
+  "access_context_refresh_before_pull",
+  "vouchers_received",
+]);
+
 export function livePullDevLog(message: string, detail?: Record<string, unknown>): void {
   if (!livePullLoggingEnabled()) return;
+  if (LIVE_PULL_ROUTINE_OK.has(message)) {
+    if (detail?.ok === false) {
+      /* still log failed pulls */
+    } else if (message === "focus_collection_updated" && Number(detail?.upserted || 0) > 0) {
+      /* real writes */
+    } else if (message === "browser_db_updated" && Number(detail?.upserted || 0) > 0) {
+      /* real writes */
+    } else if (
+      message === "scheduler_not_started" &&
+      detail?.reason &&
+      detail.reason !== "no_company_id" &&
+      detail.reason !== "hub_origin_no_live_sync"
+    ) {
+      /* unexpected blockers */
+    } else {
+      return;
+    }
+  }
   if (detail && Object.keys(detail).length > 0) {
     console.log(`[LivePull] ${message}`, detail);
     return;
@@ -54,6 +92,8 @@ export function livePullBugCatch(
 /** Per-doc merge skip — EXE + dev (public web production me band). */
 export function mirrorMergeSkipLog(detail: Record<string, unknown>): void {
   if (!livePullLoggingEnabled()) return;
+  // Benign: remote == local — not an error; floods console on every light poll.
+  if (detail.reason === "timestamp_equal_same_payload") return;
   console.log("[DeltaMergeSkip]", { at: new Date().toISOString(), ...detail });
   if (detail.collection === "vouchers") {
     plServerVoucherForensicTrace("client_voucher_merge_skipped", detail);

@@ -112,6 +112,54 @@ export async function upsertLocalCompany(company: LocalCompanyDoc): Promise<void
   ).run(merged.id, JSON.stringify(merged), now);
 }
 
+/**
+ * Local-only → online promotion: `upsertLocalCompany` re-stamps device-local rows, so
+ * write the cloud shape into `companies` and remove `local_companies` explicitly.
+ */
+export async function promoteLocalCompanyRowToOnline(
+  companyId: string,
+  patch?: Partial<LocalCompanyDoc>
+): Promise<LocalCompanyDoc | null> {
+  const db = await getBrowserDb();
+  const cid = String(companyId || "").trim();
+  if (!db || !cid) return null;
+  const existing = await getLocalCompanyById(cid, { includeDeleted: true });
+  if (!existing) return null;
+
+  const mergedRaw = mergePersistedLocalCloudSyncUserSettings(existing, {
+    ...existing,
+    ...(patch || {}),
+    id: cid,
+  } as LocalCompanyDoc);
+  const promoted: LocalCompanyDoc = {
+    ...mergedRaw,
+    id: cid,
+    storageOption: "firebase",
+    syncPolicy: "online",
+    syncedFromCloud: (patch as { syncedFromCloud?: boolean } | undefined)?.syncedFromCloud === true,
+    authoritativeCompanyId: cid,
+    localOnly: false,
+    firestoreSyncDisabled: false,
+    updatedAt: Date.now(),
+  };
+  delete (promoted as { demoteReason?: unknown }).demoteReason;
+  delete (promoted as { demotedFromOnlineAt?: unknown }).demotedFromOnlineAt;
+  delete (promoted as { localPersistence?: unknown }).localPersistence;
+
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO companies(id, data, updatedAt)
+     VALUES(?,?,?)
+     ON CONFLICT(id) DO UPDATE SET data = excluded.data, updatedAt = excluded.updatedAt`
+  ).run(cid, JSON.stringify(promoted), now);
+  try {
+    db.prepare(`DELETE FROM local_companies WHERE id = ?`).run(cid);
+  } catch {
+    /* pre-local_companies DB */
+  }
+  return promoted;
+}
+
 export async function getLocalCompanyById(
   companyId: string,
   options?: { includeDeleted?: boolean }

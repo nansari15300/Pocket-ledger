@@ -89,6 +89,17 @@ export function PlServerLiveSyncManager() {
   const schedulerBumpTimerRef = useRef<number | null>(null);
   const serverEventRetryTimerRef = useRef<number | null>(null);
   const [schedulerEpoch, setSchedulerEpoch] = useState(0);
+  /** Brief companyId=null flicker (clear↔restore) must not tear down LivePull every ~1s. */
+  const [stableCompanyId, setStableCompanyId] = useState(companyId);
+  useEffect(() => {
+    const next = String(companyId || "").trim() || null;
+    if (next) {
+      setStableCompanyId(next);
+      return;
+    }
+    const t = window.setTimeout(() => setStableCompanyId(null), 450);
+    return () => window.clearTimeout(t);
+  }, [companyId]);
 
   useEffect(() => {
     livePullDevLog("component_mounted");
@@ -133,8 +144,8 @@ export function PlServerLiveSyncManager() {
     const runNumber = effectRunRef.current;
     const meta = companyMetaRef.current;
     const snap = buildLivePullSchedulerSnapshot(
-      companyId,
-      companyId
+      stableCompanyId,
+      stableCompanyId
         ? {
             id: meta.companyRowId,
             plServerShared: meta.companyPlServerShared,
@@ -634,14 +645,14 @@ export function PlServerLiveSyncManager() {
       window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onLocalBump);
       unsubscribeElectronResume?.();
     };
-  }, [companyId, schedulerEpoch, pathname]);
+  }, [stableCompanyId, schedulerEpoch, pathname]);
 
   /** Route change: open page ke collections turant server se refresh. */
   useEffect(() => {
     if (pathnameRef.current === pathname) return;
     pathnameRef.current = pathname;
-    if (!companyId) return;
-    const id = String(companyId).trim();
+    if (!stableCompanyId) return;
+    const id = String(stableCompanyId).trim();
     if (!id) return;
     if (syncingRef.current) {
       pendingPullReasonRef.current = "route_change";
@@ -687,8 +698,8 @@ export function PlServerLiveSyncManager() {
             localAliveAfter: localVoucherCount,
           });
         }
-        if (result.ok) {
-          for (const col of (result.changedCollections?.length ? result.changedCollections : focusCollections || [])) {
+        if (result.ok && result.changedCollections?.length) {
+          for (const col of result.changedCollections) {
             notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_server_pull" });
             if (col === "vouchers") {
               plServerVoucherFlowLog("ui_bump_dispatched", {
@@ -703,7 +714,7 @@ export function PlServerLiveSyncManager() {
         syncingRef.current = false;
       }
     })();
-  }, [pathname, companyId]);
+  }, [pathname, stableCompanyId]);
 
   return null;
 }

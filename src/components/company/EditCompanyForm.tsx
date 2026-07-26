@@ -2,7 +2,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2, CalendarIcon, Eye, EyeOff, Pencil, Trash2, Upload } from "lucide-react";
+import { Loader2, CalendarIcon, Eye, EyeOff, Pencil, Trash2, Upload, UserPlus } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -24,6 +24,7 @@ import { compressVoucherAttachment } from "@/lib/compression";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { FilePreview } from "../vouchers/FilePreview";
 import { CompanyInterCompanyCodeField } from "@/components/inter-company/CompanyInterCompanyCodeField";
+import { MakeCompanyOnlineControl } from "@/components/company/MakeCompanyOnlineControl";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -57,6 +58,7 @@ import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Separator } from "../ui/separator";
 import { PasswordUpdateConfirmationDialog } from "./PasswordUpdateConfirmationDialog";
+import { PlServerShareUserDialog } from "./PlServerShareUserDialog";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
 import {
   AlertDialog,
@@ -178,6 +180,7 @@ export function EditCompanyForm({
   const [encryptCompanyEnabled, setEncryptCompanyEnabled] = useState(false);
   const livePlans = useLivePlans();
   const [addCompanyUserEnabled, setAddCompanyUserEnabled] = useState(false);
+  const [addPersonOpen, setAddPersonOpen] = useState(false);
   const [showCompanyUserPassword, setShowCompanyUserPassword] = useState(false);
   const [queuedCompanyUsers, setQueuedCompanyUsers] = useState<LocalCompanyUserDraft[]>([]);
   const [existingLocalUsers, setExistingLocalUsers] = useState<ExistingLocalCompanyUser[]>([]);
@@ -922,7 +925,10 @@ export function EditCompanyForm({
                 name="name"
                 render={({ field }: any) => (
                     <FormItem>
-                    <FormLabel>Company Name</FormLabel>
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                      <FormLabel className="m-0">Company Name</FormLabel>
+                      <MakeCompanyOnlineControl disabled={readOnly} />
+                    </div>
                     <FormControl>
                         <Input placeholder="e.g., Innovate Inc." {...field} />
                     </FormControl>
@@ -1299,11 +1305,19 @@ export function EditCompanyForm({
               </FormItem>
 
               {deviceLocalCoForUi && addCompanyUserEnabled && (
-                <div className="rounded-md border border-dashed bg-muted/30 p-3 text-sm text-muted-foreground">
-                  <strong className="text-foreground">Local company users</strong> log in with username + password when
-                  opening this company (Select company screen). If you share via{" "}
-                  <strong>local server</strong>, give them the same login; the gate connection is token-free.
-                </div>
+                <>
+                  <div className="rounded-md border border-dashed bg-muted/30 p-3 text-sm text-muted-foreground">
+                    <strong className="text-foreground">Local company users</strong> log in with username + password when
+                    opening this company (Select company screen). If you share via{" "}
+                    <strong>local server</strong>, give them the same login; the gate connection is token-free.
+                  </div>
+                  <div className="flex justify-end">
+                    <Button type="button" variant="outline" onClick={() => setAddPersonOpen(true)}>
+                      <UserPlus className="mr-2 h-4 w-4" />
+                      Add Person
+                    </Button>
+                  </div>
+                </>
               )}
 
               {addCompanyUserEnabled && deviceLocalCoForUi && queuedCompanyUsers.length > 0 && (
@@ -1328,7 +1342,7 @@ export function EditCompanyForm({
                 </div>
               )}
 
-              {addCompanyUserEnabled && (
+              {addCompanyUserEnabled && !deviceLocalCoForUi && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {!deviceLocalCoForUi && (
                     <FormField
@@ -1761,6 +1775,18 @@ export function EditCompanyForm({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        <PlServerShareUserDialog
+          companyId={companyId}
+          companyName={company?.name}
+          open={addPersonOpen}
+          onOpenChange={setAddPersonOpen}
+          onUserAdded={() => {
+            reloadLocalCompanyRegistry();
+            triggerSync();
+            void loadExistingLocalUsers();
+          }}
+        />
 
         {passwordConfirmation && (
             <PasswordUpdateConfirmationDialog

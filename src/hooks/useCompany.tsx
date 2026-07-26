@@ -85,7 +85,7 @@ import {
   pickGateAwareAutoSelectCompanyId,
   activateGate,
 } from "@/lib/gates/gateRuntime";
-import { mergePlServerSharedCompaniesIntoRegistry, getPlServerContextGateId, shouldMergePlServerSharedIntoRegistry, PL_SERVER_ACCESS_CONTEXT_EVENT, isListedPlServerSharedCompany } from "@/lib/plServerAccessContext";
+import { mergePlServerSharedCompaniesIntoRegistry, getPlServerContextGateId, shouldMergePlServerSharedIntoRegistry, PL_SERVER_ACCESS_CONTEXT_EVENT, isListedPlServerSharedCompany, getPlServerSharedCompanies } from "@/lib/plServerAccessContext";
 import { isServerGateCompany } from "@/lib/companyStorageKind";
 import {
   isCompanyAllowedOnActiveServerGate,
@@ -651,14 +651,51 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const [gateEpoch, setGateEpoch] = useState(0);
   /** Gate id change vs list refresh — sirf gate switch par incompatible selection clear karo. */
   const prevGateIdForSelectionRef = useRef<string>(getActiveGate().id);
-  useEffect(() => {
-    const onGate = () => setGateEpoch((n) => n + 1);
-    window.addEventListener(PL_GATE_CHANGED_EVENT, onGate);
-    return () => window.removeEventListener(PL_GATE_CHANGED_EVENT, onGate);
+  const gateEpochDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bumpGateEpochDebounced = useCallback(() => {
+    // Access-context / gate events spam → company list blink + main thread freeze.
+    if (gateEpochDebounceRef.current) return;
+    gateEpochDebounceRef.current = setTimeout(() => {
+      gateEpochDebounceRef.current = null;
+      setGateEpoch((n) => n + 1);
+    }, 320);
   }, []);
   useEffect(() => {
+    const onGate = () => bumpGateEpochDebounced();
+    window.addEventListener(PL_GATE_CHANGED_EVENT, onGate);
+    return () => {
+      window.removeEventListener(PL_GATE_CHANGED_EVENT, onGate);
+      if (gateEpochDebounceRef.current) {
+        clearTimeout(gateEpochDebounceRef.current);
+        gateEpochDebounceRef.current = null;
+      }
+    };
+  }, [bumpGateEpochDebounced]);
+  useEffect(() => {
+    let lastShareSig = "";
+    try {
+      lastShareSig = getPlServerSharedCompanies()
+        .map((r) => String(r.id || "").trim())
+        .filter(Boolean)
+        .sort()
+        .join("|");
+    } catch {
+      lastShareSig = "";
+    }
     const onAccessContext = () => {
-      setGateEpoch((n) => n + 1);
+      let nextSig = "";
+      try {
+        nextSig = getPlServerSharedCompanies()
+          .map((r) => String(r.id || "").trim())
+          .filter(Boolean)
+          .sort()
+          .join("|");
+      } catch {
+        nextSig = "";
+      }
+      const shareChanged = nextSig !== lastShareSig;
+      lastShareSig = nextSig;
+      if (shareChanged) bumpGateEpochDebounced();
       const cid = companyIdLiveRef.current;
       if (!cid) return;
       const registrySourceRaw =
@@ -676,7 +713,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     };
     window.addEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, onAccessContext);
     return () => window.removeEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, onAccessContext);
-  }, []);
+  }, [bumpGateEpochDebounced]);
   useEffect(() => {
     allCompaniesRegistryLiveRef.current = allCompaniesRegistry;
   }, [allCompaniesRegistry]);
@@ -1022,6 +1059,15 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       }
       if (!gateSwitched && activeGate.type === "local_server" && isCompanyAllowedOnActiveServerGate(companyId, activeGate)) {
         plDbgCompanyRecovery("gateFilter:keepServerGatePreview", { companyId, gateId: activeGate.id });
+        return;
+      }
+      // Share-list / PL membership — access-context refresh must not clear ↔ autoSelect (Server card blink).
+      if (
+        !gateSwitched &&
+        (isListedPlServerSharedCompany({ id: companyId }) ||
+          isCompanyAllowedOnActiveServerGate(companyId, activeGate))
+      ) {
+        plDbgCompanyRecovery("gateFilter:keepPlServerShareList", { companyId, gateId: activeGate.id });
         return;
       }
       if (shouldDeferRefreshBootCompanyClear(companyId, mountedAtRef.current, bootPinnedCompanyIdRef.current)) {
@@ -2080,6 +2126,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     if (authLoading) return;
     if (user) {
       if (customUser?.companyId && !companyId) {
+        // Respect clearCompanyId suppress — otherwise auth restore fights gateFilter clear (~1Hz).
+        if (Date.now() < suppressAutoSelectUntilRef.current) return;
         setCompanyId(customUser.companyId);
       }
       return;
@@ -2207,13 +2255,22 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       }
       // Server-gate mirrored row — Firestore doc nahi; shared-local ghost purge se mat hatao.
       // Heal corrupted `syncedFromCloud:true` too (staff flip root).
+      // Host owner: isOwned mat mitao — warna Local/Server tab blink.
       if (isPlServerRow) {
         const existingSg = companyMap.get(c.id);
+        const ownerKeep =
+          normalized.isOwned === true ||
+          (user?.uid
+            ? isCurrentUserOwnerOfCompanyRow(normalized, {
+                uid: user.uid,
+                email: user.email ?? null,
+              })
+            : false);
         companyMap.set(c.id, {
           ...(existingSg ?? normalized),
           ...normalized,
           plServerShared: true,
-          isOwned: false,
+          isOwned: ownerKeep,
           storageOption: "local",
           syncPolicy: "offline",
           syncedFromCloud: false,
@@ -2807,18 +2864,62 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           clearCompanyId();
           return;
         }
+        // Staff flip heal: sirf jab stamps sach me corrupt hon (firebase / syncedFromCloud / authoritative id).
+        // Har tick pe upsert+setAllCompanies → company list blink / main-thread freeze.
+        const plListed =
+          isListedPlServerSharedCompany(normalized) ||
+          isCompanyAllowedOnActiveServerGate(companyId) ||
+          (normalized as { plServerShared?: unknown }).plServerShared === true;
+        const so = String(normalized.storageOption || "").toLowerCase();
+        const stampsCorrupt =
+          (normalized as { syncedFromCloud?: unknown }).syncedFromCloud === true ||
+          so === "firebase" ||
+          so === "drive" ||
+          Boolean(String((normalized as { authoritativeCompanyId?: string }).authoritativeCompanyId || "").trim());
+        const needsPlHeal = plListed && stampsCorrupt && !isServerGateCompany(normalized);
+        const healed = needsPlHeal
+          ? ({
+              ...normalized,
+              // Owner host row ka isOwned mat mitao — sirf cloud stamps hatao.
+              isOwned: normalized.isOwned === true ? true : false,
+              storageOption: "local",
+              syncPolicy: "offline",
+              syncedFromCloud: false,
+              plServerShared: true,
+              authoritativeCompanyId: "",
+            } as Company)
+          : normalized;
+        if (needsPlHeal) {
+          plDbgCompanyRecovery("listRecovery:healPlServerCloudStamp", { companyId });
+          void upsertLocalCompany(healed as unknown as import("@/lib/localCompanyStore").LocalCompanyDoc).catch(
+            () => undefined
+          );
+        }
         plDbgCompanyRecovery("listRecovery:sqliteMergeIntoList", { companyId });
-        setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, normalized));
+        setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, healed));
         setAllCompanies((prev) => {
-          if (prev.some((c) => c.id === companyId)) return prev;
-          return [...prev, normalized];
+          const idx = prev.findIndex((c) => c.id === companyId);
+          if (idx < 0) return [...prev, healed];
+          const cur = prev[idx]!;
+          if (companyLedgerUiFingerprint(cur) === companyLedgerUiFingerprint(healed)) return prev;
+          const next = prev.slice();
+          next[idx] = healed;
+          return next;
         });
         // SQLite se row merge ho chuka — listener/ registry reload se poora UI mat hilaao.
         listRecoverySyncForIdRef.current = companyId;
         return;
       }
-      // Shared user: SQLite mirror baad me — Firestore doc se recover + upsert (sidebar /company clear kam)
-      if (!localRow && user?.uid) {
+      // Shared user: SQLite mirror baad me — Firestore doc se recover + upsert (sidebar /company clear kam).
+      // PL staff / local_server gate: kabhi mat — same companyId online Firestore me zinda ho to
+      // firebase stamp + Sync ledger flags chipak jaate hain → gate filter clear → A↔B flip.
+      const listRecoveryGate = getActiveGate();
+      const skipFirestoreListRecovery =
+        shouldSkipFirestoreCompanyRegistryOnPlStaff() ||
+        isLocalServerGate(listRecoveryGate) ||
+        isCompanyAllowedOnActiveServerGate(companyId, listRecoveryGate) ||
+        isListedPlServerSharedCompany({ id: companyId });
+      if (!localRow && user?.uid && !skipFirestoreListRecovery) {
         try {
           const snap = await getDoc(doc(firestore, "companies", companyId));
           if (snap.exists()) {
@@ -2843,6 +2944,16 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           }
         } catch {
           plDbgCompanyRecovery("listRecovery:firestoreFallbackDeniedOrErr", { companyId });
+        }
+      } else if (!localRow && skipFirestoreListRecovery) {
+        plDbgCompanyRecovery("listRecovery:skipFirestoreFallbackOnPlGate", { companyId });
+        if (
+          isLocalServerGate(listRecoveryGate) &&
+          (isCompanyAllowedOnActiveServerGate(companyId, listRecoveryGate) ||
+            isListedPlServerSharedCompany({ id: companyId }) ||
+            (await shouldRetainServerGateCompanySelection(companyId)))
+        ) {
+          return;
         }
       }
       console.log("Company not found in user's list, clearing local state.");
@@ -2886,6 +2997,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     try {
       const persisted = readSelectedCompanyId()?.trim();
       if (persisted) {
+        if (Date.now() < suppressAutoSelectUntilRef.current) return;
         if (readDriveOAuthReturnGrace(persisted)) {
           setCompanyId(persisted);
           plNavDbg("useCompany.autoSelect:oauthGraceHydrate", { hint: plNavDbgIdHint(persisted) });
