@@ -4,8 +4,6 @@ import type { Company } from "@/hooks/useCompany";
 import type { PlServerSharedCompanySummary } from "@/lib/localServerShareableCompanies";
 import { isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
 import {
-  isPlHubServerClientMode,
-  isPlRemoteServerClientMode,
   isPlServerGateClientActive,
   isPlSharingServerPortOrigin,
 } from "@/lib/plRemoteServerClient";
@@ -68,17 +66,6 @@ function persistGatePreviewSnapshot(gateId: string, payload: PlServerAccessConte
   if (!gid || typeof window === "undefined") return;
   try {
     const companies = companiesFromAccessPayload(payload);
-    const prev = readGatePreviewSnapshot(gid);
-    // Empty flaky refresh must not overwrite a good list — that marks authoritative-empty
-    // and wipes Online/Server tabs + clear↔restore loops LivePull every ~1s.
-    if (
-      companies.length === 0 &&
-      prev &&
-      prev.companies.length > 0 &&
-      !payload.unrestricted
-    ) {
-      return;
-    }
     const snap: GatePreviewSnapshot = {
       allowedCompanyIds: payload.unrestricted ? null : payload.allowedCompanyIds ?? null,
       label: payload.label ?? null,
@@ -155,10 +142,8 @@ export function persistDevClientAccessToken(token: string): void {
   if (typeof window === "undefined") return;
   try {
     const t = token.trim();
-    const prev = (sessionStorage.getItem(PL_DEV_CLIENT_ACCESS_TOKEN_KEY) || "").trim();
     if (t) sessionStorage.setItem(PL_DEV_CLIENT_ACCESS_TOKEN_KEY, t);
     else sessionStorage.removeItem(PL_DEV_CLIENT_ACCESS_TOKEN_KEY);
-    if (prev === t) return;
     window.dispatchEvent(new Event(PL_SERVER_ACCESS_CONTEXT_EVENT));
   } catch {
     /* ignore */
@@ -360,17 +345,8 @@ export function applyPlServerAccessContextPayload(
     clearPasswordlessSessionsThatNowRequireLogin(companies);
     if (companies.length > 0) {
       sessionStorage.setItem(STORAGE_COMPANIES, JSON.stringify(companies));
-    } else if (payload.unrestricted) {
-      sessionStorage.removeItem(STORAGE_COMPANIES);
     } else {
-      // Keep last-good share list on empty refresh — avoid Server/Online wipe + clear loop.
-      try {
-        if (!sessionStorage.getItem(STORAGE_COMPANIES)) {
-          sessionStorage.removeItem(STORAGE_COMPANIES);
-        }
-      } catch {
-        /* ignore */
-      }
+      sessionStorage.removeItem(STORAGE_COMPANIES);
     }
     const gid = String(gateId || "").trim();
     if (gid) {
@@ -383,9 +359,8 @@ export function applyPlServerAccessContextPayload(
     if (changed) {
       window.dispatchEvent(new Event(PL_SERVER_ACCESS_CONTEXT_EVENT));
     }
-    // Host plan → client SQLite — sirf jab access context sach me badla ho.
-    // Har poll pe plan apply + bumpLocalCompanyRegistry → company list blink / freeze loop.
-    if (changed && companies.length > 0) {
+    // Host plan → client SQLite (LAN up hone par; offline pe last saved plan rehta hai)
+    if (companies.length > 0) {
       void import("@/lib/plServerHostPlanSync")
         .then(({ applyPlServerHostPlansFromSharedSummaries }) =>
           applyPlServerHostPlansFromSharedSummaries(companies)
@@ -447,8 +422,9 @@ async function refreshPlServerAccessContextInner(): Promise<PlServerAccessContex
     }
     const ctx = await fetchGateServerAccessContext(activeGate.serverUrl, "");
     if (ctx.error) {
-      // Transient 403/token blips must NOT wipe share list — that empties Server tab
-      // (blink + unclickable). Keep last-good context until a successful refresh.
+      if (/invalid|missing token|403/i.test(ctx.error)) {
+        clearPlServerAccessContext();
+      }
       return null;
     }
     const payload: PlServerAccessContextPayload = {
@@ -580,25 +556,10 @@ export function patchPlServerSharedCompanyPlanInSession(
     let changed = false;
     const next = rows.map((row) => {
       if (String(row.id || "").trim() !== hostId) return row;
-      const nextPlanId = plan.planId;
-      const nextExpiry =
-        typeof plan.planExpiryMs === "number" && Number.isFinite(plan.planExpiryMs)
-          ? plan.planExpiryMs
-          : row.planExpiryMs ?? null;
-      const nextOffline =
-        typeof plan.offlineLicenseValidUntilMs === "number" &&
-        Number.isFinite(plan.offlineLicenseValidUntilMs)
-          ? plan.offlineLicenseValidUntilMs
-          : row.offlineLicenseValidUntilMs ?? null;
-      const same =
-        String(row.planId ?? "") === String(nextPlanId ?? "") &&
-        (row.planExpiryMs ?? null) === nextExpiry &&
-        (row.offlineLicenseValidUntilMs ?? null) === nextOffline;
-      if (same) return row;
       changed = true;
       return {
         ...row,
-        planId: nextPlanId,
+        planId: plan.planId,
         ...(typeof plan.planExpiryMs === "number" && Number.isFinite(plan.planExpiryMs)
           ? { planExpiryMs: plan.planExpiryMs }
           : {}),
@@ -640,24 +601,6 @@ export function resolvePlServerAuthoritativeSharedCompanies(
   return getPlServerSharedCompanies();
 }
 
-/** Staff/remote client only — host pe cloud→PL heal Online tab freeze/blink banata hai. */
-function shouldHealCorruptCloudStampForPlShareList(): boolean {
-  if (typeof window === "undefined") return false;
-  if (isPlHubServerClientMode() || isPlRemoteServerClientMode()) return true;
-  try {
-    const gate = getActiveGate();
-    if (gate.type !== "local_server") return false;
-    // Host shell (self loopback): heal mat karo.
-    if (isLocalAppServerHost()) {
-      return gatePointsAtRemotePlServerHost(gate.serverUrl);
-    }
-    // Other device EXE/APK with local_server gate = staff.
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function isListedPlServerSharedCompany(
   company: { id?: string; plServerHostCompanyId?: string } | null | undefined,
   gateId?: string | null
@@ -680,8 +623,7 @@ export function isListedPlServerSharedCompany(
       Boolean(matchPlServerSharedCompanyForLocalId(id, sessionShared))
     );
   }
-  // Share list not loaded yet — don't treat stamped PL rows as "not listed" (clear↔restore loop).
-  return true;
+  return false;
 }
 
 /** Server tab row — gate metadata + host share list membership (stale SQLite mirror mat dikhao). */
@@ -700,10 +642,7 @@ export function isServerTabCompanyRow(
     | undefined,
   gateId?: string | null
 ): boolean {
-  if (!company) return false;
-  // Share-list first — cloud stamps ignore (staff Server-tab blink).
-  if (isListedPlServerSharedCompany(company, gateId)) return true;
-  if (!company.plServerShared) return false;
+  if (!company?.plServerShared) return false;
   if (company.syncedFromCloud === true) return false;
   const so = String(company.storageOption ?? "").toLowerCase().trim();
   if (so === "firebase" || so === "drive") return false;
@@ -774,16 +713,6 @@ export function isPlServerSharedCompanyRow(
 ): boolean {
   const id = String(company?.id || "").trim();
   if (!id) return false;
-
-  // Share-list membership pehle — even if SQLite row was wrongly stamped firebase
-  // (staff listRecovery/mirror). Warna voucher listeners + Sync ledger chipak → A↔B flip.
-  const shared = resolvePlServerAuthoritativeSharedCompanies(gateId);
-  if (shared.some((r) => String(r.id || "").trim() === id)) return true;
-  if (matchPlServerSharedCompanyForLocalId(id, shared)) return true;
-  const preview = readPlServerGatePreviewContext(gateId);
-  if (preview.companies.some((r) => String(r.id || "").trim() === id)) return true;
-  if (matchPlServerSharedCompanyForLocalId(id, preview.companies)) return true;
-
   if (isCloudLinkedCompanyStorage(company)) return false;
   if (company?.plServerShared === true) {
     const rowGateId = String(company.plServerGateId || "").trim();
@@ -793,6 +722,12 @@ export function isPlServerSharedCompanyRow(
       return isListedPlServerSharedCompany(company, gateId);
     }
   }
+  const shared = resolvePlServerAuthoritativeSharedCompanies(gateId);
+  if (shared.some((r) => r.id === id)) return true;
+  if (matchPlServerSharedCompanyForLocalId(id, shared)) return true;
+  const preview = readPlServerGatePreviewContext(gateId);
+  if (preview.companies.some((r) => r.id === id)) return true;
+  if (matchPlServerSharedCompanyForLocalId(id, preview.companies)) return true;
   return false;
 }
 
@@ -1108,19 +1043,8 @@ export function mergePlServerSharedCompaniesIntoRegistry(companies: Company[]): 
           }) ?? null;
     const existing = matched?.company ?? null;
     // Online company ko Server-shared mat banao — Online tab alignment ke liye.
-    // Staff/remote only: share list me exact match + corrupt firebase stamp → heal.
-    // Host/admin pe heal mat — Online tab click ↔ PL share race → list blink / freeze.
     if (existing && isCloudLinkedCompanyStorage(existing)) {
-      if (!shouldHealCorruptCloudStampForPlShareList()) continue;
-      const existingId = String(existing.id || "").trim();
-      const hostIdExisting = String((existing as { plServerHostCompanyId?: string }).plServerHostCompanyId || "").trim();
-      const shareId = String(row.id || "").trim();
-      const exactPlShareMatch =
-        (existingId && existingId === shareId) ||
-        (hostIdExisting && hostIdExisting === shareId) ||
-        Boolean(matchPlServerSharedCompanyForLocalId(existingId, [row]));
-      if (!exactPlShareMatch) continue;
-      // fall through — heal corrupted firebase stamp below (staff only)
+      continue;
     }
     if (existing) {
       const existingOwnedLocal =
@@ -1152,20 +1076,6 @@ export function mergePlServerSharedCompaniesIntoRegistry(companies: Company[]): 
         ...(typeof row.requiresLogin === "boolean" ? { requiresLogin: row.requiresLogin } : {}),
         ...(row.usernameHint != null ? { usernameHint: row.usernameHint } : {}),
       } as CompanyWithPlServerShared);
-      // Keep prior object when merge only re-stamps the same PL fields (stops list remount blink).
-      const merged = byId.get(matchedKey)!;
-      if (
-        existing.plServerShared === true &&
-        String(existing.storageOption ?? "").toLowerCase() === "local" &&
-        existing.syncedFromCloud !== true &&
-        String(existing.name ?? "") === String(merged.name ?? "") &&
-        String(existing.ownerEmail ?? "") === String(merged.ownerEmail ?? "") &&
-        String((existing as { plServerGateId?: string }).plServerGateId ?? "") ===
-          String((merged as { plServerGateId?: string }).plServerGateId ?? "") &&
-        String((existing as { planId?: string }).planId ?? "") === String((merged as { planId?: string }).planId ?? "")
-      ) {
-        byId.set(matchedKey, existing);
-      }
       continue;
     }
     byId.set(row.id, {
@@ -1194,28 +1104,16 @@ export function filterCompaniesForPlServerAccess(companies: Company[]): CompanyW
   const compact = compactCompanyList(companies);
   if (!shouldFetchPlServerAccessContext()) return compact;
   const merged = mergePlServerSharedCompaniesIntoRegistry(compact);
-  const keepNonPlOrListed = (c: CompanyWithPlServerShared) => {
-    if ((c as { plServerShared?: boolean }).plServerShared !== true) return true;
-    return isListedPlServerSharedCompany(c, getPlServerContextGateId());
-  };
   const allowed = getPlServerAllowedCompanyIds();
   if (!allowed?.length) {
-    const gateId = getPlServerContextGateId();
-    const shared = resolvePlServerAuthoritativeSharedCompanies(gateId);
-    if (plServerShareListAuthoritativeEmpty(gateId)) {
-      // Authoritative empty share: drop unlisted PL rows, keep Online/local companies.
-      return merged.filter(keepNonPlOrListed);
+    const shared = resolvePlServerAuthoritativeSharedCompanies(getPlServerContextGateId());
+    if (plServerShareListAuthoritativeEmpty(getPlServerContextGateId()) || !shared.length) {
+      return [];
     }
-    if (!shared.length) {
-      // Transient empty — do not wipe the whole company list.
-      return merged;
-    }
-    return merged.filter(keepNonPlOrListed);
+    return merged.filter((c) => isListedPlServerSharedCompany(c, getPlServerContextGateId()));
   }
   const set = new Set(allowed);
   return merged.filter((c) => {
-    // PL allow-list must not hide Online / device-local companies on local_server gate.
-    if ((c as { plServerShared?: boolean }).plServerShared !== true) return true;
     const id = String(c.id || "").trim();
     const hostId = String((c as { plServerHostCompanyId?: string }).plServerHostCompanyId || "").trim();
     return set.has(id) || (hostId ? set.has(hostId) : false);
