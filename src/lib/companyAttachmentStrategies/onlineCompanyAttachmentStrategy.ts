@@ -91,8 +91,10 @@ export async function resolveOnlineCompanyAttachmentDisplay(
     return { displayUrl: null, blob: null, contentType: null };
   }
 
-  // Cloud data sync off: browser ko seedha Firebase HTTPS mat do — sirf pehle se cached blob.
+  // Cloud data sync / Files tick off: HTTPS passthrough mat — sirf pehle se cached blob.
+  // localLedgerOnly (Files untick UI) same gate.
   if (
+    options?.localLedgerOnly === true ||
     isFirebaseLedgerDataSyncDisabled() ||
     (companyId ? !isFirebaseLedgerCompanyAttachmentSyncEnabled(companyId) : false)
   ) {

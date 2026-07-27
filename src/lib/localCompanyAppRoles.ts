@@ -4,7 +4,7 @@ export const COMPANY_SHARE_ROLE_OPTIONS = [
   { value: "data-entry", label: "Data Entry" },
   { value: "accountant", label: "Accountant" },
   { value: "editor", label: "Editor" },
-  { value: "manager", label: "Admin" },
+  { value: "manager", label: "Manager" },
 ] as const;
 
 /** Manage Sharing → Role Permissions editor (owner included). */

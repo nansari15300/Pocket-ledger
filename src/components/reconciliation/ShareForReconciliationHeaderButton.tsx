@@ -15,15 +15,43 @@ import {
   OPEN_RECON_SHARE_DIALOG_EVENT,
   type OpenReconShareDialogDetail,
 } from "@/lib/reconciliation/openShareDialog";
+import { useCompanyVoucherFeatureSettings } from "@/hooks/useCompanyVoucherFeatureSettings";
+import { logHeaderFeatureButtonFlip } from "@/lib/companyOnlinePlFlipTrace";
 
 /** Header button — plan + company setting + share permission. */
 export function ShareForReconciliationHeaderButton() {
   const [open, setOpen] = React.useState(false);
   const [openDetail, setOpenDetail] = React.useState<OpenReconShareDialogDetail>({});
   const { user } = useAuth();
-  const { companyId } = useCompany();
+  const { companyId, company } = useCompany();
   const { canShare, canLink, canView, canViewSharedList, canViewUnlinkedList, enabled } = useReconciliationFeature();
+  const { enableCrossCompanyLedgerCopy, enableShareForReconciliation } = useCompanyVoucherFeatureSettings();
   const [pendingIncoming, setPendingIncoming] = React.useState(0);
+  const prevEnabledRef = React.useRef<boolean | null>(null);
+  React.useEffect(() => {
+    if (prevEnabledRef.current === enabled) return;
+    if (prevEnabledRef.current != null) {
+      logHeaderFeatureButtonFlip({
+        companyId,
+        syncLedgerVisible: enableCrossCompanyLedgerCopy === true,
+        shareReconVisible: enabled,
+        enableCrossCompanyLedgerCopy,
+        enableShareForReconciliation,
+        storageOption: company?.storageOption,
+        plServerShared: (company as { plServerShared?: boolean } | null)?.plServerShared === true,
+        syncedFromCloud: (company as { syncedFromCloud?: boolean } | null)?.syncedFromCloud === true,
+      });
+    }
+    prevEnabledRef.current = enabled;
+  }, [
+    enabled,
+    companyId,
+    company?.storageOption,
+    (company as { plServerShared?: boolean } | null)?.plServerShared,
+    (company as { syncedFromCloud?: boolean } | null)?.syncedFromCloud,
+    enableCrossCompanyLedgerCopy,
+    enableShareForReconciliation,
+  ]);
 
   React.useEffect(() => {
     if (!user?.uid || !enabled) {

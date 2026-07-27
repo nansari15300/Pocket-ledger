@@ -3,13 +3,14 @@
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { demoteCompanyToLocal } from "@/lib/companyDemote";
-import { isDeviceLocalCompany, isStrictLocalOnlyCompany } from "@/lib/companyStorageKind";
+import { isDeviceLocalCompany, isStrictLocalOnlyCompany, isServerGateCompany } from "@/lib/companyStorageKind";
 import { isProtectedOwnerLocalBackupCompany } from "@/lib/localBackupRestoreCompany";
 import { isProtectedDriveLocalRegistryRow } from "@/lib/driveRestoredLocalCompany";
 import type { LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { listLocalCompanies, removeLocalCompanyById } from "@/lib/localCompanyStore";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
 import { isCompanyPendingRestoreCloudPush } from "@/lib/restoreCloudBackgroundSync";
+import { shouldPreferPlServerOverCloudRow } from "@/lib/companyOnlinePlFlipTrace";
 
 /** Current user company ka owner hai ya nahi (shared vs My companies split). */
 export function isCurrentUserOwnerOfCompanyRow(
@@ -124,6 +125,8 @@ export async function reconcileOnlineMirrorsWithServer(user: {
     if (isStrictLocalOnlyCompany(row)) continue;
     // Server-gate mirrored company — sirf SQLite; Firestore root verify mat
     if ((row as { plServerShared?: boolean }).plServerShared === true) continue;
+    if (isServerGateCompany(row as never)) continue;
+    if (shouldPreferPlServerOverCloudRow(row)) continue;
     const isOwner = isCurrentUserOwnerOfCompanyRow(row, user);
     const storageLocal = String(row.storageOption || "local").toLowerCase() === "local";
     const isDriveSharedJoin = (row as { driveSharedJoin?: unknown }).driveSharedJoin === true;

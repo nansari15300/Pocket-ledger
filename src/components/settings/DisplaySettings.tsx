@@ -11,9 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useCompany } from "@/hooks/useCompany";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { doc, updateDoc } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
+import { persistCompanyRootSettingsPatch } from "@/lib/persistCompanyRootSettings";
 import { Loader2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -47,7 +46,7 @@ const displayLabels: { key: keyof DisplaySettingsValues; label: string }[] = [
 ];
 
 export function DisplaySettings() {
-  const { company, companyId, loading: companyLoading } = useCompany();
+  const { company, companyId, loading: companyLoading, reloadLocalCompanyRegistry, triggerSync } = useCompany();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
 
@@ -75,10 +74,15 @@ export function DisplaySettings() {
     }
     setIsLoading(true);
     try {
-      const companyRef = doc(firestore, "companies", companyId);
-      // Merge taaki future displaySettings keys Firestore se na hat jaayein.
-      await updateDoc(companyRef, {
-        displaySettings: { ...(company.displaySettings || {}), ...data },
+      // Merge taaki future displaySettings keys na hat jaayein.
+      await persistCompanyRootSettingsPatch({
+        companyId,
+        company,
+        patch: {
+          displaySettings: { ...(company.displaySettings || {}), ...data },
+        },
+        reloadLocalCompanyRegistry,
+        triggerSync,
       });
       toast({ title: "Success", description: "Display settings have been updated." });
     } catch (error) {

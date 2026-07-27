@@ -24,7 +24,6 @@ import { compressVoucherAttachment } from "@/lib/compression";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { FilePreview } from "../vouchers/FilePreview";
 import { CompanyInterCompanyCodeField } from "@/components/inter-company/CompanyInterCompanyCodeField";
-import { MakeCompanyOnlineControl } from "@/components/company/MakeCompanyOnlineControl";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -925,10 +924,7 @@ export function EditCompanyForm({
                 name="name"
                 render={({ field }: any) => (
                     <FormItem>
-                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                      <FormLabel className="m-0">Company Name</FormLabel>
-                      <MakeCompanyOnlineControl disabled={readOnly} />
-                    </div>
+                    <FormLabel>Company Name</FormLabel>
                     <FormControl>
                         <Input placeholder="e.g., Innovate Inc." {...field} />
                     </FormControl>
@@ -1427,7 +1423,7 @@ export function EditCompanyForm({
                             value={field.value || "manager"}
                             onChange={(e) => field.onChange(e.target.value)}
                           >
-                            <option value="manager">Admin</option>
+                            <option value="manager">Manager</option>
                             <option value="editor">Editor</option>
                             <option value="accountant">Accountant</option>
                             <option value="data-entry">Data Entry</option>
@@ -1669,7 +1665,7 @@ export function EditCompanyForm({
                   value={editLocalRole}
                   onChange={(e) => setEditLocalRole(e.target.value)}
                 >
-                  <option value="manager">Admin</option>
+                  <option value="manager">Manager</option>
                   <option value="editor">Editor</option>
                   <option value="accountant">Accountant</option>
                   <option value="data-entry">Data Entry</option>

@@ -4,8 +4,6 @@ import { isCloudLinkedCompanyStorage, isOfflineCompanyStorage } from "@/lib/comp
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 import {
   getPlServerContextGateId,
-  hasPlServerAuthoritativeShareList,
-  isListedPlServerSharedCompany,
   isServerTabCompanyRow,
   isPlServerSharedCompanyRow,
 } from "@/lib/plServerAccessContext";
@@ -100,22 +98,17 @@ export function isServerSelectorCompanyRow(
 ): boolean {
   if (!c) return false;
   if (isCloudLinkedCompanyStorage(c)) return false;
+  // Stamped PL share (`plServerShared`) — Local tab me kabhi mat dikhao (gate list id mismatch pe bhi).
+  // Gate page already Server-only; company picker pehle `!gid` / share-list miss se Local me leak karta tha.
+  if (isServerGateCompany(c)) return true;
   if (isServerOriginSelectorCompanyRow(c)) return true;
   const gid = gateId ?? getPlServerContextGateId();
   // Restored local backups can retain old PL-server markers. Without an active gate/context,
-  // those SQLite rows are local companies, not server-share rows.
+  // those SQLite rows are local companies, not server-share rows — but `isServerGateCompany`
+  // already returned above when stamp present; remaining host-id hints need a gate.
   if (!gid) return false;
   if (isServerTabCompanyRow(c, gid)) return true;
   if (isPlServerSharedCompanyRow(c, gid)) return true;
-  if (c.plServerShared === true) {
-    if (c.syncedFromCloud === true) return false;
-    const so = String(c.storageOption ?? "").toLowerCase().trim();
-    if (so === "firebase" || so === "drive") return false;
-    if (hasPlServerAuthoritativeShareList(gid)) {
-      return isListedPlServerSharedCompany(c, gid);
-    }
-    return true;
-  }
   const hostCompanyId = String(c.plServerHostCompanyId ?? "").trim();
   if (hostCompanyId) return true;
   return false;
@@ -133,6 +126,7 @@ export function isLocalSelectorCompanyRow(
   if (!c) return false;
   // Firebase / Firestore mirror — kabhi Local tab me mat dikhao (cloud sync off hone par bhi).
   if (isCloudLinkedCompanyStorage(c)) return false;
+  if (isServerGateCompany(c)) return false;
   if (isServerSelectorCompanyRow(c)) return false;
   if (isDeviceLocalCompany(c)) return true;
   if (isDriveCloudSyncLocalRegistryRow(c as Record<string, unknown>)) return true;
@@ -259,6 +253,7 @@ export function isStrictLocalUnlockTabCompany(
   c: (CompanyStorageRow & { cloudSyncDriveFolderId?: unknown; driveSharedJoin?: unknown }) | null | undefined
 ): boolean {
   if (!c || isCloudLinkedCompanyStorage(c)) return false;
+  if (isServerGateCompany(c)) return false;
   if (isServerSelectorCompanyRow(c)) return false;
   if (isSharedOnlineCompany(c)) return false;
   if (isStrictLocalOnlyCompany(c)) return true;
@@ -325,7 +320,9 @@ export function defaultSelectorTab(
   const id = companyId?.trim();
   if (id) {
     if (buckets.serverTabCompanies.some((c) => c.id === id)) return "server";
-    if (buckets.localTabCompanies.some((c) => c.id === id)) return "local";
+    const localHit = buckets.localTabCompanies.find((c) => c.id === id);
+    if (localHit && isServerGateCompany(localHit)) return "server";
+    if (localHit) return "local";
     if (buckets.onlineTabCompanies.some((c) => c.id === id)) return "online";
   }
   if (
@@ -350,14 +347,14 @@ export function ensureSelectedInTabList(
   if (!id || list.some((c) => c.id === id)) return list;
   const selected = pool.find((c) => c.id === id);
   if (!selected) return list;
-  const isLocalTabRow =
-    (isDeviceLocalCompany(selected) || isSharedLocalCompany(selected)) &&
-    !isServerSelectorCompanyRow(selected, getPlServerContextGateId());
-  if (tab === "server" && isServerSelectorCompanyRow(selected, getPlServerContextGateId())) {
+  const gateId = getPlServerContextGateId();
+  if (tab === "server" && (isServerGateCompany(selected) || isServerSelectorCompanyRow(selected, gateId))) {
     return [selected, ...list];
   }
-  if (tab === "local" && isLocalTabRow) return [selected, ...list];
-  if (tab === "online" && !isLocalTabRow && !isServerSelectorCompanyRow(selected, getPlServerContextGateId())) {
+  if (tab === "local" && isLocalSelectorCompanyRow(selected) && isStrictLocalUnlockTabCompany(selected)) {
+    return [selected, ...list];
+  }
+  if (tab === "online" && !isLocalSelectorCompanyRow(selected) && !isServerSelectorCompanyRow(selected, gateId)) {
     return [selected, ...list];
   }
   if (tab === "online" && isSharedOnlineCompany(selected)) return [selected, ...list];

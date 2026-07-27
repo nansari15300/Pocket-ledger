@@ -61,10 +61,15 @@ export function readBackupLocationDisplayHint(): string | null {
   return null;
 }
 
-/** Auto backup preview — base path + company + timestamp subfolders. */
-export function formatAutoBackupPathPreview(basePath: string): string {
+/** Auto backup preview — base + company + year/month/day folders. */
+export function formatAutoBackupPathPreview(
+  basePath: string,
+  folderDateSystem: "AD" | "BS" = "AD"
+): string {
   const base = String(basePath || "").trim().replace(/[/\\]+$/, "");
   if (!base || base.startsWith("Not set")) return "";
   const sep = base.includes("\\") ? "\\" : "/";
-  return `${base}${sep}{company}${sep}{date-time}${sep}`;
+  const monthHint = folderDateSystem === "BS" ? "Shrawan" : "July";
+  const yearHint = folderDateSystem === "BS" ? "{BS-year}" : "{AD-year}";
+  return `${base}${sep}{company}${sep}${yearHint}${sep}${monthHint}${sep}{day}${sep}`;
 }

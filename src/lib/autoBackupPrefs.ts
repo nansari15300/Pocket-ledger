@@ -4,6 +4,10 @@ import type { CompanyBackupIntent, CompanyBackupSourceMode } from "@/lib/company
 import { isBackupSaveLocationConfigured } from "@/lib/backupSaveLocation";
 import { normalizeRestoreAllowedGmailList } from "@/lib/backupRestoreAccess";
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
+import {
+  normalizeBackupFolderDateSystem,
+  type BackupFolderDateSystem,
+} from "@/lib/autoBackupPath";
 
 const AUTO_BACKUP_PREFS_KEY = "pl_auto_backup_prefs_v2";
 
@@ -31,6 +35,8 @@ export type AutoBackupPrefs = {
   /** Local device time HH:mm (24h). */
   runTimeLocal: string;
   includeAttachments: boolean;
+  /** Folder calendar: AD → Jul; BS → Shrawan (English month text). */
+  folderDateSystem: BackupFolderDateSystem;
   lastRunAt: number | null;
   lastRunByCompanyId: Record<string, number>;
   companyIds: string[];
@@ -45,6 +51,7 @@ const DEFAULT: AutoBackupPrefs = {
   weekdays: [1],
   runTimeLocal: "02:00",
   includeAttachments: false,
+  folderDateSystem: "AD",
   lastRunAt: null,
   lastRunByCompanyId: {},
   companyIds: [],
@@ -190,6 +197,7 @@ export function readAutoBackupPrefs(): AutoBackupPrefs {
       weekdays: normalizeWeekdays(p.weekdays, scheduleMode),
       runTimeLocal: normalizeRunTimeLocal(p.runTimeLocal),
       includeAttachments: p.includeAttachments === true,
+      folderDateSystem: normalizeBackupFolderDateSystem(p.folderDateSystem),
       lastRunAt: typeof p.lastRunAt === "number" && Number.isFinite(p.lastRunAt) ? p.lastRunAt : null,
       lastRunByCompanyId:
         p.lastRunByCompanyId && typeof p.lastRunByCompanyId === "object"

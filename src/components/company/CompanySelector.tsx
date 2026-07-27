@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { DeleteCompanyDialog } from "./DeleteCompanyDialog";
 import { ShareCompanyDialog } from "./ShareCompanyDialog";
-import { AddLocalCompanyUserDialog } from "./AddLocalCompanyUserDialog";
+import { PlServerShareUserDialog } from "./PlServerShareUserDialog";
 import { PlServerSharedCompanyUrlDialog } from "./PlServerSharedCompanyUrlDialog";
 import { useState, useEffect, useMemo, useRef, useCallback, type Dispatch, type SetStateAction } from "react";
 import { useCompany } from "@/hooks/useCompany";
@@ -1233,7 +1233,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                       ) : (
                         <Share2 className="mr-2 h-4 w-4"/>
                       )}
-                      {offlineOwned ? "Add User" : "Share"}
+                      {offlineOwned ? "Add Person" : "Share"}
                   </DropdownMenuItem> : null}
                   {company.isOwned ? <DropdownMenuSeparator /> : null}
                   <DropdownMenuItem onSelect={() => handleLogoutCompany(company.id)}>
@@ -1496,8 +1496,9 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         </Card>
       </div>
 
-      <AddLocalCompanyUserDialog
-        company={dialogState.type === "addLocalUser" ? dialogState.company : null}
+      <PlServerShareUserDialog
+        companyId={dialogState.type === "addLocalUser" ? dialogState.company?.id : null}
+        companyName={dialogState.type === "addLocalUser" ? dialogState.company?.name : null}
         open={dialogState.type === "addLocalUser"}
         onOpenChange={(open) => {
           if (!open) setDialogState({ type: null, company: null });
@@ -2704,7 +2705,7 @@ export function CompanyActions({
                   ) : (
                     <Share2 className="mr-2 h-4 w-4" />
                   )}
-                  <span>{isOfflineCompanyStorage(activeCompany) ? "Add User" : "Share"}</span>
+                  <span>{isOfflineCompanyStorage(activeCompany) ? "Add Person" : "Share"}</span>
                 </DropdownMenuItem>
               )}
               {activeCompany && isServerGateCompany(activeCompany) && (
@@ -2720,8 +2721,9 @@ export function CompanyActions({
         </DropdownMenuPortal>
       </DropdownMenu>
 
-      <AddLocalCompanyUserDialog
-        company={dialogState.type === "addLocalUser" ? dialogState.company : null}
+      <PlServerShareUserDialog
+        companyId={dialogState.type === "addLocalUser" ? dialogState.company?.id : null}
+        companyName={dialogState.type === "addLocalUser" ? dialogState.company?.name : null}
         open={dialogState.type === "addLocalUser"}
         onOpenChange={(open) => {
           if (!open) setDialogState({ type: null, company: null });

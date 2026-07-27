@@ -112,7 +112,13 @@ import {
   type AutoBackupScheduleMode,
 } from "@/lib/autoBackupPrefs";
 import { runAutoBackupQueue, loadAutoBackupCompanyPickerRows, companyHasAutoBackupPassword, syncAutoBackupCompanyIdsWithEligible } from "@/lib/autoBackupRunner";
-import { isDeviceLocalCompany } from "@/lib/companyStorageKind";
+import { buildAutoBackupRelativeDir } from "@/lib/autoBackupPath";
+import { isDeviceLocalCompany, partitionCompaniesForSelector, type CompanyListTab } from "@/lib/companyStorageKind";
+import {
+  getOnlineCompanyBackupTickGate,
+  companyUsesOnlineSelectorSyncTicks,
+} from "@/lib/onlineCompanySelectorSyncPolicy";
+import { FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import { canUserRestoreBackup, isValidRestoreAllowedGmail, normalizeBackupRestoreEmail, normalizeRestoreAllowedGmailList } from "@/lib/backupRestoreAccess";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
@@ -673,6 +679,22 @@ export function BackupRestore() {
   const isBackingUp = backupRun.status === "running";
   const backupProgress = backupRun.progress;
   const [autoBackupCompanyRows, setAutoBackupCompanyRows] = useState<Company[]>([]);
+  const [autoBackupListTab, setAutoBackupListTab] = useState<CompanyListTab>("local");
+  const [onlineSyncPrefsEpoch, setOnlineSyncPrefsEpoch] = useState(0);
+  useEffect(() => {
+    const bump = () => setOnlineSyncPrefsEpoch((n) => n + 1);
+    window.addEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, bump);
+    return () => window.removeEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, bump);
+  }, []);
+  const autoBackupCompanyBuckets = useMemo(
+    () => partitionCompaniesForSelector(autoBackupCompanyRows),
+    [autoBackupCompanyRows, onlineSyncPrefsEpoch]
+  );
+  const autoBackupTabCompanies = useMemo(() => {
+    if (autoBackupListTab === "server") return autoBackupCompanyBuckets.serverTabCompanies;
+    if (autoBackupListTab === "online") return autoBackupCompanyBuckets.onlineTabCompanies;
+    return autoBackupCompanyBuckets.localTabCompanies;
+  }, [autoBackupListTab, autoBackupCompanyBuckets]);
   const autoBackupEligibleCompanies = useMemo(
     () => autoBackupCompanyRows.filter((c) => c.isOwned !== false),
     [autoBackupCompanyRows]
@@ -682,11 +704,13 @@ export function BackupRestore() {
   const [backupLocationLabel, setBackupLocationLabel] = useState("Not set");
   const backupLocationHint = useMemo(() => readBackupLocationDisplayHint(), [backupLocationLabel]);
   const autoBackupPathPreview = useMemo(
-    () => formatAutoBackupPathPreview(backupLocationLabel),
-    [backupLocationLabel]
+    () => formatAutoBackupPathPreview(backupLocationLabel, autoBackupDraft.folderDateSystem),
+    [backupLocationLabel, autoBackupDraft.folderDateSystem]
   );
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoreProgress, setRestoreProgress] = useState<CompanyBackupProgress | null>(null);
+  /** Restore progress popup — Close se sirf dialog band, restore main page par chalta rahe. */
+  const [restoreProgressDialogOpen, setRestoreProgressDialogOpen] = useState(false);
   const restoreAbortRef = useRef<AbortController | null>(null);
   /** v3 zip backup: decrypt ke baad attachment bytes yahan — restore tak memory me. */
   const restoreZipFilesRef = useRef<Map<string, Uint8Array> | null>(null);
@@ -990,7 +1014,9 @@ export function BackupRestore() {
       ownerUid: user.uid,
       ownerEmail: user.email ?? null,
       resolveAccountPlanId: (c) => resolveEffectiveAccountPlanId(allCompanies, user.uid, c.planId),
-      markRunsInPrefs: false,
+      // Manual Backup now bhi aaj ka run mark kare — warna AutoBackupScheduler same din dobara file bana deta hai.
+      markRunsInPrefs: true,
+      backupFileRunKind: "Manual",
     });
     const okCount = results.filter((r) => r.result.ok).length;
     const failCount = results.length - okCount;
@@ -1035,6 +1061,13 @@ export function BackupRestore() {
     report.tick("Starting restore", "Preparing…", 0, 0);
     return { signal, report };
   };
+
+  // Restore chalu hote hi progress popup khud khule; restore khatam par band (render-phase sync, effect nahi).
+  const [prevIsRestoring, setPrevIsRestoring] = useState(isRestoring);
+  if (isRestoring !== prevIsRestoring) {
+    setPrevIsRestoring(isRestoring);
+    setRestoreProgressDialogOpen(isRestoring);
+  }
 
   // Reset restore choices only when the confirm dialog opens — not when attachment hints update while open.
   useEffect(() => {
@@ -1452,6 +1485,14 @@ export function BackupRestore() {
       backupSourceMode: resolvedSourceMode,
       backupIntent: staticBackupClient ? backupIntent : backupIntent,
       attachmentMissingPolicy: withAttachments ? attachmentMissingPolicy : undefined,
+      backupRelativeDir: buildAutoBackupRelativeDir(
+        String(backupCompany.name || company.name || companyId),
+        companyId,
+        new Date(),
+        autoBackupDraft.folderDateSystem ?? readAutoBackupPrefs().folderDateSystem
+      ),
+      folderDateSystem: autoBackupDraft.folderDateSystem ?? readAutoBackupPrefs().folderDateSystem,
+      backupFileRunKind: "Manual",
       backupRestoreGmails: getAutoBackupCompanySettings(autoBackupPrefs, companyId, staticBackupClient)
         .restoreAllowedGmails,
     });
@@ -1494,6 +1535,25 @@ export function BackupRestore() {
   const handleBackup = async (includeAttachments: boolean) => {
     if (!companyId || !company || !user?.uid) return;
 
+    const localDeviceEmbed =
+      staticBackupClient ||
+      backupIntent === "for_offline" ||
+      backupSourceMode === "local_only" ||
+      isLocalCompanyBackup;
+    const tickGate = getOnlineCompanyBackupTickGate(company, {
+      attachmentEmbedMode: localDeviceEmbed ? "local_device_bytes" : "may_download",
+    });
+    if (includeAttachments && !tickGate.filesAllowed) {
+      toast({
+        variant: "destructive",
+        title: "Files tick required",
+        description:
+          tickGate.filesMessage ||
+          "Turn on Files for this company in Company Selector (Online tab), then Save — to download missing attachments. Or choose Local device only to embed files already on this device.",
+      });
+      return;
+    }
+
     if (isCompanyBackupRunning()) {
       toast({
         variant: "destructive",
@@ -1521,6 +1581,7 @@ export function BackupRestore() {
       staticBackupClient ||
       backupIntent === "for_offline" ||
       backupSourceMode === "local_only" ||
+      isLocalCompanyBackup ||
       attachmentFeatureOn;
     const withAttachments = includeAttachments && allowsAttachmentEmbed;
 
@@ -2181,16 +2242,18 @@ export function BackupRestore() {
         title: "Restore Successful",
         description: cloudRestore
           ? replaceCurrent
-            ? `Company "${resolvedCompanyName.trim() || company?.name}" restored. Cloud upload complete — reloading once.`
-            : `New company restored (${targetCompanyId}). Cloud upload complete — reloading once.`
+            ? `Company "${resolvedCompanyName.trim() || company?.name}" restored. Cloud upload complete — opening dashboard.`
+            : `New company restored (${targetCompanyId}). Cloud upload complete — opening dashboard.`
           : replaceCurrent
-            ? `Company "${resolvedCompanyName.trim() || company?.name}" data replaced on this device only. Reloading…`
-            : `New local company created (${targetCompanyId}). Your other companies are unchanged. Reloading…`,
+            ? `Company "${resolvedCompanyName.trim() || company?.name}" data replaced on this device only. Opening dashboard…`
+            : `New local company created (${targetCompanyId}). Your other companies are unchanged. Opening dashboard…`,
       });
-      window.location.reload();
+      // Success: box se file hatao + dashboard par redirect (full reload company context refresh karta hai).
+      setFileToRestore(null);
+      window.location.assign("/dashboard");
     } catch (error: any) {
       if (error instanceof DOMException && error.name === "AbortError") {
-        toast({ title: "Restore cancelled", description: "You can start again when ready." });
+        toast({ title: "Restore cancelled", description: "File box me hai — Restore dobara chala sakte ho." });
       } else {
         console.error("Local restore failed:", error);
         toast({
@@ -2206,7 +2269,7 @@ export function BackupRestore() {
       restoreZipFilesRef.current = null;
       setRestoreZipFilesByPath(null);
       setRestoreProgress(null);
-      setFileToRestore(null);
+      // Cancel/error par file box me rakho taaki Restore button enabled rahe (success path upar file clear karta hai).
     }
   };
 
@@ -2466,18 +2529,20 @@ export function BackupRestore() {
         reloadLocalCompanyRegistry();
         triggerSync();
 
-        report.tick("Complete", "Reloading app…");
+        report.tick("Complete", "Opening dashboard…");
         setCompanyId(targetCompanyId);
         toast({
           title: "Restore Successful",
           description: replaceCurrent
-            ? `Company "${resolvedCompanyName.trim() || company?.name}" data replaced in cloud. Page will now reload.`
-            : `New cloud company ${targetCompanyId}. Page will now reload.`,
+            ? `Company "${resolvedCompanyName.trim() || company?.name}" data replaced in cloud. Opening dashboard.`
+            : `New cloud company ${targetCompanyId}. Opening dashboard.`,
         });
-        window.location.reload();
+        // Success: box se file hatao + dashboard par redirect.
+        setFileToRestore(null);
+        window.location.assign("/dashboard");
     } catch (error: any) {
       if (error instanceof DOMException && error.name === "AbortError") {
-        toast({ title: "Restore cancelled", description: "You can start again when ready." });
+        toast({ title: "Restore cancelled", description: "File box me hai — Restore dobara chala sakte ho." });
       } else {
         console.error("Restore failed:", error);
         toast({
@@ -2492,7 +2557,7 @@ export function BackupRestore() {
       restoreZipFilesRef.current = null;
       setRestoreZipFilesByPath(null);
       setRestoreProgress(null);
-      setFileToRestore(null);
+      // Cancel/error par file box me rakho — Restore button enabled rahe (success path file clear karta hai).
     }
   };
 
@@ -2503,9 +2568,11 @@ export function BackupRestore() {
   return (
     <>
       <div className="flex min-w-0 flex-col gap-8" data-pl-backup-restore>
-        {/* PC: Backup + Auto ek row; mobile: Backup phir Auto (order 1–2), baaki cards neeche */}
-        <div className="grid min-w-0 grid-cols-1 gap-8 md:grid-cols-2 md:gap-6 md:items-stretch">
-        <Card className={cn("flex h-full min-w-0 flex-col overflow-hidden", backupCardToneGreenCn)}>
+        {/* PC: left = Backup→Restore (gap na rahe), right = Auto→Data save.
+            Mobile: Backup → Auto → Restore → Data (order 1–4). */}
+        <div className="grid min-w-0 grid-cols-1 gap-8 md:grid-cols-2 md:items-start md:gap-6">
+        <div className="contents md:flex md:min-w-0 md:flex-col md:gap-8">
+        <Card className={cn("order-1 flex min-w-0 flex-col overflow-hidden", backupCardToneGreenCn)}>
           <CardHeader className="pb-3">
             {/* Title + Create Backup — chhoti screen par actions neeche wrap. */}
             <div className={backupCardHeaderLayoutCn}>
@@ -2557,6 +2624,23 @@ export function BackupRestore() {
             </div>
           </CardHeader>
           <CardContent className="min-w-0 space-y-3 text-sm text-muted-foreground">
+            {(() => {
+              const localDeviceEmbed =
+                staticBackupClient ||
+                backupIntent === "for_offline" ||
+                backupSourceMode === "local_only" ||
+                isLocalCompanyBackup;
+              if (localDeviceEmbed) return null;
+              const gate = getOnlineCompanyBackupTickGate(company, {
+                attachmentEmbedMode: "may_download",
+              });
+              if (!(backupIncludeAttachments && gate.needFilesTick)) return null;
+              return (
+                <p className="rounded-md border border-amber-300/80 bg-amber-50 px-2.5 py-2 text-xs leading-snug text-amber-900">
+                  {gate.filesMessage}
+                </p>
+              );
+            })()}
             <div className={cn(backupCardSoftGreenBorderCn, "p-2.5")}>
               <BackupLocationField
                 locationLabel={backupLocationLabel}
@@ -2623,10 +2707,74 @@ export function BackupRestore() {
           ) : null}
         </Card>
 
-        <Card className={cn("flex h-full min-w-0 flex-col overflow-hidden", backupCardToneSkyCn)}>
+        <Card className={cn("order-3 flex min-w-0 flex-col overflow-hidden", backupCardToneGreenCn)}>
+          <CardHeader>
+            <CardTitle>Restore Data</CardTitle>
+            <CardDescription>
+              Restore from a JSON or encrypted .plbp file (legacy .webtally supported). Each restore creates a new company id so
+              nothing merges into an existing slot by mistake.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="min-w-0 space-y-2">
+            {nativeRuntime ? (
+              <>
+                {/* Native APK: dedicated picker se restore file selection stable rahe. */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handlePickRestoreFileNative}
+                  className={backupCardActionBtnCn}
+                >
+                  Choose backup file
+                </Button>
+                <p className="text-xs text-muted-foreground break-all">
+                  Selected file: <span className="font-medium text-foreground">{fileToRestore?.name || "Not selected"}</span>
+                </p>
+              </>
+            ) : (
+              <Input
+                type="file"
+                accept=".json,.plbp,.webtally"
+                onChange={handleFileSelect}
+                className="pl-backup-control-emerald max-w-full"
+              />
+            )}
+          </CardContent>
+          <CardFooter className="flex min-w-0 flex-col items-stretch gap-3 pt-0">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={startRestore}
+              disabled={!fileToRestore || isRestoring}
+              className={backupCardActionBtnCn}
+            >
+              {isRestoring ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+              Restore as new company
+            </Button>
+            {/* Restore live progress — backup card jaisa pill bar + cancel. */}
+            {isRestoring && restoreProgress ? (
+              <BackupProgressStrip
+                progress={restoreProgress}
+                spinning
+                inCard
+                showRefreshWarning
+                refreshWarningText="Do not refresh or close this tab until restore completes."
+                showCancel
+                onCancel={() => {
+                  cancelRestoreRun();
+                }}
+              />
+            ) : null}
+          </CardFooter>
+        </Card>
+        </div>
+
+        <div className="contents md:flex md:min-w-0 md:flex-col md:gap-8">
+        <Card className={cn("order-2 flex min-w-0 flex-col overflow-hidden md:h-auto", backupCardToneSkyCn)}>
           <CardContent className="min-w-0 flex-1 space-y-4 py-4 text-sm">
             <div className={cn(backupCardSoftSkyBorderCn, "space-y-1.5 p-2.5")}>
-              <div className="flex min-w-0 items-center gap-1">
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                 <span className="text-base font-semibold leading-none">Auto Backup</span>
                 <TooltipProvider delayDuration={200}>
                   <Tooltip>
@@ -2641,10 +2789,31 @@ export function BackupRestore() {
                     </TooltipTrigger>
                     <TooltipContent side="top" className="max-w-[22rem] text-xs leading-snug">
                       Tick companies below. At the chosen time, each selected company is backed up to your saved
-                      location in its own folder with a date-time subfolder. Works the same on web, EXE, APK, and iOS.
+                      location as Company / Year / MonthName / Day. Month names follow Date system (AD: July, BS:
+                      Shrawan). File name uses the same calendar with full month name.
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
+                <div className={cn(backupCardPillCn, "ml-1 h-8 min-h-8 w-auto shrink-0 gap-1.5 px-2.5 py-0")}>
+                  <Label htmlFor="auto-backup-folder-date-system" className="shrink-0 text-xs font-medium leading-none">
+                    Date system
+                  </Label>
+                  <select
+                    id="auto-backup-folder-date-system"
+                    className="h-6 min-w-[3.25rem] cursor-pointer appearance-none border-0 bg-transparent p-0 text-sm outline-none focus:ring-0"
+                    value={autoBackupDraft.folderDateSystem}
+                    onChange={(e) =>
+                      updateAutoBackupDraft({
+                        ...autoBackupDraft,
+                        folderDateSystem: e.target.value === "BS" ? "BS" : "AD",
+                      })
+                    }
+                    aria-label="Backup folder date system"
+                  >
+                    <option value="AD">AD</option>
+                    <option value="BS">BS</option>
+                  </select>
+                </div>
               </div>
               <div className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                 <p className="min-w-0 flex-1 text-sm leading-snug text-muted-foreground">
@@ -2803,6 +2972,37 @@ export function BackupRestore() {
                   No companies found on this device.
                 </p>
               ) : (
+                <>
+                  <div className="flex w-full gap-1.5" role="tablist" aria-label="Companies for auto backup">
+                    {(
+                      [
+                        ["local", "Local", autoBackupCompanyBuckets.localTabCompanies.length],
+                        ["server", "Server", autoBackupCompanyBuckets.serverTabCompanies.length],
+                        ["online", "Online", autoBackupCompanyBuckets.onlineTabCompanies.length],
+                      ] as const
+                    ).map(([tab, label, count]) => (
+                      <Button
+                        key={tab}
+                        type="button"
+                        role="tab"
+                        variant="outline"
+                        size="sm"
+                        aria-selected={autoBackupListTab === tab}
+                        data-pl-auto-backup-tab="1"
+                        data-pl-auto-backup-tab-active={autoBackupListTab === tab ? "true" : "false"}
+                        className="h-8 flex-1 px-2.5 text-xs pl-backup-control-sky"
+                        onClick={() => setAutoBackupListTab(tab)}
+                      >
+                        {label}
+                        {count > 0 ? ` (${count})` : ""}
+                      </Button>
+                    ))}
+                  </div>
+                  {autoBackupTabCompanies.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      No companies in this tab.
+                    </p>
+                  ) : (
                 <Table scrollContainer className="max-h-44">
                   <TableHeader className="[&_tr]:border-b [&_tr]:border-sky-200/70">
                     <TableRow className="border-0 hover:bg-transparent">
@@ -2812,25 +3012,35 @@ export function BackupRestore() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {autoBackupCompanyRows.map((c) => {
+                    {autoBackupTabCompanies.map((c) => {
                       const hasPassword = companyHasAutoBackupPassword(c);
                       const checked = autoBackupDraft.companyIds.includes(c.id);
                       return (
                         <TableRow key={c.id} className="border-b border-sky-200/60 hover:bg-sky-50/40">
                           <TableCell className="max-w-0 py-2">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <Checkbox
-                                id={`auto-backup-co-${c.id}`}
-                                checked={checked}
-                                className="pl-backup-checkbox-sky shrink-0"
-                                onCheckedChange={(v) => toggleAutoBackupCompany(c.id, v === true)}
-                              />
-                              <Label
-                                htmlFor={`auto-backup-co-${c.id}`}
-                                className="min-w-0 truncate text-sm font-normal cursor-pointer"
-                              >
-                                {c.name}
-                              </Label>
+                            <div className="flex min-w-0 flex-col gap-0.5">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <Checkbox
+                                  id={`auto-backup-co-${c.id}`}
+                                  checked={checked}
+                                  className="pl-backup-checkbox-sky shrink-0"
+                                  onCheckedChange={(v) => toggleAutoBackupCompany(c.id, v === true)}
+                                />
+                                <Label
+                                  htmlFor={`auto-backup-co-${c.id}`}
+                                  className="min-w-0 truncate text-sm font-normal cursor-pointer"
+                                >
+                                  {c.name}
+                                </Label>
+                              </div>
+                              {companyUsesOnlineSelectorSyncTicks(c) &&
+                              !getOnlineCompanyBackupTickGate(c, {
+                                attachmentEmbedMode: "may_download",
+                              }).filesAllowed ? (
+                                <p className="pl-6 text-[10px] leading-snug text-muted-foreground">
+                                  Local-only can embed device files without Files tick. Tick Files only if Online merge must download missing attachments.
+                                </p>
+                              ) : null}
                             </div>
                           </TableCell>
                           <TableCell className="py-2 text-right">
@@ -2865,6 +3075,8 @@ export function BackupRestore() {
                     })}
                   </TableBody>
                 </Table>
+                  )}
+                </>
               )}
             </div>
             {autoBackupPrefs.lastRunAt ? (
@@ -2909,72 +3121,8 @@ export function BackupRestore() {
             </div>
           </CardContent>
         </Card>
-        </div>
 
-        <div className="grid min-w-0 grid-cols-1 gap-8 md:grid-cols-2 md:gap-6 md:items-stretch">
-        <Card className={cn("flex h-full min-w-0 flex-col overflow-hidden", backupCardToneGreenCn)}>
-          <CardHeader>
-            <CardTitle>Restore Data</CardTitle>
-            <CardDescription>
-              Restore from a JSON or encrypted .plbp file (legacy .webtally supported). Each restore creates a new company id so
-              nothing merges into an existing slot by mistake.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="min-w-0 space-y-2">
-            {nativeRuntime ? (
-              <>
-                {/* Native APK: dedicated picker se restore file selection stable rahe. */}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handlePickRestoreFileNative}
-                  className={backupCardActionBtnCn}
-                >
-                  Choose backup file
-                </Button>
-                <p className="text-xs text-muted-foreground break-all">
-                  Selected file: <span className="font-medium text-foreground">{fileToRestore?.name || "Not selected"}</span>
-                </p>
-              </>
-            ) : (
-              <Input
-                type="file"
-                accept=".json,.plbp,.webtally"
-                onChange={handleFileSelect}
-                className="pl-backup-control-emerald max-w-full"
-              />
-            )}
-          </CardContent>
-          <CardFooter className="flex min-w-0 flex-col items-stretch gap-3 pt-0">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={startRestore}
-              disabled={!fileToRestore || isRestoring}
-              className={backupCardActionBtnCn}
-            >
-              {isRestoring ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-              Restore as new company
-            </Button>
-            {/* Restore live progress — backup card jaisa pill bar + cancel. */}
-            {isRestoring && restoreProgress ? (
-              <BackupProgressStrip
-                progress={restoreProgress}
-                spinning
-                inCard
-                showRefreshWarning
-                refreshWarningText="Do not refresh or close this tab until restore completes."
-                showCancel
-                onCancel={() => {
-                  cancelRestoreRun();
-                }}
-              />
-            ) : null}
-          </CardFooter>
-        </Card>
-
-        <Card className={cn("flex h-full min-w-0 flex-col overflow-hidden", backupCardToneSkyCn)}>
+        <Card className={cn("order-4 flex min-w-0 flex-col overflow-hidden", backupCardToneSkyCn)}>
           <CardHeader>
             <CardTitle className="flex min-w-0 items-center gap-2">
               <Folder className="h-5 w-5 shrink-0" />
@@ -3017,6 +3165,7 @@ export function BackupRestore() {
             </Button>
           </CardFooter>
         </Card>
+        </div>
         </div>
       </div>
 
@@ -3270,16 +3419,11 @@ export function BackupRestore() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 text-sm text-muted-foreground">
+            {!isAutoBackupSettingsLocalCompany ? (
             <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
               <Label className="text-sm font-medium text-foreground">
                 {staticBackupClient ? "Backup for" : "Backup source"}
               </Label>
-              {isAutoBackupSettingsLocalCompany && !staticBackupClient ? (
-                <p className="text-sm leading-relaxed">
-                  <span className="font-medium text-foreground">Local device only</span> — SQLite on this device.
-                  This company is stored locally; no online merge.
-                </p>
-              ) : (
               <RadioGroup
                 value={staticBackupClient ? autoBackupSettingsDraft.backupIntent : autoBackupSettingsDraft.backupSourceMode}
                 onValueChange={(v) => {
@@ -3330,21 +3474,22 @@ export function BackupRestore() {
                   </>
                 )}
               </RadioGroup>
-              )}
             </div>
+            ) : null}
             <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
               <Label className="text-sm font-medium text-foreground">Backup contents</Label>
               {staticBackupClient ||
+              isAutoBackupSettingsLocalCompany ||
               autoBackupSettingsDraft.backupSourceMode === "local_only" ||
               autoBackupSettingsDraft.backupIntent === "for_offline" ? (
                 <RadioGroup
                   value={autoBackupSettingsDraft.includeAttachments ? "attachments" : "data"}
-                  onValueChange={(v) =>
+                  onValueChange={(v) => {
                     setAutoBackupSettingsDraft((prev) => ({
                       ...prev,
                       includeAttachments: v === "attachments",
-                    }))
-                  }
+                    }));
+                  }}
                   className="grid gap-2"
                 >
                   <label className="flex cursor-pointer items-start gap-2 text-left">
@@ -3353,31 +3498,12 @@ export function BackupRestore() {
                       <span className="font-medium text-foreground">Data only</span> — records and attachment links (URLs).
                     </span>
                   </label>
-                  <label
-                    className={cn(
-                      "flex items-start gap-2 text-left",
-                      staticBackupClient ||
-                        autoBackupSettingsDraft.backupIntent === "for_offline" ||
-                        autoBackupSettingsDraft.backupSourceMode === "local_only" ||
-                        attachmentFeatureOn
-                        ? "cursor-pointer"
-                        : "cursor-not-allowed opacity-60"
-                    )}
-                  >
-                    <RadioGroupItem
-                      value="attachments"
-                      className="mt-0.5"
-                      disabled={
-                        !staticBackupClient &&
-                        autoBackupSettingsDraft.backupIntent !== "for_offline" &&
-                        autoBackupSettingsDraft.backupSourceMode !== "local_only" &&
-                        !attachmentFeatureOn
-                      }
-                    />
+                  <label className="flex cursor-pointer items-start gap-2 text-left">
+                    <RadioGroupItem value="attachments" className="mt-0.5" />
                     <span>
                       <span className="font-medium text-foreground">With attachments</span>
                       <span className="block text-xs mt-1 leading-relaxed">
-                        Embed files already on this device into the backup file.
+                        Embed files already on this device. Missing files stay as URLs (online company).
                       </span>
                     </span>
                   </label>
@@ -3385,12 +3511,27 @@ export function BackupRestore() {
               ) : (
                 <RadioGroup
                   value={autoBackupSettingsDraft.includeAttachments ? "attachments" : "data"}
-                  onValueChange={(v) =>
+                  onValueChange={(v) => {
+                    if (v === "attachments") {
+                      const gate = getOnlineCompanyBackupTickGate(autoBackupSettingsCompany, {
+                        attachmentEmbedMode: "may_download",
+                      });
+                      if (!gate.filesAllowed) {
+                        toast({
+                          variant: "destructive",
+                          title: "Files tick required",
+                          description:
+                            gate.filesMessage ||
+                            "Turn on Files for this company in Company Selector (Online tab), then Save.",
+                        });
+                        return;
+                      }
+                    }
                     setAutoBackupSettingsDraft((prev) => ({
                       ...prev,
                       includeAttachments: v === "attachments" && attachmentFeatureOn,
-                    }))
-                  }
+                    }));
+                  }}
                   className="grid gap-2"
                 >
                   <label className="flex cursor-pointer items-start gap-2 text-left">
@@ -3510,16 +3651,11 @@ export function BackupRestore() {
                     ? "This backup will be encrypted with your company password. That password is required to restore the data."
                     : "This company has no password — the backup will be saved without encryption. Anyone with the file can read it. Set a company password in settings if you want encrypted backups."}
                 </p>
+                {!isLocalCompanyBackup ? (
                 <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
                   <Label className="text-sm font-medium text-foreground">
                     {staticBackupClient ? "Backup for" : "Backup source"}
                   </Label>
-                  {isLocalCompanyBackup && !staticBackupClient ? (
-                    <p className="text-sm leading-relaxed">
-                      <span className="font-medium text-foreground">Local device only</span> — SQLite on this device.
-                      This company is stored locally; no online merge.
-                    </p>
-                  ) : (
                   <RadioGroup
                     value={staticBackupClient ? backupIntent : backupSourceMode}
                     onValueChange={(v) => {
@@ -3571,13 +3707,37 @@ export function BackupRestore() {
                       </>
                     )}
                   </RadioGroup>
-                  )}
                 </div>
+                ) : null}
                 <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
                   <Label className="text-sm font-medium text-foreground">Backup contents</Label>
                   <RadioGroup
                     value={backupIncludeAttachments ? "attachments" : "data"}
-                    onValueChange={(v) => setBackupIncludeAttachments(v === "attachments")}
+                    onValueChange={(v) => {
+                      if (v === "attachments") {
+                        const localDeviceEmbed =
+                          staticBackupClient ||
+                          backupIntent === "for_offline" ||
+                          backupSourceMode === "local_only" ||
+                          isLocalCompanyBackup;
+                        if (!localDeviceEmbed) {
+                          const gate = getOnlineCompanyBackupTickGate(company, {
+                            attachmentEmbedMode: "may_download",
+                          });
+                          if (!gate.filesAllowed) {
+                            toast({
+                              variant: "destructive",
+                              title: "Files tick required",
+                              description:
+                                gate.filesMessage ||
+                                "Turn on Files for this company in Company Selector (Online tab), then Save.",
+                            });
+                            return;
+                          }
+                        }
+                      }
+                      setBackupIncludeAttachments(v === "attachments");
+                    }}
                     className="grid gap-2"
                   >
                     <label className="flex cursor-pointer items-start gap-2 text-left">
@@ -3597,6 +3757,7 @@ export function BackupRestore() {
                       className={`flex items-start gap-2 text-left ${
                         backupIntent !== "for_offline" &&
                         backupSourceMode !== "local_only" &&
+                        !isLocalCompanyBackup &&
                         !attachmentFeatureOn
                           ? "opacity-60 cursor-not-allowed"
                           : "cursor-pointer"
@@ -3609,6 +3770,7 @@ export function BackupRestore() {
                         disabled={
                           backupIntent !== "for_offline" &&
                           backupSourceMode !== "local_only" &&
+                          !isLocalCompanyBackup &&
                           !attachmentFeatureOn
                         }
                       />
@@ -3625,9 +3787,7 @@ export function BackupRestore() {
                         isLocalCompanyBackup ||
                         staticBackupClient ? (
                           <span className="block text-xs mt-1 leading-relaxed">
-                            Embeds pending + other files already on this device. If some cloud links have no local
-                            bytes, you will be asked to download them or continue with local only (missing URLs
-                            removed).
+                            Embed files already on this device. For online companies, missing files stay as URLs.
                           </span>
                         ) : (
                           <span className="block text-xs mt-1 leading-relaxed">
@@ -3652,6 +3812,7 @@ export function BackupRestore() {
                       staticBackupClient ||
                       backupIntent === "for_offline" ||
                       backupSourceMode === "local_only" ||
+                      isLocalCompanyBackup ||
                       attachmentFeatureOn;
                     void handleBackup(backupIncludeAttachments && allowsAttachmentEmbed);
                   }}
@@ -4057,6 +4218,51 @@ export function BackupRestore() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Restore progress popup — Close se sirf dialog band; restore main page (card strip) par chalta rahe. */}
+      <Dialog
+        open={isRestoring && restoreProgressDialogOpen}
+        onOpenChange={(open) => {
+          // Sirf dialog band karo — restore run cancel na ho.
+          if (!open) setRestoreProgressDialogOpen(false);
+        }}
+      >
+        <DialogContent className="max-w-md" data-pl-backup-dialog="emerald">
+          <DialogHeader>
+            <DialogTitle>Restoring…</DialogTitle>
+            <DialogDescription>
+              Restore is running. You can close this popup — it will keep running and stay visible on the page.
+            </DialogDescription>
+          </DialogHeader>
+          {restoreProgress ? (
+            <BackupProgressStrip
+              progress={restoreProgress}
+              spinning
+              inCard
+              showRefreshWarning
+              refreshWarningText="Do not refresh or close this tab until restore completes."
+              showCancel
+              onCancel={() => {
+                cancelRestoreRun();
+              }}
+            />
+          ) : (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Starting restore…
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setRestoreProgressDialogOpen(false)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

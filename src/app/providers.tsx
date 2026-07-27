@@ -27,6 +27,7 @@ import { OfflineWarmSyncManager } from "@/components/OfflineWarmSyncManager";
 import { CompanyAttachmentOfflineBackfillManager } from "@/components/CompanyAttachmentOfflineBackfillManager";
 import { LocalCompanySqliteWarmBootstrap } from "@/components/LocalCompanySqliteWarmBootstrap";
 import { LiveMirrorFolderMissingDialog } from "@/components/LiveMirrorFolderMissingDialog";
+import { AppAlertDialog } from "@/components/AppAlertDialog";
 import { FirstDeviceCompanyHydrationOverlay } from "@/components/FirstDeviceCompanyHydrationOverlay";
 import { EmbeddedDeviceLockGate } from "@/components/EmbeddedDeviceLockGate";
 import { EmbeddedAppDeferredShell } from "@/components/EmbeddedAppDeferredShell";
@@ -154,6 +155,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 <CompanyAttachmentOfflineBackfillManager />
                 <LocalCompanySqliteWarmBootstrap />
                 <LiveMirrorFolderMissingDialog />
+                <AppAlertDialog />
                 <PresenceManager />
                 <PrintLogoPreloader />
                 <DateProvider>

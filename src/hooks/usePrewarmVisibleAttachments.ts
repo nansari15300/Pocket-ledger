@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo } from "react";
 import { prewarmVisibleAttachmentRefsForInstantOpen } from "@/components/vouchers/attachmentHoverPreviewBody";
+import { shouldSkipVisibleRowFullIdlePrewarmOnWeb } from "@/lib/webAttachmentLazyLoadPolicy";
 
 /** Visible master-list / page rows — idle par attachment bytes + hover LRU warm (staff PlServer `local:` included). */
 export function usePrewarmVisibleAttachments(
@@ -21,6 +22,7 @@ export function usePrewarmVisibleAttachments(
     const ac = new AbortController();
     const cid = companyId?.trim() || undefined;
     const run = () => {
+      if (shouldSkipVisibleRowFullIdlePrewarmOnWeb()) return;
       void prewarmVisibleAttachmentRefsForInstantOpen(urls, {
         signal: ac.signal,
         maxUrls: 180,

@@ -2941,7 +2941,7 @@ if (gotSingleInstanceLock) {
     }
   });
 
-  /** Incremental backup: folder me `.plbp` names list — nested `{company}/{date}/` included. */
+  /** Incremental backup: folder me `.plbp` names list — nested `{company}/{year}/{MonthName}/{day}/` included. */
   ipcMain.handle("pl-list-backup-files", async (_event, dirPathRaw) => {
     try {
       const dirPath = String(dirPathRaw || "").trim();
@@ -2966,14 +2966,28 @@ if (gotSingleInstanceLock) {
     }
   });
 
-  /** Incremental backup: encrypted `.plbp` text read — company password renderer me decrypt karega. */
+  /** Incremental backup: encrypted `.plbp` text read — company password renderer me decrypt karega.
+   * `fileName` nested relative path allow: `Company/2026-07-27/file.plbp`
+   */
   ipcMain.handle("pl-read-backup-file", async (_event, payload) => {
     try {
       const dirPath = String(payload?.dirPath || "").trim();
-      const fileName = path.basename(String(payload?.fileName || ""));
-      if (!dirPath || !fileName) return { ok: false, error: "missing-args" };
-      const full = path.join(dirPath, fileName);
-      const text = fs.readFileSync(full, "utf8");
+      const rawName = String(payload?.fileName || "").replace(/\\/g, "/").trim();
+      if (!dirPath || !rawName) return { ok: false, error: "missing-args" };
+      const segments = rawName.split("/").filter(Boolean);
+      if (segments.some((s) => s === ".." || s === ".")) {
+        return { ok: false, error: "invalid-path" };
+      }
+      const full = path.join(dirPath, ...segments);
+      const rootResolved = path.resolve(dirPath);
+      const fullResolved = path.resolve(full);
+      if (
+        fullResolved !== rootResolved &&
+        !fullResolved.startsWith(rootResolved + path.sep)
+      ) {
+        return { ok: false, error: "invalid-path" };
+      }
+      const text = fs.readFileSync(fullResolved, "utf8");
       return { ok: true, text };
     } catch (e) {
       return { ok: false, error: String(e?.message || e) };

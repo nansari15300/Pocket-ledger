@@ -178,6 +178,7 @@ export function useAttachmentThumbDisplayUrl(
             rememberHoverBlobUrl(url, ou);
           }
           if (!cancelled) setThumb(ou);
+          markAttachmentUrlReady(url);
           return;
         }
         if (kind === "pdf") {
@@ -189,6 +190,7 @@ export function useAttachmentThumbDisplayUrl(
           const result = await convertPdfFirstPageToImage(pdfBlob, 0.55, 96);
           rememberHoverBlobUrl(thumbCacheKey(url), result.thumbnailUrl);
           if (!cancelled) setThumb(result.thumbnailUrl);
+          markAttachmentUrlReady(url);
         }
       } catch {
         /* thumb optional — Preview mode placeholder / tick-only fallback */

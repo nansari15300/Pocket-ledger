@@ -42,6 +42,7 @@ import { getBlobFromAttachmentRefPreferLocalFirst } from "@/lib/attachmentPrevie
 import { tryResolveInterCompanyPeerAttachmentUrl } from "@/lib/interCompany/interCompanyAttachmentPeerResolve";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isWebBrowserAttachmentLazyLoad } from "@/lib/webAttachmentLazyLoadPolicy";
 import { usesEmbeddedNativeAttachmentStorage } from "@/lib/usesEmbeddedNativeAttachmentStorage";
 import {
   useAttachmentHoldPointer,
@@ -57,6 +58,7 @@ import {
 import { toast as sonnerToast } from "sonner";
 import { useCrossCompanyAttachmentAccess } from "@/hooks/useCrossCompanyAttachmentAccess";
 import { useCompany } from "@/hooks/useCompany";
+import { isOnlineCompanyAttachmentNetworkAllowed } from "@/lib/onlineCompanySelectorSyncPolicy";
 import {
   companyAttachmentMode,
   companyRequiresLocalAttachmentUrlsOnly,
@@ -440,10 +442,13 @@ export function FilePreview({
   }, []);
   // Edit forms me fallback company id dene se Firebase object-path resolve stable rehta hai.
   const pathCompanyId = attachmentCompanyId ?? voucherAttachmentFb?.companyId ?? shellCompanyId ?? undefined;
-  const localLedgerOnly = React.useMemo(
-    () => forceLocalAttachmentOnly || companyRequiresLocalAttachmentUrlsOnly(company),
-    [forceLocalAttachmentOnly, company]
-  );
+  const localLedgerOnly = React.useMemo(() => {
+    if (forceLocalAttachmentOnly || companyRequiresLocalAttachmentUrlsOnly(company)) return true;
+    const cid = String(pathCompanyId || company?.id || "").trim();
+    if (!cid) return false;
+    // Files tick OFF → no network fetch; local blob/cache still shows / opens.
+    return !isOnlineCompanyAttachmentNetworkAllowed(cid, company);
+  }, [forceLocalAttachmentOnly, company, pathCompanyId]);
   const attachmentMode = React.useMemo(
     () => companyAttachmentMode(company, { localLedgerOnly }),
     [company, localLedgerOnly]
@@ -1096,9 +1101,12 @@ export function FilePreview({
               // 1) Offline/restart fast fallback: pehle local cache read try.
               let probe = await getOfflineCachedAttachmentBlob(file);
               // 2) Cache miss + online: network se hydrate karo (is call me putCachedBlob bhi hota hai); offline par fetch mat — hang/spinner.
+              // Web: edit tile pe Firebase full hydrate mat — cache/local only; thumb click / open pe full load.
+              const webLazyNoNetwork = isWebBrowserAttachmentLazyLoad();
               if (
                 (!probe || probe.size === 0) &&
                 !localLedgerOnly &&
+                !webLazyNoNetwork &&
                 !controller.signal.aborted &&
                 typeof navigator !== "undefined" &&
                 (navigator.onLine || isCapacitorNativeApp())
@@ -1777,6 +1785,7 @@ export function FilePreview({
   const skipNextClickOpenRef = useRef(false);
 
   const openAttachmentFromFileInfo = useCallback(() => {
+    // Files tick OFF: openAttachmentInApp still opens device cache; blocks download.
     const rawRef =
       typeof normalizedPreviewFile === "string"
         ? normalizeAttachmentUrlForDevicePreview(normalizedPreviewFile)
@@ -1826,6 +1835,7 @@ export function FilePreview({
       gallery: g,
       serverFallback,
       localLedgerOnly,
+      gateCompany: company,
     });
   }, [
     viewFileInfo.url,
@@ -1841,6 +1851,8 @@ export function FilePreview({
     voucherAttachmentFb?.interCompanyPeer,
     voucherAttachmentFb?.companyId,
     voucherAttachmentFb?.voucherId,
+    company,
+    shellCompanyId,
   ]);
 
   const handlePreviewClick = (e: React.MouseEvent) => {

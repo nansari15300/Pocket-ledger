@@ -12,6 +12,8 @@ import { runAutoBackupQueue } from "@/lib/autoBackupRunner";
 import { isCompanyBackupRunning } from "@/lib/companyBackupRunner";
 
 /** Dashboard layout — scheduled auto backup for ticked companies at chosen time. */
+let autoBackupSchedulerGlobalBusy = false;
+
 export function AutoBackupScheduler() {
   const { allCompanies } = useCompany();
   const { user } = useAuth();
@@ -19,7 +21,7 @@ export function AutoBackupScheduler() {
 
   useEffect(() => {
     const tick = async () => {
-      if (ticking.current || isCompanyBackupRunning()) return;
+      if (ticking.current || autoBackupSchedulerGlobalBusy || isCompanyBackupRunning()) return;
       const prefs = readAutoBackupPrefs();
       if (!prefs.enabled || prefs.frequency === "off") return;
       if (!user?.uid) return;
@@ -29,6 +31,7 @@ export function AutoBackupScheduler() {
       if (dueIds.length === 0) return;
 
       ticking.current = true;
+      autoBackupSchedulerGlobalBusy = true;
       try {
         await runAutoBackupQueue({
           companyIds: dueIds,
@@ -38,9 +41,11 @@ export function AutoBackupScheduler() {
           resolveAccountPlanId: (c) =>
             resolveEffectiveAccountPlanId(allCompanies, user.uid, c.planId),
           markRunsInPrefs: true,
+          backupFileRunKind: "Auto",
         });
       } finally {
         ticking.current = false;
+        autoBackupSchedulerGlobalBusy = false;
       }
     };
 

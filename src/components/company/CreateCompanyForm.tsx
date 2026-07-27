@@ -2,7 +2,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2, CalendarIcon, Eye, EyeOff, CheckCircle, AlertTriangle, Upload } from "lucide-react";
+import { Loader2, CalendarIcon, Eye, EyeOff, CheckCircle, AlertTriangle, Upload, UserPlus } from "lucide-react";
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -58,6 +58,7 @@ import { getFiscalRangeForCountry } from "@/lib/fiscalRange";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { upsertLocalCompany } from "@/lib/localCompanyStore";
 import { type LocalCompanyUserRecord, upsertUserInList } from "@/lib/localCompanyUsers";
+import { PlServerShareUserDialog } from "@/components/company/PlServerShareUserDialog";
 import { planAllowsFirebaseOnline } from "@/lib/planSyncEntitlements";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
@@ -98,7 +99,13 @@ const formSchema = z
   );
 
 type FormValues = z.infer<typeof formSchema>;
-type LocalCompanyUserDraft = { name: string; username: string; role: string; password: string };
+type LocalCompanyUserDraft = {
+  name: string;
+  username: string;
+  role: string;
+  password: string;
+  shareEmail?: string;
+};
 
 export function CreateCompanyForm({
   onCompanyCreated,
@@ -110,7 +117,7 @@ export function CreateCompanyForm({
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [passwordEnabled, setPasswordEnabled] = useState(false);
   const [addCompanyUserEnabled, setAddCompanyUserEnabled] = useState(false);
-  const [showCompanyUserPassword, setShowCompanyUserPassword] = useState(false);
+  const [addPersonOpen, setAddPersonOpen] = useState(false);
   const [queuedCompanyUsers, setQueuedCompanyUsers] = useState<LocalCompanyUserDraft[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileToUpload, setFileToUpload] = useState<{ file: File; preview: string } | null>(null);
@@ -283,16 +290,11 @@ export function CreateCompanyForm({
 
       // Login mandatory: local mode me bhi real authenticated user context use karo.
     if (addCompanyUserEnabled) {
-      // Multi-user mode: either current draft is complete or at least one queued user must exist.
-      const hasName = (values.companyUserName || "").trim().length > 1;
-      const hasUsername = (values.companyUserUsername || "").trim().length > 0;
-      const hasPassword = (values.companyUserPassword || "").trim().length > 0;
-      const currentDraftComplete = hasName && hasUsername && hasPassword;
-      if (!currentDraftComplete && queuedCompanyUsers.length === 0) {
+      if (queuedCompanyUsers.length === 0) {
         toast({
           variant: "destructive",
           title: "Company user details required",
-          description: "Add at least one company user (current draft or queued list).",
+          description: "Add at least one user with Add Person.",
         });
         return;
       }
@@ -432,24 +434,13 @@ export function CreateCompanyForm({
           });
         }
         if (addCompanyUserEnabled) {
-          const usersToCreate: LocalCompanyUserDraft[] = [...queuedCompanyUsers];
-          const currentName = (values.companyUserName || "").trim();
-          const currentUsername = (values.companyUserUsername || "").trim();
-          const currentPassword = (values.companyUserPassword || "").trim();
-          if (currentName && currentUsername && currentPassword) {
-            usersToCreate.push({
-              name: currentName,
-              username: currentUsername,
-              role: (values.companyUserRole || "manager").trim().toLowerCase(),
-              password: currentPassword,
-            });
-          }
-          for (const localUser of usersToCreate) {
+          for (const localUser of queuedCompanyUsers) {
             localCompanyUsers = upsertUserInList(localCompanyUsers, {
               username: localUser.username,
               displayName: localUser.name,
               role: localUser.role,
               password: localUser.password,
+              shareEmail: localUser.shareEmail,
             });
           }
         }
@@ -998,7 +989,10 @@ export function CreateCompanyForm({
               <div className="space-y-1">
                 {queuedCompanyUsers.map((u, index) => (
                   <div key={`${u.username}-${index}`} className="flex items-center justify-between text-xs">
-                    <span>{u.name} ({u.username}) - {u.role}</span>
+                    <span>
+                      {u.name} ({u.username}) - {u.role}
+                      {u.shareEmail ? ` · ${u.shareEmail}` : ""}
+                    </span>
                     <Button
                       type="button"
                       variant="ghost"
@@ -1015,117 +1009,14 @@ export function CreateCompanyForm({
           )}
 
           {addCompanyUserEnabled && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-4">
-              <FormField
-                control={form.control}
-                name="companyUserName"
-                render={({ field }: any) => (
-                  <FormItem>
-                    {/* User-requested label rename for local company user naming. */}
-                    <FormLabel className="text-xs sm:text-sm">Comapny User Name</FormLabel>
-                    <FormControl>
-                      <Input placeholder="e.g., Sales User" className="text-xs sm:text-sm" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="companyUserUsername"
-                render={({ field }: any) => (
-                  <FormItem>
-                    {/* User-requested label rename for login identifier field. */}
-                    <FormLabel className="text-xs sm:text-sm">Login User name</FormLabel>
-                    <FormControl>
-                      <Input placeholder="e.g., sales_user" className="text-xs sm:text-sm" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="companyUserRole"
-                render={({ field }: any) => (
-                  <FormItem>
-                    <FormLabel className="text-xs sm:text-sm">Company User Role</FormLabel>
-                    <FormControl>
-                      {/* "manager" value works as admin-level role in current permission presets. */}
-                      <select
-                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs sm:text-sm"
-                        value={field.value || "manager"}
-                        onChange={(e) => field.onChange(e.target.value)}
-                      >
-                        <option value="manager">Admin</option>
-                        <option value="editor">Editor</option>
-                        <option value="accountant">Accountant</option>
-                        <option value="data-entry">Data Entry</option>
-                        <option value="viewer">Viewer</option>
-                      </select>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="companyUserPassword"
-                render={({ field }: any) => (
-                  <FormItem>
-                    <FormLabel className="text-xs sm:text-sm">Company User Password (Optional)</FormLabel>
-                    <div className="relative">
-                      <FormControl>
-                        <Input
-                          type={showCompanyUserPassword ? "text" : "password"}
-                          placeholder="Set user password"
-                          className="text-xs sm:text-sm pr-8"
-                          autoComplete="new-password"
-                          {...field}
-                        />
-                      </FormControl>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6 sm:h-7 sm:w-7"
-                        onClick={() => setShowCompanyUserPassword((s) => !s)}
-                      >
-                        {showCompanyUserPassword ? <EyeOff className="h-3 w-3 sm:h-4 sm:w-4" /> : <Eye className="h-3 w-3 sm:h-4 sm:w-4" />}
-                      </Button>
-                    </div>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <div className="sm:col-span-2 flex justify-end">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    // Queue one more local user draft without saving company immediately.
-                    const name = (form.getValues("companyUserName") || "").trim();
-                    const username = (form.getValues("companyUserUsername") || "").trim();
-                    const role = (form.getValues("companyUserRole") || "manager").trim().toLowerCase();
-                    const password = (form.getValues("companyUserPassword") || "").trim();
-                    if (!name || !username || !password) {
-                      toast({
-                        variant: "destructive",
-                        title: "User details required",
-                        description: "Fill name, username and password before adding another user.",
-                      });
-                      return;
-                    }
-                    setQueuedCompanyUsers((prev) => [...prev, { name, username, role, password }]);
-                    form.setValue("companyUserName", "");
-                    form.setValue("companyUserUsername", "");
-                    form.setValue("companyUserRole", "manager");
-                    form.setValue("companyUserPassword", "");
-                  }}
-                >
-                  Add Another User
-                </Button>
-              </div>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">
+                Local company bhi local server par hi share hoti hai — Add Person se hi user banao.
+              </p>
+              <Button type="button" variant="outline" onClick={() => setAddPersonOpen(true)}>
+                <UserPlus className="mr-2 h-4 w-4" />
+                Add Person
+              </Button>
             </div>
           )}
         </div>
@@ -1217,6 +1108,14 @@ export function CreateCompanyForm({
           </Button>
         </div>
       </form>
+      <PlServerShareUserDialog
+        companyId={null}
+        companyName={form.watch("companyName")}
+        open={addPersonOpen}
+        onOpenChange={setAddPersonOpen}
+        mode="queue"
+        onQueueUser={(draft) => setQueuedCompanyUsers((prev) => [...prev, draft])}
+      />
     </Form>
   );
 }

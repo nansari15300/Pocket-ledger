@@ -58,6 +58,7 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { loadVoucherDataForDeletePreCheck, resolveVoucherDeleteBackdateDate } from "@/lib/voucherDeletePreCheck";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { shouldReadLedgerFromSqliteOnly } from "@/lib/companyStorageKind";
 import { normalizePrefix } from "@/lib/voucherNumberFormat";
 import { getNextVoucherNumberForCompany } from "@/lib/nextVoucherNumber";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
@@ -758,7 +759,7 @@ export function SalaryForm({
     if (!companyId || !salaryVoucherId) return;
     const voucherPath = `companies/${companyId}/vouchers`;
     const desiredMap = normaliseSalaryLinkMap(localSalaryLinkMap);
-    const isLocalMode = isLocalOnlyMode();
+    const isLocalMode = isLocalOnlyMode() || shouldReadLedgerFromSqliteOnly(company);
     const sourceVoucherIds = new Set<string>([
       ...Object.keys(initialSalaryLinkMapRef.current),
       ...Object.keys(desiredMap),
@@ -1489,7 +1490,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
         return;
     }
 
-    const isLocalMode = isLocalOnlyMode();
+    const isLocalMode = isLocalOnlyMode() || shouldReadLedgerFromSqliteOnly(company);
 
     try {
       // Permission check: create or edit

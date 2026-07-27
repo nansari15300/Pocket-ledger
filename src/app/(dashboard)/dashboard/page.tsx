@@ -10,6 +10,9 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { useCompany } from "@/hooks/useCompany";
 import { sortRecentTransactionsDesc } from "@/lib/recentTransactionsSort";
+import { getActiveGate } from "@/lib/gates/gateStore";
+import { isServerGateCompany } from "@/lib/companyStorageKind";
+import { voucherIdFingerprint } from "@/lib/plServerLiveChangeTrace";
 import { firestore } from "@/lib/firebase";
 import {
   doc,
@@ -89,6 +92,8 @@ import usePermissions from '@/hooks/usePermissions';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DaybookReport } from '@/components/reports/DaybookReport';
 import { useVouchers } from '@/hooks/useVouchers';
+import { getOnlineCompanySyncStatusRibbon } from '@/lib/onlineCompanySelectorSyncPolicy';
+import { FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT } from '@/lib/firebaseLedgerCompanySyncPrefs';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { TransactionsTable } from '@/components/vouchers/TransactionsTable';
@@ -586,6 +591,33 @@ function transactionMatchesRecentQuickSearch(
 
 function DashboardPageContent() {
   const { company, companyId, setCompanyId } = useCompany();
+  const [onlineSyncPrefsEpoch, setOnlineSyncPrefsEpoch] = useState(0);
+  useEffect(() => {
+    const bump = () => setOnlineSyncPrefsEpoch((n) => n + 1);
+    window.addEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, bump);
+    return () => window.removeEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, bump);
+  }, []);
+  const onlineSyncStatusRibbon = useMemo(() => {
+    void onlineSyncPrefsEpoch;
+    if (!companyId) return { show: false, message: "" };
+    return getOnlineCompanySyncStatusRibbon(companyId, company);
+  }, [company, companyId, onlineSyncPrefsEpoch]);
+  /** Dashboard-only: company / Files-Data switch pe 2s popup (permanent ribbon nahi). */
+  const [onlineSyncStatusPopup, setOnlineSyncStatusPopup] = useState<string | null>(null);
+  const onlineSyncPopupKeyRef = useRef("");
+  useEffect(() => {
+    if (!onlineSyncStatusRibbon.show || !onlineSyncStatusRibbon.message) {
+      setOnlineSyncStatusPopup(null);
+      onlineSyncPopupKeyRef.current = "";
+      return;
+    }
+    const key = `${String(companyId || "").trim()}|${onlineSyncStatusRibbon.message}|${onlineSyncPrefsEpoch}`;
+    if (key === onlineSyncPopupKeyRef.current) return;
+    onlineSyncPopupKeyRef.current = key;
+    setOnlineSyncStatusPopup(onlineSyncStatusRibbon.message);
+    const t = window.setTimeout(() => setOnlineSyncStatusPopup(null), 2000);
+    return () => window.clearTimeout(t);
+  }, [companyId, onlineSyncStatusRibbon.show, onlineSyncStatusRibbon.message, onlineSyncPrefsEpoch]);
   const { can } = usePermissions();
   const { user } = useAuth();
   const router = useRouter();
@@ -1233,6 +1265,99 @@ function DashboardPageContent() {
     if (!isNaN(limit) && limit > 0) return recentPoolBeforeLimit.slice(0, limit);
     return recentPoolBeforeLimit;
   }, [recentPoolBeforeLimit, recentRowsPerPage, recentUnapprovedOnly]);
+
+  /**
+   * Idle blink tracker (no behavior change): PL-gate company pe Recent Transactions
+   * list kab / kitni baar swap hoti hai — filter console: `[DashRecentIdle]`
+   */
+  const dashRecentIdlePrevRef = useRef<{
+    fp: string;
+    vouchersFp: string;
+    count: number;
+    vouchersCount: number;
+    recentIds: string[];
+    atMs: number;
+  } | null>(null);
+  useEffect(() => {
+    if (!companyId) return;
+    const gate = getActiveGate();
+    const isPlRow =
+      isServerGateCompany(company) ||
+      (company as { plServerShared?: boolean } | null)?.plServerShared === true ||
+      gate.type === "local_server";
+    if (!isPlRow) return;
+
+    const recentFp = voucherIdFingerprint(recentTransactions as unknown[]);
+    const vouchersFp = voucherIdFingerprint(vouchers as unknown[]);
+    const now = Date.now();
+    const prev = dashRecentIdlePrevRef.current;
+    const recentChanged = !prev || prev.fp !== recentFp || prev.count !== recentTransactions.length;
+    const vouchersChanged = !prev || prev.vouchersFp !== vouchersFp || prev.vouchersCount !== vouchers.length;
+    if (!recentChanged && !vouchersChanged) return;
+
+    const currIds = (recentTransactions as Array<{ id?: string }>)
+      .map((t) => String(t?.id || "").trim())
+      .filter(Boolean);
+    const prevIdSet = new Set(prev?.recentIds ?? []);
+    const currIdSet = new Set(currIds);
+    const addedIds = currIds.filter((id) => !prevIdSet.has(id)).slice(0, 12);
+    const removedIds = (prev?.recentIds ?? []).filter((id) => !currIdSet.has(id)).slice(0, 12);
+
+    console.log(
+      `[DashRecentIdle] ${
+        (company as { plServerShared?: boolean } | null)?.plServerShared === true
+          ? "pl_server"
+          : String(company?.storageOption || "").toLowerCase() === "firebase" ||
+              (company as { syncedFromCloud?: boolean } | null)?.syncedFromCloud === true
+            ? "online_firebase"
+            : "local_or_other"
+      } vouchers=${vouchers.length}←${prev?.vouchersCount ?? "?"} recent=${recentTransactions.length}←${prev?.count ?? "?"} ms=${prev ? now - prev.atMs : "-"}`,
+      {
+      at: new Date(now).toISOString(),
+      companyId,
+      companyName: company?.name || null,
+      gateType: gate.type,
+      gateId: gate.id,
+      plServerShared: (company as { plServerShared?: boolean } | null)?.plServerShared === true,
+      storageOption: company?.storageOption ?? null,
+      syncedFromCloud: (company as { syncedFromCloud?: boolean } | null)?.syncedFromCloud === true,
+      enableCrossCompanyLedgerCopy:
+        (company as { enableCrossCompanyLedgerCopy?: boolean } | null)?.enableCrossCompanyLedgerCopy === true,
+      enableShareForReconciliation:
+        (company as { enableShareForReconciliation?: boolean } | null)?.enableShareForReconciliation === true,
+      companyKindHint:
+        (company as { plServerShared?: boolean } | null)?.plServerShared === true
+          ? "pl_server"
+          : String(company?.storageOption || "").toLowerCase() === "firebase" ||
+              (company as { syncedFromCloud?: boolean } | null)?.syncedFromCloud === true
+            ? "online_firebase"
+            : "local_or_other",
+      documentHidden: typeof document !== "undefined" ? document.hidden : null,
+      idleMsSincePrevChange: prev ? now - prev.atMs : null,
+      recentCount: recentTransactions.length,
+      recentCountPrev: prev?.count ?? null,
+      recentFp,
+      recentFpPrev: prev?.fp ?? null,
+      vouchersCount: vouchers.length,
+      vouchersCountPrev: prev?.vouchersCount ?? null,
+      vouchersFp,
+      vouchersFpPrev: prev?.vouchersFp ?? null,
+      recentChanged,
+      vouchersChanged,
+      addedIds,
+      removedIds,
+      sampleRecentIds: currIds.slice(0, 8),
+    });
+
+    dashRecentIdlePrevRef.current = {
+      fp: recentFp,
+      vouchersFp,
+      count: recentTransactions.length,
+      vouchersCount: vouchers.length,
+      recentIds: currIds,
+      atMs: now,
+    };
+  }, [company, companyId, recentTransactions, vouchers]);
   
   const handlePrint = () => {
     const filterLabel =
@@ -1992,6 +2117,15 @@ function DashboardPageContent() {
 
   return (
     <div className="px-0.5 pt-0.5" style={{ paddingBottom: footerReservePx + recentBottomControlsReservePx }}>
+      {onlineSyncStatusPopup ? (
+        <div
+          className="pointer-events-none fixed left-1/2 top-16 z-[200] w-[min(92vw,28rem)] -translate-x-1/2 rounded-md border border-amber-300/90 bg-amber-50 px-4 py-2.5 text-center text-xs text-amber-950 shadow-md sm:text-sm"
+          role="status"
+          aria-live="polite"
+        >
+          {onlineSyncStatusPopup}
+        </div>
+      ) : null}
       <div className="p-0 min-h-0">
         {renderDashboardContent()}
       </div>

@@ -114,7 +114,7 @@ export function ShareCompanyDialog({
         toast({
           variant: "destructive",
           title: "Invalid role",
-          description: "Owner cannot be assigned through online share. Choose Admin or another role.",
+          description: "Owner cannot be assigned through online share. Choose Manager or another role.",
         });
         return;
       }

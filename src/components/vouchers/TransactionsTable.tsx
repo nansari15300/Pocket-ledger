@@ -80,6 +80,7 @@ import {
   prewarmVisibleAttachmentRefsForInstantOpen,
 } from "@/components/vouchers/attachmentHoverPreviewBody";
 import { updateAttachmentPrefetchPriorityFromVisibleRows } from "@/lib/attachmentPrefetchPriorityBuffer";
+import { shouldSkipVisibleRowFullIdlePrewarmOnWeb } from "@/lib/webAttachmentLazyLoadPolicy";
 import { getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize";
 import { statementCheckTxnId } from "@/lib/statementCheckModeStorage";
 import { stripSpendWiseSyntheticOpeningMaster } from "@/lib/ledgerPagePrint";
@@ -1113,6 +1114,8 @@ export function TransactionsTable({
     let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
     const runWarm = () => {
       const warmCompanyId = companyId?.trim() || undefined;
+      // Web: idle full-blob warm skip — Preview thumbs load visible rows; hover/click loads full.
+      if (shouldSkipVisibleRowFullIdlePrewarmOnWeb()) return;
       // Idle-time warm keeps row mount responsive while making first hover near-instant.
       void prewarmHoverPreviewHttpsUrls(visibleAttachmentUrls, {
         signal: ac.signal,

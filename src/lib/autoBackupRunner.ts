@@ -19,6 +19,7 @@ import {
 import { getLocalCompanyById, listLocalCompanies } from "@/lib/localCompanyStore";
 import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
+import { getOnlineCompanyBackupTickGate } from "@/lib/onlineCompanySelectorSyncPolicy";
 
 export type AutoBackupCompanyResult = {
   companyId: string;
@@ -34,6 +35,8 @@ export type RunAutoBackupQueueInput = {
   resolveAccountPlanId: (company: Company) => string;
   /** Scheduler: mark last run per company on success. */
   markRunsInPrefs?: boolean;
+  /** File name prefix Manual_ vs Auto_ (scheduled = Auto, Backup now = Manual). */
+  backupFileRunKind?: import("@/lib/autoBackupPath").BackupFileRunKind;
 };
 
 function isBackupEligibleCompany(c: Company | undefined): c is Company {
@@ -56,6 +59,8 @@ async function resolveBackupCompany(company: Company, companyId: string): Promis
 }
 
 /** Sequential backup for selected companies — same pipeline as Backup Data. */
+let autoBackupQueueInFlight = false;
+
 export async function runAutoBackupQueue(input: RunAutoBackupQueueInput): Promise<AutoBackupCompanyResult[]> {
   const ids = [...new Set(input.companyIds.map((id) => String(id || "").trim()).filter(Boolean))];
   const results: AutoBackupCompanyResult[] = [];
@@ -67,7 +72,7 @@ export async function runAutoBackupQueue(input: RunAutoBackupQueueInput): Promis
       result: { ok: false, error: "Backup location not set. Choose a folder first." },
     }));
   }
-  if (isCompanyBackupRunning()) {
+  if (autoBackupQueueInFlight || isCompanyBackupRunning()) {
     return ids.map((companyId) => ({
       companyId,
       companyName: companyId,
@@ -75,6 +80,8 @@ export async function runAutoBackupQueue(input: RunAutoBackupQueueInput): Promis
     }));
   }
 
+  autoBackupQueueInFlight = true;
+  try {
   const staticBackupClient = isEmbeddedOfflinePreloadClient();
   let prefs = readAutoBackupPrefs();
   const pickerRows = await loadAutoBackupCompanyPickerRows(
@@ -96,16 +103,33 @@ export async function runAutoBackupQueue(input: RunAutoBackupQueueInput): Promis
       continue;
     }
 
+    // Data-only from Local SQLite always OK.
+    // Local-only / for_offline embed: device bytes without Files tick.
+    // Online merge download: Files tick required.
+
     const backupCompany = await resolveBackupCompany(company, companyId);
     const planSource = input.allCompanies.find((c) => c.id === companyId) ?? company;
-    const backupRelativeDir = buildAutoBackupRelativeDir(company.name, companyId);
+    const backupRelativeDir = buildAutoBackupRelativeDir(
+      company.name,
+      companyId,
+      new Date(),
+      prefs.folderDateSystem
+    );
     const companySettings = getAutoBackupCompanySettings(prefs, companyId, staticBackupClient);
-    const includeAttachments = staticBackupClient && companySettings.includeAttachments;
+    const wantAttachments = staticBackupClient && companySettings.includeAttachments;
     const resolvedSourceMode: "local_only" | "online_merge" = staticBackupClient
       ? "local_only"
       : companySettings.backupIntent === "for_offline"
         ? "local_only"
         : companySettings.backupSourceMode;
+    const localDeviceEmbed =
+      staticBackupClient ||
+      resolvedSourceMode === "local_only" ||
+      companySettings.backupIntent === "for_offline";
+    const attachGate = getOnlineCompanyBackupTickGate(company, {
+      attachmentEmbedMode: localDeviceEmbed ? "local_device_bytes" : "may_download",
+    });
+    const includeAttachments = Boolean(wantAttachments && attachGate.filesAllowed);
 
     const result = await startCompanyBackupRun({
       company: backupCompany,
@@ -117,6 +141,8 @@ export async function runAutoBackupQueue(input: RunAutoBackupQueueInput): Promis
       backupIntent: staticBackupClient ? companySettings.backupIntent : companySettings.backupIntent,
       attachmentMissingPolicy: includeAttachments ? "local_only" : undefined,
       backupRelativeDir,
+      folderDateSystem: prefs.folderDateSystem,
+      backupFileRunKind: input.backupFileRunKind === "Auto" ? "Auto" : "Manual",
       backupRestoreGmails: companySettings.restoreAllowedGmails,
     });
 
@@ -133,6 +159,9 @@ export async function runAutoBackupQueue(input: RunAutoBackupQueueInput): Promis
   }
 
   return results;
+  } finally {
+    autoBackupQueueInFlight = false;
+  }
 }
 
 export function companyHasAutoBackupPassword(c: Company | undefined): boolean {

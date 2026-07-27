@@ -119,6 +119,13 @@ import { isCloudBackedCompanyShape } from "@/lib/offlineFullWarmSync";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import {
+  logCompanyOnlinePlFlip,
+  markStickyPlServerCompanyId,
+  shouldPreferPlServerOverCloudRow,
+  shouldRetainPlServerCompanyShape,
+} from "@/lib/companyOnlinePlFlipTrace";
+import { PL_SERVER_COMPANY_META_UPDATED_EVENT } from "@/lib/plServerCompanyMetaSync";
+import {
   embeddedClientRequiresServerPlanSyncWhenOnline,
   shouldSkipPeriodicPlanSyncForLocalOnlyMode,
 } from "@/lib/planSyncClientPolicy";
@@ -471,11 +478,72 @@ function companyLedgerUiFingerprint(company: Company | null | undefined): string
   return JSON.stringify(row);
 }
 
+/** Host/local SQLite settings — PL shape retain ke baad bhi root fields merge karo (voucher/decimal/share). */
+function mergePlHostCompanyMetaFields(prev: Company, next: Company): Company {
+  const keys = [
+    "permissionConfig",
+    "localCompanyUsers",
+    "sharedWith",
+    "voucherPrefixes",
+    "autoVoucherNumbering",
+    "allowVoucherNumberEditing",
+    "allowRateEditing",
+    "enableVoucherPrefixSelection",
+    "enableLinkPaymentToTxns",
+    "enableCrossCompanyLedgerCopy",
+    "enableShareForReconciliation",
+    "spendWiseEnabled",
+    "spendWiseOppositeVoucherEditable",
+    "requirePaymentLinkByRole",
+    "voucherHistoryEnabled",
+    "voucherHistoryLimit",
+    "voucherHistoryFullBehavior",
+    "recurringVoucherSettings",
+    "decimalPlaces",
+    "showDrCr",
+    "showCurrencySymbol",
+    "currencyCode",
+    "currencySymbol",
+    "displaySettings",
+    "name",
+    "address",
+    "pan",
+    "phone",
+    "email",
+    "logoUrl",
+    "adminUsername",
+  ] as const;
+  const prevRec = prev as Company & Record<string, unknown>;
+  const nextRec = next as Company & Record<string, unknown>;
+  let changed = false;
+  const merged: Company & Record<string, unknown> = { ...prevRec };
+  for (const key of keys) {
+    if (!(key in nextRec) || nextRec[key] === undefined) continue;
+    if (JSON.stringify(prevRec[key] ?? null) === JSON.stringify(nextRec[key] ?? null)) continue;
+    (merged as Record<string, unknown>)[key] = nextRec[key];
+    changed = true;
+  }
+  return changed ? (merged as Company) : prev;
+}
+
 function keepCompanyRefIfLedgerUnchanged(prev: Company | null, next: Company | null): Company | null {
   if (!next) return null;
   if (!prev) return next;
   if (prev.id !== next.id) return next;
-  if (companyLedgerUiFingerprint(prev) === companyLedgerUiFingerprint(next)) return prev;
+  // Dual Firebase+PL same id: cloud stamp se PL row overwrite = header Sync/Recon + voucher blink.
+  if (shouldRetainPlServerCompanyShape(prev, next)) {
+    const merged = mergePlHostCompanyMetaFields(prev, next);
+    logCompanyOnlinePlFlip("keepRef_retain_pl_block_cloud", {
+      before: prev,
+      after: next,
+      source: "keepCompanyRefIfLedgerUnchanged",
+      extra: { metaMerged: merged !== prev },
+    });
+    return merged;
+  }
+  if (companyLedgerUiFingerprint(prev) === companyLedgerUiFingerprint(next)) {
+    return mergePlHostCompanyMetaFields(prev, next);
+  }
   return next;
 }
 
@@ -633,7 +701,40 @@ function shouldDeferRefreshBootCompanyClear(
 
 export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const [companyId, setCompanyIdState] = useState<string | null>(null);
-  const [company, setCompany] = useState<Company | null>(null);
+  const [company, setCompanyRaw] = useState<Company | null>(null);
+  /** Har setCompany call-site ka tag — minified stack se source nahi milta. */
+  const setCompanyFrom = useCallback((source: string, action: React.SetStateAction<Company | null>) => {
+    setCompanyRaw((prev) => {
+      let next = typeof action === "function" ? action(prev) : action;
+      if (prev === next) return prev;
+      if (shouldRetainPlServerCompanyShape(prev, next)) {
+        logCompanyOnlinePlFlip("retain_pl_block_cloud", {
+          before: prev,
+          after: next,
+          source,
+        });
+        return prev;
+      }
+      if (
+        next &&
+        (next.plServerShared === true ||
+          isServerGateCompany(next) ||
+          shouldPreferPlServerOverCloudRow(next))
+      ) {
+        markStickyPlServerCompanyId(next.id);
+      }
+      logCompanyOnlinePlFlip("setCompany", {
+        before: prev,
+        after: next,
+        source,
+      });
+      return next;
+    });
+  }, []);
+  const setCompany = useCallback(
+    (action: React.SetStateAction<Company | null>) => setCompanyFrom("untagged", action),
+    [setCompanyFrom]
+  );
   /** Local fiscal split save/tab change — merged `company` dubara banao. */
   const [fiscalLocalEpoch, setFiscalLocalEpoch] = useState(0);
   const [allCompanies, setAllCompanies] = useState<Company[]>([]);
@@ -671,12 +772,38 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         : registrySourceRaw;
       const row = registry.find((c) => c.id === cid);
       if (row) {
-        setCompany((prev) => (prev?.id === cid ? keepCompanyRefIfLedgerUnchanged(prev, row) : prev));
+        setCompanyFrom("plAccessContext:registryRow:keepRef", (prev) => (prev?.id === cid ? keepCompanyRefIfLedgerUnchanged(prev, row) : prev));
       }
     };
     window.addEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, onAccessContext);
     return () => window.removeEventListener(PL_SERVER_ACCESS_CONTEXT_EVENT, onAccessContext);
   }, []);
+  /** Host Role Permissions bump → selected company context me permissionConfig/local users turant merge. */
+  useEffect(() => {
+    const onMeta = (event: Event) => {
+      const detail = (event as CustomEvent<{ companyId?: string }>).detail;
+      const cid = String(detail?.companyId || companyIdLiveRef.current || "").trim();
+      if (!cid || companyIdLiveRef.current !== cid) return;
+      void (async () => {
+        try {
+          const row = await getLocalCompanyById(cid, { includeDeleted: true });
+          if (!row || companyIdLiveRef.current !== cid) return;
+          const patch = {
+            ...(row as unknown as Company),
+            id: cid,
+            name: typeof row.name === "string" ? row.name : cid,
+          } as Company;
+          setCompanyFrom("plServerCompanyMeta:sqlite:keepRef", (prev) =>
+            prev?.id === cid ? keepCompanyRefIfLedgerUnchanged(prev, patch) : prev
+          );
+        } catch {
+          /* ignore */
+        }
+      })();
+    };
+    window.addEventListener(PL_SERVER_COMPANY_META_UPDATED_EVENT, onMeta);
+    return () => window.removeEventListener(PL_SERVER_COMPANY_META_UPDATED_EVENT, onMeta);
+  }, [setCompanyFrom]);
   useEffect(() => {
     allCompaniesRegistryLiveRef.current = allCompaniesRegistry;
   }, [allCompaniesRegistry]);
@@ -959,7 +1086,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const suppressAutoSelectUntilRef = useRef(0);
   const AUTO_SELECT_AFTER_CLEAR_SUPPRESS_MS = 15_000;
 
-  const clearCompanyId = useCallback((opts?: { force?: boolean }) => {
+  const clearCompanyId = useCallback((opts?: { force?: boolean; reason?: string }) => {
     const liveId = String(companyIdLiveRef.current || "").trim();
     if (
       !opts?.force &&
@@ -969,17 +1096,47 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       plDbgCompanyRecovery("clearCompanyId:deferredRefreshBoot", { companyId: liveId });
       return;
     }
+    // Shared PL-gate blink root: delta/list/reconcile clearCompanyId → auto-select → clear loop (~1s).
+    // Sirf logout / gate switch / explicit user clear allow.
+    const allowClearReasons = new Set(["logout", "gate_switch", "user_clear", "company_deleted"]);
+    let gateType = "?";
+    try {
+      gateType = getActiveGate().type;
+    } catch {
+      /* ignore */
+    }
+    if (
+      liveId &&
+      gateType === "local_server" &&
+      shouldPreferPlServerOverCloudRow({ id: liveId }) &&
+      !allowClearReasons.has(String(opts?.reason || ""))
+    ) {
+      logCompanyOnlinePlFlip("clearCompanyId_blocked_pl_gate", {
+        before: companyIdLiveRef.current
+          ? ({ id: liveId, plServerShared: true, storageOption: "local" } as Company)
+          : null,
+        after: null,
+        source: `clearCompanyId:blocked reason=${opts?.reason || "none"} force=${opts?.force === true}`,
+        extra: { force: opts?.force === true, reason: opts?.reason || null },
+      });
+      plDbgCompanyRecovery("clearCompanyId:blockedPlGate", {
+        companyId: liveId,
+        force: opts?.force === true,
+        reason: opts?.reason || null,
+      });
+      return;
+    }
     const err = new Error();
     const st = typeof err.stack === "string" ? err.stack.split("\n").slice(1, 10).join(" | ") : "";
-    plDbgCompanyRecovery("clearCompanyId", { stackHint: st });
-    plNavDbgCritical("useCompany.clearCompanyId", { stackHint: st.slice(0, 400) });
+    plDbgCompanyRecovery("clearCompanyId", { stackHint: st, reason: opts?.reason || null });
+    plNavDbgCritical("useCompany.clearCompanyId", { stackHint: st.slice(0, 400), reason: opts?.reason || null });
     suppressAutoSelectUntilRef.current = Date.now() + AUTO_SELECT_AFTER_CLEAR_SUPPRESS_MS;
     // Clear both tab override and global fallback when user leaves/deletes the active company.
     clearSelectedCompanyId();
     setCompanyIdState(null);
-    setCompany(null);
+    setCompanyFrom("clearCompanyId:null", null);
     // Poori company list mat hatao — mirror/list reload par auto-select [0] flicker + rapid switch hota tha.
-  }, []);
+  }, [setCompanyFrom]);
 
   useEffect(() => {
     if (!companyId) return;
@@ -1024,12 +1181,20 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         plDbgCompanyRecovery("gateFilter:keepServerGatePreview", { companyId, gateId: activeGate.id });
         return;
       }
+      if (
+        !gateSwitched &&
+        activeGate.type === "local_server" &&
+        shouldPreferPlServerOverCloudRow({ id: companyId, ...(selectedRow || {}) })
+      ) {
+        plDbgCompanyRecovery("gateFilter:keepPlPreferSticky", { companyId, gateId: activeGate.id });
+        return;
+      }
       if (shouldDeferRefreshBootCompanyClear(companyId, mountedAtRef.current, bootPinnedCompanyIdRef.current)) {
         return;
       }
       // Gate switch par auto-select purani (device) company na uthaye — clear ↔ select loop avoid.
       suppressAutoSelectUntilRef.current = Date.now() + AUTO_SELECT_AFTER_CLEAR_SUPPRESS_MS;
-      clearCompanyId();
+      clearCompanyId({ reason: gateSwitched ? "gate_switch" : undefined });
     }
   }, [companyId, gateEpoch, clearCompanyId, loading, allCompaniesForUi]);
 
@@ -1051,10 +1216,17 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       null;
     const fromListStamped = fromList ? stampPureLocalDeviceCompanyRow(fromList) : null;
     if (fromListStamped) {
-      setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, fromListStamped));
+      if (
+        getActiveGate().type === "local_server" ||
+        fromListStamped.plServerShared === true ||
+        isServerGateCompany(fromListStamped)
+      ) {
+        markStickyPlServerCompanyId(nextId);
+      }
+      setCompanyFrom("useCompany.setCompanyId:keepRef", (prev) => keepCompanyRefIfLedgerUnchanged(prev, fromListStamped));
       setLoading(false);
     } else {
-      setCompany(null);
+      setCompanyFrom("useCompany.setCompanyId:null", null);
       setLoading(true);
       void (async () => {
         try {
@@ -1068,7 +1240,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             syncPolicy: "offline",
             syncedFromCloud: false,
           } as Company);
-          setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, norm));
+          setCompanyFrom("useCompany.setCompanyId:keepRef", (prev) => keepCompanyRefIfLedgerUnchanged(prev, norm));
           setLoading(false);
         } catch {
           if (companyIdLiveRef.current === nextId) setLoading(false);
@@ -1207,7 +1379,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           pathnameRef.current
         );
       });
-      setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, normalized));
+      setCompanyFrom("setCompany:keepRef", (prev) => keepCompanyRefIfLedgerUnchanged(prev, normalized));
       setCompanyIdState(nextId);
       markActiveAttachmentCompanyId(nextId);
       markSuppressFirestorePermissionForCompany(nextId);
@@ -1246,7 +1418,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           return;
         }
 
-        setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, normalized));
+        setCompanyFrom("setCompany:keepRef", (prev) => keepCompanyRefIfLedgerUnchanged(prev, normalized));
         setAllCompanies((prev) => {
           const idx = prev.findIndex((c) => c.id === id);
           if (idx < 0) return [...prev, normalized];
@@ -1329,16 +1501,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         });
         /** Staff PL-share: Firestore me same id online company zinda ho to UI/SQLite pe cloud stamp mat chipkao. */
         const preferPlServerOverCloud = (row: { id?: string; plServerHostCompanyId?: string; plServerShared?: boolean } | null | undefined) =>
-          Boolean(row) &&
-          (row!.plServerShared === true ||
-            isServerGateCompany(row as Company) ||
-            isListedPlServerSharedCompany(row));
+          shouldPreferPlServerOverCloudRow(row);
 
         const companyById = new Map<string, Company>();
         for (const row of mirroredRows) {
           // Staff device: PL share list me ye company hai to Firestore mirror row skip —
           // warna pehle firebase stamp → baad me local server-gate → A↔B flip.
-          if (preferPlServerOverCloud({ id: row.id, plServerShared: false })) continue;
+          if (preferPlServerOverCloud({ id: row.id })) continue;
           const norm = normalizeLocalCompany({
             id: row.id,
             ...row.data,
@@ -1467,7 +1636,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         setAllCompanies(filteredLocals);
         const liveId = companyIdLiveRef.current;
         if (!liveId) {
-          setCompany(null);
+          setCompanyFrom("performLocalRegistryFirestoreMirror:setList:null", null);
           return;
         }
         const selected = await getLocalCompanyById(liveId);
@@ -1493,7 +1662,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             liveId &&
             (isCompanyAllowedOnActiveServerGate(liveId, gate) || (norm && isServerGateCompany(norm)))
           ) {
-            if (norm) setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, norm));
+            if (norm) setCompanyFrom("performLocalRegistryFirestoreMirror:selectedInvisible:oauthGraceHold:keepRef", (prev) => keepCompanyRefIfLedgerUnchanged(prev, norm));
             plDbgCompanyRecovery("performLocalRegistryFirestoreMirror:keepServerGate", { liveId });
             return;
           }
@@ -1516,7 +1685,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           }
           return;
         }
-        setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, norm));
+        setCompanyFrom("performLocalRegistryFirestoreMirror:selectedInvisible:clearAndPush:keepRef", (prev) => keepCompanyRefIfLedgerUnchanged(prev, norm));
       } finally {
         if (touchLoading) setLoading(false);
       }
@@ -1547,11 +1716,23 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           const sel = await getLocalCompanyById(liveId);
           if (!sel) return;
           if (!isLocalCompanyVisibleToAppAccount(sel, user)) {
-            clearCompanyId({ force: true });
-            setCompany(null);
+            // Shared PL staff: SQLite row me Firebase share emails nahi hote — membership false → clear loop.
+            if (
+              shouldPreferPlServerOverCloudRow(sel) ||
+              shouldPreferPlServerOverCloudRow({ id: liveId }) ||
+              isServerGateCompany(sel as Company)
+            ) {
+              markStickyPlServerCompanyId(liveId);
+              setCompanyFrom("plDeltaMirror:keepPlGateDespiteLocalMembership", (prev) =>
+                keepCompanyRefIfLedgerUnchanged(prev, normalizeLocalCompany(sel as unknown as Company))
+              );
+              return;
+            }
+            clearCompanyId({ force: true, reason: "user_clear" });
+            setCompanyFrom("plDeltaMirror:membershipFail:null", null);
             return;
           }
-          setCompany((prev) =>
+          setCompanyFrom("plDeltaMirror:updater", (prev) =>
             keepCompanyRefIfLedgerUnchanged(prev, normalizeLocalCompany(sel as unknown as Company))
           );
         } catch {
@@ -1595,7 +1776,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           const rowAfter = await getLocalCompanyById(cid);
           if (rowAfter && r.ok && r.applied) {
             const norm = normalizeLocalCompany(rowAfter as unknown as Company);
-            setCompany((prev) => (prev?.id === cid ? keepCompanyRefIfLedgerUnchanged(prev, norm) : prev));
+            setCompanyFrom("refreshAuthoritativePlan:keepRef", (prev) => (prev?.id === cid ? keepCompanyRefIfLedgerUnchanged(prev, norm) : prev));
             setAllCompanies((prev) => {
               const idx = prev.findIndex((c) => c.id === cid);
               if (idx < 0) return prev;
@@ -1628,7 +1809,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         const rowAfter = await getLocalCompanyById(cid);
         if (rowAfter && r.ok && r.applied) {
           const norm = normalizeLocalCompany(rowAfter as unknown as Company);
-          setCompany((prev) => (prev?.id === cid ? keepCompanyRefIfLedgerUnchanged(prev, norm) : prev));
+          setCompanyFrom("setCompany:keepRef", (prev) => (prev?.id === cid ? keepCompanyRefIfLedgerUnchanged(prev, norm) : prev));
           setAllCompanies((prev) => {
             const idx = prev.findIndex((c) => c.id === cid);
             if (idx < 0) return prev;
@@ -1901,7 +2082,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         sqliteRegistryListHydratedRef.current = true;
 
         if (!liveCompanyId) {
-          setCompany(null);
+          setCompanyFrom("localOnlyRegistry:SQLite:setList:null", null);
           setLoading(false);
           // Cache clear: SQLite khali + uid — email late ho to bhi owned Firestore pull chale.
           needImmediateFullMirror = normalizedLocalCompanies.length === 0 && !!user?.uid;
@@ -1910,19 +2091,19 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           if (cancelled) return;
           if (!sel) {
             needImmediateFullMirror = true;
-            setCompany(null);
+            setCompanyFrom("localOnlyRegistry:SQLite:setList:null", null);
           } else if (!isLocalCompanyVisibleToAppAccount(sel, user)) {
             clearCompanyId({ force: true });
-            setCompany(null);
+            setCompanyFrom("localOnlyRegistry:SQLite:setList:null", null);
           } else {
-            setCompany((prev) =>
+            setCompanyFrom("localOnlyRegistry:SQLite:setList:updater", (prev) =>
               keepCompanyRefIfLedgerUnchanged(prev, normalizeLocalCompany(sel as unknown as Company))
             );
           }
           setLoading(false);
         }
       } catch {
-        if (companyIdLiveRef.current) setCompany(null);
+        if (companyIdLiveRef.current) setCompanyFrom("setCompany:null", null);
         setLoading(false);
         needImmediateFullMirror = !!user?.uid;
       }
@@ -2055,7 +2236,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           if (liveId) {
             const sel = await getLocalCompanyById(liveId);
             if (sel) {
-              setCompany((prev) =>
+              setCompanyFrom("setCompany:updater", (prev) =>
                 keepCompanyRefIfLedgerUnchanged(prev, normalizeLocalCompany(sel as unknown as Company))
               );
             }
@@ -2093,7 +2274,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         /* ignore */
       }
       // Embedded shell me transient auth null aane par selected company turant clear mat karo.
-      clearCompanyId();
+      clearCompanyId({ reason: "logout" });
     }, logoutClearDelayMs);
     return () => {
       if (clearCompanyOnLogoutTimerRef.current) {
@@ -2131,10 +2312,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
     const companyMap = new Map<string, Company>();
     const preferPlServerOverCloudSnap = (row: { id?: string; plServerHostCompanyId?: string; plServerShared?: boolean } | null | undefined) =>
-      Boolean(row) &&
-      (row!.plServerShared === true ||
-        isServerGateCompany(row as Company) ||
-        isListedPlServerSharedCompany(row));
+      shouldPreferPlServerOverCloudRow(row);
 
     owned.forEach((c: Company) => {
       // Staff PL-share same id — Firestore owned snap se online mat banao (owner Firebase login + staff share race).
@@ -2619,6 +2797,10 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       allCompaniesLiveRef.current.find((c) => c.id === companyId) ??
       allCompaniesRegistryLiveRef.current.find((c) => c.id === companyId) ??
       (company?.id === companyId ? company : null);
+    // PL-gate / sticky PL share: Firestore company doc listener mat lagao — online stamp flip = header Sync/Recon blink.
+    if (shouldPreferPlServerOverCloudRow(activeRow) || shouldPreferPlServerOverCloudRow({ id: companyId })) {
+      return;
+    }
     if (!isCloudBackedCompanyShape(activeRow)) return;
 
     let cancelled = false;
@@ -2647,7 +2829,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           }
           if (cancelled || merged.id !== companyIdLiveRef.current) return;
 
-          setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, merged));
+          setCompanyFrom("activeCompanyDoc:firestoreSnap:keepRef", (prev) => keepCompanyRefIfLedgerUnchanged(prev, merged));
           plDbgCompanyRecovery("activeCompanyDoc:listRowMerge", {
             companyId: merged.id,
             isDeleted: merged.isDeleted === true,
@@ -2697,6 +2879,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       if (cancelled) return;
       if (selectedAtStart && result.removedIds.includes(selectedAtStart)) {
         if (
+          shouldPreferPlServerOverCloudRow({ id: selectedAtStart }) ||
           shouldSuppressTransientCompanyClear() ||
           readLocalBackupRestoreSelectionGrace(selectedAtStart) ||
           readDriveRestoreSelectionGrace(selectedAtStart)
@@ -2710,7 +2893,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         if (process.env.NODE_ENV !== "production") {
           console.log("[RELOAD_TRIGGER]", "useCompany:router.push(/company) after reconcileOnlineMirrorsWithServer");
         }
-        clearCompanyId();
+        clearCompanyId({ reason: "company_deleted" });
         router.push("/company");
       }
       if (result.changed) reloadLocalCompanyRegistry();
@@ -2722,7 +2905,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     if (!companyId) {
-      setCompany(null);
+      setCompanyFrom("companyIdNull:clearRow", null);
       listRecoverySyncForIdRef.current = null;
       listRecoveryDeferPulseCountRef.current = 0;
       listRecoveryDeferPulseCompanyRef.current = "";
@@ -2739,7 +2922,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       ledgerShield: shouldSuppressTransientCompanyClear(),
     });
     if (companyFromList && isCompanyVisibleInMainApp(companyFromList)) {
-      setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, companyFromList));
+      setCompanyFrom("listRecovery:tick:keepRef", (prev) => keepCompanyRefIfLedgerUnchanged(prev, companyFromList));
       listRecoverySyncForIdRef.current = null;
       listRecoveryDeferPulseCountRef.current = 0;
       return;
@@ -2753,7 +2936,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         return;
       }
       plDbgCompanyRecovery("listRecovery:listRowNotMainVisible:clear", { companyId });
-      setCompany(null);
+      setCompanyFrom("listRecovery:listRowNotMainVisible:clear:null", null);
       listRecoverySyncForIdRef.current = null;
       clearCompanyId();
       return;
@@ -2802,13 +2985,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             return;
           }
           plDbgCompanyRecovery("listRecovery:sqliteNotMainVisible:clear", { companyId });
-          setCompany(null);
+          setCompanyFrom("listRecovery:sqliteNotMainVisible:clear:null", null);
           listRecoverySyncForIdRef.current = null;
           clearCompanyId();
           return;
         }
         plDbgCompanyRecovery("listRecovery:sqliteMergeIntoList", { companyId });
-        setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, normalized));
+        setCompanyFrom("listRecovery:sqliteMergeIntoList:keepRef", (prev) => keepCompanyRefIfLedgerUnchanged(prev, normalized));
         setAllCompanies((prev) => {
           if (prev.some((c) => c.id === companyId)) return prev;
           return [...prev, normalized];
@@ -2828,7 +3011,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
               const normalized = normalizeLocalCompany(raw);
               if (isCompanyVisibleInMainApp(normalized)) {
                 plDbgCompanyRecovery("listRecovery:firestoreFallbackMerge", { companyId });
-                setCompany((prev) => keepCompanyRefIfLedgerUnchanged(prev, normalized));
+                setCompanyFrom("listRecovery:firestoreFallbackMerge:keepRef", (prev) => keepCompanyRefIfLedgerUnchanged(prev, normalized));
                 setAllCompanies((prev) => {
                   if (prev.some((c) => c.id === companyId)) return prev;
                   return [...prev, normalized];

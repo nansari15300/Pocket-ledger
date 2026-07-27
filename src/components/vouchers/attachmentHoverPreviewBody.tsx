@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
+import { isOnlineCompanyAttachmentNetworkAllowed } from "@/lib/onlineCompanySelectorSyncPolicy";
 import { tryGetStoragePathFromFirebaseDownloadUrl, looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
 import {
   isLocalFileRef,
@@ -117,11 +118,14 @@ function HoverPreviewHttpsAwareImage(props: {
   loading?: React.ImgHTMLAttributes<HTMLImageElement>["loading"];
   onDoubleClick?: React.MouseEventHandler<HTMLImageElement>;
   localLedgerOnly?: boolean;
+  /** Company Selector Files tick — network download/upload. */
+  filesNetworkAllowed?: boolean;
   companyId?: string;
   companyMode?: CompanyAttachmentMode;
 }) {
   const u = String(props.url || "");
   const localBytesOnly = props.localLedgerOnly === true || embeddedAttachmentDisplayUsesLocalBytesOnly();
+  const filesNetworkAllowed = props.filesNetworkAllowed !== false;
   const [displaySrc, setDisplaySrc] = React.useState<string>(() => {
     if (!/^https?:\/\//i.test(u)) {
       if (u.startsWith("blob:") || u.startsWith("data:")) return u;
@@ -131,7 +135,8 @@ function HoverPreviewHttpsAwareImage(props: {
     }
     const fromLru = peekHoverCachedBlobUrl(u);
     if (fromLru) return fromLru;
-    if (typeof navigator !== "undefined" && navigator.onLine) {
+    // Files untick / local-only: raw HTTPS mat — pehle IndexedDB/blob cache.
+    if (!localBytesOnly && typeof navigator !== "undefined" && navigator.onLine) {
       return u;
     }
     return "";
@@ -156,9 +161,29 @@ function HoverPreviewHttpsAwareImage(props: {
     const applyResolved = (displayUrl: string | null, blob: Blob | null) => {
       if (cancelled) return;
       if (displayUrl) {
-        setLoadFailed(false);
-        setDisplaySrc(displayUrl);
-        return;
+        // Local-only: HTTPS displayUrl mat — network gate bypass ho jata.
+        if (localBytesOnly && /^https?:\/\//i.test(displayUrl)) {
+          /* fall through to blob / fail */
+        } else {
+          setLoadFailed(false);
+          setDisplaySrc(displayUrl);
+          if (!localBytesOnly && /^https?:\/\//i.test(displayUrl)) {
+            void import("@/lib/offlineAttachmentUrlCache")
+              .then(({ getRemoteAttachmentBlobPreferOfflineCache }) =>
+                getRemoteAttachmentBlobPreferOfflineCache(displayUrl, ac.signal, {
+                  companyId: props.companyId,
+                  awaitDiskWrite: false,
+                })
+              )
+              .then((cached) => {
+                if (cancelled || !cached || cached.size <= 0) return;
+                const ou = URL.createObjectURL(cached);
+                rememberHoverBlobUrl(u, ou);
+              })
+              .catch(() => {});
+          }
+          return;
+        }
       }
       if (blob && blob.size > 0) {
         const ou = URL.createObjectURL(blob);
@@ -171,6 +196,20 @@ function HoverPreviewHttpsAwareImage(props: {
       if (!localBytesOnly && typeof navigator !== "undefined" && navigator.onLine && /^https?:\/\//i.test(u)) {
         setLoadFailed(false);
         setDisplaySrc(u);
+        // Web pe raw HTTPS dikha — IndexedDB me likho taaki Files untick ke baad local open chale.
+        void import("@/lib/offlineAttachmentUrlCache")
+          .then(({ getRemoteAttachmentBlobPreferOfflineCache }) =>
+            getRemoteAttachmentBlobPreferOfflineCache(u, ac.signal, {
+              companyId: props.companyId,
+              awaitDiskWrite: false,
+            })
+          )
+          .then((cached) => {
+            if (cancelled || !cached || cached.size <= 0) return;
+            const ou = URL.createObjectURL(cached);
+            rememberHoverBlobUrl(u, ou);
+          })
+          .catch(() => {});
       } else {
         setDisplaySrc("");
         setLoadFailed(true);
@@ -184,7 +223,7 @@ function HoverPreviewHttpsAwareImage(props: {
           cancelled = true;
         };
       }
-      setDisplaySrc((prev) => prev || "");
+      setDisplaySrc((prev) => (prev.startsWith("blob:") || prev.startsWith("data:") ? prev : prev || ""));
       void resolveStaticAttachmentDisplay(u, {
         localLedgerOnly: localBytesOnly,
         companyMode: props.companyMode,
@@ -225,9 +264,12 @@ function HoverPreviewHttpsAwareImage(props: {
     const online = typeof navigator !== "undefined" && navigator.onLine;
     const canInstantHttps = isHttps && online && !localBytesOnly;
 
-    // Online HTTPS: initial state already `u` — mat clear karo (warna 2–4s spinner).
+    // Local-only: purana raw HTTPS src mat rakho (Files untick ke baad network leak).
     if (!canInstantHttps) {
-      setDisplaySrc((prev) => prev || "");
+      setDisplaySrc((prev) => {
+        if (prev.startsWith("blob:") || prev.startsWith("data:")) return prev;
+        return "";
+      });
     } else {
       setDisplaySrc((prev) => prev || u);
     }
@@ -236,6 +278,7 @@ function HoverPreviewHttpsAwareImage(props: {
       localLedgerOnly: localBytesOnly,
       companyMode: props.companyMode,
       signal: ac.signal,
+      companyId: props.companyId,
     })
       .then((resolved) => {
         if (cancelled) return;
@@ -244,9 +287,7 @@ function HoverPreviewHttpsAwareImage(props: {
             applyResolved(resolved.displayUrl, resolved.blob);
             return;
           }
-          if (resolved.displayUrl && resolved.displayUrl !== u) {
-            applyResolved(resolved.displayUrl, resolved.blob);
-          }
+          applyResolved(resolved.displayUrl || u, null);
           return;
         }
         applyResolved(resolved.displayUrl, resolved.blob);
@@ -271,14 +312,16 @@ function HoverPreviewHttpsAwareImage(props: {
 
   if (!displaySrc) {
     if (loadFailed) {
+      const offline = typeof navigator !== "undefined" && !navigator.onLine;
+      const failHint = !filesNetworkAllowed
+        ? "Turn on Files in Company Selector (Online tab), then Save — or check your network. Already downloaded files still open."
+        : offline
+          ? "Connect once online to download, or wait for background sync. Or turn on Files in Company Selector if it is off."
+          : "Check Files tick in Company Selector (Online tab) and Save, or check your network — then retry.";
       return (
         <div className="flex min-h-[200px] min-w-[220px] flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">
-          <span>File not on device yet</span>
-          <span className="text-xs opacity-80">
-            {typeof navigator !== "undefined" && !navigator.onLine
-              ? "Connect once online to download, or wait for background sync."
-              : "Download timed out or failed — retry or wait for background sync."}
-          </span>
+          <span>File not on this device</span>
+          <span className="text-xs opacity-80">{failHint}</span>
           <Button
             type="button"
             size="sm"
@@ -286,21 +329,10 @@ function HoverPreviewHttpsAwareImage(props: {
             onClick={() => {
               setLoadFailed(false);
               setDisplaySrc("");
-              void resolveStaticAttachmentDisplay(u, {
-                localLedgerOnly: localBytesOnly,
-                companyMode: props.companyMode,
-                companyId: props.companyId,
-              }).then((resolved) => {
-                if (resolved.displayUrl) setDisplaySrc(resolved.displayUrl);
-                else if (resolved.blob && resolved.blob.size > 0) {
-                  const ou = URL.createObjectURL(resolved.blob);
-                  rememberHoverBlobUrl(u, ou);
-                  setDisplaySrc(ou);
-                } else setLoadFailed(true);
-              });
+              setReloadKey((k) => k + 1);
             }}
           >
-            Retry download
+            {filesNetworkAllowed ? "Retry download" : "Retry local"}
           </Button>
         </div>
       );
@@ -309,7 +341,9 @@ function HoverPreviewHttpsAwareImage(props: {
       <div className="flex min-h-[200px] min-w-[220px] flex-col items-center justify-center gap-2 p-6">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" aria-label="Loading preview" />
         {localBytesOnly ? (
-          <span className="text-xs text-muted-foreground">Downloading to device…</span>
+          <span className="text-xs text-muted-foreground">
+            {filesNetworkAllowed ? "Loading from device…" : "Looking for local file…"}
+          </span>
         ) : null}
       </div>
     );
@@ -586,8 +620,13 @@ export function LocalFileRefTooltipPreview({
             interCompanyPeer: voucherAttachmentFb?.interCompanyPeer,
           }
         : undefined;
-    void openAttachmentInApp(effectiveUrl, { kind, gallery: multi, serverFallback });
-  }, [effectiveUrl, state, gallery, voucherAttachmentFb, companyId]);
+    void openAttachmentInApp(effectiveUrl, {
+      kind,
+      gallery: multi,
+      serverFallback,
+      gateCompany: company,
+    });
+  }, [effectiveUrl, state, gallery, voucherAttachmentFb, companyId, company]);
 
   const canRemoteFetch = canFetchPlServerAttachmentForCompany(companyId);
 
@@ -716,8 +755,12 @@ export function SingleAttachmentHoverPreviewBody({
 }) {
   const { company } = useCompany();
   const voucherAttachmentFb = useVoucherAttachmentFallback();
+  const filesNetworkAllowed =
+    !company?.id || isOnlineCompanyAttachmentNetworkAllowed(String(company.id), company);
   const localLedgerOnly =
-    companyRequiresLocalAttachmentUrlsOnly(company) || embeddedAttachmentDisplayUsesLocalBytesOnly();
+    companyRequiresLocalAttachmentUrlsOnly(company) ||
+    embeddedAttachmentDisplayUsesLocalBytesOnly() ||
+    !filesNetworkAllowed;
   const attachmentMode = companyAttachmentMode(company, { localLedgerOnly });
   const normalized = trimEntityFileUrlForPreview(url);
   if (!normalized) {
@@ -755,6 +798,7 @@ export function SingleAttachmentHoverPreviewBody({
     void openAttachmentInApp(effectiveUrl, {
       kind: isImage ? "image" : isPdf ? "pdf" : "other",
       localLedgerOnly,
+      gateCompany: company,
       gallery:
         galleryOpts && galleryOpts.urls.length > 1
           ? { urls: galleryOpts.urls, startIndex: galleryOpts.startIndex }
@@ -791,6 +835,7 @@ export function SingleAttachmentHoverPreviewBody({
         <HoverPreviewHttpsAwareImage
           url={u}
           localLedgerOnly={localLedgerOnly}
+          filesNetworkAllowed={filesNetworkAllowed}
           companyMode={attachmentMode}
           companyId={voucherAttachmentFb?.companyId ?? company?.id}
           alt=""
@@ -820,6 +865,7 @@ export function SingleAttachmentHoverPreviewBody({
             attachmentGallery={attachmentGallery}
             attachmentCompanyId={voucherAttachmentFb?.companyId ?? company?.id ?? undefined}
             holdAttachmentClipboard={false}
+            forceLocalAttachmentOnly={!filesNetworkAllowed}
           />
         </div>
       )}

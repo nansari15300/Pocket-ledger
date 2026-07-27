@@ -89,17 +89,6 @@ export function PlServerLiveSyncManager() {
   const schedulerBumpTimerRef = useRef<number | null>(null);
   const serverEventRetryTimerRef = useRef<number | null>(null);
   const [schedulerEpoch, setSchedulerEpoch] = useState(0);
-  /** Brief companyId=null flicker (clear↔restore) must not tear down LivePull every ~1s. */
-  const [stableCompanyId, setStableCompanyId] = useState(companyId);
-  useEffect(() => {
-    const next = String(companyId || "").trim() || null;
-    if (next) {
-      setStableCompanyId(next);
-      return;
-    }
-    const t = window.setTimeout(() => setStableCompanyId(null), 450);
-    return () => window.clearTimeout(t);
-  }, [companyId]);
 
   useEffect(() => {
     livePullDevLog("component_mounted");
@@ -144,8 +133,8 @@ export function PlServerLiveSyncManager() {
     const runNumber = effectRunRef.current;
     const meta = companyMetaRef.current;
     const snap = buildLivePullSchedulerSnapshot(
-      stableCompanyId,
-      stableCompanyId
+      companyId,
+      companyId
         ? {
             id: meta.companyRowId,
             plServerShared: meta.companyPlServerShared,
@@ -450,6 +439,7 @@ export function PlServerLiveSyncManager() {
     }, 750);
     schedulePoll();
     let eventSource: EventSource | null = null;
+    let eventsConnectInFlight = false;
     let hubMetaTimer: number | null = null;
     const startServerEvents = () => {
       if (isPlHubServerClientMode() || isPlServerThinStaffClient()) {
@@ -466,97 +456,106 @@ export function PlServerLiveSyncManager() {
         }
       }
       if (typeof EventSource === "undefined") return;
-      if (eventSource) return;
+      if (eventSource || eventsConnectInFlight) return;
       const transport = resolvePlServerDeltaTransport(id);
       if (!transport) return;
-      try {
-        const url = new URL(`${transport.baseUrl.replace(/\/$/, "")}/__pl_company_delta_events`);
-        url.searchParams.set("companyId", id);
-        const appAccount = readCurrentAppAccountIdentity();
-        if (appAccount) url.searchParams.set("appAccount", appAccount);
-        eventSource = new EventSource(url.toString());
-        eventSource.addEventListener("change", (event) => {
-          let payload: { collection?: unknown; source?: unknown; docs?: unknown; company?: unknown } = {};
-          try {
-            payload = JSON.parse((event as MessageEvent).data || "{}") as typeof payload;
-          } catch {
-            payload = {};
-          }
-          const collection = String(payload.collection || "").trim();
-          if (!collection) return;
-          plServerVoucherFlowLog("server_event_pull", {
-            companyId: id,
-            collection,
-            source: String(payload.source || ""),
-          });
-          if (collection === "company_meta") {
-            if (payload.company && typeof payload.company === "object") {
-              void import("@/lib/plServerCompanyMetaSync").then(
-                ({ applyPlServerCompanyMetaPatch }) =>
-                  applyPlServerCompanyMetaPatch(
-                    id,
-                    payload.company as Record<string, unknown>
-                  )
-              );
+      eventsConnectInFlight = true;
+      void (async () => {
+        try {
+          const { resolvePlServerHostCompanyId } = await import("@/lib/plServerHostCompanyId");
+          const hostCompanyId = (await resolvePlServerHostCompanyId(id)) || id;
+          if (eventSource) return;
+          const url = new URL(`${transport.baseUrl.replace(/\/$/, "")}/__pl_company_delta_events`);
+          // Host SSE `client.companyId` host canonical id pe match hota hai (local slug_xxx alag ho sakta hai).
+          url.searchParams.set("companyId", hostCompanyId);
+          const appAccount = readCurrentAppAccountIdentity();
+          if (appAccount) url.searchParams.set("appAccount", appAccount);
+          eventSource = new EventSource(url.toString());
+          eventSource.addEventListener("change", (event) => {
+            let payload: { collection?: unknown; source?: unknown; docs?: unknown; company?: unknown } = {};
+            try {
+              payload = JSON.parse((event as MessageEvent).data || "{}") as typeof payload;
+            } catch {
+              payload = {};
+            }
+            const collection = String(payload.collection || "").trim();
+            if (!collection) return;
+            plServerVoucherFlowLog("server_event_pull", {
+              companyId: id,
+              collection,
+              source: String(payload.source || ""),
+            });
+            if (collection === "company_meta") {
+              if (payload.company && typeof payload.company === "object") {
+                void import("@/lib/plServerCompanyMetaSync").then(
+                  ({ applyPlServerCompanyMetaPatch }) =>
+                    applyPlServerCompanyMetaPatch(
+                      id,
+                      payload.company as Record<string, unknown>
+                    )
+                );
+                return;
+              }
+              void (async () => {
+                const { pullPlServerCompanyMetaFromHost } = await import("@/lib/plServerCompanyMetaSync");
+                await pullPlServerCompanyMetaFromHost(id);
+              })();
               return;
             }
-            void (async () => {
-              const { pullPlServerCompanyMetaFromHost } = await import("@/lib/plServerCompanyMetaSync");
-              await pullPlServerCompanyMetaFromHost(id);
-            })();
-            return;
-          }
-          const liveDocs = Array.isArray(payload.docs)
-            ? (payload.docs as Array<Record<string, unknown>>)
-            : [];
-          if (liveDocs.length > 0) {
-            void (async () => {
-              const { applyPlServerLiveDeltaDocs } = await import("@/lib/plServerClientCompanyDelta");
-              const result = await applyPlServerLiveDeltaDocs(
-                id,
-                collection as CompanyBackupCollection,
-                liveDocs
-              );
-              notifyBrowserDbCollectionUpdated(id, collection, {
-                immediate: true,
-                source: "pl_server_delta",
-              });
-              plServerVoucherFlowLog("server_event_docs_applied", {
-                companyId: id,
-                collection,
-                received: liveDocs.length,
-                upserted: result.upserted,
-                skipped: result.skipped,
-              });
-            })();
-            return;
-          }
-          notifyBrowserDbCollectionUpdated(id, collection, {
-            immediate: true,
-            source: "pl_server_pull",
-          });
-          void runPull(`server_event_${collection}`);
-        });
-        eventSource.onerror = () => {
-          plServerVoucherFlowLog("server_event_error", { companyId: id });
-          if (eventSource) {
-            eventSource.close();
-            eventSource = null;
-          }
-          if (serverEventRetryTimerRef.current != null) {
-            window.clearTimeout(serverEventRetryTimerRef.current);
-          }
-          serverEventRetryTimerRef.current = window.setTimeout(() => {
-            serverEventRetryTimerRef.current = null;
-            const health = getPlServerReadSyncHealth(id);
-            if (health.consecutiveFailures < 2 || typeof navigator === "undefined" || navigator.onLine) {
-              startServerEvents();
+            const liveDocs = Array.isArray(payload.docs)
+              ? (payload.docs as Array<Record<string, unknown>>)
+              : [];
+            if (liveDocs.length > 0) {
+              void (async () => {
+                const { applyPlServerLiveDeltaDocs } = await import("@/lib/plServerClientCompanyDelta");
+                const result = await applyPlServerLiveDeltaDocs(
+                  id,
+                  collection as CompanyBackupCollection,
+                  liveDocs
+                );
+                notifyBrowserDbCollectionUpdated(id, collection, {
+                  immediate: true,
+                  source: "pl_server_delta",
+                });
+                plServerVoucherFlowLog("server_event_docs_applied", {
+                  companyId: id,
+                  collection,
+                  received: liveDocs.length,
+                  upserted: result.upserted,
+                  skipped: result.skipped,
+                });
+              })();
+              return;
             }
-          }, LIVE_SERVER_EVENT_RETRY_MS);
-        };
-      } catch {
-        eventSource = null;
-      }
+            notifyBrowserDbCollectionUpdated(id, collection, {
+              immediate: true,
+              source: "pl_server_pull",
+            });
+            void runPull(`server_event_${collection}`);
+          });
+          eventSource.onerror = () => {
+            plServerVoucherFlowLog("server_event_error", { companyId: id });
+            if (eventSource) {
+              eventSource.close();
+              eventSource = null;
+            }
+            if (serverEventRetryTimerRef.current != null) {
+              window.clearTimeout(serverEventRetryTimerRef.current);
+            }
+            serverEventRetryTimerRef.current = window.setTimeout(() => {
+              serverEventRetryTimerRef.current = null;
+              const health = getPlServerReadSyncHealth(id);
+              if (health.consecutiveFailures < 2 || typeof navigator === "undefined" || navigator.onLine) {
+                startServerEvents();
+              }
+            }, LIVE_SERVER_EVENT_RETRY_MS);
+          };
+        } catch {
+          eventSource = null;
+        } finally {
+          eventsConnectInFlight = false;
+        }
+      })();
     };
     startServerEvents();
     const onOnline = () => {
@@ -645,14 +644,14 @@ export function PlServerLiveSyncManager() {
       window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onLocalBump);
       unsubscribeElectronResume?.();
     };
-  }, [stableCompanyId, schedulerEpoch, pathname]);
+  }, [companyId, schedulerEpoch, pathname]);
 
   /** Route change: open page ke collections turant server se refresh. */
   useEffect(() => {
     if (pathnameRef.current === pathname) return;
     pathnameRef.current = pathname;
-    if (!stableCompanyId) return;
-    const id = String(stableCompanyId).trim();
+    if (!companyId) return;
+    const id = String(companyId).trim();
     if (!id) return;
     if (syncingRef.current) {
       pendingPullReasonRef.current = "route_change";
@@ -698,8 +697,8 @@ export function PlServerLiveSyncManager() {
             localAliveAfter: localVoucherCount,
           });
         }
-        if (result.ok && result.changedCollections?.length) {
-          for (const col of result.changedCollections) {
+        if (result.ok) {
+          for (const col of (result.changedCollections?.length ? result.changedCollections : focusCollections || [])) {
             notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_server_pull" });
             if (col === "vouchers") {
               plServerVoucherFlowLog("ui_bump_dispatched", {
@@ -714,7 +713,7 @@ export function PlServerLiveSyncManager() {
         syncingRef.current = false;
       }
     })();
-  }, [pathname, stableCompanyId]);
+  }, [pathname, companyId]);
 
   return null;
 }

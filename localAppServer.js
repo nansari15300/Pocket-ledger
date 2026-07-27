@@ -464,7 +464,7 @@ function sendRemoteAuthFailure(response, auth, asOkEnvelope) {
   );
 }
 
-function broadcastPlMirrorEvent(companyId, collection, source) {
+function broadcastPlMirrorEvent(companyId, collection, source, docs, extra) {
   const cid = String(companyId || "").trim();
   const col = String(collection || "").trim();
   if (!cid || !col) return;
@@ -472,6 +472,8 @@ function broadcastPlMirrorEvent(companyId, collection, source) {
     companyId: cid,
     collection: col,
     source: source || "pl_server_write",
+    docs: Array.isArray(docs) ? docs : undefined,
+    ...(extra && typeof extra === "object" ? extra : {}),
     at: Date.now(),
   });
   for (const client of Array.from(mirrorEventClients)) {
@@ -1138,7 +1140,9 @@ function createRequestHandler(userDataPath) {
             sendRemoteAuthFailure(response, auth, true);
             return;
           }
-          broadcastPlMirrorEvent(companyId, "company_meta", "pl_host_company_meta");
+          broadcastPlMirrorEvent(companyId, "company_meta", "pl_host_company_meta", undefined, {
+            company: body.company && typeof body.company === "object" ? body.company : undefined,
+          });
           response.statusCode = 200;
           response.setHeader("content-type", "application/json; charset=utf-8");
           response.setHeader("cache-control", "no-store");

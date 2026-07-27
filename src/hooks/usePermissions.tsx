@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   evaluateBackdatePermission,
   formatBackdatePermissionDeniedMessage,
@@ -15,7 +15,7 @@ import { getLocalAuthToken, getLocalAuthUser, LOCAL_AUTH_CHANGED_EVENT } from "@
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { resolvePlanIdForActiveCompany } from "@/lib/accountPlanForOwner";
 import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
-import { companyRowUsesSqliteLedgerWrites, isServerGateCompany } from "@/lib/companyStorageKind";
+import { companyRowUsesSqliteLedgerWrites, isServerGateCompany, isServerSelectorCompanyRow } from "@/lib/companyStorageKind";
 import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
 import { PL_SERVER_COMPANY_META_UPDATED_EVENT } from "@/lib/plServerCompanyMetaSync";
 
@@ -199,8 +199,10 @@ const usePermissions = () => {
     /** Local unlock ke baad localStorage role turant useMemo me aaye (same-tab me storage event nahi aata). */
     const [localAuthEpoch, setLocalAuthEpoch] = useState(0);
     const [plServerMetaEpoch, setPlServerMetaEpoch] = useState(0);
-    /** PL server staff: `company` context row me permissionConfig na ho to bhi SQLite se load. */
+    /** PL / local staff: host meta → client SQLite `permissionConfig` (server se har save pe verify nahi). */
     const [sqlitePermissionConfig, setSqlitePermissionConfig] = useState<PermissionConfig | null>(null);
+    /** Async reload / missing row pe default 7-day flash mat do — last good config sticky. */
+    const sqlitePermissionStickyRef = useRef<{ companyId: string; config: PermissionConfig } | null>(null);
     useEffect(() => {
       const onAuth = () => setLocalAuthEpoch((n) => n + 1);
       window.addEventListener(LOCAL_AUTH_CHANGED_EVENT, onAuth);
@@ -219,7 +221,10 @@ const usePermissions = () => {
     useEffect(() => {
       const cid = String(company?.id || "").trim();
       if (!cid || !companyUsesLocalStaffPermissions(company)) {
-        setSqlitePermissionConfig(null);
+        if (sqlitePermissionStickyRef.current?.companyId !== cid) {
+          sqlitePermissionStickyRef.current = null;
+        }
+        if (!cid) setSqlitePermissionConfig(null);
         return;
       }
       let cancelled = false;
@@ -229,9 +234,23 @@ const usePermissions = () => {
           const row = await getLocalCompanyById(cid, { includeDeleted: true });
           if (cancelled) return;
           const cfg = (row as { permissionConfig?: PermissionConfig } | null)?.permissionConfig;
-          setSqlitePermissionConfig(cfg && typeof cfg === "object" ? cfg : null);
+          if (cfg && typeof cfg === "object") {
+            sqlitePermissionStickyRef.current = { companyId: cid, config: cfg };
+            setSqlitePermissionConfig(cfg);
+            return;
+          }
+          // Row me config missing: sticky mat mitao — warna Manager editDays 7 default flash.
+          if (sqlitePermissionStickyRef.current?.companyId === cid) {
+            setSqlitePermissionConfig(sqlitePermissionStickyRef.current.config);
+            return;
+          }
+          setSqlitePermissionConfig(null);
         } catch {
-          if (!cancelled) setSqlitePermissionConfig(null);
+          if (!cancelled && sqlitePermissionStickyRef.current?.companyId === cid) {
+            setSqlitePermissionConfig(sqlitePermissionStickyRef.current.config);
+          } else if (!cancelled) {
+            setSqlitePermissionConfig(null);
+          }
         }
       })();
       return () => {
@@ -246,16 +265,71 @@ const usePermissions = () => {
       plServerMetaEpoch,
     ]);
 
+    /** PL staff: company select pe ek baar host meta pull — SQLite me dateLimits land; epoch loop nahi. */
+    useEffect(() => {
+      const cid = String(company?.id || "").trim();
+      if (!cid) return;
+      const plSurface =
+        company?.plServerShared === true ||
+        isServerGateCompany(company) ||
+        isPlServerThinStaffClient() ||
+        Boolean(String((company as { plServerHostCompanyId?: string } | null)?.plServerHostCompanyId || "").trim());
+      if (!plSurface) return;
+      void (async () => {
+        try {
+          const { pullPlServerCompanyMetaFromHost } = await import("@/lib/plServerCompanyMetaSync");
+          await pullPlServerCompanyMetaFromHost(cid);
+        } catch {
+          /* offline */
+        }
+      })();
+    }, [company?.id, company?.plServerShared]);
+
     const permissions = useMemo(() => {
-        // Company context receives the just-saved local/host config first. SQLite is the
-        // durable fallback for thin PL clients; an older async SQLite read must not mask it.
+        const plStaffSurface =
+          !!company &&
+          (company.plServerShared === true ||
+            isServerGateCompany(company) ||
+            isPlServerThinStaffClient() ||
+            Boolean(String((company as { plServerHostCompanyId?: string }).plServerHostCompanyId || "").trim()) ||
+            isServerSelectorCompanyRow(company));
+        const localStaffCompany = companyUsesLocalStaffPermissions(company);
+        const localAuthToken =
+          company?.id && localStaffCompany ? getLocalAuthToken(company.id) : null;
+        const localAuthUser =
+          company?.id && localAuthToken ? getLocalAuthUser(company.id) : null;
+
+        // PL / local staff: SQLite (+ sticky) only — Firebase company.permissionConfig se flicker mat khao.
+        const stickyCfg =
+          company?.id && sqlitePermissionStickyRef.current?.companyId === company.id
+            ? sqlitePermissionStickyRef.current.config
+            : null;
         const config = normalizePermissionConfig(
-          company?.permissionConfig || sqlitePermissionConfig || initialPermissionConfig
+          localStaffCompany || plStaffSurface
+            ? sqlitePermissionConfig || stickyCfg || company?.permissionConfig || initialPermissionConfig
+            : company?.permissionConfig || sqlitePermissionConfig || stickyCfg || initialPermissionConfig
         );
         
         let role: UserRole = 'viewer'; 
 
-        if (customUser && company) {
+        // Shared / PL unlock: role = localAuth only. Firebase ownerEmail/isOwned overlay → kabhi owner
+        // (unlimited save) kabhi manager+default-7 (deny) — intermittent ka root.
+        if (localAuthUser && company?.id) {
+            if (localAuthUser.id === "local_admin_fallback") {
+                role = "owner";
+            } else if (plStaffSurface || company.isOwned === false) {
+                role = normalizeStaffRoleString(localAuthUser.role);
+            } else if (customUser) {
+                const shareUser = { uid: customUser.uid || "", email: customUser.email ?? null };
+                if (resolveCompanyIsOwnedForUser(company, shareUser)) {
+                    role = "owner";
+                } else if (localAuthUser.role) {
+                    role = normalizeStaffRoleString(localAuthUser.role);
+                }
+            } else if (localAuthUser.role) {
+                role = normalizeStaffRoleString(localAuthUser.role);
+            }
+        } else if (customUser && company) {
             // SuperAdmin: treat as owner for selected company so they can use app like a normal user (plans, header buttons, etc.)
             if (customUser.role === 'SuperAdmin') {
                 role = 'owner';
@@ -307,30 +381,6 @@ const usePermissions = () => {
                     role = "owner";
                 }
             }
-        }
-
-        // Local / PL server staff: effective role = local unlock (username/password), NOT only Firebase owner email.
-        if (
-          customUser &&
-          company &&
-          company.id &&
-          getLocalAuthToken(company.id) &&
-          companyUsesLocalStaffPermissions(company)
-        ) {
-          const localUser = getLocalAuthUser(company.id);
-          const roleBeforeLocalSession = role;
-          if (localUser?.id) {
-            // Company creator/owner always keeps full owner permissions. A local/PLServer
-            // credential row such as "Admin" must not downgrade owner to manager (7-day defaults).
-            if (roleBeforeLocalSession === "owner" || localUser.id === "local_admin_fallback") {
-              role = "owner";
-            } else if (localUser.id === "local_open" || localUser.id === "local_open_owner") {
-              // Password-free open: Firebase owner ko viewer mat banao (header buttons / create_records).
-              role = normalizeStaffRoleString(localUser.role);
-            } else if (localUser.role) {
-              role = normalizeStaffRoleString(localUser.role);
-            }
-          }
         }
         
         const dateLimits = config.dateLimits?.[role] || { entryDays: 0, editDays: 0, deleteDays: 0 };
@@ -409,7 +459,8 @@ const usePermissions = () => {
         const fileAttachmentLimits = canAddFileImagePdf && planMaxFiles > 0
           ? { ...roleFileLimits, maxFileCount: cappedMax }
           : { maxFileCount: 0, allowImage: false, allowPDF: false, allowDelete: false };
-        const allowAttachments = (config.allowAttachments !== false) && canAddFileImagePdf && planMaxFiles > 0;
+        const allowAttachments =
+          (config.allowAttachments !== false) && canAddFileImagePdf && planMaxFiles > 0;
 
         return { 
             can, 

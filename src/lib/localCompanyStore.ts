@@ -124,10 +124,10 @@ export async function promoteLocalCompanyRowToOnline(
   const cid = String(companyId || "").trim();
   if (!db || !cid) return null;
   const existing = await getLocalCompanyById(cid, { includeDeleted: true });
-  if (!existing) return null;
+  if (!existing && !patch) return null;
 
   const mergedRaw = mergePersistedLocalCloudSyncUserSettings(existing, {
-    ...existing,
+    ...(existing || { id: cid, name: cid, ownerId: "" }),
     ...(patch || {}),
     id: cid,
   } as LocalCompanyDoc);

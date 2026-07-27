@@ -25,9 +25,6 @@ import {
 
 const PUSH_DEBOUNCE_MS = 400;
 const PUSH_RETRY_MS = 4_000;
-/** Empty share list pe har poll refresh mat karo — access wipe ↔ restore loop. */
-let lastEmptyShareAccessRefreshMs = 0;
-const EMPTY_SHARE_ACCESS_REFRESH_MIN_MS = 8_000;
 
 type PlDeltaPushRetryReason =
   | "partial_write"
@@ -784,12 +781,8 @@ export async function syncPlServerSharedCompanyLive(
         "@/lib/plServerAccessContext"
       );
       if (getPlServerSharedCompanies().length === 0) {
-        const now = Date.now();
-        if (now - lastEmptyShareAccessRefreshMs >= EMPTY_SHARE_ACCESS_REFRESH_MIN_MS) {
-          lastEmptyShareAccessRefreshMs = now;
-          livePullDevLog("access_context_refresh_before_pull", { companyId: id, serverUrl });
-          await refreshPlServerAccessContext();
-        }
+        livePullDevLog("access_context_refresh_before_pull", { companyId: id, serverUrl });
+        await refreshPlServerAccessContext();
       }
       const focusCollections = options?.focusCollections?.length ? options.focusCollections : undefined;
       const result = await syncPlServerSharedCompaniesToLocalSqliteLegacy({
@@ -844,16 +837,11 @@ export async function syncPlServerSharedCompanyLive(
     );
     const { matchPlServerSharedCompanyForLocalId } = await import("@/lib/plServerHostCompanyId");
     let shared = getPlServerSharedCompanies();
-    if (!shared.length) {
-      const now = Date.now();
-      if (now - lastEmptyShareAccessRefreshMs >= EMPTY_SHARE_ACCESS_REFRESH_MIN_MS) {
-        lastEmptyShareAccessRefreshMs = now;
-        livePullDevLog("access_context_refresh_before_pull", { companyId: id, serverUrl });
-        await refreshPlServerAccessContext();
-        shared = getPlServerSharedCompanies();
-      }
-    } else if (!matchPlServerSharedCompanyForLocalId(id, shared)) {
-      livePullDevLog("access_context_refresh_before_pull", { companyId: id, serverUrl, reason: "company_not_in_share_list" });
+    if (
+      !shared.length ||
+      !matchPlServerSharedCompanyForLocalId(id, shared)
+    ) {
+      livePullDevLog("access_context_refresh_before_pull", { companyId: id, serverUrl });
       await refreshPlServerAccessContext();
       shared = getPlServerSharedCompanies();
     }

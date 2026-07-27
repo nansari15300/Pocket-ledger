@@ -24,6 +24,7 @@ import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isFirebaseLedgerLocalDeltaMode } from "@/lib/firebaseLedgerSyncMode";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 import { isFirebaseLedgerCompanyAttachmentSyncEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
+import { shouldSkipCompanyWideAttachmentPrefetchOnWeb } from "@/lib/webAttachmentLazyLoadPolicy";
 const DEBOUNCE_AFTER_COMPANY_MS = 2_800;
 
 export function CompanyAttachmentOfflineBackfillManager() {
@@ -44,6 +45,8 @@ export function CompanyAttachmentOfflineBackfillManager() {
     if (isFirebaseLedgerDataSyncDisabled()) return;
     // EXE: `OfflineWarmSyncManager` already serial warm chalata hai — duplicate prefetch + header % flicker avoid.
     if (isElectronDesktopApp()) return;
+    // Web: visible-page thumbs + hover/click only — company-wide full preload billing hit.
+    if (shouldSkipCompanyWideAttachmentPrefetchOnWeb()) return;
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;

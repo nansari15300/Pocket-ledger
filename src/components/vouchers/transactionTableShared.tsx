@@ -131,7 +131,25 @@ export function OpeningBalanceFileCellContent({
   if (urls.length === 0) {
     return <span>-</span>;
   }
-  // Hover preview stays enabled; dbl-click on single PDF opens full viewer quickly.
+
+  const indicator =
+    showAll && displayMode === "preview" ? (
+      <span className="inline-flex items-center gap-1">
+        {urls.map((url, index) => (
+          <span key={`${url}:${index}`} data-attachment-index={index}>
+            <VoucherAttachmentFileIndicator
+              urls={[url]}
+              displayMode="preview"
+              aria-label={`Attachment ${index + 1}`}
+            />
+          </span>
+        ))}
+      </span>
+    ) : (
+      <VoucherAttachmentFileIndicator urls={urls} displayMode={displayMode} aria-label="Has attachment" />
+    );
+
+  // Files tick OFF: still allow click — openAttachmentInApp opens local cache only (no download).
   const serverFb =
     company?.id && urls.length > 0
       ? { companyId: company.id, voucherId: "", clientFileUrls: urls }
@@ -140,33 +158,23 @@ export function OpeningBalanceFileCellContent({
     urls.length === 1 && getAttachmentFormatLabel(urls[0]!) === "PDF"
       ? (e: React.MouseEvent<HTMLDivElement>) => {
           e.stopPropagation();
-          void openAttachmentInApp(urls[0]!, { kind: "pdf", localLedgerOnly, serverFallback: serverFb });
+          void openAttachmentInApp(urls[0]!, {
+            kind: "pdf",
+            localLedgerOnly,
+            serverFallback: serverFb,
+            gateCompany: company,
+          });
         }
       : undefined;
 
   return (
     <AttachmentHoverPortal
-      // Click se preview; pointer cursor taaki hover-help jaisa na lage
       triggerClassName="inline-flex cursor-pointer"
       onPreviewDoubleClick={singlePdfOpen}
       galleryUrls={urls.length > 1 ? urls : undefined}
       preview={<StableAttachmentPortalPreview urls={urls} companyId={company?.id} />}
     >
-          {showAll && displayMode === "preview" ? (
-            <span className="inline-flex items-center gap-1">
-              {urls.map((url, index) => (
-                <span key={`${url}:${index}`} data-attachment-index={index}>
-                  <VoucherAttachmentFileIndicator
-                    urls={[url]}
-                    displayMode="preview"
-                    aria-label={`Attachment ${index + 1}`}
-                  />
-                </span>
-              ))}
-            </span>
-          ) : (
-        <VoucherAttachmentFileIndicator urls={urls} displayMode={displayMode} aria-label="Has attachment" />
-      )}
+      {indicator}
     </AttachmentHoverPortal>
   );
 }
@@ -1197,6 +1205,27 @@ export const TransactionRow = React.memo(
             {(() => {
               const rowUrls = getVoucherAttachmentUrlsForUi(transaction);
               if (rowUrls.length === 0) return "-";
+              const indicator =
+                fileShowAll && fileDisplayMode === "preview" ? (
+                  <span className="inline-flex items-center gap-1">
+                    {rowUrls.map((url, index) => (
+                      <span key={`${url}:${index}`} data-attachment-index={index}>
+                        <VoucherAttachmentFileIndicator
+                          urls={[url]}
+                          displayMode="preview"
+                          aria-label={`Attachment ${index + 1}`}
+                        />
+                      </span>
+                    ))}
+                  </span>
+                ) : (
+                  <VoucherAttachmentFileIndicator
+                    urls={rowUrls}
+                    displayMode={fileDisplayMode}
+                    aria-label="Has attachment"
+                  />
+                );
+              // Files tick OFF: portal still opens local cache only (openAttachmentInApp — no download).
               const serverFb = company?.id
                 ? {
                     companyId: company.id,
@@ -1204,7 +1233,6 @@ export const TransactionRow = React.memo(
                     clientFileUrls: rowUrls,
                   }
                 : undefined;
-              // Shared table rows: click preview + double-click open for single PDF.
               const singlePdfOpen =
                 rowUrls.length === 1 && getAttachmentFormatLabel(rowUrls[0]!) === "PDF"
                   ? (e: React.MouseEvent<HTMLDivElement>) => {
@@ -1213,6 +1241,7 @@ export const TransactionRow = React.memo(
                         kind: "pdf",
                         localLedgerOnly,
                         serverFallback: serverFb,
+                        gateCompany: company,
                       });
                     }
                   : undefined;
@@ -1223,21 +1252,7 @@ export const TransactionRow = React.memo(
                   galleryUrls={rowUrls.length > 1 ? rowUrls : undefined}
                   preview={<StableAttachmentPortalPreview urls={rowUrls} companyId={company?.id} />}
                 >
-                  {fileShowAll && fileDisplayMode === "preview" ? (
-                    <span className="inline-flex items-center gap-1">
-                      {rowUrls.map((url, index) => (
-                        <span key={`${url}:${index}`} data-attachment-index={index}>
-                          <VoucherAttachmentFileIndicator
-                            urls={[url]}
-                            displayMode="preview"
-                            aria-label={`Attachment ${index + 1}`}
-                          />
-                        </span>
-                      ))}
-                    </span>
-                  ) : (
-                    <VoucherAttachmentFileIndicator urls={rowUrls} displayMode={fileDisplayMode} aria-label="Has attachment" />
-                  )}
+                  {indicator}
                 </AttachmentHoverPortal>
               );
             })()}

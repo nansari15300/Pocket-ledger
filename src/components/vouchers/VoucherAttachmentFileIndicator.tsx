@@ -9,6 +9,8 @@ import {
   useAttachmentThumbDisplayUrl,
 } from "@/hooks/useAttachmentThumbDisplayUrl";
 import { useCompany } from "@/hooks/useCompany";
+import { isWebBrowserAttachmentLazyLoad } from "@/lib/webAttachmentLazyLoadPolicy";
+import { isOnlineCompanyFilesUiAllowed } from "@/lib/onlineCompanySelectorSyncPolicy";
 
 type Props = {
   urls: readonly string[];
@@ -19,7 +21,7 @@ type Props = {
   "aria-label"?: string;
 };
 
-/** File column / OB row — bytes ready = green; URL-only/not hydrated = red. */
+/** File column / OB row — Preview = square; Tick only = check. Files tick OFF: local cache only (no download). */
 export function VoucherAttachmentFileIndicator({
   urls,
   className,
@@ -28,25 +30,32 @@ export function VoucherAttachmentFileIndicator({
   companyId: companyIdProp,
   "aria-label": ariaLabel = "Attachment",
 }: Props) {
-  const { companyId: shellCid } = useCompany();
+  const { company, companyId: shellCid } = useCompany();
   const companyId = companyIdProp ?? shellCid;
-  const readyState = useAttachmentUrlsReadyState(urls);
+  const filesNetworkAllowed =
+    !companyId || isOnlineCompanyFilesUiAllowed(String(companyId), company);
   const primaryUrl = React.useMemo(
     () => urls.map((u) => String(u || "").trim()).find(Boolean),
     [urls]
   );
+  const readyState = useAttachmentUrlsReadyState(urls);
   const [thumbRetryKey, setThumbRetryKey] = React.useState(0);
   React.useEffect(() => {
     setThumbRetryKey(0);
   }, [primaryUrl, displayMode]);
   const wantsPreview = displayMode === "preview";
+  // Network blocked inside cache when Files off + companyId; local cache still returns.
+  const allowThumbLoad =
+    wantsPreview &&
+    (readyState === "ready" || isWebBrowserAttachmentLazyLoad() || !filesNetworkAllowed);
   const thumbUrl = useAttachmentThumbDisplayUrl(
     primaryUrl,
-    wantsPreview && readyState === "ready",
+    allowThumbLoad,
     companyId,
     thumbRetryKey
   );
   const fileCount = urls.map((u) => String(u || "").trim()).filter(Boolean).length;
+  if (fileCount === 0) return null;
   const isReady = readyState === "ready";
   const iconClass = size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4";
   const thumbClass = size === "sm" ? "h-7 w-7" : "h-8 w-8";
@@ -62,13 +71,19 @@ export function VoucherAttachmentFileIndicator({
       </span>
     ) : null;
 
-  // Preview selected: hamesha preview cell — portal open / revoke race pe tick pe mat shift.
   if (wantsPreview) {
-    const canShowThumb = isReady && !!thumbUrl && thumbRetryKey < 4;
+    const canShowThumb =
+      !!thumbUrl &&
+      thumbRetryKey < 4 &&
+      (isReady || isWebBrowserAttachmentLazyLoad() || !filesNetworkAllowed);
     if (canShowThumb) {
       return (
         <span
-          className={cn("relative inline-flex overflow-hidden rounded border border-border/80 bg-muted/30", thumbClass, className)}
+          className={cn(
+            "relative inline-flex overflow-hidden rounded border border-border/80 bg-muted/30",
+            thumbClass,
+            className
+          )}
           aria-label={fileCount > 1 ? `${ariaLabel} preview (${fileCount} files)` : `${ariaLabel} preview`}
         >
           {/* eslint-disable-next-line @next/next/no-img-element -- warmed blob / pdf raster */}
@@ -80,7 +95,6 @@ export function VoucherAttachmentFileIndicator({
             draggable={false}
             onError={() => {
               invalidateAttachmentThumbDisplayUrl(primaryUrl, thumbUrl);
-              // Preview mode force: tick pe mat jao; limited retry, phir placeholder.
               setThumbRetryKey((n) => n + 1);
             }}
           />
@@ -96,18 +110,9 @@ export function VoucherAttachmentFileIndicator({
           className
         )}
         aria-label={
-          fileCount > 1
-            ? `${ariaLabel} preview loading (${fileCount} files)`
-            : `${ariaLabel} preview loading`
+          fileCount > 1 ? `${ariaLabel} preview (${fileCount} files)` : `${ariaLabel} preview`
         }
       >
-        <span
-          className={cn(
-            "block rounded-sm bg-muted-foreground/25",
-            size === "sm" ? "h-3 w-3" : "h-3.5 w-3.5"
-          )}
-          aria-hidden="true"
-        />
         {countBadge}
       </span>
     );

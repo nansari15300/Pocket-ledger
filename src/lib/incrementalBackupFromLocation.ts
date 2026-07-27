@@ -40,17 +40,33 @@ function companyBackupNameSlug(companyName: string): string {
     .replace(/\s+/g, "_");
 }
 
-/** Filename pattern: pocket-ledger_backup_{CompanyName}_{timestamp}.plbp */
+function pathBasename(p: string): string {
+  const s = String(p || "").replace(/\\/g, "/");
+  const i = s.lastIndexOf("/");
+  return i >= 0 ? s.slice(i + 1) : s;
+}
+
+/** Filename: `Manual_backup_` / `Auto_backup_` / legacy `*_ledger_backup_*`. */
 function plbpFileNameMatchesCompany(fileName: string, companyName: string): boolean {
   const slug = companyBackupNameSlug(companyName);
   if (!slug) return false;
-  return fileName.startsWith(`pocket-ledger_backup_${slug}_`) && fileName.toLowerCase().endsWith(".plbp");
+  const lower = fileName.toLowerCase();
+  if (!lower.endsWith(".plbp")) return false;
+  return (
+    fileName.startsWith(`Manual_backup_${slug}_`) ||
+    fileName.startsWith(`Auto_backup_${slug}_`) ||
+    fileName.startsWith(`Manual_ledger_backup_${slug}_`) ||
+    fileName.startsWith(`Auto_ledger_backup_${slug}_`) ||
+    fileName.startsWith(`ledger_backup_${slug}_`) ||
+    fileName.startsWith(`pocket-ledger_backup_${slug}_`)
+  );
 }
 
 type PlbpFileCandidate = { name: string; readEncryptedText: () => Promise<string> };
 
 async function listPlbpCandidatesFromWebBackupDir(
-  dirHandle: FileSystemDirectoryHandle
+  dirHandle: FileSystemDirectoryHandle,
+  prefix = ""
 ): Promise<PlbpFileCandidate[]> {
   const h = dirHandle as FileSystemDirectoryHandle & {
     entries?: () => AsyncIterableIterator<[string, FileSystemHandle]>;
@@ -58,6 +74,19 @@ async function listPlbpCandidatesFromWebBackupDir(
   if (typeof h.entries !== "function") return [];
   const rows: PlbpFileCandidate[] = [];
   for await (const [name, handle] of h.entries()) {
+    const rel = prefix ? `${prefix}/${name}` : name;
+    if (handle.kind === "directory") {
+      try {
+        const nested = await listPlbpCandidatesFromWebBackupDir(
+          handle as FileSystemDirectoryHandle,
+          rel
+        );
+        rows.push(...nested);
+      } catch {
+        /* skip unreadable folder */
+      }
+      continue;
+    }
     if (handle.kind !== "file" || !name.toLowerCase().endsWith(".plbp")) continue;
     const fileHandle = handle as FileSystemFileHandle;
     rows.push({
@@ -159,13 +188,26 @@ export async function loadIncrementalAttachmentCacheFromBackupLocation(args: {
       const dirPath = prefs.webFolderDisplayPath.trim();
       if (api?.listBackupFiles && api?.readBackupFile) {
         const listed = await api.listBackupFiles(dirPath);
-        const names = (listed.files || [])
-          .filter((n) => n.toLowerCase().endsWith(".plbp"))
-          .sort((a, b) => b.localeCompare(a));
-        candidates = names.map((name) => ({
-          name,
+        type ListedFile = string | { name?: string; relativePath?: string };
+        const files = (listed.files || []) as ListedFile[];
+        const rows = files
+          .map((f) => {
+            if (typeof f === "string") {
+              return { name: pathBasename(f), relativePath: f.replace(/\\/g, "/") };
+            }
+            const relativePath = String(f.relativePath || f.name || "").replace(/\\/g, "/");
+            const name = String(f.name || pathBasename(relativePath) || "").trim();
+            return { name, relativePath: relativePath || name };
+          })
+          .filter((f) => f.name.toLowerCase().endsWith(".plbp"))
+          .sort((a, b) => b.relativePath.localeCompare(a.relativePath));
+        candidates = rows.map((row) => ({
+          name: row.name,
           readEncryptedText: async () => {
-            const r = await api.readBackupFile!({ dirPath, fileName: name });
+            const r = await api.readBackupFile!({
+              dirPath,
+              fileName: row.relativePath || row.name,
+            });
             if (!r.ok || typeof r.text !== "string") throw new Error("read failed");
             return r.text;
           },

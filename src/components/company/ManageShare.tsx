@@ -474,44 +474,50 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
       const saveViaPlServerHost = await shouldPersistPermissionConfigViaPlServerHost(companyId, companyData);
 
       if (saveViaPlServerHost) {
-        const localOk = await updateCompanyDocRoot(companyId, { permissionConfig: configToSave });
-        if (localOk) {
+        // Electron / PL host: SQLite `local_companies` delta export + staff meta ka source of truth.
+        // `updateCompanyDocRoot` → Local HTTP API; woh “ok” ho to bhi alag DB me likh sakta hai —
+        // UI 400 dikhe, voucher runtime pe default manager editDays=7 (initialPermissionConfig).
+        try {
+          const existing = await getLocalCompanyById(companyId, { includeDeleted: true });
+          if (!existing) {
+            toast({
+              variant: "destructive",
+              title: "Could not save",
+              description: "Local company row not found for permission save.",
+            });
+            return;
+          }
+          await upsertLocalCompany({
+            ...existing,
+            id: companyId,
+            permissionConfig: configToSave,
+            updatedAt: Date.now(),
+          } as LocalCompanyDoc);
+          // Best-effort Local API mirror (legacy); failure must not skip SQLite / staff bump.
+          void updateCompanyDocRoot(companyId, { permissionConfig: configToSave });
           reloadLocalCompanyRegistry();
           commitSavedPermissionConfig(configToSave);
+          if (typeof window !== "undefined") {
+            const { PL_SERVER_COMPANY_META_UPDATED_EVENT } = await import("@/lib/plServerCompanyMetaSync");
+            window.dispatchEvent(
+              new CustomEvent(PL_SERVER_COMPANY_META_UPDATED_EVENT, { detail: { companyId } })
+            );
+          }
           void notifyPlServerHostCompanyMetaSaved(companyId, { permissionConfig: configToSave });
           toast({
             title: "Success",
             description: "Permissions saved on this PC — staff clients sync via PL server.",
           });
           return;
-        }
-        try {
-          const existing = await getLocalCompanyById(companyId);
-          if (existing) {
-            await upsertLocalCompany({
-              ...existing,
-              id: companyId,
-              permissionConfig: configToSave,
-              updatedAt: Date.now(),
-            } as LocalCompanyDoc);
-            reloadLocalCompanyRegistry();
-            commitSavedPermissionConfig(configToSave);
-            void notifyPlServerHostCompanyMetaSaved(companyId, { permissionConfig: configToSave });
-            toast({
-              title: "Success",
-              description: "Permissions saved (this device) — turn sharing ON so staff receive live updates.",
-            });
-            return;
-          }
         } catch (e) {
           console.error(e);
+          toast({
+            variant: "destructive",
+            title: "Could not save",
+            description: "Local company: sync server chalao ya baad mein try karein.",
+          });
+          return;
         }
-        toast({
-          variant: "destructive",
-          title: "Could not save",
-          description: "Local company: sync server chalao ya baad mein try karein.",
-        });
-        return;
       }
 
       const companyRef = doc(firestore, "companies", companyId);

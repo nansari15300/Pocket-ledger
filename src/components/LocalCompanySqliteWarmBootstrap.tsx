@@ -25,6 +25,7 @@ import {
 } from "@/lib/offlineFullWarmSync";
 import { queueAttachmentUrlsWarm } from "@/lib/attachmentLoadReady";
 import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
+import { shouldSkipCompanyWideAttachmentPrefetchOnWeb } from "@/lib/webAttachmentLazyLoadPolicy";
 
 function isLocalSqliteLedgerCompany(c: Company | null | undefined): boolean {
   if (!c) return false;
@@ -61,8 +62,10 @@ export function LocalCompanySqliteWarmBootstrap() {
         )
       );
       if (ac.signal.aborted) return;
-      // EXE/APK: attachment warm OfflineWarmSyncManager / first-login overlay karte hain — duplicate CPU avoid.
+      // EXE/APK: attachment warm offlineWarmSyncManager / first-login overlay karte hain — duplicate CPU avoid.
       if (isEmbeddedOfflinePreloadClient()) return;
+      // Web Chrome: billing — company-wide Firebase full prefetch mat chalao (visible thumb / hover only).
+      if (shouldSkipCompanyWideAttachmentPrefetchOnWeb()) return;
 
       const urls = [...(await scrapeLocalMirrorAttachmentUrls(cid))];
       if (urls.length > 0) {

@@ -9,11 +9,10 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDes
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useCompany } from "@/hooks/useCompany";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { doc, updateDoc } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
+import { persistCompanyRootSettingsPatch } from "@/lib/persistCompanyRootSettings";
 import { Loader2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CountryCurrencyCombobox } from "@/components/shared/CountryCurrencyCombobox";
@@ -32,7 +31,7 @@ const currencySettingsSchema = z.object({
 type CurrencySettingsValues = z.infer<typeof currencySettingsSchema>;
 
 export function CurrencySettings() {
-  const { company, companyId, loading: companyLoading } = useCompany();
+  const { company, companyId, loading: companyLoading, reloadLocalCompanyRegistry, triggerSync } = useCompany();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
 
@@ -65,13 +64,18 @@ export function CurrencySettings() {
     const row = getDefaultCurrencyForCountry(data.billingCurrencyCountry);
     setIsLoading(true);
     try {
-      const companyRef = doc(firestore, "companies", companyId);
-      await updateDoc(companyRef, {
-        decimalPlaces: data.decimalPlaces,
-        showDrCr: data.showDrCr,
-        showCurrencySymbol: data.showCurrencySymbol,
-        currencyCode: row.currencyCode,
-        currencySymbol: row.symbol,
+      await persistCompanyRootSettingsPatch({
+        companyId,
+        company,
+        patch: {
+          decimalPlaces: data.decimalPlaces,
+          showDrCr: data.showDrCr,
+          showCurrencySymbol: data.showCurrencySymbol,
+          currencyCode: row.currencyCode,
+          currencySymbol: row.symbol,
+        },
+        reloadLocalCompanyRegistry,
+        triggerSync,
       });
       toast({ title: "Success", description: "Currency settings have been updated." });
     } catch (error) {

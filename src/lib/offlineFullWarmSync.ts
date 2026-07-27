@@ -320,6 +320,9 @@ export async function runOfflineFullWarmSync(options: {
   if (typeof navigator !== "undefined" && !navigator.onLine) return null;
   if (!localCompanyId?.trim()) return null;
   if (!isCloudBackedCompanyShape(company)) return null;
+  // Data tick OFF: no Firestore warm download — Local SQLite stays as-is for offline UI.
+  const { isOnlineCompanyLedgerCloudSyncAllowed } = await import("@/lib/onlineCompanySelectorSyncPolicy");
+  if (!isOnlineCompanyLedgerCloudSyncAllowed(localCompanyId, company)) return null;
 
   const fsCompanyId = String((company as { authoritativeCompanyId?: string }).authoritativeCompanyId || localCompanyId).trim();
   const isEmbeddedClient =

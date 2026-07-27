@@ -6,8 +6,6 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { doc, updateDoc } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -33,8 +31,7 @@ import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
 import { useState, useEffect, useMemo } from "react";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
-import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
-import { isPureLocalLedgerCompany } from "@/lib/companyStorageKind";
+import { persistCompanyRootSettingsPatch } from "@/lib/persistCompanyRootSettings";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/useTheme";
 import { PRO_THEME_CLASS, proDashboardRibbonClass } from "@/lib/proTheme";
@@ -360,7 +357,6 @@ export function VoucherSettings() {
       if (data.voucherHistoryLimit > planHistoryLimit) {
         toast({ title: "Plan limit applied", description: `Max history entries capped to ${planHistoryLimit} (your plan's limit).` });
       }
-      const companyRef = doc(firestore, "companies", companyId);
       const voucherSettingsPatch = {
         autoVoucherNumbering: data.autoVoucherNumbering,
         allowVoucherNumberEditing: data.allowVoucherNumberEditing,
@@ -381,35 +377,13 @@ export function VoucherSettings() {
           runScope: data.recurringVoucherRunScope,
         },
       };
-      if (isPureLocalLedgerCompany(company)) {
-        const localRow = await getLocalCompanyById(companyId, { includeDeleted: true });
-        await upsertLocalCompany({
-          ...((localRow || company || {}) as Record<string, unknown>),
-          ...voucherSettingsPatch,
-          id: companyId,
-        } as unknown as Parameters<typeof upsertLocalCompany>[0]);
-        reloadLocalCompanyRegistry();
-        triggerSync();
-        toast({ title: "Success", description: "Voucher settings have been updated." });
-        return;
-      }
-      await updateDoc(companyRef, voucherSettingsPatch);
-      // SQLite mirror me bhi likho — refresh par company yahan se aaye to toggle + header sync rahein
-      try {
-        const localRow = await getLocalCompanyById(companyId);
-        if (localRow) {
-          await upsertLocalCompany({
-            ...(localRow as Record<string, unknown>),
-            ...voucherSettingsPatch,
-            id: companyId,
-          } as unknown as Parameters<typeof upsertLocalCompany>[0]);
-        }
-      } catch {
-        /* online-only / no local DB */
-      }
-      // Firestore snapshot se pehle bhi `company` + local registry refresh — header Sync ledger turant show/hide
-      reloadLocalCompanyRegistry();
-      triggerSync();
+      await persistCompanyRootSettingsPatch({
+        companyId,
+        company,
+        patch: voucherSettingsPatch,
+        reloadLocalCompanyRegistry,
+        triggerSync,
+      });
       toast({ title: "Success", description: "Voucher settings have been updated." });
     } catch (error) {
       console.error("Error updating voucher settings:", error);

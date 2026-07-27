@@ -50,6 +50,15 @@ import {
 } from "@/lib/companyStorageKind";
 import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 
+function normalizeCompanyConfirmName(value: string | null | undefined): string {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 export function DangerZone() {
   const { user, customUser } = useAuth();
   const { company, companyId, allCompanies, allCompaniesRegistry, clearCompanyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
@@ -111,18 +120,25 @@ export function DangerZone() {
       if (!moved.ok) {
         throw new Error(("error" in moved ? moved.error : null) || "Failed to move company to bin.");
       }
-      toast({
-        title: "Company Moved to Bin",
-        description: `"${targetName}" has been moved to the recycle bin.`,
-      });
-      void sendRecycleBinMovedAlert(targetId, targetCompany ?? null, {
-        entityKind: "company",
-        entityId: targetId,
-        entityName: String(targetName || "Company"),
-        performedByUserId: user?.uid,
-        performedByEmail: user?.email ?? undefined,
-        performedByName: user?.displayName ?? customUser?.displayName ?? undefined,
-      });
+      if (moved.releasedToOnline) {
+        toast({
+          title: "Moved to Online tab",
+          description: `"${targetName}" was a Firebase company stuck in Local — it is now on the Online tab.`,
+        });
+      } else {
+        toast({
+          title: "Company Moved to Bin",
+          description: `"${targetName}" has been moved to the recycle bin.`,
+        });
+        void sendRecycleBinMovedAlert(targetId, targetCompany ?? null, {
+          entityKind: "company",
+          entityId: targetId,
+          entityName: String(targetName || "Company"),
+          performedByUserId: user?.uid,
+          performedByEmail: user?.email ?? undefined,
+          performedByName: user?.displayName ?? customUser?.displayName ?? undefined,
+        });
+      }
       if (companyId === targetId) clearCompanyId();
       setSelectedCompanyToDeleteId("");
       reloadLocalCompanyRegistry();
@@ -229,11 +245,14 @@ export function DangerZone() {
               <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
                 <AlertDialogAction
-                  onClick={handleDelete}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void handleDelete();
+                  }}
                   disabled={
                     isLoading ||
-                    deleteConfirmationText.trim().toLowerCase() !==
-                      (companyToDelete?.name || "").trim().toLowerCase()
+                    normalizeCompanyConfirmName(deleteConfirmationText) !==
+                      normalizeCompanyConfirmName(companyToDelete?.name)
                   }
                   className="bg-destructive hover:bg-destructive/90"
                 >

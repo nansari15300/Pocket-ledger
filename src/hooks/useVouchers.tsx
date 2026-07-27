@@ -25,6 +25,8 @@ import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import {
   FIREBASE_LEDGER_SYNC_MODE_CHANGED_EVENT,
 } from "@/lib/firebaseLedgerSyncMode";
+import { FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT } from "@/lib/firebaseLedgerCompanySyncPrefs";
+import { isOnlineCompanyLedgerCloudSyncAllowed } from "@/lib/onlineCompanySelectorSyncPolicy";
 import { shouldBindFirebaseLedgerCollectionLiveListeners } from "@/lib/firebaseLedgerSyncPolicy";
 import {
   BROWSER_DB_COLLECTION_BUMP,
@@ -466,7 +468,7 @@ const VoucherContext = createContext<VoucherContextType>({
 type StateSetter<T> = React.Dispatch<React.SetStateAction<T[]>>;
 /** Recycle Bin safety: isDeleted=true row app ke normal screens par kabhi na dikhe. */
 const isAliveDoc = (row: any) => row?.isDeleted !== true;
-const HEAVY_LEDGER_SKIP_ROUTE_PREFIXES = ["/company", "/admin", "/distributor-signup"] as const;
+const HEAVY_LEDGER_SKIP_ROUTE_PREFIXES = ["/company", "/admin", "/distributor-signup", "/gate"] as const;
 const HEAVY_LEDGER_SKIP_ROUTES = new Set(["/", ""]);
 
 /** Master collections config — prefetch/listener/filter sab jagah same source. */
@@ -588,10 +590,77 @@ export const VoucherProvider = ({
     window.addEventListener(FIREBASE_LEDGER_SYNC_MODE_CHANGED_EVENT, bump);
     return () => window.removeEventListener(FIREBASE_LEDGER_SYNC_MODE_CHANGED_EVENT, bump);
   }, []);
+  const [onlineSyncPrefsEpoch, setOnlineSyncPrefsEpoch] = useState(0);
+  useEffect(() => {
+    const bump = () => setOnlineSyncPrefsEpoch((n) => n + 1);
+    window.addEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, bump);
+    return () => window.removeEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, bump);
+  }, []);
 
-  const [vouchers, setVouchers] = useState<any[]>([]);
+  /** Same company par listener rebind — poora page spinner mat dikhao (EXE/APK party/bank shake). */
+  const hasWarmLedgerDataRef = useRef(false);
+  const lastCompanyIdRef = useRef<string | null>(null);
+  /** Async SQLite/Firestore callbacks purani company ke liye late na aayein. */
+  const companyDataLoadEpochRef = useRef(0);
+  /** Intentional clears only (company switch / gate-shell). Accidental [] = shared-user blink. */
+  const allowEmptyVoucherWipeRef = useRef(false);
+  const companyIdForWipeGuardRef = useRef<string | null>(companyId);
+  companyIdForWipeGuardRef.current = companyId ?? null;
+  const pathnameForWipeGuardRef = useRef(pathname);
+  pathnameForWipeGuardRef.current = pathname;
+
+  const [vouchers, setVouchersRaw] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const voucherForensicPrevRef = useRef<{ companyId: string; rows: any[] }>({ companyId: "", rows: [] });
+
+  /** Same-company pe accidental empty replace block; /gate + company-switch allow wipe. */
+  const setVouchers = useCallback((action: React.SetStateAction<any[]>) => {
+    setVouchersRaw((prev) => {
+      const next = typeof action === "function" ? action(prev) : action;
+      const sameCompanyWarm =
+        !!companyIdForWipeGuardRef.current &&
+        lastCompanyIdRef.current === companyIdForWipeGuardRef.current;
+      const blockEmptyWipe =
+        !allowEmptyVoucherWipeRef.current &&
+        sameCompanyWarm &&
+        Array.isArray(next) &&
+        next.length === 0 &&
+        Array.isArray(prev) &&
+        prev.length > 0 &&
+        !shouldSkipHeavyVoucherBootstrap(pathnameForWipeGuardRef.current);
+      if (blockEmptyWipe) {
+        void import("@/lib/plServerLiveChangeTrace")
+          .then(({ plServerVoucherForensicTrace, voucherIdFingerprint }) =>
+            plServerVoucherForensicTrace("ui_block_empty_voucher_wipe", {
+              companyId: companyIdForWipeGuardRef.current,
+              beforeCount: prev.length,
+              beforeFingerprint: voucherIdFingerprint(prev),
+              pathname: pathnameForWipeGuardRef.current,
+              stack: new Error().stack?.split("\n").slice(1, 9).join(" | "),
+            })
+          )
+          .catch(() => undefined);
+        return prev;
+      }
+      if (Array.isArray(next) && next.length === 0 && Array.isArray(prev) && prev.length > 0) {
+        void import("@/lib/plServerLiveChangeTrace")
+          .then(({ plServerVoucherForensicTrace, voucherIdFingerprint }) =>
+            plServerVoucherForensicTrace("ui_empty_voucher_wipe_allowed", {
+              companyId: companyIdForWipeGuardRef.current,
+              beforeCount: prev.length,
+              beforeFingerprint: voucherIdFingerprint(prev),
+              pathname: pathnameForWipeGuardRef.current,
+              allowFlag: allowEmptyVoucherWipeRef.current,
+              skipHeavy: shouldSkipHeavyVoucherBootstrap(pathnameForWipeGuardRef.current),
+              lastCompanyId: lastCompanyIdRef.current,
+              stack: new Error().stack?.split("\n").slice(1, 9).join(" | "),
+            })
+          )
+          .catch(() => undefined);
+      }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     const id = String(companyId || "").trim();
@@ -786,16 +855,13 @@ export const VoucherProvider = ({
   const mirrorSnapshotTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   /** EXE: background sync ke dauran har SQLite write par list merge batch — scroll/jump kam. */
   const sqliteBumpMergeTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  /** Same company par listener rebind — poora page spinner mat dikhao (EXE/APK party/bank shake). */
-  const hasWarmLedgerDataRef = useRef(false);
-  const lastCompanyIdRef = useRef<string | null>(null);
-  /** Async SQLite/Firestore callbacks purani company ke liye late na aayein. */
-  const companyDataLoadEpochRef = useRef(0);
   useEffect(() => {
     if (lastCompanyIdRef.current === companyId) return;
     companyDataLoadEpochRef.current += 1;
     // Company switch par purana company data turant clear karo (offline stale merge avoid).
+    allowEmptyVoucherWipeRef.current = true;
     setVouchers([]);
+    allowEmptyVoucherWipeRef.current = false;
     setParties([]);
     setStaff([]);
     setAccounts([]);
@@ -836,7 +902,7 @@ export const VoucherProvider = ({
       patchMasterEntity: () => {},
     };
     lastCompanyIdRef.current = companyId ?? null;
-  }, [companyId]);
+  }, [companyId, setVouchers]);
 
   // Pre-fill current user name so transaction User column shows correctly (no fetch delay)
   useEffect(() => {
@@ -879,9 +945,22 @@ export const VoucherProvider = ({
    */
   const voucherListenerCompanyKey = useMemo(() => {
     if (!companyId) return "";
-    // companyId aur company row sync hone se pehle bhi listener dubara bind ho.
+    const c = (company || null) as CloudBackedCompanyShape | null;
+    const storageOpt = String(c?.storageOption ?? "").toLowerCase().trim();
+    const stickyWarmSameCompany =
+      hasWarmLedgerDataRef.current && lastCompanyIdRef.current === companyId;
+    const looksSqliteOrPl =
+      stickyWarmSameCompany ||
+      storageOpt === "local" ||
+      (company as { plServerShared?: boolean } | null)?.plServerShared === true ||
+      isPlServerSharedCompanyRow(company, null) ||
+      isPlServerSharedCompanyRow({ id: companyId }, null) ||
+      companyRowUsesSqliteLedgerWrites(company);
+    // Shared PL-gate: company null↔row / pending|id key remount = wipe cycle. Keep companyId-stable.
+    if (looksSqliteOrPl) {
+      return `sqlite|${companyId}`;
+    }
     if (!company || company.id !== companyId) return `pending|${companyId}`;
-    const c = company as CloudBackedCompanyShape;
     // Local/EXE restore me `sharedWithEmails` non-array ho sakta hai; listener key build me spread crash mat hone do.
     const sharedList = Array.isArray((company as any)?.sharedWithEmails)
       ? ((company as any).sharedWithEmails as unknown[])
@@ -892,11 +971,11 @@ export const VoucherProvider = ({
     return [
       companyId,
       company.id,
-      String(c.storageOption ?? ""),
-      String(c.syncPolicy ?? ""),
-      c.syncedFromCloud === true ? "1" : "0",
-      String(c.authoritativeCompanyId ?? "").trim(),
-      String(c.encryptServerBackupSalt ?? "").trim(),
+      String(c?.storageOption ?? ""),
+      String(c?.syncPolicy ?? ""),
+      c?.syncedFromCloud === true ? "1" : "0",
+      String(c?.authoritativeCompanyId ?? "").trim(),
+      String(c?.encryptServerBackupSalt ?? "").trim(),
       String(company.ownerId ?? ""),
       String(company.ownerEmail ?? "").toLowerCase().trim(),
       shared,
@@ -909,6 +988,7 @@ export const VoucherProvider = ({
     (company as CloudBackedCompanyShape | undefined)?.syncedFromCloud,
     (company as CloudBackedCompanyShape | undefined)?.authoritativeCompanyId,
     (company as CloudBackedCompanyShape | undefined)?.encryptServerBackupSalt,
+    (company as { plServerShared?: boolean } | undefined)?.plServerShared,
     company?.ownerId,
     company?.ownerEmail,
     company?.sharedWithEmails,
@@ -929,14 +1009,16 @@ export const VoucherProvider = ({
       (!!companyId && isPlServerSharedCompanyRow({ id: companyId }, null));
 
     const resetAllStates = () => {
+      allowEmptyVoucherWipeRef.current = true;
       setVouchers([]); setParties([]); setStaff([]); setAccounts([]);
       setTaxes([]); setUnprocessedExpenseAccounts([]); setItems([]);
       setItemGroups([]); setGroups([]); setAccountGroups([]);
       setStaffGroups([]); setTaxGroups([]); setExpenseGroups([]);
+      allowEmptyVoucherWipeRef.current = false;
     };
 
     if (shouldSkipHeavyVoucherBootstrap(pathname)) {
-      // Route-level hard stop: background listeners/pulls off on selection/admin shells.
+      // Route-level hard stop: background listeners/pulls off on selection/admin/gate shells.
       resetAllStates();
       setLoading(false);
       return;
@@ -967,11 +1049,29 @@ export const VoucherProvider = ({
       isServerGateCompanyContext ||
       (sqliteLedgerRouteHint.usesSqlite && sqliteLedgerRouteHint.ownerMatchesUser);
     if (!companyId || !user || !isCompanyReady) {
-      resetAllStates();
-      if (!keepWarmUi) setLoading(false);
+      // Shared PL: company-row/share-list flicker → isCompanyReady false. Gate/shell pe wipe OK;
+      // ledger pe warm same-company mat mitao (pichhla broad keepWarm /gate pe bhi rok deta tha).
+      if (!companyId || !keepWarmUi) {
+        resetAllStates();
+        setLoading(false);
+      } else {
+        void import("@/lib/plServerLiveChangeTrace")
+          .then(({ plServerVoucherForensicTrace }) =>
+            plServerVoucherForensicTrace("ui_skip_reset_ready_flicker", {
+              companyId,
+              hasUser: !!user,
+              isCompanyReady,
+              isServerGateCompanyContext,
+              ownerEmailPresent: !!company?.ownerEmail,
+              sharedEmailOk,
+              hasLocalUnlockedSession,
+              pathname,
+            })
+          )
+          .catch(() => undefined);
+      }
       return;
     }
-
     /** Subcollections Firestore par isi doc id ke neeche — authoritativeCompanyId upload/Stripe ke baad; `storageOption: local` par hamesha registry id (online backup → local restore ke baad purana cloud id mat use karo) */
     const storageOptionLocal = String((company as CloudBackedCompanyShape)?.storageOption || "").toLowerCase() === "local";
     const fsCompanyId = storageOptionLocal
@@ -979,6 +1079,12 @@ export const VoucherProvider = ({
       : String(
           (company as CloudBackedCompanyShape)?.authoritativeCompanyId || companyId || ""
         ).trim() || companyId;
+
+    /** Data tick OFF → Local SQLite dikhao; Firestore masters/vouchers pull/upload band (all platforms). */
+    const cloudLedgerSyncAllowed = isOnlineCompanyLedgerCloudSyncAllowed(
+      companyId,
+      company as Parameters<typeof isOnlineCompanyLedgerCloudSyncAllowed>[1]
+    );
 
     const allCollectionsToPrefetch: MasterCollectionConfig[] = [
       { path: "vouchers", setter: setVouchers, orderByField: "date" },
@@ -1016,10 +1122,16 @@ export const VoucherProvider = ({
     ) => {
       if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return;
       const next = sqliteCachedRowsForSetter(cached as any[], orderByField) as T[];
-      // Purani SQLite read save ke baad complete ho to poori list replace na kare — bump handler jaisa merge.
-      setter((prev) =>
-        mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), next as any[], orderByField)
-      );
+      // Company switch / cold: REPLACE. Same-company late read after warm: merge so in-flight save na mite.
+      // Cross-company merge (prev A + next B) = Recent Txn 100+150 mix — refresh pe theek.
+      setter((prev) => {
+        if (cancelled || loadEpoch !== companyDataLoadEpochRef.current) return prev;
+        const prevAlive = (prev as any[]).filter(isAliveDoc);
+        if (!prevAlive.length || !hasWarmLedgerDataRef.current) {
+          return next as any;
+        }
+        return mergeEntityListsByIdOrKeepPrev(prevAlive, next as any[], orderByField) as any;
+      });
     };
 
     if (isExplicitLocalRegistryRow) {
@@ -1140,7 +1252,8 @@ export const VoucherProvider = ({
       };
     }
 
-    const allowCollectionLiveListeners = shouldBindFirebaseLedgerCollectionLiveListeners();
+    const allowCollectionLiveListeners =
+      cloudLedgerSyncAllowed && shouldBindFirebaseLedgerCollectionLiveListeners();
 
     /**
      * deltaa (web/EXE/APK/iOS): SQLite UI + one-shot getDocs transport pull.
@@ -1183,7 +1296,12 @@ export const VoucherProvider = ({
 
       const online =
         typeof navigator === "undefined" || navigator.onLine !== false;
-      if (online && isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape)) {
+      // Data tick OFF: Local SQLite already loaded above — no Firestore masters/vouchers download.
+      if (
+        cloudLedgerSyncAllowed &&
+        online &&
+        isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape)
+      ) {
         void (async () => {
           const CONCURRENCY = 4;
           for (let i = 0; i < collectionsToPrefetch.length; i += CONCURRENCY) {
@@ -1238,6 +1356,7 @@ export const VoucherProvider = ({
       if (cancelled) return;
       // Cloud firebase company ko bhi mirror chahiye: purane guard me sirf `storageOption===local`/static — offline par SQLite khali → sirf wo screens jahan pehle online snapshot mila usable tha (PWA/APK overlap).
       const shouldSqliteHydratePullFromFirestore =
+        cloudLedgerSyncAllowed &&
         opts.firestoreRemotePullAttempt &&
         (shouldUseLocalCompanyData || isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape));
 
@@ -1497,9 +1616,20 @@ export const VoucherProvider = ({
     if (hydrateFromMirrorWhenOffline || embeddedLocalFirstBoot) {
       bindHybridFirestoreToCompany({
         firestoreRemotePullAttempt:
-          shouldUseLocalCompanyData || isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape),
+          cloudLedgerSyncAllowed &&
+          (shouldUseLocalCompanyData || isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape)),
       });
     } else {
+      // Data untick: stay on Local SQLite — no company-root server verify / Firestore bind.
+      if (!cloudLedgerSyncAllowed) {
+        if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) {
+          hasWarmLedgerDataRef.current = true;
+          setLoading(false);
+        }
+        return () => {
+          cancelled = true;
+        };
+      }
       getDocFromServer(companyRootDocRef)
         .then((snap) => {
           if (cancelled) return;
@@ -1534,8 +1664,9 @@ export const VoucherProvider = ({
           }
           bindHybridFirestoreToCompany({
             firestoreRemotePullAttempt:
-              shouldUseLocalCompanyData ||
-              isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape),
+              cloudLedgerSyncAllowed &&
+              (shouldUseLocalCompanyData ||
+                isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape)),
           });
         })
         .catch((err: unknown) => {
@@ -1554,9 +1685,12 @@ export const VoucherProvider = ({
           // APK local company + stale build path (purana guard) + reachable-Firestore-fail mirrors
           if (networkLike || (shouldUseLocalCompanyData && isStaticAppBuild())) {
             bindHybridFirestoreToCompany({
-              firestoreRemotePullAttempt: networkLike
-                ? false
-                : shouldUseLocalCompanyData || isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape),
+              firestoreRemotePullAttempt:
+                cloudLedgerSyncAllowed &&
+                (networkLike
+                  ? false
+                  : shouldUseLocalCompanyData ||
+                    isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape)),
             });
             return;
           }
@@ -1572,7 +1706,7 @@ export const VoucherProvider = ({
       unsubRef.current.forEach(u => u());
       unsubRef.current = [];
     };
-  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch, ledgerSyncModeEpoch, pathname, voucherFormMasterScope, sqliteLedgerRouteHint.usesSqlite, sqliteLedgerRouteHint.ownerMatchesUser, company?.storageOption, company?.syncPolicy, company?.syncedFromCloud, company?.ownerId]);
+  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch, ledgerSyncModeEpoch, onlineSyncPrefsEpoch, pathname, voucherFormMasterScope, sqliteLedgerRouteHint.usesSqlite, sqliteLedgerRouteHint.ownerMatchesUser, company?.storageOption, company?.syncPolicy, company?.syncedFromCloud, company?.ownerId]);
 
   // Single-doc / write-path upsert ke baad merge (notify) — collections ke hisaab se state update.
   useEffect(() => {
@@ -1594,70 +1728,86 @@ export const VoucherProvider = ({
         pathname,
         remoteIncoming: opts?.remoteIncoming === true,
       });
+      const bumpCompanyId = String(companyId || "").trim();
+      const bumpEpoch = companyDataLoadEpochRef.current;
       void (async () => {
         try {
           if (opts?.remoteIncoming) {
             const { reloadBrowserDbFromIndexedDB } = await import("@/lib/localSqlite");
             await reloadBrowserDbFromIndexedDB();
           }
-          const cached = await listCompanyDocsFromBrowserDb(companyId, coll, { forBackupMerge: true });
+          if (
+            !bumpCompanyId ||
+            bumpCompanyId !== String(companyIdForWipeGuardRef.current || "").trim() ||
+            bumpEpoch !== companyDataLoadEpochRef.current
+          ) {
+            return;
+          }
+          const cached = await listCompanyDocsFromBrowserDb(bumpCompanyId, coll, { forBackupMerge: true });
+          if (
+            bumpCompanyId !== String(companyIdForWipeGuardRef.current || "").trim() ||
+            bumpEpoch !== companyDataLoadEpochRef.current
+          ) {
+            return;
+          }
           if (!cached.length) {
             if (opts?.remoteIncoming) {
               void import("@/lib/plServerLiveChangeTrace").then(({ plServerLiveChangeTrace }) =>
-                plServerLiveChangeTrace("ui_merge_remote_empty", { companyId, collection: coll })
+                plServerLiveChangeTrace("ui_merge_remote_empty", { companyId: bumpCompanyId, collection: coll })
               );
             }
             return;
           }
           const aliveCached = (cached as any[]).filter(isAliveDoc);
-          const mergeRows = (prev: any[], rows: any[], orderByField?: string) =>
-            opts?.remoteIncoming
-              ? mergeEntityListsById(prev.filter(isAliveDoc), rows, orderByField).filter(isAliveDoc)
-              : mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), rows, orderByField);
+          // Full company collection from SQLite = source of truth. Merge-with-prev cross-company mix karta hai
+          // (A vouchers + B vouchers) jab stale bump company switch ke baad complete ho.
+          const replaceRows = (rows: any[], orderByField?: string) => {
+            const next = orderByField ? sortDocsByDateField(rows, orderByField) : rows;
+            return next.map(stripMirrorMetaForEntityListRow);
+          };
           switch (coll) {
             case "vouchers":
-              setVouchers((prev) => mergeRows(prev, aliveCached, "date"));
+              setVouchers(replaceRows(aliveCached.map(normalizeVoucherRowAttachmentsForUi), "date"));
               break;
             case "parties":
-              setParties((prev) => mergeRows(prev, aliveCached));
+              setParties(replaceRows(aliveCached));
               break;
             case "staff":
-              setStaff((prev) => mergeRows(prev, aliveCached));
+              setStaff(replaceRows(aliveCached));
               break;
             case "bank_accounts":
-              setAccounts((prev) =>
-                mergeRows(
-                  prev,
+              setAccounts(
+                replaceRows(
                   aliveCached.map((row) => normalizeBankAccountRow(row as Record<string, unknown>))
                 )
               );
               break;
             case "taxes":
-              setTaxes((prev) => mergeRows(prev, aliveCached));
+              setTaxes(replaceRows(aliveCached));
               break;
             case "expense_accounts":
-              setUnprocessedExpenseAccounts((prev) => mergeRows(prev, aliveCached));
+              setUnprocessedExpenseAccounts(replaceRows(aliveCached));
               break;
             case "items":
-              setItems((prev) => mergeRows(prev, aliveCached));
+              setItems(replaceRows(aliveCached));
               break;
             case "item_groups":
-              setItemGroups((prev) => mergeRows(prev, aliveCached));
+              setItemGroups(replaceRows(aliveCached));
               break;
             case "groups":
-              setGroups((prev) => mergeRows(prev, aliveCached));
+              setGroups(replaceRows(aliveCached));
               break;
             case "account_groups":
-              setAccountGroups((prev) => mergeRows(prev, aliveCached));
+              setAccountGroups(replaceRows(aliveCached));
               break;
             case "staff_groups":
-              setStaffGroups((prev) => mergeRows(prev, aliveCached));
+              setStaffGroups(replaceRows(aliveCached));
               break;
             case "tax_groups":
-              setTaxGroups((prev) => mergeRows(prev, aliveCached));
+              setTaxGroups(replaceRows(aliveCached));
               break;
             case "expense_groups":
-              setExpenseGroups((prev) => mergeRows(prev, aliveCached));
+              setExpenseGroups(replaceRows(aliveCached));
               break;
             default:
               break;
@@ -1665,7 +1815,7 @@ export const VoucherProvider = ({
           if (opts?.remoteIncoming) {
             void import("@/lib/plServerLiveChangeTrace").then(({ plServerLiveChangeTrace }) =>
               plServerLiveChangeTrace("ui_merge_remote_applied", {
-                companyId,
+                companyId: bumpCompanyId,
                 collection: coll,
                 rowCount: aliveCached.length,
               })
@@ -1752,11 +1902,21 @@ export const VoucherProvider = ({
     const onRestoreVouchersRefresh = (ev: Event) => {
       const d = (ev as CustomEvent<{ companyId?: string }>).detail;
       if (!d?.companyId || d.companyId !== companyId) return;
-      listCompanyDocsFromBrowserDb(companyId, "vouchers", { forBackupMerge: true })
+      const restoreCompanyId = String(d.companyId).trim();
+      const restoreEpoch = companyDataLoadEpochRef.current;
+      listCompanyDocsFromBrowserDb(restoreCompanyId, "vouchers", { forBackupMerge: true })
         .then((cached) => {
+          if (
+            restoreCompanyId !== String(companyIdForWipeGuardRef.current || "").trim() ||
+            restoreEpoch !== companyDataLoadEpochRef.current
+          ) {
+            return;
+          }
           if (!cached.length) return;
-          const aliveCached = (cached as any[]).filter(isAliveDoc).map(normalizeVoucherRowAttachmentsForUi);
-          setVouchers((prev) => mergeEntityListsByIdOrKeepPrev(prev.filter(isAliveDoc), aliveCached, "date"));
+          const aliveCached = (cached as any[])
+            .filter(isAliveDoc)
+            .map(normalizeVoucherRowAttachmentsForUi);
+          setVouchers(sortDocsByDateField(aliveCached, "date").map(stripMirrorMetaForEntityListRow));
         })
         .catch(() => {});
     };

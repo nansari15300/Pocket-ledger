@@ -751,7 +751,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         setItemType(li0.type);
       }
       setSavedVoucherId(voucher.id);
-      const urlsToSet = voucherAttachmentUrlsForFormState(voucher);
+      const urlsToSet = allowAttachments ? voucherAttachmentUrlsForFormState(voucher) : [];
       if (Array.isArray(urlsToSet)) {
         setFiles(urlsToSet);
         initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === "string") as string[];
@@ -775,7 +775,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         if (li0?.type === "service" || li0?.type === "item") {
           setItemType(li0.type);
         }
-        const urlsToSet = voucherAttachmentUrlsForFormState(voucher);
+        const urlsToSet = allowAttachments ? voucherAttachmentUrlsForFormState(voucher) : [];
         if (Array.isArray(urlsToSet)) {
           setFiles(urlsToSet);
           initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === "string") as string[];
@@ -785,7 +785,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     } else {
       lastResetVoucherIdRef.current = null;
     }
-  }, [voucher, form]);
+  }, [voucher, form, allowAttachments]);
 
   /* ---------------------- AUTO VOUCHER NUMBER GENERATION ------------------ */
 

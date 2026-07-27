@@ -149,6 +149,8 @@ export type StartCompanyBackupRunInput = {
   backupIntent?: import("@/lib/companyBackupCore").CompanyBackupIntent;
   attachmentMissingPolicy?: import("@/lib/companyBackupCore").CompanyBackupAttachmentMissingPolicy;
   backupRelativeDir?: string | null;
+  folderDateSystem?: import("@/lib/autoBackupPath").BackupFolderDateSystem;
+  backupFileRunKind?: import("@/lib/autoBackupPath").BackupFileRunKind;
   backupRestoreGmails?: string[] | null;
 };
 

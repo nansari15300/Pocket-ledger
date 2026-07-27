@@ -152,7 +152,8 @@ export function FirebaseLedgerOnlineCompanySyncList({
       setDirty(false);
       toast({
         title: "Online sync saved",
-        description: "Data / Files ticks apply now for cloud download and upload.",
+        description:
+          "Data = cloud download/upload for masters & vouchers. Untick keeps Local SQLite on screen (offline). Files = attachment upload/download.",
       });
     } finally {
       setSaving(false);
@@ -244,8 +245,9 @@ export function FirebaseLedgerOnlineCompanySyncList({
         </div>
       </div>
       <p className="px-1 text-[10px] leading-snug text-muted-foreground">
-        <strong>Data</strong> — ledger records only. <strong>Files</strong> — attachment
-        upload/download (needs Data). Default off until you tick and Save.
+        <strong>Data</strong> — cloud download/upload for masters &amp; vouchers. Untick keeps Local
+        SQLite on screen (offline). <strong>Files</strong> — attachment upload/download (needs Data).
+        Default off until you tick and Save. Same on web, EXE, APK, iOS.
       </p>
       <div className="flex justify-end px-1">
         <Button

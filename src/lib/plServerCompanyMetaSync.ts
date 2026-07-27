@@ -52,7 +52,11 @@ function resolveMetaFetchBaseUrl(companyId: string): string {
 async function fetchCompanyMetaBundle(companyId: string): Promise<CompanyMetaBundle | null> {
   const baseUrl = resolveMetaFetchBaseUrl(companyId);
   if (!baseUrl) return null;
-  const url = `${baseUrl}/__pl_company_delta/${encodeURIComponent(companyId)}`;
+  // Ledger delta jaisa: staff local id ≠ host id ho to host canonical id se fetch.
+  const { resolvePlServerHostCompanyId } = await import("@/lib/plServerHostCompanyId");
+  const hostCompanyId = (await resolvePlServerHostCompanyId(companyId)) || String(companyId || "").trim();
+  if (!hostCompanyId) return null;
+  const url = `${baseUrl}/__pl_company_delta/${encodeURIComponent(hostCompanyId)}`;
   try {
     const { status, body } = await gateHttpGet(url, "", { timeoutMs: 25_000 });
     if (!status || status >= 400) return null;

@@ -19,7 +19,7 @@ import { normalizeRestoreAllowedGmailList } from "@/lib/backupRestoreAccess";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { packPlbpZipBackup } from "@/lib/plbpBackupZip";
-import { resolveWebBackupDirectoryForRelativePath } from "@/lib/autoBackupPath";
+import { resolveWebBackupDirectoryForRelativePath, buildAutoBackupRelativeDir, buildCompanyBackupFileName } from "@/lib/autoBackupPath";
 import {
   readBackupSaveLocationPrefs,
   readWebBackupDirectoryHandle,
@@ -444,7 +444,7 @@ export type CompanyBackupIntent = "for_online" | "for_offline";
 /**
  * Missing attachment files on device:
  * - `download_missing` — cloud se download karke embed
- * - `local_only` — missing URLs hatao; sirf local/pending bytes embed
+ * - `local_only` — sirf device bytes embed; `for_offline` missing URLs strip; `for_online` missing URLs rehne do
  */
 export type CompanyBackupAttachmentMissingPolicy = "download_missing" | "local_only";
 
@@ -460,8 +460,12 @@ export type ExecuteCompanyBackupInput = {
   backupIntent?: CompanyBackupIntent;
   /** With attachments: missing files download vs strip + continue. Default download when online merge. */
   attachmentMissingPolicy?: CompanyBackupAttachmentMissingPolicy;
-  /** Auto backup: `{company}/{timestamp}` under saved backup location. */
+  /** Auto backup: `{company}/{year}/{Month}/{day}` under saved backup location. */
   backupRelativeDir?: string | null;
+  /** Folder + file stamp calendar (AD July / BS Shrawan). */
+  folderDateSystem?: import("@/lib/autoBackupPath").BackupFolderDateSystem;
+  /** File name prefix: Manual_… vs Auto_… */
+  backupFileRunKind?: import("@/lib/autoBackupPath").BackupFileRunKind;
   /** Gmail list allowed to restore this backup file (stored in companyDetails). */
   backupRestoreGmails?: string[] | null;
   onProgress: (p: CompanyBackupProgress) => void;
@@ -492,6 +496,8 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
     backupIntent: backupIntentInput,
     attachmentMissingPolicy: attachmentMissingPolicyInput,
     backupRelativeDir,
+    folderDateSystem: folderDateSystemInput,
+    backupFileRunKind: backupFileRunKindInput,
     backupRestoreGmails,
     onProgress,
     signal,
@@ -504,6 +510,12 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
     attachmentMissingPolicyInput ??
     (localOnlySource ? "local_only" : "download_missing");
   const encryptionPassword = String(company.password || "").trim();
+  const folderDateSystem = folderDateSystemInput === "BS" ? "BS" : "AD";
+  const backupFileRunKind = backupFileRunKindInput === "Auto" ? "Auto" : "Manual";
+  /** `{Company}/{year}/{MonthFull}/{DD}` — callers pass relativeDir with AD/BS month names. */
+  const resolvedRelativeDir =
+    String(backupRelativeDir || "").trim() ||
+    buildAutoBackupRelativeDir(String(company.name || companyId), companyId, new Date(), folderDateSystem);
 
   if (includeAttachments && !localOnlySource && !offlineIntent) {
     const gate = await checkAttachmentBackupAllowed(ownerUid, accountPlanId);
@@ -666,7 +678,8 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
             };
           }
         } else {
-          // local_only policy: device pe jo hai (pending + cache) woh; missing URLs strip.
+          // local_only policy: device pe jo hai embed.
+          // for_offline → missing URLs strip (portable). for_online → missing URLs rehne do.
           onProgress({
             phase: "Checking attachments",
             detail: "Checking local / pending attachment files…",
@@ -687,13 +700,20 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
             { companyId }
           );
           if (localScan.missing.length > 0) {
-            workingData = stripListedAttachmentRefsFromBackupData(workingData, localScan.missing);
-            refs = collectAttachmentRefsFromBackupData(workingData);
-            attachmentRefCount = localScan.total;
-            onProgress({
-              phase: "Checking attachments",
-              detail: `Continuing with ${localScan.available.length} local file(s); removed ${localScan.missing.length} missing link(s).`,
-            });
+            if (offlineIntent) {
+              workingData = stripListedAttachmentRefsFromBackupData(workingData, localScan.missing);
+              refs = collectAttachmentRefsFromBackupData(workingData);
+              attachmentRefCount = localScan.total;
+              onProgress({
+                phase: "Checking attachments",
+                detail: `Continuing with ${localScan.available.length} local file(s); removed ${localScan.missing.length} missing link(s).`,
+              });
+            } else {
+              onProgress({
+                phase: "Checking attachments",
+                detail: `Embedding ${localScan.available.length} local file(s); keeping ${localScan.missing.length} link(s) as URLs.`,
+              });
+            }
           }
         }
       }
@@ -807,11 +827,15 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
           blob = new Blob([zipBlobBytes], { type: "application/zip" });
         }
 
-        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-        const fileName = `pocket-ledger_backup_${company.name.replace(/\s+/g, "_")}_${timestamp}.plbp`;
+        const fileName = buildCompanyBackupFileName(
+          String(company.name || companyId),
+          new Date(),
+          folderDateSystem,
+          backupFileRunKind
+        );
         onProgress({ phase: "Saving", detail: "Writing backup file…" });
         const saved = await saveBackupBlobWithBestEffort(blob, fileName, {
-          relativeDir: backupRelativeDir,
+          relativeDir: resolvedRelativeDir,
         });
 
         if (!localOnlySource && !offlineIntent) {
@@ -874,11 +898,15 @@ export async function executeCompanyBackup(input: ExecuteCompanyBackupInput): Pr
       blob = new Blob([jsonData], { type: "application/json" });
     }
 
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const fileName = `pocket-ledger_backup_${company.name.replace(/\s+/g, "_")}_${timestamp}.plbp`;
+    const fileName = buildCompanyBackupFileName(
+      String(company.name || companyId),
+      new Date(),
+      folderDateSystem,
+      backupFileRunKind
+    );
     onProgress({ phase: "Saving", detail: "Writing backup file…" });
     const saved = await saveBackupBlobWithBestEffort(blob, fileName, {
-      relativeDir: backupRelativeDir,
+      relativeDir: resolvedRelativeDir,
     });
 
     if (savedWithAttachments && !localOnlySource && !offlineIntent) {

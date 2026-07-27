@@ -7,10 +7,11 @@
  * same id online doc ho to soft-delete/restore cloud production ko corrupt kar deta hai).
  * Online (Firestore) companies: root `companies/{id}` soft markers + optional SQLite mirror.
  */
-import { deleteField, doc, serverTimestamp, updateDoc } from "firebase/firestore";
+import { deleteField, doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import {
   getLocalCompanyById,
+  promoteLocalCompanyRowToOnline,
   upsertLocalCompany,
   type LocalCompanyDoc,
 } from "@/lib/localCompanyStore";
@@ -77,11 +78,68 @@ export async function resolveCompanyRecycleRootForId(
 export async function softDeleteCompanyToRecycleBin(
   companyId: string,
   opts?: { companyStorageSource?: "local" | "online" | string }
-): Promise<{ ok: true; root: CompanyRecycleStorageRoot } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; root: CompanyRecycleStorageRoot; releasedToOnline?: boolean }
+  | { ok: false; error: string }
+> {
   const { companyId: cid, root, localRow } = await resolveCompanyRecycleRootForId(companyId, opts);
   if (!cid) return { ok: false, error: "Invalid company id" };
 
   try {
+    // Local tab me stuck Firebase company: SQLite soft-delete + strict-local guard
+    // remirror skip karta hai → Online me kabhi nahi aati / delete "fail" feel.
+    // Live Firestore twin ho to Local stamp clear karke Online tab pe release karo.
+    if (root === "local") {
+      let cloudData: Record<string, unknown> | null = null;
+      try {
+        const snap = await getDoc(doc(firestore, "companies", cid));
+        if (snap.exists()) {
+          const data = (snap.data() || {}) as Record<string, unknown>;
+          if (data.isDeleted !== true && data.movedToAdminRecycleAt == null) {
+            cloudData = data;
+          }
+        }
+      } catch {
+        cloudData = null;
+      }
+      if (cloudData) {
+        const promoted = await promoteLocalCompanyRowToOnline(cid, {
+          ...(localRow || {}),
+          ...cloudData,
+          id: cid,
+          name: String(cloudData.name || localRow?.name || cid),
+          ownerId: String(cloudData.ownerId || localRow?.ownerId || ""),
+          ownerEmail:
+            (cloudData.ownerEmail as string | null | undefined) ??
+            (localRow?.ownerEmail ?? null),
+          syncedFromCloud: true,
+          isDeleted: false,
+          deletedAt: null,
+          movedToAdminRecycleAt: null,
+        } as Partial<LocalCompanyDoc>);
+        if (!promoted) {
+          // No SQLite row yet — write online shape so selector can show Online tab.
+          await upsertLocalCompany({
+            ...(cloudData as LocalCompanyDoc),
+            id: cid,
+            name: String(cloudData.name || cid),
+            ownerId: String(cloudData.ownerId || ""),
+            ownerEmail: (cloudData.ownerEmail as string | null | undefined) ?? null,
+            storageOption: "firebase",
+            syncPolicy: "online",
+            syncedFromCloud: true,
+            authoritativeCompanyId: cid,
+            localOnly: false,
+            firestoreSyncDisabled: false,
+            isDeleted: false,
+            deletedAt: null,
+            movedToAdminRecycleAt: null,
+          } as LocalCompanyDoc);
+        }
+        return { ok: true, root: "online", releasedToOnline: true };
+      }
+    }
+
     if (!companyRecycleMustSkipFirestore(root)) {
       await updateDoc(doc(firestore, "companies", cid), {
         isDeleted: true,

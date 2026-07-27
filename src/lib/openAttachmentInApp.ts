@@ -11,6 +11,7 @@ import {
 } from "@/lib/openPdfExternal";
 import { showInAppImagePreview } from "@/lib/inAppImagePreview";
 import { openAttachmentGalleryInApp } from "@/lib/inAppAttachmentGallery";
+import { showAppAlert } from "@/lib/appAlertDialog";
 import { tryGetBlobFromFirebaseStorageDownloadUrl } from "@/lib/storageGetBlobFromDownloadUrl";
 import {
   looksLikeFirebaseStorageObjectPath,
@@ -18,7 +19,6 @@ import {
 } from "@/lib/firebaseStorageDownloadUrl";
 import { isOfflineCacheableAttachmentRef } from "@/lib/attachmentRefBlobFetch";
 import {
-  getOfflineCachedAttachmentBlob,
   getOfflineCachedAttachmentNativeRef,
   getRemoteAttachmentBlobPreferOfflineCache,
   tryOfflineCachedAttachmentBlobMultiKey,
@@ -169,6 +169,93 @@ async function tryOpenPlServerLocalAttachment(
 }
 
 /**
+ * Files tick OFF: open only if bytes already on device — no HTTPS / Storage / Drive download.
+ */
+async function tryOpenAttachmentFromDeviceCacheOnly(
+  url: string,
+  opts?: { title?: string; kind?: AttachmentKindHint; companyId?: string }
+): Promise<boolean> {
+  const u = String(url || "").trim();
+  if (!u) return false;
+
+  if (await openInMemoryUrlAttachment(u, { title: opts?.title, kind: opts?.kind })) {
+    return true;
+  }
+
+  const cid = String(opts?.companyId || "").trim();
+
+  if (isLocalFileRef(u)) {
+    if (usesEmbeddedNativeAttachmentStorage()) {
+      const meta = getLocalFileRefMetaSync(u) ?? (await getLocalFileRefMeta(u));
+      const ct = String(meta?.contentType || "").toLowerCase();
+      const kindHint = opts?.kind ?? "other";
+      const isPdf = kindHint === "pdf" || ct.includes("pdf");
+      const isImg = kindHint === "image" || ct.startsWith("image/");
+      if (isImg && meta?.displayUrl && !isPdf) {
+        showInAppImagePreview(meta.displayUrl, () => {}, { title: opts?.title ?? "Image" });
+        return true;
+      }
+    }
+    const blob = await getBlobFromLocalFileRef(u, cid ? { companyId: cid } : undefined);
+    if (blob && blob.size > 0) {
+      await openBlobAttachmentInApp(blob, { title: opts?.title, kind: opts?.kind });
+      return true;
+    }
+    return false;
+  }
+
+  // HTTPS / Storage path / drive: — IndexedDB / native disk / hover LRU only (no network).
+  try {
+    const { peekHoverCachedBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
+    const hoverCached =
+      peekHoverCachedBlobUrl(u) ?? peekHoverCachedBlobUrl(`${u}::cell-thumb`);
+    if (hoverCached && (await openInMemoryUrlAttachment(hoverCached, { title: opts?.title, kind: opts?.kind }))) {
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+
+  const cached =
+    (await tryOfflineCachedAttachmentBlobMultiKey(u)) ||
+    (await getRemoteAttachmentBlobPreferOfflineCache(u, undefined, {
+      companyId: cid || undefined,
+      localOnly: true,
+      galleryUrls: undefined,
+    }));
+  if (cached && cached.size > 0) {
+    await openBlobAttachmentInApp(cached, { title: opts?.title, kind: opts?.kind });
+    return true;
+  }
+
+  try {
+    const { getBlobFromAttachmentRefPreferLocalFirst } = await import("@/lib/attachmentPreviewResolve");
+    const localBlob = await getBlobFromAttachmentRefPreferLocalFirst(u, {
+      companyId: cid || undefined,
+      localLedgerOnly: true,
+    });
+    if (localBlob && localBlob.size > 0) {
+      await openBlobAttachmentInApp(localBlob, { title: opts?.title, kind: opts?.kind });
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+
+  const native = await getOfflineCachedAttachmentNativeRef(u);
+  if (native?.fileUri && isCapacitorNativeApp()) {
+    await openLocalFileUriInExternalViewer(
+      native.fileUri,
+      native.contentType || "application/octet-stream",
+      opts?.title ?? "File"
+    );
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * File PDF ya image: overlay / gallery; HTTP URL par fetch + blob (CORS allow ho to) — web par bhi bahar tab kam.
  */
 export async function openAttachmentInApp(
@@ -180,12 +267,54 @@ export async function openAttachmentInApp(
     serverFallback?: OpenAttachmentServerFallback;
     /** Local / server-gate company: HTTPS mat — pehle SQLite+disk cache, phir download. */
     localLedgerOnly?: boolean;
+    /**
+     * Online company row (Company Selector). When set, Files tick OFF → open/load blocked.
+     * Prefer passing this from UI that has `useCompany()`.
+     */
+    gateCompany?: { id?: string; storageOption?: string | null; syncPolicy?: string | null; syncedFromCloud?: boolean; authoritativeCompanyId?: string } | null;
   }
 ): Promise<void> {
   // PL_ATTACH_V1: clipboard marker aa gaya to underlying src (local:/https) decode karo —
   // warna isLocalFileRef check miss karta tha aur error dialog dikhta tha.
   const u = normalizeAttachmentUrlForDevicePreview(String(url || "").trim());
   if (!u) return;
+
+  /**
+   * Files tick OFF (Online): no network download.
+   * Already on device (`local:` / IndexedDB / native cache / hover blob) → open anyway.
+   */
+  let attachmentNetworkBlocked = false;
+  const gateCid = String(
+    opts?.gateCompany?.id || opts?.serverFallback?.companyId || ""
+  ).trim();
+  if (gateCid) {
+    const { isOnlineCompanyAttachmentNetworkAllowed } = await import(
+      "@/lib/onlineCompanySelectorSyncPolicy"
+    );
+    if (
+      !isOnlineCompanyAttachmentNetworkAllowed(
+        gateCid,
+        (opts?.gateCompany as never) ?? null
+      )
+    ) {
+      attachmentNetworkBlocked = true;
+    }
+  }
+
+  if (attachmentNetworkBlocked) {
+    const opened = await tryOpenAttachmentFromDeviceCacheOnly(u, {
+      title: opts?.title,
+      kind: opts?.kind,
+      companyId: gateCid || undefined,
+    });
+    if (!opened && typeof window !== "undefined") {
+      showAppAlert(
+        "This file is not on this device. Turn on Files in Company Selector (Online tab), then Save — to download. Already downloaded files still open.",
+        "File not on this device"
+      );
+    }
+    return;
+  }
 
   if (await openInMemoryUrlAttachment(u, { title: opts?.title, kind: opts?.kind })) {
     return;
@@ -215,7 +344,10 @@ export async function openAttachmentInApp(
       (await getBlobFromLocalFileRef(u));
     if (!blob) {
       if (typeof window !== "undefined") {
-        window.alert("Could not download this attachment from Google Drive. Check internet and Drive connection.");
+        showAppAlert(
+          "Could not download this attachment from Google Drive. Check internet and Drive connection.",
+          "Download failed"
+        );
       }
       return;
     }
@@ -327,9 +459,10 @@ export async function openAttachmentInApp(
         }
       }
       if (typeof window !== "undefined") {
-        window.alert(
+        showAppAlert(
           "Attachment file not found on this device (cache may have been cleared). " +
-            "Could not load a copy from the server — check internet or re-upload the file if the voucher still shows an old local link."
+            "Could not load a copy from the server — check internet or re-upload the file if the voucher still shows an old local link.",
+          "File not found"
         );
       }
       return;
@@ -462,6 +595,10 @@ export async function openAttachmentInApp(
       }
     }
     showInAppImagePreview(u, () => {}, { title: opts?.title ?? "Image" });
+    // Raw HTTPS open — background me IndexedDB likho (Files untick ke baad local open).
+    if (!isDataImage && isRemoteCacheableAttachmentSource(u)) {
+      void getRemoteAttachmentBlobPreferOfflineCache(u, undefined, { awaitDiskWrite: false });
+    }
     return;
   }
 
