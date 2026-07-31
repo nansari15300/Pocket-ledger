@@ -27,6 +27,18 @@ export type MasterEntityListRowLike = {
   openingBalanceDate?: unknown;
 };
 
+export function masterEntityTextMatchesSearch(text: unknown, searchTerm: string): boolean {
+  const src = String(text || "").toLowerCase();
+  const tokens = String(searchTerm || "")
+    .toLowerCase()
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!tokens.length) return true;
+  if (!src) return false;
+  return tokens.every((token) => src.includes(token));
+}
+
 export function filterAndSortMasterEntityListRows<T extends MasterEntityListRowLike>(
   items: T[] | undefined,
   searchTerm: string,
@@ -36,13 +48,12 @@ export function filterAndSortMasterEntityListRows<T extends MasterEntityListRowL
     excludeRow?: (row: T) => boolean;
   }
 ): T[] {
-  const searchLower = (searchTerm || "").toLowerCase();
   const exclude = options?.excludeRow;
 
   const list = (items || []).filter((row) => {
     if (exclude?.(row)) return false;
     if (!row.name) return false;
-    if (!String(row.name).toLowerCase().includes(searchLower)) return false;
+    if (!masterEntityTextMatchesSearch(row.name, searchTerm)) return false;
 
     const balRaw = row.balance;
     const bal = typeof balRaw === "number" && !Number.isNaN(balRaw) ? balRaw : null;

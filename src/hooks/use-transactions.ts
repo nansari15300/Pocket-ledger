@@ -174,6 +174,12 @@ export const getTransactionAmounts = (
     const amount = ['sale', 'purchase'].includes(transaction.type)
         ? toNum(transaction.total || transaction.amount || 0)
         : toNum(transaction.amount || transaction.total || 0);
+    const paymentOutPayeeAmount =
+        transaction.type === 'payment_out' && toNum(transaction.payeeAmount) > 0
+            ? toNum(transaction.payeeAmount)
+            : amount;
+    const paymentOutOtherChargeAmount =
+        transaction.type === 'payment_out' ? toNum(transaction.otherChargeAmount) : 0;
 
     if (['sale', 'purchase'].includes(transaction.type)) {
       const subTotal = toNum(transaction.subTotal);
@@ -204,8 +210,12 @@ export const getTransactionAmounts = (
                 if (transaction.type === 'purchase') debit += taxableAmount;
             }
             else if (entity && transaction.partyId === entity.id) {
-                if (["sale", "sale_service", "payment_out", "direct_income"].includes(transaction.type)) debit += amount;
+                if (["sale", "sale_service", "direct_income"].includes(transaction.type)) debit += amount;
+                if (transaction.type === "payment_out") debit += paymentOutPayeeAmount;
                 if (["purchase", "purchase_service", "payment_in", "direct_expense"].includes(transaction.type)) credit += amount;
+            }
+            if (entity && transaction.type === 'payment_out' && transaction.otherChargeAccountId === entity.id) {
+                debit += paymentOutOtherChargeAmount;
             }
 
             /** Party contra: sundry creditor/debtor ledger jahan party id bank leg jaisi `from/toAccountId` se juda ho — account context jaisa Dr/Cr. */
@@ -294,7 +304,9 @@ export const getTransactionAmounts = (
                     // Legacy pay_salary vouchers stored with type=pay_salary
                     debit += amount;
                 } else if (transaction.type === 'payment_out' && transaction.staffId) {
-                    debit += amount;
+                    debit += paymentOutPayeeAmount;
+                } else if (transaction.type === 'payment_out' && transaction.otherChargeAccountId === entity.id) {
+                    debit += paymentOutOtherChargeAmount;
                 } else if (transaction.type === 'payment_in' && transaction.staffId) {
                     credit += amount;
                 }
@@ -318,7 +330,10 @@ export const getTransactionAmounts = (
             }
             // Payment Out mapped to expense accounts should debit the selected account.
             if (transaction.type === 'payment_out' && (transaction.expenseAccountId || transaction.toAccountId) === entity.id) {
-                debit += amount;
+                debit += paymentOutPayeeAmount;
+            }
+            if (transaction.type === 'payment_out' && transaction.otherChargeAccountId === entity.id) {
+                debit += paymentOutOtherChargeAmount;
             }
             // Add Salary Support for Individual Expense Account
             if (transaction.type === 'journal' && transaction.subType === 'add_salary') {
@@ -663,6 +678,11 @@ export const getStaffTransactionAmounts = (transaction: any, staffIds: string[],
   let taxAmount = 0;
   let quantity = 0;
   const amount = Number(transaction.amount || transaction.total || 0);
+  const paymentOutPayeeAmount =
+    transaction.type === 'payment_out' && Number(transaction.payeeAmount || 0) > 0
+      ? Number(transaction.payeeAmount || 0)
+      : amount;
+  const paymentOutOtherChargeAmount = transaction.type === 'payment_out' ? Number(transaction.otherChargeAmount || 0) || 0 : 0;
 
   if (transaction.type === "note") return { debit, credit, taxRate, taxableAmount, taxAmount, quantity };
 
@@ -682,8 +702,12 @@ export const getStaffTransactionAmounts = (transaction: any, staffIds: string[],
     }
   }
 
-  if ((transaction.type === 'payment_out' || transaction.type === 'pay_salary') && staffIds.includes(transaction.staffId)) {
-    debit = amount; 
+  if (transaction.type === 'payment_out' && staffIds.includes(transaction.staffId)) {
+    debit = paymentOutPayeeAmount;
+  } else if (transaction.type === 'payment_out' && staffIds.includes(transaction.otherChargeAccountId)) {
+    debit = paymentOutOtherChargeAmount;
+  } else if (transaction.type === 'pay_salary' && staffIds.includes(transaction.staffId)) {
+    debit = amount;
   } else if (transaction.type === 'payment_in' && staffIds.includes(transaction.staffId)) {
     credit = amount;
   } else if (transaction.type === 'add_salary') {
@@ -767,8 +791,9 @@ export const getTaxTransactionAmounts = (transaction: any, taxAccountId: string,
     }
     
     if (transaction.type === 'payment_out' && transaction.taxAccountId === taxAccountId) {
-        debit += transaction.amount || 0;
-        taxAmount += transaction.amount || 0;
+        const paymentOutTaxAmount = Number(transaction.payeeAmount || 0) > 0 ? Number(transaction.payeeAmount || 0) : Number(transaction.amount || transaction.total || 0);
+        debit += paymentOutTaxAmount;
+        taxAmount += paymentOutTaxAmount;
     } else if (transaction.type === 'payment_in' && transaction.taxAccountId === taxAccountId) {
         credit += transaction.amount || 0;
         taxAmount += transaction.amount || 0;

@@ -498,6 +498,10 @@ export function TransactionsTable({
   const [internalActiveFilter, setInternalActiveFilter] = useState<string | null>(null);
   const effectiveActiveFilter = activeFilter !== undefined ? activeFilter : internalActiveFilter;
   const patchActiveFilter = setActiveFilter ?? setInternalActiveFilter;
+  const filterInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const focusFilterInputSoon = useCallback((key: string) => {
+    requestAnimationFrame(() => filterInputRefs.current[key]?.focus({ preventScroll: true }));
+  }, []);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (effectiveActiveFilter === "file") setFileFilterPopoverOpen(true);
@@ -857,6 +861,17 @@ export function TransactionsTable({
     return formatCurrency(value, {noSuffix: true, context: 'transaction'});
   }, [getDisplayValueProp, formatCurrency]);
 
+  const rowTextSearchHighlight = useMemo(() => {
+    const filterText = Object.values(filters || {})
+      .map((v) => String(v || "").trim())
+      .filter(Boolean)
+      .join(" ");
+    return [transactionCardSearchHighlight, filterText]
+      .map((v) => String(v || "").trim())
+      .filter(Boolean)
+      .join(" ");
+  }, [filters, transactionCardSearchHighlight]);
+
 
   // Header filter: `modal` true — input pe pehla click dismiss na ho (non-modal me DismissableLayer kabhi filter box ko "outside" maan leta hai)
   const renderHeaderWithFilter = (key: string, label: string, isNumeric: boolean = false, minWidthPx?: number) => {
@@ -876,11 +891,28 @@ export function TransactionsTable({
                     <Filter className={cn("h-4 w-4", isFiltered && "text-red-600")} />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="p-1 w-48" onCloseAutoFocus={(e: Event) => e.preventDefault()}>
+                <PopoverContent
+                  side="top"
+                  align="center"
+                  sideOffset={6}
+                  className="w-48 p-0 overflow-hidden"
+                  onOpenAutoFocus={(e: Event) => {
+                    e.preventDefault();
+                    focusFilterInputSoon(key);
+                  }}
+                  onCloseAutoFocus={(e: Event) => e.preventDefault()}
+                  onPointerUpCapture={() => focusFilterInputSoon(key)}
+                  onClickCapture={() => focusFilterInputSoon(key)}
+                >
                     {key === 'type' && onVoucherTypeChange ? (
                         <VoucherTypeFilter selectedTypes={voucherTypes || ['all']} onSelectionChange={onVoucherTypeChange} />
                     ) : setFilters ? (
                         <Input
+                        ref={(el) => {
+                          filterInputRefs.current[key] = el;
+                          if (el && activeFilter === key) focusFilterInputSoon(key);
+                        }}
+                        className="border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                         placeholder={`Filter ${label}...`}
                         value={filters ? filters[key] || '' : ''}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
@@ -901,11 +933,28 @@ export function TransactionsTable({
                     <Filter className={cn("h-4 w-4", isFiltered && "text-red-600")} />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="p-1 w-48" onCloseAutoFocus={(e: Event) => e.preventDefault()}>
+                <PopoverContent
+                  side="top"
+                  align="center"
+                  sideOffset={6}
+                  className="w-48 p-0 overflow-hidden"
+                  onOpenAutoFocus={(e: Event) => {
+                    e.preventDefault();
+                    focusFilterInputSoon(key);
+                  }}
+                  onCloseAutoFocus={(e: Event) => e.preventDefault()}
+                  onPointerUpCapture={() => focusFilterInputSoon(key)}
+                  onClickCapture={() => focusFilterInputSoon(key)}
+                >
                     {key === 'type' && onVoucherTypeChange ? (
                         <VoucherTypeFilter selectedTypes={voucherTypes || ['all']} onSelectionChange={onVoucherTypeChange} />
                     ) : setFilters ? (
                         <Input
+                        ref={(el) => {
+                          filterInputRefs.current[key] = el;
+                          if (el && activeFilter === key) focusFilterInputSoon(key);
+                        }}
+                        className="border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                         placeholder={`Filter ${label}...`}
                         value={filters ? filters[key] || '' : ''}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1813,7 +1862,7 @@ export function TransactionsTable({
   );
 
   if (useMobileCardView) {
-    const highlightQ = (transactionCardSearchHighlight ?? "").trim();
+    const highlightQ = (rowTextSearchHighlight ?? "").trim();
     const hl = (s: string) => highlightQueryInText(s, highlightQ);
     const renderMobileCard = (t: any, key: string, insideGroup: boolean) => {
       if (t.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
@@ -1948,7 +1997,7 @@ export function TransactionsTable({
         <Card
           key={key}
           className={cn(
-            "p-2.5 min-w-0 w-full overflow-hidden border-2 shadow-sm cursor-pointer transition-colors",
+            "relative p-2.5 min-w-0 w-full overflow-hidden border-2 shadow-sm cursor-pointer transition-colors",
             context === "daybook" && "rounded-lg",
             swBorder,
             isPendingApproval
@@ -1961,8 +2010,12 @@ export function TransactionsTable({
             <div className="min-w-0 flex-1 overflow-hidden">
               <p className="font-bold text-sm truncate">{hl(titleLabel)}</p>
             </div>
-            <div className={cn("flex shrink-0 items-center justify-end gap-1.5 font-bold text-sm", mainAmountClass)}>
-              {showFileBySelection ? <MobileTransactionFilePreview transaction={t} /> : null}
+            <div className={cn("relative flex shrink-0 items-center justify-end font-bold text-sm", showFileBySelection && "pl-8", mainAmountClass)}>
+              {showFileBySelection ? (
+                <div className="absolute left-0 top-1/2 -translate-y-1/2">
+                  <MobileTransactionFilePreview transaction={t} />
+                </div>
+              ) : null}
               <span>{amount > 0 ? renderHighlightedMobileAmountOrQty(amount) : "-"}</span>
             </div>
           </div>
@@ -2656,7 +2709,7 @@ export function TransactionsTable({
                                           highlightPendingApproval={highlightPendingApproval}
                                           syncInFlight={syncingVoucherIds.has(String((t as any).id || ""))}
                                           onSyncNow={handleSyncVoucherNow}
-                                          textSearchHighlight={transactionCardSearchHighlight}
+                                          textSearchHighlight={rowTextSearchHighlight}
                                           {...getSpendWiseRowMenuProps(t)}
                                         />
                                         {/* Card ke andar txn ke beech — alag sep row (zoom-stable border-top) */}
@@ -2728,7 +2781,7 @@ export function TransactionsTable({
                           highlightPendingApproval={highlightPendingApproval}
                           syncInFlight={syncingVoucherIds.has(String((t as any).id || ""))}
                           onSyncNow={handleSyncVoucherNow}
-                          textSearchHighlight={transactionCardSearchHighlight}
+                          textSearchHighlight={rowTextSearchHighlight}
                           {...getSpendWiseRowMenuProps(t)}
                         />
                       </React.Fragment>
@@ -2804,7 +2857,7 @@ export function TransactionsTable({
                         highlightPendingApproval={highlightPendingApproval}
                         syncInFlight={syncingVoucherIds.has(String((t as any).id || ""))}
                         onSyncNow={handleSyncVoucherNow}
-                        textSearchHighlight={transactionCardSearchHighlight}
+                        textSearchHighlight={rowTextSearchHighlight}
                         {...getSpendWiseRowMenuProps(t)}
                       />
                     );

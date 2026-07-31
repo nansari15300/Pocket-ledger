@@ -22,6 +22,7 @@ import {
 import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows"
 import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
 import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
+import { highlightQueryInText } from "@/lib/highlightQueryInText";
 
 interface ExpenseAccountListProps {
   accounts: ExpenseAccount[];
@@ -59,6 +60,7 @@ export function ExpenseAccountList({
   const quickFilterFooter = !hideQuickFilterBar ? (
     <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
   ) : null;
+  const highlightSearch = searchTerm.trim();
 
   const filteredAndSortedAccounts = useMemo(() => {
     return filterAndSortMasterEntityListRows(accounts ?? [], searchTerm, quickFilter);
@@ -148,7 +150,7 @@ export function ExpenseAccountList({
                               onPointerDown={(e) => e.stopPropagation()}
                               className={masterListNameTriggerCn}
                             >
-                              {account.name}
+                              {highlightSearch ? highlightQueryInText(account.name, highlightSearch) : account.name}
                             </TooltipTrigger>
                             <TooltipContent side="right">
                               <p className="font-medium">{account.name}</p>

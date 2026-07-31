@@ -27,10 +27,18 @@ export function getPartyLedgerTransactionAmounts(transaction: any, partyId: stri
   let debit = 0;
   let credit = 0;
   const amount = toNum(transaction?.total ?? transaction?.amount ?? 0);
+  const paymentOutPayeeAmount =
+    transaction?.type === "payment_out" && toNum(transaction?.payeeAmount) > 0
+      ? toNum(transaction?.payeeAmount)
+      : amount;
 
   if (String(transaction?.partyId ?? "") === partyId) {
-    if (["sale", "sale_service", "payment_out", "direct_income"].includes(transaction.type)) debit += amount;
+    if (["sale", "sale_service", "direct_income"].includes(transaction.type)) debit += amount;
+    if (transaction.type === "payment_out") debit += paymentOutPayeeAmount;
     if (["purchase", "purchase_service", "payment_in", "direct_expense"].includes(transaction.type)) credit += amount;
+  }
+  if (transaction?.type === "payment_out" && String(transaction?.otherChargeAccountId ?? "") === partyId) {
+    debit += toNum(transaction?.otherChargeAmount);
   }
 
   if (
@@ -80,6 +88,7 @@ function collectPartyIdCandidatesFromVoucher(v: any, partyIdSet: Set<string>): S
   bump(v?.incomeAccountId);
   bump(v?.salesAccountId);
   bump(v?.purchaseAccountId);
+  bump(v?.otherChargeAccountId);
   if (Array.isArray(v?.lineItems)) {
     for (const li of v.lineItems) {
       bump(li?.itemId);

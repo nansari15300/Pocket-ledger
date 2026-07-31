@@ -83,7 +83,7 @@ export function Combobox({
   showFullOptionText = false,
   contentWidthMode = "trigger",
   popoverModal = true,
-  autoFocusSearchOnOpen = false,
+  autoFocusSearchOnOpen = true,
   triggerLabelScrollable = false,
   triggerLabelMinCh,
   maxVisibleOptions,
@@ -146,6 +146,10 @@ export function Combobox({
     fn();
   };
 
+  const focusSearchSoon = React.useCallback(() => {
+    requestAnimationFrame(() => searchInputRef.current?.focus({ preventScroll: true }));
+  }, []);
+
   const handleSingleSelect = (val: string) => {
     onChange?.(val);
     setOpen(false);
@@ -174,6 +178,7 @@ export function Combobox({
     } else {
         onMultiChange(newSelection);
     }
+    focusSearchSoon();
   };
 
   const handleAddNew = (val: string, newName: string) => {
@@ -208,6 +213,41 @@ export function Combobox({
   }, [filteredOptions, maxVisibleOptions]);
   const hasNoResults = filteredOptions.length === 0;
   const showAddNew = addNewItems.length > 0 && (search.trim().length > 0 || hasNoResults);
+  const renderHighlightedText = (text: string, segmentClassName?: string) => {
+    if (!q) return <span className={segmentClassName}>{text}</span>;
+    const lowerText = text.toLowerCase();
+    const pieces: React.ReactNode[] = [];
+    let cursor = 0;
+    let matchIndex = lowerText.indexOf(q);
+
+    while (matchIndex >= 0) {
+      if (matchIndex > cursor) {
+        pieces.push(
+          <span key={`${cursor}-plain`} className={segmentClassName}>
+            {text.slice(cursor, matchIndex)}
+          </span>
+        );
+      }
+      const end = matchIndex + q.length;
+      pieces.push(
+        <span key={`${matchIndex}-match`} className="rounded bg-pink-200 px-0.5 text-pink-900">
+          {text.slice(matchIndex, end)}
+        </span>
+      );
+      cursor = end;
+      matchIndex = lowerText.indexOf(q, cursor);
+    }
+
+    if (cursor < text.length) {
+      pieces.push(
+        <span key={`${cursor}-tail`} className={segmentClassName}>
+          {text.slice(cursor)}
+        </span>
+      );
+    }
+
+    return <>{pieces}</>;
+  };
 
   const renderOptionLabel = (label: string) => {
     // Keep list row text single-line when caller requests no-wrap options.
@@ -217,16 +257,15 @@ export function Combobox({
       effectiveNoWrap && effectiveShowFull && "overflow-x-auto [scrollbar-width:thin]",
       effectiveNoWrap && !effectiveShowFull && "truncate"
     );
-    if (!highlightBalanceInOptions) return <span className={labelClassName}>{label}</span>;
+    if (!highlightBalanceInOptions) return <span className={labelClassName}>{renderHighlightedText(label)}</span>;
     const balanceIdx = label.indexOf("Balance:");
-    if (balanceIdx < 0) return <span className={labelClassName}>{label}</span>;
+    if (balanceIdx < 0) return <span className={labelClassName}>{renderHighlightedText(label)}</span>;
     const prefix = label.slice(0, balanceIdx);
     const balanceText = label.slice(balanceIdx);
-    // Keep account name neutral; emphasize the balance segment in green for quick scan.
     return (
       <span className={labelClassName}>
-        <span>{prefix}</span>
-        <span className="text-green-600 font-medium">{balanceText}</span>
+        {renderHighlightedText(prefix)}
+        {renderHighlightedText(balanceText, "text-green-600 font-medium")}
       </span>
     );
   };
@@ -347,6 +386,10 @@ export function Combobox({
             }}
             onPointerUpCapture={() => {
               listGestureStartRef.current = null;
+              focusSearchSoon();
+            }}
+            onClickCapture={() => {
+              focusSearchSoon();
             }}
             onScroll={() => {
               if (ignoreListScrollRef.current) return;

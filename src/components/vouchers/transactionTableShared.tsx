@@ -1276,8 +1276,7 @@ export const TransactionRow = React.memo(
     });
     const names = { ...journalAccountNames, ...userNames, ...(accountNames || {}) };
     const hlQ = String(textSearchHighlight ?? "").trim();
-    const hl = (s: string) =>
-      context === "daybook" && hlQ ? (highlightQueryInText(s, hlQ) as React.ReactNode) : s;
+    const hl = (s: string) => (hlQ ? (highlightQueryInText(s, hlQ) as React.ReactNode) : s);
     const isItemPartyContext = context === "item" || (context === "group" && groupEntityType === "item");
     const shouldDisableAmountTextAnimation = (context === "daybook" && hlQ.length > 0) || (context === "item" && stockView === "qty");
 

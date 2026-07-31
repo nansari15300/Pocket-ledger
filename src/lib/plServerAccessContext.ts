@@ -556,17 +556,28 @@ export function patchPlServerSharedCompanyPlanInSession(
     let changed = false;
     const next = rows.map((row) => {
       if (String(row.id || "").trim() !== hostId) return row;
+      const nextPlanExpiryMs =
+        typeof plan.planExpiryMs === "number" && Number.isFinite(plan.planExpiryMs)
+          ? plan.planExpiryMs
+          : row.planExpiryMs;
+      const nextOfflineLicenseValidUntilMs =
+        typeof plan.offlineLicenseValidUntilMs === "number" &&
+        Number.isFinite(plan.offlineLicenseValidUntilMs)
+          ? plan.offlineLicenseValidUntilMs
+          : row.offlineLicenseValidUntilMs;
+      if (
+        row.planId === plan.planId &&
+        row.planExpiryMs === nextPlanExpiryMs &&
+        row.offlineLicenseValidUntilMs === nextOfflineLicenseValidUntilMs
+      ) {
+        return row;
+      }
       changed = true;
       return {
         ...row,
         planId: plan.planId,
-        ...(typeof plan.planExpiryMs === "number" && Number.isFinite(plan.planExpiryMs)
-          ? { planExpiryMs: plan.planExpiryMs }
-          : {}),
-        ...(typeof plan.offlineLicenseValidUntilMs === "number" &&
-        Number.isFinite(plan.offlineLicenseValidUntilMs)
-          ? { offlineLicenseValidUntilMs: plan.offlineLicenseValidUntilMs }
-          : {}),
+        planExpiryMs: nextPlanExpiryMs,
+        offlineLicenseValidUntilMs: nextOfflineLicenseValidUntilMs,
       };
     });
     if (!changed) return;

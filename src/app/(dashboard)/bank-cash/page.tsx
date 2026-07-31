@@ -63,6 +63,7 @@ import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { usePendingApprovalListFilter } from "@/hooks/usePendingApprovalListFilter";
 import { MasterListViewShell } from "@/components/layout/MasterListViewShell";
 import { type EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
+import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
 
 function BankCashPageContent() {
   const { user } = useAuth();
@@ -327,21 +328,19 @@ function BankCashPageContent() {
   }, [processedAccounts]);
   // Header count: `AccountList` jaisa — search + special-account permission
   const filteredAccountListCount = useMemo(() => {
-    const searchLower = (searchTerm || "").toLowerCase();
     const canViewSpecialAccount = can("view_special_bank_accounts");
     return accountsForAccountList.filter((account) => {
       if (account.isSpecial && !canViewSpecialAccount) return false;
       const label = bankAccountDisplayName(account);
-      return !!(label && label.toLowerCase().includes(searchLower));
+      return !!(label && masterEntityTextMatchesSearch(label, searchTerm));
     }).length;
   }, [accountsForAccountList, searchTerm, can]);
   const filteredClearingAccountListCount = useMemo(() => {
-    const searchLower = (searchTerm || "").toLowerCase();
     const canViewSpecialAccount = can("view_special_bank_accounts");
     return clearingAccountsForList.filter((account) => {
       if (account.isSpecial && !canViewSpecialAccount) return false;
       const label = bankAccountDisplayName(account);
-      return !!(label && label.toLowerCase().includes(searchLower));
+      return !!(label && masterEntityTextMatchesSearch(label, searchTerm));
     }).length;
   }, [clearingAccountsForList, searchTerm, can]);
 
@@ -440,13 +439,12 @@ function BankCashPageContent() {
 
   // Filtered group count (matches AccountGroupList: search + exclude report-only + exclude system groups)
   const filteredGroupCount = useMemo(() => {
-    const searchLower = (searchTerm || "").toLowerCase();
     return (processedAccountGroupsForList || []).filter((g) => {
       const anyG = g as any;
       if (anyG.isReportOnly === true) return false;
       const isSystemParent = anyG.isSystemReserved === true || isSystemParentGroup("account_groups", anyG.id);
       if (isSystemParent) return false;
-      return g.name && (searchLower ? g.name.toLowerCase().includes(searchLower) : true);
+      return g.name && masterEntityTextMatchesSearch(g.name, searchTerm);
     }).length;
   }, [processedAccountGroupsForList, searchTerm]);
 

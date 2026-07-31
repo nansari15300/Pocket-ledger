@@ -25,6 +25,7 @@ import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
 import { useCompany } from "@/hooks/useCompany";
+import { highlightQueryInText } from "@/lib/highlightQueryInText";
 
 interface ItemListProps {
   items: Item[];
@@ -109,6 +110,7 @@ export function ItemList({
   const quickFilterFooter = !hideQuickFilterBar ? (
     <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
   ) : null;
+  const highlightSearch = searchTerm.trim();
 
   const enrichedRows: ItemListFilterRow[] = useMemo(() => {
     return (items || []).map((item) => {
@@ -202,7 +204,7 @@ export function ItemList({
                           onPointerDown={(e) => e.stopPropagation()}
                           className={masterListNameTriggerCn}
                         >
-                          {item.name}
+                          {highlightSearch ? highlightQueryInText(item.name, highlightSearch) : item.name}
                         </TooltipTrigger>
                         <TooltipContent>
                           <p>{item.name}</p>

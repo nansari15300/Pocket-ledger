@@ -23,6 +23,8 @@ import {
 } from "@/components/entity/EntityListQuickFilterBar";
 import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
 import { useCompany } from "@/hooks/useCompany";
+import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -62,6 +64,7 @@ export function StaffList({
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
   const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
+  const highlightSearch = searchTerm.trim();
   const filteredAndSortedStaff = useMemo(() => {
     const toDateMs = (raw: unknown): number => {
       if (!raw) return 0;
@@ -76,7 +79,7 @@ export function StaffList({
     const isSettled = (bal: number) => Math.abs(Number(bal || 0)) < 1e-6;
     return staff
       .filter((s) => {
-        if (!s.name || !s.name.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+        if (!s.name || !masterEntityTextMatchesSearch(s.name, searchTerm)) return false;
         const bal = Number(s.balance || 0);
         // Footer quick filters: list short/filter from same control on mobile + desktop.
         if (quickFilter === "dr") return bal > 0;
@@ -152,7 +155,7 @@ export function StaffList({
                         onPointerDown={(e) => e.stopPropagation()}
                         className={masterListNameTriggerCn}
                       >
-                        {staffMember.name}
+                        {highlightSearch ? highlightQueryInText(staffMember.name, highlightSearch) : staffMember.name}
                       </TooltipTrigger>
                       <TooltipContent>
                         <p>{staffMember.name}</p>

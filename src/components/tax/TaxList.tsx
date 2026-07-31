@@ -22,6 +22,7 @@ import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { highlightQueryInText } from "@/lib/highlightQueryInText";
 
 export function TaxList({ 
     taxes, 
@@ -54,6 +55,7 @@ export function TaxList({
   const quickFilterFooter = !hideQuickFilterBar ? (
     <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
   ) : null;
+  const highlightSearch = searchTerm.trim();
 
   const filteredAndSortedTaxes = useMemo(() => {
     return filterAndSortMasterEntityListRows(taxes, searchTerm, quickFilter);
@@ -118,7 +120,7 @@ export function TaxList({
                             onPointerDown={(e) => e.stopPropagation()}
                             className={masterListNameTriggerCn}
                           >
-                            {tax.name}
+                            {highlightSearch ? highlightQueryInText(tax.name, highlightSearch) : tax.name}
                           </TooltipTrigger>
                           <TooltipContent side="right">
                             <p className="font-medium">{tax.name}</p>

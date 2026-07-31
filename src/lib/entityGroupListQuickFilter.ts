@@ -1,4 +1,5 @@
 import type { EntityListQuickFilter } from "@/components/entity/EntityListQuickFilterBar";
+import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
 
 function toDateMs(raw: unknown): number {
   if (!raw) return 0;
@@ -29,11 +30,9 @@ export function filterAndSortEntityGroups<T extends EntityGroupRowLike>(
   searchTerm: string,
   quickFilter: EntityListQuickFilter
 ): T[] {
-  const searchLower = (searchTerm || "").toLowerCase();
-
   const list = (items || []).filter((row) => {
     if (!row.name) return false;
-    if (!String(row.name).toLowerCase().includes(searchLower)) return false;
+    if (!masterEntityTextMatchesSearch(row.name, searchTerm)) return false;
 
     const balRaw = row.balance;
     const bal = typeof balRaw === "number" && !Number.isNaN(balRaw) ? balRaw : null;

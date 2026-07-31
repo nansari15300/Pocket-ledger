@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useFileHoverPreview } from "@/contexts/FileHoverPreviewContext";
 import { AttachmentPreviewGalleryContext } from "@/components/vouchers/attachmentPreviewGalleryContext";
+import { registerImperativeDialogBack } from "@/contexts/DialogBackHandlerContext";
 
 /** Tooltip se zyada: fixed portal + solid bg taaki table/parent overflow ya blend se file transparent na dikhe */
 const HOVER_CLOSE_MS = 280;
@@ -641,6 +642,11 @@ export function AttachmentHoverPortal({
 
   React.useEffect(() => {
     if (!open) return;
+    return registerImperativeDialogBack(closePanel);
+  }, [open, closePanel]);
+
+  React.useEffect(() => {
+    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         closePanel();
@@ -679,11 +685,13 @@ export function AttachmentHoverPortal({
 
   /** PC: mouse left = pan (scroll area); capture hata diya — img se bubble yahi aata hai */
   const handleScrollPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.pointerType !== "mouse" || e.button !== 0) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
     const target = e.target as HTMLElement | null;
     if (target?.closest("button, a, input, textarea, select, [data-gallery-nav]")) return;
     const el = scrollRef.current;
     if (!el) return;
+    const canPan = el.scrollWidth > el.clientWidth + 2 || el.scrollHeight > el.clientHeight + 2;
+    if (!canPan) return;
     panRef.current = {
       active: true,
       pointerId: e.pointerId,
@@ -789,6 +797,15 @@ export function AttachmentHoverPortal({
             data-attachment-preview-backdrop=""
             onPointerDown={(e) => {
               e.preventDefault();
+              e.stopPropagation();
+            }}
+            onPointerUp={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
               closePanel();
             }}
             aria-hidden
@@ -831,6 +848,8 @@ export function AttachmentHoverPortal({
           onPointerDownCapture={clickOrTapOpenMode ? undefined : handlePanelPointerDownCapture}
           /* Bubble par hi stop — capture par mat (warna toolbar button / img tak event pahunchta hi nahi) */
           onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
           /* Portal DOM body par hai lekin React bubble table row tak jata hai — dblclick se voucher edit na khule */
           onDoubleClick={(e) => e.stopPropagation()}
         >
@@ -884,7 +903,7 @@ export function AttachmentHoverPortal({
                 measuredContentFrame ? "overflow-hidden" : "overflow-auto",
                 scrollable ? "cursor-grab active:cursor-grabbing" : "cursor-default"
               )}
-              style={{ touchAction: "pan-x pan-y" }}
+              style={{ touchAction: scrollable ? "none" : "pan-x pan-y" }}
               onPointerDown={handleScrollPointerDown}
               onPointerMove={handleScrollPointerMove}
               onPointerUp={endPan}
@@ -991,7 +1010,15 @@ export function AttachmentHoverPortal({
               size="sm"
               className="h-9 shrink-0 px-4 text-xs font-semibold border-red-300 bg-red-50 text-red-800 hover:bg-red-100 dark:border-red-700 dark:bg-red-950/50 dark:text-red-100 dark:hover:bg-red-900/50"
               aria-label="Close preview"
-              onClick={() => closePanel()}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                closePanel();
+              }}
             >
               Close
             </Button>

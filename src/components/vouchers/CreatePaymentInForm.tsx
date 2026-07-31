@@ -2393,7 +2393,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   {isCopyingMissingMasters ? "…" : "Copy account"}
                                 </Button>
                               )}
-                              {accountBalance !== null && <FormLabel className="text-[10px] text-muted-foreground shrink-0">Bal: {formatCurrency(accountBalance, {noAnimation: true, noSuffix: true})}</FormLabel>}
+                              {accountBalance !== null && (
+                                <FormLabel className={cn("text-[10px] font-semibold shrink-0", accountBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                                  Bal: {formatCurrency(Math.abs(accountBalance), {noAnimation: true, noSuffix: true})} {accountBalance >= 0 ? "Dr" : "Cr"}
+                                </FormLabel>
+                              )}
                             </div>
                           </div>
                           <div className="min-w-0 w-full overflow-hidden">
@@ -2644,7 +2648,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               {isCopyingMissingMasters ? "…" : "Copy account"}
                             </Button>
                           )}
-                          {accountBalance !== null && <FormLabel className="text-xs text-muted-foreground">Balance: {formatCurrency(accountBalance, {noAnimation: true})}</FormLabel>}
+                          {accountBalance !== null && (
+                            <FormLabel className={cn("text-xs font-semibold", accountBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                              Balance: {formatCurrency(Math.abs(accountBalance), { noSuffix: true, noAnimation: true })} {accountBalance >= 0 ? "Dr" : "Cr"}
+                            </FormLabel>
+                          )}
                         </div>
                       </div>
                        <Combobox

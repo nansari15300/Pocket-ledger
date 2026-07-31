@@ -25,6 +25,8 @@ import {
 } from "@/components/entity/EntityListQuickFilterBar";
 import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
 import { useCompany } from "@/hooks/useCompany";
+import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
 
 export function AccountList({
   accounts,
@@ -58,6 +60,7 @@ export function AccountList({
   const { animatePresenceMode, rowMotionProps, markListScrolling } = useMasterListRowMotion();
   const canViewSpecialAccount = can('view_special_bank_accounts');
   const canViewSpecialBalance = can('view_special_account_balance');
+  const highlightSearch = searchTerm.trim();
 
   const filteredAndSortedAccounts = useMemo(() => {
       const toDateMs = (raw: unknown): number => {
@@ -75,7 +78,7 @@ export function AccountList({
         .filter(account => {
             if (account.isSpecial && !canViewSpecialAccount) return false;
             const label = bankAccountDisplayName(account);
-            if (!label || !label.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+            if (!label || !masterEntityTextMatchesSearch(label, searchTerm)) return false;
             const bal = Number(account.balance || 0);
             // Footer quick filters: list short/filter from same control on mobile + desktop.
             if (quickFilter === "dr") return bal > 0;
@@ -160,7 +163,7 @@ export function AccountList({
                         onPointerDown={(e) => e.stopPropagation()}
                         className={cn(masterListNameTriggerCn, isSpecial && "text-amber-600")}
                       >
-                        {displayName}
+                        {highlightSearch ? highlightQueryInText(displayName, highlightSearch) : displayName}
                       </TooltipTrigger>
                       <TooltipContent>
                         <p>{displayName}</p>

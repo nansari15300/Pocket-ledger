@@ -21,6 +21,8 @@ import { EntityListQuickFilterBar,
 } from "@/components/entity/EntityListQuickFilterBar";
 import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
 import { useCompany } from "@/hooks/useCompany";
+import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import { masterEntityTextMatchesSearch } from "@/lib/filterMasterEntityListRows";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -62,6 +64,7 @@ export const PartyList = React.memo(({
   const [internalQuickFilter, setInternalQuickFilter] = useState<EntityListQuickFilter>("default");
   const quickFilter = quickFilterProp ?? internalQuickFilter;
   const setQuickFilter = onQuickFilterChange ?? setInternalQuickFilter;
+  const highlightSearch = searchTerm.trim();
 
   const filteredAndSortedParties = useMemo(() => {
     const toDateMs = (raw: unknown): number => {
@@ -76,11 +79,9 @@ export const PartyList = React.memo(({
     };
     const isSettled = (bal: number) => Math.abs(Number(bal || 0)) < 1e-6;
     const list = parties || [];
-    const searchLower = searchTerm.toLowerCase();
     const filterFn = (party: Party) => {
       if (!party.name) return false;
-      const nameLower = party.name.toLowerCase();
-      const matchesSearch = !searchLower || nameLower.includes(searchLower);
+      const matchesSearch = masterEntityTextMatchesSearch(party.name, searchTerm);
       const isSystemAccount = (party as any).isSystemAccount === true;
       if (!matchesSearch || isSystemAccount) return false;
       const bal = Number(party.balance || 0);
@@ -173,7 +174,7 @@ export const PartyList = React.memo(({
                               onPointerDown={(e) => e.stopPropagation()}
                               className={masterListNameTriggerCn}
                             >
-                              {party.name}
+                              {highlightSearch ? highlightQueryInText(party.name, highlightSearch) : party.name}
                             </TooltipTrigger>
                             {/* Narrow list column: tooltip niche — amount column se overlap kam */}
                             <TooltipContent side="bottom" align="start">

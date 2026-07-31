@@ -2248,6 +2248,12 @@ export const VoucherProvider = ({
     vouchersForDisplay.forEach(v => {
         const amount = Number(v.amount || v.total || 0);
         const subTotal = Number(v.subTotal || amount);
+        const paymentOutPayeeAmount =
+          v.type === "payment_out" && Number(v.payeeAmount || 0) > 0
+            ? Number(v.payeeAmount || 0)
+            : amount;
+        const paymentOutOtherChargeAmount =
+          v.type === "payment_out" ? Number(v.otherChargeAmount || 0) || 0 : 0;
 
         // --- Staff Logic ---
         if (v.type === "journal" && v.subType === "add_salary" && Array.isArray(v.entries)) {
@@ -2259,7 +2265,7 @@ export const VoucherProvider = ({
             });
         } else if (v.staffId) {
             if (v.type === "payment_out") {
-                addVal(staffMap, v.staffId, 'debit', amount);
+                addVal(staffMap, v.staffId, 'debit', paymentOutPayeeAmount);
             } else if (v.type === "payment_in") {
                 addVal(staffMap, v.staffId, 'credit', amount);
             }
@@ -2291,7 +2297,7 @@ export const VoucherProvider = ({
 
         // --- Tax Logic ---
         if (v.taxAccountId) {
-             if (v.type === 'payment_out') addVal(taxMap, v.taxAccountId, 'debit', amount);
+             if (v.type === 'payment_out') addVal(taxMap, v.taxAccountId, 'debit', paymentOutPayeeAmount);
              else if (v.type === 'payment_in') addVal(taxMap, v.taxAccountId, 'credit', amount);
         }
 
@@ -2304,7 +2310,16 @@ export const VoucherProvider = ({
         // Payment mapped to expense account.
         if (v.type === "payment_out") {
             const expenseAccId = v.expenseAccountId || v.toAccountId;
-            if (expenseAccId) addVal(expenseMap, expenseAccId, 'debit', amount);
+            if (expenseAccId) addVal(expenseMap, expenseAccId, 'debit', paymentOutPayeeAmount);
+            if (v.otherChargeAccountId && paymentOutOtherChargeAmount > 0) {
+              if (partyIdSet.has(String(v.otherChargeAccountId))) {
+                addVal(partyMap, v.otherChargeAccountId, 'debit', paymentOutOtherChargeAmount);
+              } else if (staff.some((s) => s.id === v.otherChargeAccountId)) {
+                addVal(staffMap, v.otherChargeAccountId, 'debit', paymentOutOtherChargeAmount);
+              } else {
+                addVal(expenseMap, v.otherChargeAccountId, 'debit', paymentOutOtherChargeAmount);
+              }
+            }
         }
 
         // Inter Company — bank + staff/tax/expense legs (party → `buildPartyLedgerAggregateMap`)
