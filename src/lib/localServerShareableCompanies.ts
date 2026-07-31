@@ -49,6 +49,8 @@ export type PlServerSharedCompanySummary = {
   /** Server-side access filter only; stripped before sending company summaries to clients. */
   accessEmails?: string[];
   accessAccount?: string | null;
+  /** Host local users — server email filter fallback when accessEmails incomplete. */
+  localCompanyUsers?: unknown[];
   /** Delivered even after target user is no longer in accessEmails, so their client can wipe local SQLite. */
   clientDataDeleteCommands?: CompanyClientDataDeleteCommand[];
 };
@@ -80,6 +82,7 @@ export function toPlServerSharedCompanySummary(row: {
     requiresLogin: loginMeta.requiresLogin,
     usernameHint: loginMeta.usernameHint,
     accessEmails: localCompanyAccessEmails(row as never),
+    localCompanyUsers: Array.isArray(row.localCompanyUsers) ? row.localCompanyUsers : [],
     clientDataDeleteCommands: Array.isArray(row.clientDataDeleteCommands)
       ? (row.clientDataDeleteCommands as CompanyClientDataDeleteCommand[])
       : [],
@@ -125,6 +128,7 @@ export async function toPlServerSharedCompanySummaryAsync(row: {
     requiresLogin: loginMeta.requiresLogin,
     usernameHint: loginMeta.usernameHint,
     accessEmails: localCompanyAccessEmails(freshRow as never),
+    localCompanyUsers: Array.isArray(freshRow.localCompanyUsers) ? freshRow.localCompanyUsers : [],
     clientDataDeleteCommands: Array.isArray(freshRow.clientDataDeleteCommands)
       ? (freshRow.clientDataDeleteCommands as CompanyClientDataDeleteCommand[])
       : [],

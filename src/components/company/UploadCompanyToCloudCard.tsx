@@ -8,7 +8,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import { doc, setDoc, serverTimestamp, deleteField } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
-import { upsertLocalCompany } from "@/lib/localCompanyStore";
+import { promoteLocalCompanyRowToOnline } from "@/lib/localCompanyStore";
 import { canUploadOneMoreOnline } from "@/lib/companyOnlineSlots";
 import { useToast } from "@/hooks/use-toast";
 import Link from "next/link";
@@ -135,13 +135,14 @@ export function UploadCompanyToCloudCard() {
       const rest = { ...(company as Record<string, unknown>) };
       delete rest.demoteReason;
       delete rest.demotedFromOnlineAt;
-      await upsertLocalCompany({
+      // Move SQLite folder local → online, then stamp cloud root (do not use upsertLocalCompany — it re-stamps local).
+      await promoteLocalCompanyRowToOnline(companyId, {
         ...rest,
         id: companyId,
         storageOption: "firebase",
         syncPolicy: "online",
         syncedFromCloud: false,
-      } as unknown as Parameters<typeof upsertLocalCompany>[0]);
+      } as Parameters<typeof promoteLocalCompanyRowToOnline>[1]);
       // Local SQLite me jo vouchers/parties pade hain — Firestore subcollections me bhi bhejo (sirf root pe pehle data nahi dikhta tha).
       const { pushed, errors } = await pushAllLocalCompanyDocsToFirestore(companyId);
       // Static build: company list + cloud mirror; online: listener bump.

@@ -89,8 +89,9 @@ const SelectContent = React.forwardRef<
       <SelectPrimitive.Viewport
         className={cn(
           "p-1",
+          // Trigger height mat lock karo — short pills (Auto Monthly day) me list 1-line me clip/hide ho jati thi.
           position === "popper" &&
-            "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]"
+            "w-full min-w-[var(--radix-select-trigger-width)] max-h-[min(var(--radix-select-content-available-height,20rem),20rem)]"
         )}
       >
         {children}

@@ -319,7 +319,7 @@ export function StaffDetails({
     vouchers.forEach((v) => {
       if (
         v.staffId === staff.id ||
-        (v.entries && v.entries.some((e: any) => e.accountId === staff.id))
+        (Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId === staff.id))
       ) {
         const dateValue = v.date?.toDate
           ? v.date.toDate()

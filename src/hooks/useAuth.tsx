@@ -4,7 +4,7 @@
 import type { User } from "firebase/auth";
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter, usePathname } from "next/navigation";
-import React, { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { auth, firestore } from "@/lib/firebase";
 import { slugify } from "@/lib/slugify";
 import { getCountryByIP } from "@/lib/getCountryByIP";
@@ -663,7 +663,7 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
 
 
   return (
-    <AuthContext.Provider value={{ user, customUser, loading }}>
+    <AuthContext.Provider value={useMemo(() => ({ user, customUser, loading }), [user, customUser, loading])}>
       {/* Keep tree mounted during auth hydration to avoid full-app remount flicker that looks like double refresh. */}
       {children}
     </AuthContext.Provider>

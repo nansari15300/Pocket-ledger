@@ -3,11 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Info } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -32,8 +27,8 @@ export function FirebaseLedgerSyncModeSwitch({ sidebarOpen, compact }: Props) {
 
   const refresh = useCallback(() => {
     const policy = resolveFirebaseLedgerSyncPolicy();
-    setMode(policy.syncMode);
-    setAllowSwitch(policy.allowUserModeSwitch);
+    setMode((prev) => (prev === policy.syncMode ? prev : policy.syncMode));
+    setAllowSwitch((prev) => (prev === policy.allowUserModeSwitch ? prev : policy.allowUserModeSwitch));
   }, []);
 
   useEffect(() => {
@@ -75,22 +70,15 @@ export function FirebaseLedgerSyncModeSwitch({ sidebarOpen, compact }: Props) {
 
   if (!sidebarOpen) {
     return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            className="flex w-full items-center justify-center rounded-md px-2 py-2 text-sidebar-foreground hover:bg-sidebar-accent"
-            aria-label={title}
-            title={title}
-            onClick={() => onCheckedChange(!fullOnline)}
-          >
-            <span className="text-[10px] font-semibold text-emerald-700">{fullOnline ? "live" : "deltaa"}</span>
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="right" className="max-w-xs">
-          {title}
-        </TooltipContent>
-      </Tooltip>
+      <button
+        type="button"
+        className="flex w-full items-center justify-center rounded-md px-2 py-2 text-sidebar-foreground hover:bg-sidebar-accent"
+        aria-label={title}
+        title={title}
+        onClick={() => onCheckedChange(!fullOnline)}
+      >
+        <span className="text-[10px] font-semibold text-emerald-700">{fullOnline ? "live" : "deltaa"}</span>
+      </button>
     );
   }
 
@@ -135,20 +123,14 @@ export function FirebaseLedgerSyncModeSwitch({ sidebarOpen, compact }: Props) {
         >
           live
         </span>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              className="rounded-full p-1 text-muted-foreground hover:bg-background/70 hover:text-foreground"
-              aria-label="Sync mode rules"
-            >
-              <Info className="size-3.5" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right" className="max-w-sm text-xs leading-relaxed">
-            {RULE_TEXT}
-          </TooltipContent>
-        </Tooltip>
+        <button
+          type="button"
+          className="rounded-full p-1 text-muted-foreground hover:bg-background/70 hover:text-foreground"
+          aria-label="Sync mode rules"
+          title={RULE_TEXT}
+        >
+          <Info className="size-3.5" />
+        </button>
       </div>
     </div>
   );

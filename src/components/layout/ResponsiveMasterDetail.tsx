@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { mdc, mdcNoEdgeSwipeCapture } from "@/lib/mobileDetailChrome";
 import { mlc } from "@/lib/mobileListChrome";
 import type { MasterDetailListRouteKey } from "@/lib/masterDetailListPath";
+import { ResizeWidthHandle, useResizablePercentWidth } from "@/components/layout/ResizablePaneWidth";
 
 export function ResponsiveMasterDetail({
   title,
@@ -56,6 +57,14 @@ export function ResponsiveMasterDetail({
     : {};
   const dockTabsOnMobile = mobileTabsDocked ?? Boolean(isMobile && mobileListOnly);
   const isNegative = typeof balance === 'string' && balance.includes('Cr');
+  const desktopGridRef = React.useRef<HTMLDivElement | null>(null);
+  const { widthPercent: desktopListWidthPercent, beginResize: beginDesktopListResize } = useResizablePercentWidth({
+    storageKey: "pl-master-list-width-percent",
+    defaultPercent: 25,
+    minPercent: 17.5,
+    maxPercent: 32.5,
+    containerRef: desktopGridRef,
+  });
 
   if (isMobile) {
     // mobileListOnly + selected: show detail with back button (fix: party/staff list tap pe response nahi tha)
@@ -148,12 +157,14 @@ export function ResponsiveMasterDetail({
   // Desktop: list column 25% of yahi grid (sidebar alag), detail baki — lamba naam list failaaundaina
   return (
     <div
+      ref={desktopGridRef}
       // min-h-0: parent flex (dashboard main) ke andar grid shrink kar sake, andar scroll sahi kaam kare
-      className="grid h-full min-h-0 grid-cols-1 overflow-hidden md:[grid-template-columns:minmax(0,25%)_minmax(0,1fr)]"
+      className="grid h-full min-h-0 grid-cols-1 overflow-hidden md:grid-cols-none"
+      style={{ gridTemplateColumns: `minmax(0, ${desktopListWidthPercent}%) minmax(0, 1fr)` }}
       data-master-detail-layout="25-75"
     >
       <div
-        className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r"
+        className="relative flex min-h-0 min-w-0 flex-col overflow-hidden border-r"
         data-pl-master-list-chrome=""
         {...listChromeRouteData}
       >
@@ -164,6 +175,7 @@ export function ResponsiveMasterDetail({
         {tabs && <div className={mlc.tabsRow}>{tabs}</div>}
         {/* PC: yahan bhi flex column zaroori — warna listView ka flex-1 apply nahi hota, ScrollArea ko height nahi milti */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{listView}</div>
+        <ResizeWidthHandle onPointerDown={beginDesktopListResize} title="Resize list panel" />
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{detailView}</div>
     </div>

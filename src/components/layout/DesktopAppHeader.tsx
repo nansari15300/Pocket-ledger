@@ -103,7 +103,7 @@ import { RenewProrationPills } from "@/components/billing/RenewProrationPills";
 import { useDisplayCurrency } from "@/hooks/useDisplayCurrency";
 import { getCompanyPlanExpiryMsFromDoc } from "@/lib/companyPlanExpiryMs";
 import { HeaderAttachmentPrefetchStrip } from "@/components/layout/HeaderAttachmentPrefetchStrip";
-import { readCurrentAppAccountIdentity } from "@/lib/appAccountIdentity";
+import { gateHttpGet } from "@/lib/gates/gateServerFetch";
 
 /** Electron desktop: header quick-action buttons strip collapsed — `main.js` View menu se bhi toggle */
 const PL_DESKTOP_QUICK_ACTIONS_KEY = "pl-desktop-header-quick-actions-collapsed";
@@ -417,6 +417,7 @@ function MobileReportButtonsOnly() {
 
 function HeaderActions() {
   const { isMobile } = useMobileView();
+  const pathname = usePathname();
   const { user } = useAuth();
   const { company } = useCompany();
   // Inter Company vouchers are online-company only.
@@ -444,7 +445,7 @@ function HeaderActions() {
   const buttonClass = "whitespace-nowrap flex-grow min-w-fit";
 
   // Hide quick actions whenever mobile view is selected (including on PC)
-  if (isMobile) {
+  if (isMobile || pathRoot(pathname, "gate")) {
     return null;
   }
 
@@ -1847,15 +1848,16 @@ function PlServerCompanyConnectionStatus() {
     let cancelled = false;
     const check = async () => {
       try {
+        // APK WebView is https://localhost — raw fetch to http://LAN is mixed-content blocked.
+        // Gate sync uses CapacitorHttp via gateHttpGet; ping must use the same path.
         const pingUrl = new URL(`${serverUrl}/__pl_server_ping`);
         if (company?.id) pingUrl.searchParams.set("companyId", company.id);
-        if (lastPingMsRef.current != null) pingUrl.searchParams.set("clientPingMs", String(lastPingMsRef.current));
-        const appAccount = readCurrentAppAccountIdentity();
-        const headers: Record<string, string> = {};
-        if (appAccount) headers["x-pocket-ledger-app-account"] = appAccount;
+        if (lastPingMsRef.current != null) {
+          pingUrl.searchParams.set("clientPingMs", String(lastPingMsRef.current));
+        }
         const started = performance.now();
-        const response = await fetch(pingUrl.toString(), { cache: "no-store", headers });
-        const measuredMs = response.ok ? Math.max(1, Math.round(performance.now() - started)) : null;
+        const { status } = await gateHttpGet(pingUrl.toString(), "", { timeoutMs: 12_000 });
+        const measuredMs = status === 200 ? Math.max(1, Math.round(performance.now() - started)) : null;
         if (!cancelled) {
           lastPingMsRef.current = measuredMs;
           setPingMs(measuredMs);

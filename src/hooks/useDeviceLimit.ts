@@ -46,19 +46,27 @@ export function useDeviceLimit() {
   useEffect(() => {
     if (isStaticAppBuild() && isOffline) {
       // Offline UX: company ke local data access ko device-limit gate se block mat karo.
-      setResult({ allowed: true, count: 0, limit: 1 });
+      setResult((prev) =>
+        prev?.allowed === true && prev.count === 0 && prev.limit === 1
+          ? prev
+          : { allowed: true, count: 0, limit: 1 }
+      );
       myDeviceWasInListRef.current = null;
       return;
     }
     if (!companyId || !user?.uid || !company) {
-      setResult(null);
+      setResult((prev) => (prev === null ? prev : null));
       myDeviceWasInListRef.current = null;
       return;
     }
 
     // Pure local company (SQLite on this device) — no Firestore device-sync list.
     if (isOfflineCompanyStorage(company) && !isCloudBackedCompanyShape(company)) {
-      setResult({ allowed: true, count: 0, limit: 1 });
+      setResult((prev) =>
+        prev?.allowed === true && prev.count === 0 && prev.limit === 1
+          ? prev
+          : { allowed: true, count: 0, limit: 1 }
+      );
       myDeviceWasInListRef.current = null;
       return;
     }
@@ -101,10 +109,41 @@ export function useDeviceLimit() {
               // non-blocking
             }
           }
-          if (!cancelled) setResult({ allowed: r.allowed, count: r.count, limit: r.limit, singleDeviceOnly: r.singleDeviceOnly, replaceOffer: r.replaceOffer, noPermissionNewDevice: r.noPermissionNewDevice, kickedAndBlocked: r.kickedAndBlocked });
+          if (!cancelled) {
+            setResult((prev) => {
+              const next = {
+                allowed: r.allowed,
+                count: r.count,
+                limit: r.limit,
+                singleDeviceOnly: r.singleDeviceOnly,
+                replaceOffer: r.replaceOffer,
+                noPermissionNewDevice: r.noPermissionNewDevice,
+                kickedAndBlocked: r.kickedAndBlocked,
+              };
+              if (
+                prev &&
+                prev.allowed === next.allowed &&
+                prev.count === next.count &&
+                prev.limit === next.limit &&
+                prev.singleDeviceOnly === next.singleDeviceOnly &&
+                prev.replaceOffer === next.replaceOffer &&
+                prev.noPermissionNewDevice === next.noPermissionNewDevice &&
+                prev.kickedAndBlocked === next.kickedAndBlocked
+              ) {
+                return prev;
+              }
+              return next;
+            });
+          }
         })
         .catch(() => {
-          if (!cancelled) setResult({ allowed: true, count: 0, limit: maxDevices });
+          if (!cancelled) {
+            setResult((prev) =>
+              prev?.allowed === true && prev.count === 0 && prev.limit === maxDevices
+                ? prev
+                : { allowed: true, count: 0, limit: maxDevices }
+            );
+          }
         });
     };
 
@@ -133,14 +172,19 @@ export function useDeviceLimit() {
   }, [
     companyId,
     user?.uid,
+    user?.email,
     company?.planId,
     company?.ownerId,
     company?.ownerEmail,
     company?.userCanUseMultiDevice,
+    company?.storageOption,
+    company?.syncPolicy,
+    // Intentionally omit full `company` / `allCompanies` object refs — registry reloads were
+    // recreating them every pass and re-entering this effect → Maximum update depth.
     livePlans,
-    company,
     isOffline,
-    allCompanies,
+    allCompanies.length,
+    Boolean(company),
   ]);
 
   const refreshDeviceCheck = useCallback(() => {

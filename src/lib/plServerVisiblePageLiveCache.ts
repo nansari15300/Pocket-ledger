@@ -30,7 +30,7 @@ export function plServerLiveCollectionsForPathname(pathname: string): CompanyBac
   if (p.includes("/dashboard")) {
     return ["vouchers", "parties", "bank_accounts"];
   }
-  if (p.includes("/reports") || p.includes("/statement")) {
+  if (p.includes("/daybook") || p.includes("/reports") || p.includes("/statement")) {
     return ["vouchers", "parties", "bank_accounts"];
   }
 

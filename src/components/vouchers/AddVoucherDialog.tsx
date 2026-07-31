@@ -101,6 +101,7 @@ import {
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { useDate } from "@/hooks/useDate";
 import { recurringAutoVoucherLabels } from "@/lib/calendarDisplayLabels";
+import { chromeProPillCn } from "@/lib/chromePillButton";
 import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
 import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
 import { plNavDbg, plNavDbgIdHint } from "@/lib/plNavRedirectDebug";
@@ -114,9 +115,13 @@ import {
   getPastDueRecurringGapIfAny,
   getRecurringTemplateDocIdForVoucher,
   getRecurringTemplateForVoucher,
+  debugMissingRecurringPeriodScan,
   listMissingRecurringPeriodSlotsAscending,
   projectNextRecurringMonetaryTotal,
+  resolveNextRecurringDueAd,
   setRecurringTemplateForVoucher,
+  shouldAskForMissedRecurringGap,
+  shouldAutoCreateRecurringWithoutAsk,
   suppressRecurringPeriodForTemplate,
   type RecurringPeriodSlot,
   type RecurringRateAdjustCadence,
@@ -130,6 +135,12 @@ import {
   canTurnOnRecurringAutoMonthlyOnSave,
   canViewRecurringVoucherControls,
 } from "@/lib/recurringAutoPermissions";
+
+/** Auto Monthly settings — header `chromePill` jaisa field shell. */
+const autoMonthlyPillFieldCn = cn(
+  "h-9 rounded-full px-3 text-sm shadow-none focus:ring-2 focus:ring-blue-400/40 focus-visible:ring-2 focus-visible:ring-blue-400/40",
+  chromeProPillCn
+);
 
 /** Recurring save: % / fixed ke liye Firestore me number; none / khaali input => null. */
 function recurringRatePayload(mode: RecurringRateAdjustMode, raw: string): number | null {
@@ -198,16 +209,21 @@ function parseAdDateInput(s: string): Date | undefined {
   return new Date(y, m - 1, d, 12, 0, 0, 0);
 }
 
-/** Yearly every-N-years: optional BS-year anchor for phase; null uses effective-from year. */
-function recurringYearlyBaseAnchorForSave(
+/** Yearly bump month/day = “Apply increase from” calendar date (BS). */
+function yearlyBumpMonthDayFromApplyFrom(fromAd: Date | undefined): { month: number; day: number } {
+  if (!fromAd || Number.isNaN(fromAd.getTime())) return { month: 1, day: 1 };
+  const bs = adToBs(new Date(fromAd.getFullYear(), fromAd.getMonth(), fromAd.getDate(), 12, 0, 0, 0));
+  const dim = getBSMonthDays(bs.y)[bs.m - 1] || 30;
+  return { month: bs.m, day: Math.min(Math.max(1, bs.d), dim >= 32 ? 32 : dim) };
+}
+
+function recurringCadencePayloadFromUi(
   mode: RecurringRateAdjustMode,
   cadence: RecurringRateAdjustCadence,
-  d: Date | undefined,
-): string | null {
-  if (mode !== "fixed" && mode !== "percent") return null;
-  if (cadence !== "every_bs_year") return null;
-  if (!d || Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
+  fromAd: Date | undefined,
+) {
+  const { month, day } = yearlyBumpMonthDayFromApplyFrom(fromAd);
+  return recurringRateCadencePayload(mode, cadence, month, day);
 }
 
 type VoucherType = "sale" | "purchase" | "payment_in" | "payment_out" | "inter_company" | "contra" | "direct_income" | "direct_expense" | "journal" | "note" | "add_salary" | "production";
@@ -1557,6 +1573,25 @@ export function AddVoucherDialog(props: any) {
   const recurringVoucherControlsEditable = recurringEditorsEffective && canToggleAutoMonthlySwitch;
   /** Strip pills / countdown: permission + journal tab + switch ON teeno */
   const recurringStripActive = recurringEditorsEffective && autoMonthlyEnabled;
+  const recurringTemplateActiveOnOpenVoucher = useMemo(() => {
+    const vid = String(voucher?.id || "").trim();
+    if (!vid || !recurringTemplateSnapshot?.enabled) return false;
+    const activeLine = String(
+      recurringTemplateSnapshot.cloneSourceVoucherId || recurringTemplateSnapshot.sourceVoucherId || ""
+    ).trim();
+    return !activeLine || activeLine === vid;
+  }, [
+    voucher?.id,
+    recurringTemplateSnapshot?.enabled,
+    recurringTemplateSnapshot?.cloneSourceVoucherId,
+    recurringTemplateSnapshot?.sourceVoucherId,
+  ]);
+  const showMissedRecurringCheckRunning =
+    recurringStripActive &&
+    recurringTemplateActiveOnOpenVoucher &&
+    isOpen &&
+    Boolean(voucher?.id) &&
+    missedRecurringGapScanning;
   /**
    * Capacitor plain add/edit: nested `CompanyContext` override hatao — sidebar `companyId` aur form save target align rahein;
    * SQLite list recovery race par galat `clearCompanyId` + `/company` kam (Electron/web jaisa nested rehne do).
@@ -1581,9 +1616,11 @@ export function AddVoucherDialog(props: any) {
 
   useEffect(() => {
     if (voucherFormActiveTab !== "inter_company") {
-      setInterCompanyRibbonTab("voucher");
+      if (interCompanyRibbonTab !== "voucher") {
+        setInterCompanyRibbonTab("voucher");
+      }
     }
-  }, [voucherFormActiveTab]);
+  }, [voucherFormActiveTab, interCompanyRibbonTab]);
 
   const interCompanyRibbonCompanyReadOnly = useMemo(() => {
     if (voucherFormActiveTab !== "inter_company") return undefined;
@@ -1705,14 +1742,24 @@ export function AddVoucherDialog(props: any) {
       return;
     }
     let cancelled = false;
+    const rowMeta = (voucher as { recurringMeta?: { isActiveTriggerSource?: boolean; activeTriggerSourceVoucherId?: string | null } } | null | undefined)?.recurringMeta;
+    const rowSaysActiveTrigger =
+      rowMeta?.isActiveTriggerSource === true ||
+      String(rowMeta?.activeTriggerSourceVoucherId || "").trim() === editVoucherId;
+    if (rowSaysActiveTrigger) {
+      setAutoMonthlyEnabled(true);
+      setCommittedAutoMonthlyEnabled(true);
+    }
     setAutoMonthlyHydrating(true);
     void (async () => {
       try {
         const tpl = await getRecurringTemplateForVoucher(companyId, editVoucherId);
         if (cancelled) return;
-        // Journal series = ek Firestore template; sirf jis voucherId par `sourceVoucherId` match ho wahi line “ON” — doosri line pe switch OFF (purana source).
+        // Journal series = ek template; local row meta already marks the active trigger source.
+        // Firebase/Data sync OFF or stale template read must not flip an active row OFF on edit open.
         const nominalSource = String(tpl?.cloneSourceVoucherId || tpl?.sourceVoucherId || "").trim();
-        const ownsRecurringTemplate = tpl?.enabled === true && nominalSource === editVoucherId;
+        const ownsRecurringTemplate =
+          tpl?.enabled === true && (nominalSource === editVoucherId || rowSaysActiveTrigger);
         setRecurringTemplateSnapshot(ownsRecurringTemplate ? tpl : null);
         setAutoMonthlyEnabled(ownsRecurringTemplate);
         if (!ownsRecurringTemplate) {
@@ -1792,7 +1839,7 @@ export function AddVoucherDialog(props: any) {
       } catch {
         if (cancelled) return;
         setRecurringTemplateSnapshot(null);
-        setAutoMonthlyEnabled(false);
+        setAutoMonthlyEnabled(rowSaysActiveTrigger);
         setAutoMonthlyScheduleBsDay(32);
         setAutoMonthlyRateMode("none");
         setAutoMonthlyRateValue("");
@@ -1805,7 +1852,7 @@ export function AddVoucherDialog(props: any) {
         setRecurringTemplateLastPeriodKey(null);
         setRecurringTemplateSuppressedKeys([]);
         setRecurringLastGeneratedAtMs(null);
-        setCommittedAutoMonthlyEnabled(false);
+        setCommittedAutoMonthlyEnabled(rowSaysActiveTrigger);
       } finally {
         if (!cancelled) setAutoMonthlyHydrating(false);
       }
@@ -1813,7 +1860,13 @@ export function AddVoucherDialog(props: any) {
     return () => {
       cancelled = true;
     };
-  }, [isOpen, companyId, voucher?.id]);
+  }, [
+    isOpen,
+    companyId,
+    voucher?.id,
+    (voucher as { recurringMeta?: { isActiveTriggerSource?: boolean } } | null | undefined)?.recurringMeta?.isActiveTriggerSource,
+    (voucher as { recurringMeta?: { activeTriggerSourceVoucherId?: string | null } } | null | undefined)?.recurringMeta?.activeTriggerSourceVoucherId,
+  ]);
 
   /** Last auto voucher ka timestamp — accrual numerator ke liye (PC strip). */
   useEffect(() => {
@@ -2478,7 +2531,8 @@ export function AddVoucherDialog(props: any) {
         }
         toast.success("Transaction approved.", { id: toastId, duration: 1000 });
       } catch (e) {
-        toast.error("Failed to approve transaction.", { id: toastId });
+        const message = e instanceof Error && e.message ? e.message : "Failed to approve transaction.";
+        toast.error(message, { id: toastId });
       }
     })();
   }, [
@@ -2942,7 +2996,59 @@ export function AddVoucherDialog(props: any) {
     if (closeParent) onOpenChange?.(false);
   }, [onOpenChange]);
 
-  // Dialog khule + Auto ON: Firestore template ke hisaab se past-due gap scan — user Create / Skip choose kare.
+  const handlePostSaveMissingRecurringSlots = useCallback(async (
+    cid: string,
+    vid: string,
+    tpl: RecurringVoucherTemplate,
+    closeParentOnAsk: boolean,
+  ) => {
+    if (!user?.uid || !canGenerateRecurringOnVoucher || !company || apkOfflineViewOnly) return;
+    const templateDocId = await getRecurringTemplateDocIdForVoucher(cid, vid);
+    const now = new Date();
+    const slots = await listMissingRecurringPeriodSlotsAscending(cid, templateDocId, tpl, now);
+    if (slots.length === 0) return;
+
+    const silentSlots = slots.filter((slot) => shouldAutoCreateRecurringWithoutAsk(tpl, slot.bsY, slot.bsM, now));
+    const askSlots = slots.filter((slot) => shouldAskForMissedRecurringGap(tpl, slot.bsY, slot.bsM, now));
+
+    if (silentSlots.length > 0) {
+      const res = await generateRecurringVouchersForPeriodSlots(
+        cid,
+        company,
+        vid,
+        {
+          uid: user.uid,
+          email: user.email ?? null,
+          displayName: customUser?.displayName || user.displayName || user.email || null,
+        },
+        silentSlots,
+      );
+      if (res.lastVoucherId) void refreshRecurringTemplateMeta(cid, res.lastVoucherId);
+      else void refreshRecurringTemplateMeta(cid, vid);
+    }
+
+    if (askSlots.length > 0) {
+      recurringPickerCloseParentRef.current = closeParentOnAsk;
+      setRecurringGeneratePicker({
+        open: true,
+        slots: askSlots,
+        selected: Object.fromEntries(askSlots.map((s) => [s.periodKey, false])),
+        voucherId: vid,
+        templateForSchedule: tpl,
+      });
+    }
+  }, [
+    apkOfflineViewOnly,
+    canGenerateRecurringOnVoucher,
+    company,
+    customUser?.displayName,
+    refreshRecurringTemplateMeta,
+    user?.uid,
+    user?.email,
+    user?.displayName,
+  ]);
+
+  // Dialog khule + Auto ON: missing months — local SQLite pehle (Firebase query hang mat).
   useEffect(() => {
     if (
       !isOpen ||
@@ -2951,24 +3057,92 @@ export function AddVoucherDialog(props: any) {
       !autoMonthlyEnabled ||
       autoMonthlyHydrating ||
       !recurringTemplateSnapshot?.enabled ||
+      !recurringTemplateActiveOnOpenVoucher ||
       !recurringEditorsEffective
     ) {
       setMissedRecurringGap(null);
       setMissedRecurringGapScanning(false);
       return;
     }
+    const tplSnap = recurringTemplateSnapshot;
     let cancelled = false;
     setMissedRecurringGapScanning(true);
     setMissedRecurringGap(null);
     void (async () => {
+      const SCAN_UI_MS = 12000;
+      let uiWarnTimer: any = null;
       try {
         const vid = String(voucher.id).trim();
+        const activeLine = String(tplSnap.cloneSourceVoucherId || tplSnap.sourceVoucherId || "").trim();
+        console.info("[Auto Monthly] missed-schedule scan start", {
+          companyId,
+          voucherId: vid,
+          activeLine,
+          scheduleBsDay: tplSnap.scheduleBsDay,
+          lastGeneratedPeriodKey: tplSnap.lastGeneratedPeriodKey ?? null,
+          today: new Date().toISOString(),
+        });
+        if (activeLine && activeLine !== vid) {
+          console.info("[Auto Monthly] missed-schedule scan skip: voucher is not active recurring source", {
+            voucherId: vid,
+            activeLine,
+          });
+          if (!cancelled) setMissedRecurringGap(null);
+          return;
+        }
         const docId = await getRecurringTemplateDocIdForVoucher(companyId, vid);
-        const gap = await getPastDueRecurringGapIfAny(companyId, docId, recurringTemplateSnapshot, new Date());
-        if (!cancelled) setMissedRecurringGap(gap);
-      } catch {
+        const scan = (async () => {
+          const now = new Date();
+          const slots0 = await listMissingRecurringPeriodSlotsAscending(companyId, docId, tplSnap, now);
+          const slots = slots0.filter((slot) => shouldAskForMissedRecurringGap(tplSnap, slot.bsY, slot.bsM, now));
+          if (cancelled) return { kind: "cancel" as const };
+          if (slots.length >= 1) {
+            console.info("[Auto Monthly] missed-schedule detected slots", {
+              companyId,
+              voucherId: vid,
+              templateDocId: docId,
+              slotCount: slots.length,
+              slots: slots.map((s) => s.periodKey),
+            });
+            recurringPickerCloseParentRef.current = false;
+            setRecurringGeneratePicker({
+              open: true,
+              slots,
+              selected: Object.fromEntries(slots.map((s) => [s.periodKey, false])),
+              voucherId: vid,
+              templateForSchedule: tplSnap,
+            });
+            setMissedRecurringGap(null);
+            return { kind: "picker" as const };
+          }
+          const gap0 = await getPastDueRecurringGapIfAny(companyId, docId, tplSnap, now);
+          const gap =
+            gap0 && shouldAskForMissedRecurringGap(tplSnap, gap0.bsY, gap0.bsM, now) ? gap0 : null;
+          const debug = await debugMissingRecurringPeriodScan(companyId, docId, tplSnap, now);
+          console.info("[Auto Monthly] missed-schedule scan complete", {
+            companyId,
+            voucherId: vid,
+            templateDocId: docId,
+            slotCount: 0,
+            gap: gap ? gap.periodKey : null,
+            debug,
+          });
+          if (!cancelled) setMissedRecurringGap(gap);
+          return { kind: "gap" as const };
+        })();
+        uiWarnTimer = window.setTimeout(() => {
+          if (!cancelled) {
+            console.warn("[Auto Monthly] missed-schedule scan still running… (local/Firebase)");
+          }
+        }, SCAN_UI_MS);
+
+        // Scan cancel nahi kar rahe — exact result aate hi picker/gap UI aa jaye.
+        await scan;
+      } catch (e) {
+        console.warn("[Auto Monthly] missed-schedule scan failed", e);
         if (!cancelled) setMissedRecurringGap(null);
       } finally {
+        if (uiWarnTimer) window.clearTimeout(uiWarnTimer);
         if (!cancelled) setMissedRecurringGapScanning(false);
       }
     })();
@@ -2981,8 +3155,14 @@ export function AddVoucherDialog(props: any) {
     voucher?.id,
     autoMonthlyEnabled,
     autoMonthlyHydrating,
-    recurringTemplateSnapshot,
+    recurringTemplateActiveOnOpenVoucher,
     recurringEditorsEffective,
+    recurringTemplateSnapshot?.enabled,
+    recurringTemplateSnapshot?.lastGeneratedPeriodKey,
+    recurringTemplateSnapshot?.cloneSourceVoucherId,
+    recurringTemplateSnapshot?.sourceVoucherId,
+    recurringTemplateSnapshot?.scheduleBsDay,
+    recurringTemplateSnapshot,
   ]);
 
   /** Past-due banner: BS month name + optional AD (template schedule day se due). */
@@ -3006,19 +3186,43 @@ export function AddVoucherDialog(props: any) {
     return `${bsLine} (${formatDateBS(dueAd)} / ${formatDate(dueAd)})`;
   }, [missedRecurringGap, recurringTemplateSnapshot, dateSystem, formatDate, formatDateBS]);
 
-  /** AD `Date` for strip “Next auto” + desktop countdown (due local day ke end tak). */
-  const autoVoucherNextDueAd = useMemo(() => {
-    if (!recurringStripActive || !voucher?.id || autoMonthlyHydrating) return null;
-    return getNextRecurringDueAd(
-      autoMonthlyScheduleBsDay,
-      new Date(),
-      recurringTemplateLastPeriodKey,
-      recurringTemplateSuppressedKeys,
-    );
+  /** AD `Date` for strip “Next auto” + desktop countdown — occupied periods heal (stale lastGenerated mat). */
+  const [autoVoucherNextDueAd, setAutoVoucherNextDueAd] = useState<Date | null>(null);
+  useEffect(() => {
+    if (!recurringStripActive || !voucher?.id || !companyId?.trim() || autoMonthlyHydrating || !recurringTemplateSnapshot?.enabled) {
+      setAutoVoucherNextDueAd(null);
+      return;
+    }
+    const tpl = recurringTemplateSnapshot;
+    const vid = String(voucher.id).trim();
+    let cancelled = false;
+    void (async () => {
+      try {
+        const docId = await getRecurringTemplateDocIdForVoucher(companyId, vid);
+        const next = await resolveNextRecurringDueAd(companyId, docId, tpl, new Date());
+        if (!cancelled) setAutoVoucherNextDueAd(next);
+      } catch {
+        if (!cancelled) {
+          setAutoVoucherNextDueAd(
+            getNextRecurringDueAd(
+              autoMonthlyScheduleBsDay,
+              new Date(),
+              recurringTemplateLastPeriodKey,
+              recurringTemplateSuppressedKeys,
+            ),
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [
     recurringStripActive,
     voucher?.id,
+    companyId,
     autoMonthlyHydrating,
+    recurringTemplateSnapshot,
     autoMonthlyScheduleBsDay,
     recurringTemplateLastPeriodKey,
     recurringTemplateSuppressedKeys,
@@ -3066,11 +3270,10 @@ export function AddVoucherDialog(props: any) {
   /** Dialog schedule/rate + Firestore snapshot merge — projected “next auto” amount jaisa bump. */
   const recurringTemplateForProjection = useMemo((): RecurringVoucherTemplate | null => {
     if (!recurringTemplateSnapshot?.enabled) return null;
-    const cad = recurringRateCadencePayload(
+    const cad = recurringCadencePayloadFromUi(
       autoMonthlyRateMode,
       autoMonthlyRateCadence,
-      autoMonthlyYearlyBsMonth,
-      autoMonthlyYearlyBsDay,
+      autoMonthlyRateEffectiveFromAd,
     );
     return {
       ...recurringTemplateSnapshot,
@@ -3080,11 +3283,7 @@ export function AddVoucherDialog(props: any) {
       rateAdjustEffectiveFrom: recurringRateEffectiveFromForSave(autoMonthlyRateMode, autoMonthlyRateEffectiveFromAd),
       ...cad,
       rateAdjustEveryN: recurringRateEveryNForSave(autoMonthlyRateMode, autoMonthlyRateEveryN),
-      rateAdjustYearlyBaseAnchorIso: recurringYearlyBaseAnchorForSave(
-        autoMonthlyRateMode,
-        autoMonthlyRateCadence,
-        autoMonthlyYearlyBaseAnchorAd,
-      ),
+      rateAdjustYearlyBaseAnchorIso: null,
     };
   }, [
     recurringTemplateSnapshot,
@@ -3093,10 +3292,7 @@ export function AddVoucherDialog(props: any) {
     autoMonthlyRateValue,
     autoMonthlyRateEffectiveFromAd,
     autoMonthlyRateCadence,
-    autoMonthlyYearlyBsMonth,
-    autoMonthlyYearlyBsDay,
     autoMonthlyRateEveryN,
-    autoMonthlyYearlyBaseAnchorAd,
   ]);
 
   const recurringAccrualPeriodStartMs = useMemo(() => {
@@ -3389,18 +3585,13 @@ export function AddVoucherDialog(props: any) {
                   autoMonthlyRateMode,
                   autoMonthlyRateEffectiveFromAd
                 ),
-                ...recurringRateCadencePayload(
+                ...recurringCadencePayloadFromUi(
                   autoMonthlyRateMode,
                   autoMonthlyRateCadence,
-                  autoMonthlyYearlyBsMonth,
-                  autoMonthlyYearlyBsDay
+                  autoMonthlyRateEffectiveFromAd
                 ),
                 rateAdjustEveryN: recurringRateEveryNForSave(autoMonthlyRateMode, autoMonthlyRateEveryN),
-                rateAdjustYearlyBaseAnchorIso: recurringYearlyBaseAnchorForSave(
-                  autoMonthlyRateMode,
-                  autoMonthlyRateCadence,
-                  autoMonthlyYearlyBaseAnchorAd
-                ),
+                rateAdjustYearlyBaseAnchorIso: null,
               });
               void refreshRecurringTemplateMeta(companyId, savedVoucherIdForRecurring);
               setCommittedAutoMonthlyEnabled(true);
@@ -3419,26 +3610,7 @@ export function AddVoucherDialog(props: any) {
                   if (tplFresh?.enabled) {
                     const activeLine = String(tplFresh.cloneSourceVoucherId || tplFresh.sourceVoucherId || "").trim();
                     if (!activeLine || activeLine === savedVoucherIdForRecurring) {
-                      const templateDocId = await getRecurringTemplateDocIdForVoucher(
-                        companyId,
-                        savedVoucherIdForRecurring
-                      );
-                      const slots = await listMissingRecurringPeriodSlotsAscending(
-                        companyId,
-                        templateDocId,
-                        tplFresh,
-                        new Date()
-                      );
-                      if (slots.length >= 2) {
-                        recurringPickerCloseParentRef.current = true;
-                        setRecurringGeneratePicker({
-                          open: true,
-                          slots,
-                          selected: Object.fromEntries(slots.map((s) => [s.periodKey, false])),
-                          voucherId: savedVoucherIdForRecurring,
-                          templateForSchedule: tplFresh,
-                        });
-                      }
+                      await handlePostSaveMissingRecurringSlots(companyId, savedVoucherIdForRecurring, tplFresh, true);
                     }
                   }
                 } catch {
@@ -3477,10 +3649,7 @@ export function AddVoucherDialog(props: any) {
     autoMonthlyRateValue,
     autoMonthlyRateEffectiveFromAd,
     autoMonthlyRateCadence,
-    autoMonthlyYearlyBsMonth,
-    autoMonthlyYearlyBsDay,
     autoMonthlyRateEveryN,
-    autoMonthlyYearlyBaseAnchorAd,
     user?.uid,
     user?.displayName,
     user?.email,
@@ -3495,6 +3664,7 @@ export function AddVoucherDialog(props: any) {
     apkLedgerPinsShellCompanyContext,
     setCompanyId,
     refreshRecurringTemplateMeta,
+    handlePostSaveMissingRecurringSlots,
     canAddRecurringOnVoucher,
     canEditRecurringOnVoucher,
     canGenerateRecurringOnVoucher,
@@ -3549,18 +3719,13 @@ export function AddVoucherDialog(props: any) {
       rateAdjustMode: autoMonthlyRateMode,
       rateAdjustValue: recurringRatePayload(autoMonthlyRateMode, autoMonthlyRateValue),
       rateAdjustEffectiveFrom: recurringRateEffectiveFromForSave(autoMonthlyRateMode, autoMonthlyRateEffectiveFromAd),
-      ...recurringRateCadencePayload(
+      ...recurringCadencePayloadFromUi(
         autoMonthlyRateMode,
         autoMonthlyRateCadence,
-        autoMonthlyYearlyBsMonth,
-        autoMonthlyYearlyBsDay,
+        autoMonthlyRateEffectiveFromAd,
       ),
       rateAdjustEveryN: recurringRateEveryNForSave(autoMonthlyRateMode, autoMonthlyRateEveryN),
-      rateAdjustYearlyBaseAnchorIso: recurringYearlyBaseAnchorForSave(
-        autoMonthlyRateMode,
-        autoMonthlyRateCadence,
-        autoMonthlyYearlyBaseAnchorAd,
-      ),
+      rateAdjustYearlyBaseAnchorIso: null,
     });
     return true;
   }, [
@@ -3574,10 +3739,7 @@ export function AddVoucherDialog(props: any) {
     autoMonthlyRateValue,
     autoMonthlyRateEffectiveFromAd,
     autoMonthlyRateCadence,
-    autoMonthlyYearlyBsMonth,
-    autoMonthlyYearlyBsDay,
     autoMonthlyRateEveryN,
-    autoMonthlyYearlyBaseAnchorAd,
     user?.uid,
     user?.displayName,
     user?.email,
@@ -3596,28 +3758,18 @@ export function AddVoucherDialog(props: any) {
         if (committedAutoMonthlyEnabled === true && companyId?.trim() && vid) {
           toast.success("Auto Monthly settings saved.");
           void refreshRecurringTemplateMeta(companyId, vid);
-          // Purana voucher + “ab tak” missing months — 2+ ho to backfill choice (Generate default = oldest gap first).
-          if (!apkOfflineViewOnly && user?.uid) {
+          // Missing months: pehle sirf 2+ pe picker — 1 overdue (Asar) Save pe bilkul skip ho jata tha.
+          // Ab Generate now jaisa: 1 = seedha create; 2+ = tick list.
+          if (!apkOfflineViewOnly && user?.uid && canGenerateRecurringOnVoucher && company) {
             try {
               const tpl = await getRecurringTemplateForVoucher(companyId, vid);
               const activeLine = String(tpl?.cloneSourceVoucherId || tpl?.sourceVoucherId || "").trim();
               // Sirf jis voucher par switch ON hai — warna Generate / backfill “another line” error.
               if (tpl?.enabled && (!activeLine || activeLine === vid)) {
-                const templateDocId = await getRecurringTemplateDocIdForVoucher(companyId, vid);
-                const slots = await listMissingRecurringPeriodSlotsAscending(companyId, templateDocId, tpl, new Date());
-                if (slots.length >= 2) {
-                  recurringPickerCloseParentRef.current = false;
-                  setRecurringGeneratePicker({
-                    open: true,
-                    slots,
-                    selected: Object.fromEntries(slots.map((s) => [s.periodKey, false])),
-                    voucherId: vid,
-                    templateForSchedule: tpl,
-                  });
-                }
+                await handlePostSaveMissingRecurringSlots(companyId, vid, tpl, false);
               }
             } catch {
-              /* optional prompt — ignore */
+              /* optional backfill — ignore */
             }
           }
         } else {
@@ -3632,14 +3784,20 @@ export function AddVoucherDialog(props: any) {
     }
   }, [
     canEditRecurringOnVoucher,
+    canGenerateRecurringOnVoucher,
     showVoucherAutoRecurringUi,
     persistRecurringScheduleRateOnly,
     committedAutoMonthlyEnabled,
     companyId,
+    company,
     voucher?.id,
     refreshRecurringTemplateMeta,
+    handlePostSaveMissingRecurringSlots,
     apkOfflineViewOnly,
     user?.uid,
+    user?.email,
+    user?.displayName,
+    customUser?.displayName,
   ]);
 
   /** Generate now: 1 missing = seedha create; 2+ = tick list popup (hover tooltip nahi). */
@@ -3689,26 +3847,14 @@ export function AddVoucherDialog(props: any) {
         toast.info("No missing auto months in range (or all already created).");
         return;
       }
-      if (slots.length >= 2) {
-        setRecurringGeneratePicker({
-          open: true,
-          slots,
-          selected: Object.fromEntries(slots.map((s) => [s.periodKey, false])),
-          voucherId: vid,
-          templateForSchedule: tpl,
-        });
-        return;
-      }
-      setGeneratingRecurringNow(true);
-      const res = await generateRecurringVoucherNow(companyId, company, vid, {
-        uid: user.uid,
-        email: user.email ?? null,
-        displayName: customUser?.displayName || user.displayName || null,
+      setRecurringGeneratePicker({
+        open: true,
+        slots,
+        selected: Object.fromEntries(slots.map((s) => [s.periodKey, false])),
+        voucherId: vid,
+        templateForSchedule: tpl,
       });
-      if (res.ok) {
-        toast.success(res.message);
-        void refreshRecurringTemplateMeta(companyId, res.voucherId?.trim() || vid);
-      } else toast.warning(res.message);
+      return;
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Generation failed.");
     } finally {
@@ -4033,10 +4179,10 @@ export function AddVoucherDialog(props: any) {
       {recurringEditorsEffective && (
         // White strip below ribbon only — not inside drag layer (`z-20` stack above resize hit-zones).
         <div className="relative z-20 flex shrink-0 flex-col gap-1 border-b border-indigo-200/70 bg-white px-2 py-1 text-xs text-indigo-900">
-          {missedRecurringGapScanning ? (
+          {showMissedRecurringCheckRunning ? (
             <p className="m-0 text-[11px] font-medium text-indigo-600/90">Checking missed schedule…</p>
           ) : null}
-          {missedRecurringGap && !missedRecurringGapScanning ? (
+          {recurringStripActive && recurringTemplateActiveOnOpenVoucher && missedRecurringGap && !missedRecurringGapScanning ? (
             <div
               role="status"
               className="flex min-w-0 flex-col gap-1.5 rounded-md border border-amber-400/90 bg-amber-50 px-2 py-1.5 sm:flex-row sm:items-center sm:justify-between"
@@ -4117,8 +4263,8 @@ export function AddVoucherDialog(props: any) {
                 <div
                   style={{ minHeight: SWITCH_TRACK_HEIGHT_PX }}
                   className={cn(
-                    "box-border inline-flex min-h-0 max-w-full flex-nowrap items-center gap-2 rounded-full border border-pink-400/85 bg-pink-100 py-0 text-[11px] font-semibold leading-none text-pink-950 shadow-sm",
-                    isMobile ? "shrink-0 px-1.5" : "px-2.5",
+                    "box-border inline-flex min-h-0 max-w-full flex-nowrap items-center gap-1.5 rounded-full border border-pink-400/85 bg-pink-100 py-0 text-[11px] font-semibold leading-none text-pink-950 shadow-sm",
+                    isMobile ? "shrink-0 px-1.5" : "shrink-0 px-2.5",
                   )}
                 >
                   <span className="m-0 shrink-0 leading-snug">auto voucher create</span>
@@ -4129,11 +4275,25 @@ export function AddVoucherDialog(props: any) {
                   >
                     <SelectTrigger
                       style={{ height: SWITCH_TRACK_HEIGHT_PX, minHeight: SWITCH_TRACK_HEIGHT_PX }}
-                      className="box-border h-auto min-h-0 w-[min(100%,12.5rem)] shrink-0 rounded-md border-0 bg-transparent px-0 py-0 text-[11px] font-semibold leading-none text-pink-950 shadow-none hover:bg-pink-200/45 focus:ring-1 focus:ring-pink-400/55 focus:ring-offset-0 data-[placeholder]:text-pink-950 [&>svg]:h-3 [&>svg]:w-3 [&>svg]:text-pink-800 [&>span]:line-clamp-1"
+                      className={cn(
+                        "box-border h-auto min-h-0 shrink-0 rounded-md border-0 bg-transparent py-0 text-[11px] font-semibold leading-none text-pink-950 shadow-none",
+                        "hover:bg-pink-200/45 focus:ring-1 focus:ring-pink-400/55 focus:ring-offset-0 data-[placeholder]:text-pink-950",
+                        // PC: full-width stretch + overflow-hidden chevron clip mat; day label + arrow clear.
+                        "!w-auto !min-w-[11.5rem] !max-w-[15rem] overflow-visible px-1.5",
+                        "[&>span]:min-w-0 [&>span]:flex-1 [&>span]:overflow-visible [&>span]:whitespace-nowrap [&>span]:text-left",
+                        "[&>svg]:ml-1 [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:shrink-0 [&>svg]:opacity-100 [&>svg]:text-pink-800",
+                      )}
                     >
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent className="max-h-[min(50vh,280px)]">
+                    <SelectContent
+                      position="popper"
+                      side="bottom"
+                      align="start"
+                      sideOffset={6}
+                      collisionPadding={12}
+                      className="z-[10050] max-h-[min(50vh,320px)] min-w-[12rem]"
+                    >
                       {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
                         <SelectItem key={d} value={String(d)}>
                           Day {d}
@@ -4553,25 +4713,34 @@ export function AddVoucherDialog(props: any) {
       {/* Auto Monthly: rate bump + Save / Generate Now — main voucher dialog ke upar nested portal. */}
       <Dialog open={recurringSettingsOpen} onOpenChange={setRecurringSettingsOpen}>
         <DialogContent
-          // Auto Monthly modal: zyada mota neela outline (pehle border-2).
-          className="w-[95vw] max-w-md gap-3 border-4 border-blue-600 p-5 shadow-md sm:max-w-lg dark:border-blue-500"
+          data-pl-auto-monthly-settings=""
+          className={cn(
+            "w-[95vw] max-w-md gap-3 rounded-xl border-2 border-solid border-blue-300 p-5 shadow-md sm:max-w-lg",
+            // Stock Summary green fill; outer border CSS se stable 2px pill-blue
+            "pl-dashboard-tone-card pl-dashboard-ribbon-emerald pl-dashboard-tone-emerald"
+          )}
           aria-describedby="recurring-settings-desc"
         >
           <DialogHeader>
-            <DialogTitle className="text-base font-semibold">Auto Monthly settings</DialogTitle>
-            <DialogDescription id="recurring-settings-desc" className="text-left text-xs text-muted-foreground">
-              {calLab.settingsIntro}
+            <DialogTitle className="text-base font-semibold text-green-950 dark:text-green-50">
+              Auto Monthly settings
+            </DialogTitle>
+            <DialogDescription
+              id="recurring-settings-desc"
+              className="rounded-lg border border-blue-300 bg-white/50 px-2.5 py-2 text-left text-xs text-black/55 dark:border-blue-400/60 dark:bg-black/20 dark:text-white/60"
+            >
+              <i>{calLab.settingsIntro}</i>
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3">
             <div className="space-y-1.5">
-              <Label className="text-xs text-indigo-950">{calLab.scheduleMonthDayLabel}</Label>
+              <Label className="text-xs font-medium text-green-950 dark:text-green-50">{calLab.scheduleMonthDayLabel}</Label>
               <Select
                 value={String(autoMonthlyScheduleBsDay)}
                 onValueChange={(v) => setAutoMonthlyScheduleBsDay(parseInt(v, 10) || 32)}
                 disabled={autoMonthlyHydrating}
               >
-                <SelectTrigger className="h-9 border-indigo-200 bg-background text-sm">
+                <SelectTrigger className={autoMonthlyPillFieldCn}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="max-h-[min(50vh,280px)]">
@@ -4584,184 +4753,109 @@ export function AddVoucherDialog(props: any) {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs text-indigo-950">Rate change for generated voucher</Label>
-              <Select
-                value={autoMonthlyRateMode}
-                onValueChange={(v) => {
-                  const next = v as RecurringRateAdjustMode;
-                  setAutoMonthlyRateMode(next);
-                  // Sirf "No change" par cadence / effective-from reset — % ↔ fixed switch par values retain.
-                  if (next === "none") {
-                    setAutoMonthlyRateEffectiveFromAd(undefined);
-                    setAutoMonthlyRateCadence("every_bs_month");
-                    setAutoMonthlyYearlyBsMonth(1);
-                    setAutoMonthlyYearlyBsDay(1);
-                    setAutoMonthlyRateEveryN("1");
-                    setAutoMonthlyYearlyBaseAnchorAd(undefined);
-                  }
-                }}
-                disabled={autoMonthlyHydrating}
-              >
-                <SelectTrigger className="h-9 border-indigo-200 bg-background text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">No change</SelectItem>
-                  <SelectItem value="percent">Increase by %</SelectItem>
-                  <SelectItem value="fixed">Increase by fixed amount</SelectItem>
-                </SelectContent>
-              </Select>
-              {(autoMonthlyRateMode === "fixed" || autoMonthlyRateMode === "percent") && (
-                <div className="space-y-2 rounded-md border border-indigo-100 bg-indigo-50/50 px-2 py-2">
-                  {/* % / fixed bump: mahine vs saal — yearly par BS month/day anchor (generation due date se match). */}
-                  <div className="space-y-1">
-                    <Label className="text-xs text-indigo-950">How often to apply increase</Label>
-                    <Select
-                      value={autoMonthlyRateCadence}
-                      onValueChange={(v) => {
-                        const next = v as RecurringRateAdjustCadence;
-                        setAutoMonthlyRateCadence(next);
-                        if (next === "every_bs_month") {
-                          setAutoMonthlyYearlyBsMonth(1);
-                          setAutoMonthlyYearlyBsDay(1);
-                          setAutoMonthlyYearlyBaseAnchorAd(undefined);
-                        }
-                      }}
-                      disabled={autoMonthlyHydrating}
-                    >
-                      <SelectTrigger className="h-9 border-indigo-200 bg-background text-sm">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="every_bs_month">{calLab.everyMonthOption}</SelectItem>
-                        <SelectItem value="every_bs_year">{calLab.oncePerYearOption}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  {autoMonthlyRateCadence === "every_bs_month" && (
-                    <div className="space-y-1">
-                      <Label className="text-[11px] text-indigo-950">{calLab.everyNMonthsLabel}</Label>
+
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+              <div className={cn("min-w-0 space-y-1.5", autoMonthlyRateMode !== "none" ? "sm:flex-[1.4]" : "w-full")}>
+                <Label className="text-xs font-medium text-green-950 dark:text-green-50">
+                  Rate change for generated voucher
+                </Label>
+                <Select
+                  value={autoMonthlyRateMode}
+                  onValueChange={(v) => {
+                    const next = v as RecurringRateAdjustMode;
+                    setAutoMonthlyRateMode(next);
+                    if (next === "none") {
+                      setAutoMonthlyRateEffectiveFromAd(undefined);
+                      setAutoMonthlyRateCadence("every_bs_month");
+                      setAutoMonthlyYearlyBsMonth(1);
+                      setAutoMonthlyYearlyBsDay(1);
+                      setAutoMonthlyRateEveryN("1");
+                      setAutoMonthlyYearlyBaseAnchorAd(undefined);
+                    }
+                  }}
+                  disabled={autoMonthlyHydrating}
+                >
+                  <SelectTrigger className={autoMonthlyPillFieldCn}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No change</SelectItem>
+                    <SelectItem value="percent">Increase by %</SelectItem>
+                    <SelectItem value="fixed">Increase by fixed amount</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {autoMonthlyRateMode !== "none" ? (
+                <div className="min-w-0 space-y-1.5 sm:flex-1">
+                  <Label className="text-xs font-medium text-green-950 dark:text-green-50">
+                    {autoMonthlyRateMode === "percent" ? "Percent increase" : "Amount to add"}
+                  </Label>
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    className={autoMonthlyPillFieldCn}
+                    placeholder={autoMonthlyRateMode === "percent" ? "e.g. 10 for +10%" : "Amount to add"}
+                    value={autoMonthlyRateValue}
+                    onChange={(e) => setAutoMonthlyRateValue(e.target.value)}
+                    disabled={autoMonthlyHydrating}
+                  />
+                </div>
+              ) : null}
+            </div>
+
+            {(autoMonthlyRateMode === "fixed" || autoMonthlyRateMode === "percent") && (
+              <div className="space-y-2">
+                <div className="space-y-1">
+                  <Label className="text-xs font-medium text-green-950 dark:text-green-50">How often to apply increase</Label>
+                  <Select
+                    value={autoMonthlyRateCadence}
+                    onValueChange={(v) => {
+                      const next = v as RecurringRateAdjustCadence;
+                      setAutoMonthlyRateCadence(next);
+                      if (next === "every_bs_month") {
+                        setAutoMonthlyYearlyBsMonth(1);
+                        setAutoMonthlyYearlyBsDay(1);
+                        setAutoMonthlyYearlyBaseAnchorAd(undefined);
+                      } else if (autoMonthlyRateEffectiveFromAd) {
+                        const { month, day } = yearlyBumpMonthDayFromApplyFrom(autoMonthlyRateEffectiveFromAd);
+                        setAutoMonthlyYearlyBsMonth(month);
+                        setAutoMonthlyYearlyBsDay(day);
+                      }
+                    }}
+                    disabled={autoMonthlyHydrating}
+                  >
+                    <SelectTrigger className={autoMonthlyPillFieldCn}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="every_bs_month">{calLab.everyMonthOption}</SelectItem>
+                      <SelectItem value="every_bs_year">{calLab.oncePerYearOption}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {autoMonthlyRateCadence === "every_bs_month" ? (
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <Label className="text-[11px] font-medium text-green-950 dark:text-green-50">{calLab.everyNMonthsLabel}</Label>
                       <Input
                         type="number"
                         min={1}
                         max={24}
                         inputMode="numeric"
-                        className="h-9 border-indigo-200 text-sm"
+                        className={autoMonthlyPillFieldCn}
                         placeholder="1"
                         value={autoMonthlyRateEveryN}
                         onChange={(e) => setAutoMonthlyRateEveryN(e.target.value.replace(/[^\d]/g, ""))}
                         disabled={autoMonthlyHydrating}
                       />
                     </div>
-                  )}
-                  {autoMonthlyRateCadence === "every_bs_year" && (
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <Label className="text-[11px] text-indigo-950">{calLab.bumpWhenMonthLabel}</Label>
-                        <Select
-                          value={String(autoMonthlyYearlyBsMonth)}
-                          onValueChange={(v) => setAutoMonthlyYearlyBsMonth(parseInt(v, 10) || 1)}
-                          disabled={autoMonthlyHydrating}
-                        >
-                          <SelectTrigger className="h-9 border-indigo-200 bg-background text-sm">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent className="max-h-[min(50vh,280px)]">
-                            {NEPALI_MONTHS.map((name, i) => (
-                              <SelectItem key={i + 1} value={String(i + 1)}>
-                                {name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <Label className="text-[11px] text-indigo-950">{calLab.bumpDayLabel}</Label>
-                        <Select
-                          value={String(autoMonthlyYearlyBsDay)}
-                          onValueChange={(v) => setAutoMonthlyYearlyBsDay(parseInt(v, 10) || 1)}
-                          disabled={autoMonthlyHydrating}
-                        >
-                          <SelectTrigger className="h-9 border-indigo-200 bg-background text-sm">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent className="max-h-[min(50vh,280px)]">
-                            {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
-                              <SelectItem key={d} value={String(d)}>
-                                Day {d}
-                              </SelectItem>
-                            ))}
-                            <SelectItem value="32">{calLab.lastDayOfScheduledMonth}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <Label className="text-[11px] text-indigo-950">{calLab.everyNYearsLabel}</Label>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={24}
-                          inputMode="numeric"
-                          className="h-9 border-indigo-200 text-sm"
-                          placeholder="1"
-                          value={autoMonthlyRateEveryN}
-                          onChange={(e) => setAutoMonthlyRateEveryN(e.target.value.replace(/[^\d]/g, ""))}
-                          disabled={autoMonthlyHydrating}
-                        />
-                      </div>
-                    </div>
-                  )}
-                  {/* Every-N-years phase anchor: books cycle vs app start date can differ. */}
-                  {autoMonthlyRateCadence === "every_bs_year" && (
-                    <div className="space-y-1 border-t border-indigo-100/80 pt-2">
-                      <Label className="text-[11px] text-indigo-950">{calLab.yearlyBaseAnchorLabel}</Label>
+                    <div className="flex w-full min-w-0 flex-col gap-1 sm:w-auto sm:min-w-[11rem]">
+                      <Label className="text-[11px] font-medium text-green-950 dark:text-green-50">{calLab.applyIncreaseFromLabel}</Label>
                       {dateSystem === "AD" ? (
                         <Input
                           type="date"
-                          className="h-9 max-w-[11rem] border-indigo-200 text-sm"
-                          value={adDateInputValue(autoMonthlyYearlyBaseAnchorAd)}
-                          onChange={(e) => setAutoMonthlyYearlyBaseAnchorAd(parseAdDateInput(e.target.value))}
-                          disabled={autoMonthlyHydrating}
-                        />
-                      ) : (
-                        <BsDatePicker
-                          isRange={false}
-                          valueAD={autoMonthlyYearlyBaseAnchorAd}
-                          onChangeAD={(d) => setAutoMonthlyYearlyBaseAnchorAd(d)}
-                          disabled={autoMonthlyHydrating}
-                          numberOfMonths={1}
-                          className="h-9 w-full max-w-[11rem] border-indigo-200 font-normal"
-                        />
-                      )}
-                      <p className="text-[11px] leading-snug text-indigo-900/80">{calLab.yearlyBaseAnchorHint}</p>
-                    </div>
-                  )}
-                </div>
-              )}
-              {autoMonthlyRateMode !== "none" && (
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <Label className="text-[11px] text-indigo-950">
-                      {autoMonthlyRateMode === "percent" ? "Percent increase" : "Amount to add"}
-                    </Label>
-                    <Input
-                      type="number"
-                      inputMode="decimal"
-                      className="h-9 border-indigo-200 text-sm"
-                      placeholder={autoMonthlyRateMode === "percent" ? "e.g. 10 for +10%" : "Amount to add"}
-                      value={autoMonthlyRateValue}
-                      onChange={(e) => setAutoMonthlyRateValue(e.target.value)}
-                      disabled={autoMonthlyHydrating}
-                    />
-                  </div>
-                  {(autoMonthlyRateMode === "fixed" || autoMonthlyRateMode === "percent") && (
-                    <div className="flex w-full flex-col gap-1 sm:w-auto sm:min-w-[11rem]">
-                      <Label className="text-xs text-indigo-950">{calLab.applyIncreaseFromLabel}</Label>
-                      {dateSystem === "AD" ? (
-                        <Input
-                          type="date"
-                          className="h-9 border-indigo-200 text-sm"
+                          className={autoMonthlyPillFieldCn}
                           value={adDateInputValue(autoMonthlyRateEffectiveFromAd)}
                           onChange={(e) => setAutoMonthlyRateEffectiveFromAd(parseAdDateInput(e.target.value))}
                           disabled={autoMonthlyHydrating}
@@ -4773,22 +4867,72 @@ export function AddVoucherDialog(props: any) {
                           onChangeAD={(d) => setAutoMonthlyRateEffectiveFromAd(d)}
                           disabled={autoMonthlyHydrating}
                           numberOfMonths={1}
-                          className="h-9 w-full border-indigo-200 font-normal sm:w-[11rem]"
+                          className={cn(autoMonthlyPillFieldCn, "w-full font-normal sm:w-[11rem]")}
                         />
                       )}
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                    <div className="flex min-w-0 flex-1 flex-col gap-1">
+                      <Label className="text-[11px] font-medium text-green-950 dark:text-green-50">{calLab.applyIncreaseFromLabel}</Label>
+                      {dateSystem === "AD" ? (
+                        <Input
+                          type="date"
+                          className={autoMonthlyPillFieldCn}
+                          value={adDateInputValue(autoMonthlyRateEffectiveFromAd)}
+                          onChange={(e) => {
+                            const next = parseAdDateInput(e.target.value);
+                            setAutoMonthlyRateEffectiveFromAd(next);
+                            const { month, day } = yearlyBumpMonthDayFromApplyFrom(next);
+                            setAutoMonthlyYearlyBsMonth(month);
+                            setAutoMonthlyYearlyBsDay(day);
+                          }}
+                          disabled={autoMonthlyHydrating}
+                        />
+                      ) : (
+                        <BsDatePicker
+                          isRange={false}
+                          valueAD={autoMonthlyRateEffectiveFromAd}
+                          onChangeAD={(d) => {
+                            setAutoMonthlyRateEffectiveFromAd(d);
+                            const { month, day } = yearlyBumpMonthDayFromApplyFrom(d);
+                            setAutoMonthlyYearlyBsMonth(month);
+                            setAutoMonthlyYearlyBsDay(day);
+                          }}
+                          disabled={autoMonthlyHydrating}
+                          numberOfMonths={1}
+                          className={cn(autoMonthlyPillFieldCn, "w-full font-normal")}
+                        />
+                      )}
+                    </div>
+                    <div className="min-w-0 space-y-1 sm:w-[7.5rem]">
+                      <Label className="text-[11px] font-medium text-green-950 dark:text-green-50">{calLab.everyNYearsLabel}</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={24}
+                        inputMode="numeric"
+                        className={autoMonthlyPillFieldCn}
+                        placeholder="1"
+                        value={autoMonthlyRateEveryN}
+                        onChange={(e) => setAutoMonthlyRateEveryN(e.target.value.replace(/[^\d]/g, ""))}
+                        disabled={autoMonthlyHydrating}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <DialogFooter className="gap-2 sm:gap-2">
-            <Button type="button" variant="secondary" onClick={() => setRecurringSettingsOpen(false)}>
+            <Button type="button" variant="chromePill" size="sm" onClick={() => setRecurringSettingsOpen(false)}>
               Close
             </Button>
             <Button
               type="button"
-              variant="outline"
+              variant="chromePill"
+              size="sm"
               disabled={
                 savingRecurringSettings ||
                 generatingRecurringNow ||
@@ -4811,6 +4955,8 @@ export function AddVoucherDialog(props: any) {
             </Button>
             <Button
               type="button"
+              variant="chromePill"
+              size="sm"
               disabled={
                 savingRecurringSettings || autoMonthlyHydrating || !voucher?.id || !canEditRecurringOnVoucher
               }

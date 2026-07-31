@@ -16,11 +16,26 @@ import {
 import { deleteDoc, setDoc, updateDoc, runTransaction } from "@/lib/writeGateway/firestoreMutationsInternal";
 import { firestore } from "@/lib/firebase";
 import { addBsMonths, adToBs, bsToAd, getBSMonthDays, NEPALI_MONTHS } from "@/lib/bs-date";
+import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
+import { preferLocalLedgerReads } from "@/lib/apkOnlineFirestoreWritePolicy";
+import {
+  deleteCompanyDocFromBrowserDb,
+  getCompanyDocFromBrowserDb,
+  listCompanyDocsFromBrowserDb,
+  upsertCompanyDocInBrowserDb,
+} from "@/lib/localCompanyDocMirror";
 import { saveVoucher } from "./voucherActionsClient";
 import { sendTransactionAlert } from "@/lib/transactionAlerts";
 import type { Company } from "@/hooks/useCompany";
 import { formatVoucherNumber, normalizePrefix, parseVoucherNumberPart } from "@/lib/voucherNumberFormat";
 import { isRecurringVoucherGenerationEnabled } from "@/lib/recurringVoucherSettings";
+import { clientRandomUUID } from "@/lib/clientRandomUUID";
+import { isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
+import { isDeviceLocalCompany, isServerGateCompany } from "@/lib/companyStorageKind";
+import {
+  companyUsesOnlineSelectorSyncTicks,
+  isOnlineCompanyLedgerCloudSyncAllowed,
+} from "@/lib/onlineCompanySelectorSyncPolicy";
 
 export type RecurringNarrationMode = "advance_bs_month";
 export type RecurringRunScope = "owner_only" | "all_users" | "selected_users";
@@ -28,6 +43,12 @@ export type RecurringRunScope = "owner_only" | "all_users" | "selected_users";
 export type ManualRecurringPickStrategy = "chronological" | "latest";
 /** @deprecated Voucher Settings user list — ab Manage Sharing → Recurring Auto Voucher permissions. */
 export type RecurringVoucherAutoEditorsScope = "all_configure_users" | "owner_only" | "selected_users";
+
+export type RecurringAutoRunScopeFilter = {
+  currentPageOnly?: boolean;
+  pathname?: string | null;
+  selectedEntityId?: string | null;
+};
 /** BS calendar day 1–31, or 32 = last day of that BS month */
 export type RecurringScheduleBsDay = number;
 export type RecurringRateAdjustMode = "none" | "percent" | "fixed";
@@ -162,6 +183,29 @@ function stripLegacyNarrationTypeSlugsFromCompact(safe: string): string {
   return out.trim() || safe;
 }
 
+function normalizeRecurringNarrationForMatch(raw: unknown): string {
+  const base = stripRecurringNarrationSearchSuffix(String(raw || "").trim()).toLowerCase();
+  if (!base) return "";
+  let out = base;
+  for (const aliasGroup of AUTO_MONTH_ALIAS_ROWS) {
+    for (const alias of aliasGroup) {
+      const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      out = out.replace(new RegExp(`\\b${escaped}\\b`, "gi"), " ");
+    }
+  }
+  return out.replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function recurringNarrationMentionsBsMonth(raw: unknown, bsM: number): boolean {
+  const text = stripRecurringNarrationSearchSuffix(String(raw || "").trim()).toLowerCase();
+  if (!text) return false;
+  const aliases = AUTO_MONTH_ALIAS_ROWS[Math.max(0, Math.min(11, bsM - 1))] || [];
+  return aliases.some((alias) => {
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`\\b${escaped}\\b`, "i").test(text);
+  });
+}
+
 /** `JRNL-094` / `JRNL094` → last digit run `094` (narration `vou.No.-094JRNL`). */
 function extractVoucherNarrationNumericPart(raw: string): string {
   const trimmed = String(raw || "").trim();
@@ -248,30 +292,164 @@ export function computeRecurringSeriesKeyFromVoucher(v: Record<string, unknown> 
   return `rsj_${fnv1a32Hex(payload)}_${fnv1a32Hex(payload.split("").reverse().join(""))}`;
 }
 
-/** Voucher `date` field → ISO (Firestore Timestamp / string / ms). */
+function computeJournalAccountSideSignature(entries: unknown): string {
+  if (!Array.isArray(entries)) return "";
+  const sigs: string[] = [];
+  for (const raw of entries) {
+    if (!raw || typeof raw !== "object") continue;
+    const e = raw as Record<string, unknown>;
+    const acc = String(e.accountId ?? "").trim();
+    if (!acc) continue;
+    const dr = Number(e.debit) > 0;
+    const cr = Number(e.credit) > 0;
+    const t = String(e.type || "").toLowerCase();
+    const amt = Number(e.amount);
+    let side = "";
+    if (dr || cr) side = dr ? "D" : "C";
+    else if (t === "debit" && amt > 0) side = "D";
+    else if (t === "credit" && amt > 0) side = "C";
+    if (!side) continue;
+    sigs.push(`${acc}:${side}`);
+  }
+  sigs.sort();
+  return sigs.join("|");
+}
+
+function voucherMatchesRecurringTemplateShape(
+  candidate: Record<string, unknown>,
+  sourceVoucher: Record<string, unknown> | null,
+): boolean {
+  if (!sourceVoucher) return true;
+  const sourceType = String(sourceVoucher.type || "").trim().toLowerCase();
+  const candidateType = String(candidate.type || "").trim().toLowerCase();
+  if (sourceType && candidateType && sourceType !== candidateType) return false;
+  if (sourceType === "journal" || candidateType === "journal") {
+    const sourceSig = computeJournalAccountSideSignature(sourceVoucher.entries);
+    const candidateSig = computeJournalAccountSideSignature(candidate.entries);
+    if (sourceSig && candidateSig && sourceSig !== candidateSig) return false;
+  }
+  const sourceNarr = normalizeRecurringNarrationForMatch(sourceVoucher.narration);
+  const candidateNarr = normalizeRecurringNarrationForMatch(candidate.narration);
+  if (sourceNarr && candidateNarr && sourceNarr !== candidateNarr) return false;
+  return true;
+}
+
+/** Voucher `date` field → ISO (Timestamp / Date / string / ms / plain `{seconds}` — SQLite/cache). */
 function voucherDateFieldToIso(raw: unknown): string | null {
-  if (raw == null) return null;
-  if (raw instanceof Timestamp) {
-    const d = raw.toDate();
-    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  const d = parseFirestoreDateFieldToJsDate(raw);
+  if (!d) return null;
+  return d.toISOString();
+}
+
+/** Local SQLite pehle (sqlite-first / delta / pending outbox), phir Firestore — live pe “source missing” mat. */
+async function getVoucherRecordForRecurring(
+  companyId: string,
+  voucherId: string,
+  opts?: { includeDeleted?: boolean },
+): Promise<Record<string, unknown> | null> {
+  if (!companyId?.trim() || !voucherId?.trim()) return null;
+  const readLocal = async () =>
+    getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId, {
+      includeDeleted: opts?.includeDeleted === true,
+    }).catch(() => null);
+  const readFs = async () => {
+    try {
+      const snap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, voucherId));
+      if (!snap.exists()) return null;
+      return { ...(snap.data() as Record<string, unknown>), id: snap.id };
+    } catch {
+      return null;
+    }
+  };
+  const local = await readLocal();
+  if (local) return local;
+  return readFs();
+}
+
+async function getRecurringTemplateRecord(
+  companyId: string,
+  templateDocId: string,
+): Promise<RecurringVoucherTemplate | null> {
+  if (!companyId?.trim() || !templateDocId?.trim()) return null;
+  const readLocal = async () => {
+    const row = await getCompanyDocFromBrowserDb(
+      companyId,
+      RECURRING_TEMPLATE_COLLECTION,
+      templateDocId,
+    ).catch(() => null);
+    return row ? (row as unknown as RecurringVoucherTemplate) : null;
+  };
+  const readFs = async () => {
+    try {
+      const snap = await getDoc(
+        doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateDocId),
+      );
+      if (!snap.exists()) return null;
+      return snap.data() as RecurringVoucherTemplate;
+    } catch {
+      return null;
+    }
+  };
+  const local = await readLocal();
+  if (local) return local;
+  return readFs();
+}
+
+async function mirrorRecurringTemplateToLocal(
+  companyId: string,
+  templateDocId: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await upsertCompanyDocInBrowserDb(
+      companyId,
+      RECURRING_TEMPLATE_COLLECTION,
+      templateDocId,
+      {
+        ...data,
+        id: templateDocId,
+      },
+      { force: true },
+    );
+  } catch {
+    /* mirror best-effort */
   }
-  if (typeof raw === "string" && raw.trim()) {
-    const d = new Date(raw.trim());
-    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+async function markRecurringTriggerVoucherLocally(
+  companyId: string,
+  voucherId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const vid = String(voucherId || "").trim();
+  if (!companyId.trim() || !vid) return;
+  try {
+    const row = (await getCompanyDocFromBrowserDb(companyId, "vouchers", vid).catch(() => null)) as
+      | Record<string, unknown>
+      | null;
+    if (!row) return;
+    const recurringMeta =
+      row.recurringMeta && typeof row.recurringMeta === "object"
+        ? { ...(row.recurringMeta as Record<string, unknown>) }
+        : {};
+    await upsertCompanyDocInBrowserDb(
+      companyId,
+      "vouchers",
+      vid,
+      { ...row, recurringMeta: { ...recurringMeta, ...patch } },
+      { force: true },
+    );
+  } catch {
+    /* local marker best-effort */
   }
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    const d = new Date(raw);
-    return Number.isNaN(d.getTime()) ? null : d.toISOString();
-  }
-  return null;
 }
 
 /** Firestore `recurring_voucher_templates` document id — series journal vs legacy per-voucher. */
 export async function getRecurringTemplateDocIdForVoucher(companyId: string, voucherId: string): Promise<string> {
   if (!companyId?.trim() || !voucherId?.trim()) return voucherId;
-  const vSnap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, voucherId));
-  if (!vSnap.exists()) return voucherId;
-  const sk = computeRecurringSeriesKeyFromVoucher(vSnap.data() as Record<string, unknown>);
+  const vData = await getVoucherRecordForRecurring(companyId, voucherId);
+  if (!vData) return voucherId;
+  const sk = computeRecurringSeriesKeyFromVoucher(vData);
   return sk || voucherId;
 }
 const AUTO_MONTH_ALIAS_ROWS: string[][] = [
@@ -306,6 +484,22 @@ function parsePeriodKey(pk: string): { y: number; m: number } | null {
 
 /** Ek missing BS mahina — Generate picker + batch create dono. */
 export type RecurringPeriodSlot = { periodKey: string; bsY: number; bsM: number };
+export const AUTO_RECURRING_ASK_GRACE_DAYS = 15;
+export type RecurringMissingScanDebug = {
+  todayPk: string;
+  sourceMinDayIso: string | null;
+  sourceOccupiedPk: string | null;
+  minPk: string | null;
+  activePks: string[];
+  suppressed: string[];
+  checked: Array<{
+    periodKey: string;
+    active: boolean;
+    suppressed: boolean;
+    dueNotBeforeSource: boolean;
+    dueArrived: boolean;
+  }>;
+};
 
 /** BS period key `YYYY-MM` lexicographic compare (same calendar order). */
 function comparePeriodKeysAsc(pkA: string, pkB: string): number {
@@ -317,29 +511,354 @@ function comparePeriodKeysAsc(pkA: string, pkB: string): number {
   return 0;
 }
 
+function maxPeriodKeyAsc(keys: Iterable<string>): string | null {
+  let best: string | null = null;
+  for (const raw of keys) {
+    const pk = String(raw || "").trim();
+    if (!pk || !parsePeriodKey(pk)) continue;
+    if (!best || comparePeriodKeysAsc(pk, best) > 0) best = pk;
+  }
+  return best;
+}
+
+async function raceWithTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms);
+      }),
+    ]);
+  } finally {
+    if (timer != null) clearTimeout(timer);
+  }
+}
+
+function recurringActorIsCompanyAdmin(
+  company: Company | null | undefined,
+  actor?: Pick<GenerateActor, "uid" | "email"> | null,
+): boolean {
+  if (!company || !actor?.uid) return false;
+  if ((company as Record<string, unknown>).isOwned === true) return true;
+  const ownerId = String(company.ownerId || "").trim();
+  if (ownerId && ownerId === String(actor.uid).trim()) return true;
+  const ownerEmail = String((company as Record<string, unknown>).ownerEmail || "").trim().toLowerCase();
+  const actorEmail = String(actor.email || "").trim().toLowerCase();
+  return Boolean(ownerEmail && actorEmail && ownerEmail === actorEmail);
+}
+
+/**
+ * Firebase Online / PL Server companies: Auto Monthly create se pehle online + server verify.
+ * Pure local companies: offline create OK. Accrued display kabhi server pe write nahi hota (device-local).
+ */
+export async function assertOnlineForRecurringVoucherCreate(
+  companyId: string,
+  company: Company | null | undefined,
+  actor?: Pick<GenerateActor, "uid" | "email"> | null,
+): Promise<{ ok: boolean; message?: string }> {
+  const id = String(companyId || "").trim();
+  if (!id) return { ok: false, message: "Missing company." };
+  const c = company ?? null;
+  if (recurringActorIsCompanyAdmin(c, actor)) {
+    console.info("[AutoRecurringOnlineGate] pass", { companyId: id, reason: "company_admin_local_first" });
+    return { ok: true };
+  }
+  if (c && isDeviceLocalCompany(c) && !isServerGateCompany(c)) {
+    console.info("[AutoRecurringOnlineGate] pass", { companyId: id, reason: "device_local_company" });
+    return { ok: true };
+  }
+  const needsServer =
+    (c != null && isServerGateCompany(c)) ||
+    (c != null && companyUsesOnlineSelectorSyncTicks(c)) ||
+    (c != null && isCloudLinkedCompanyStorage(c));
+  if (!needsServer) {
+    console.info("[AutoRecurringOnlineGate] pass", { companyId: id, reason: "server_not_required" });
+    return { ok: true };
+  }
+
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    console.info("[AutoRecurringOnlineGate] block", { companyId: id, reason: "navigator_offline" });
+    return {
+      ok: false,
+      message:
+        "Go online to create Auto Monthly vouchers. Server must verify first (Firebase / PL Server) so devices do not duplicate.",
+    };
+  }
+
+  if (c != null && companyUsesOnlineSelectorSyncTicks(c) && !isOnlineCompanyLedgerCloudSyncAllowed(id, c)) {
+    console.info("[AutoRecurringOnlineGate] block", { companyId: id, reason: "online_selector_sync_disabled" });
+    return {
+      ok: false,
+      message:
+        "Turn on Data sync in Company Selector to create Auto Monthly vouchers online. (Files sync is separate — attachments follow Files tick.)",
+    };
+  }
+
+  try {
+    console.info("[AutoRecurringOnlineGate] probe_start", { companyId: id });
+    const probe = await raceWithTimeout(
+      getDocs(query(collection(firestore, `companies/${id}/${RECURRING_TEMPLATE_COLLECTION}`), limit(1))),
+      12000,
+      null,
+    );
+    if (probe == null) {
+      console.info("[AutoRecurringOnlineGate] block", { companyId: id, reason: "probe_timeout" });
+      return {
+        ok: false,
+        message: "Auto Monthly server verification timed out. Stay online and try again.",
+      };
+    }
+  } catch {
+    console.info("[AutoRecurringOnlineGate] block", { companyId: id, reason: "probe_failed" });
+    return {
+      ok: false,
+      message: "Cannot reach the server to verify Auto Monthly. Stay online and try again.",
+    };
+  }
+  console.info("[AutoRecurringOnlineGate] pass", { companyId: id, reason: "probe_ok" });
+  return { ok: true };
+}
+
 /**
  * Is mahine ke liye zinda (non–recycle-bin) auto voucher hai? — manual gap scan ke liye.
+ * Local + server merge: online Firebase/PL pe server pehle (duplicate generate mat).
  * Recycler (`isDeleted`) = slot khali maan kar dubara Generate allow.
  */
-async function fetchActiveRecurringPeriodKeysForTemplate(companyId: string, templateDocId: string): Promise<Set<string>> {
-  const out = new Set<string>();
-  if (!companyId?.trim() || !templateDocId?.trim()) return out;
-  const snap = await getDocs(
-    query(
-      collection(firestore, `companies/${companyId}/vouchers`),
-      where("recurringMeta.templateId", "==", templateDocId),
-      limit(400),
-    ),
-  );
-  for (const d of snap.docs) {
-    const data = d.data() as Record<string, unknown>;
-    if (data.isDeleted === true) continue;
+async function fetchActiveRecurringPeriodKeysForTemplate(
+  companyId: string,
+  templateDocId: string,
+  template?: RecurringVoucherTemplate,
+): Promise<Set<string>> {
+  const empty = new Set<string>();
+  if (!companyId?.trim() || !templateDocId?.trim()) return empty;
+  const sourceVoucher = template
+    ? await getVoucherRecordForRecurring(companyId, String(template.sourceVoucherId || "").trim())
+    : null;
+
+  const absorbInto = (out: Set<string>, data: Record<string, unknown>) => {
+    if (data.isDeleted === true) return;
     const meta = data.recurringMeta;
-    if (!meta || typeof meta !== "object") continue;
+    if (!meta || typeof meta !== "object") return;
+    const tid = String((meta as Record<string, unknown>).templateId || "").trim();
+    if (tid !== templateDocId) return;
+    if (!voucherMatchesRecurringTemplateShape(data, sourceVoucher)) return;
     const pk = String((meta as Record<string, unknown>).periodKey || "").trim();
     if (pk) out.add(pk);
+  };
+
+  const readLocal = async (): Promise<Set<string>> => {
+    const out = new Set<string>();
+    const rows = await listCompanyDocsFromBrowserDb(companyId, "vouchers");
+    for (const row of rows) {
+      if (row && typeof row === "object") absorbInto(out, row as Record<string, unknown>);
+    }
+    return out;
+  };
+
+  const readFs = async (): Promise<Set<string>> => {
+    const out = new Set<string>();
+    const snap = await getDocs(
+      query(
+        collection(firestore, `companies/${companyId}/vouchers`),
+        where("recurringMeta.templateId", "==", templateDocId),
+        limit(400),
+      ),
+    );
+    for (const d of snap.docs) {
+      absorbInto(out, d.data() as Record<string, unknown>);
+    }
+    return out;
+  };
+
+  const LOCAL_MS = 8000;
+  const online =
+    typeof navigator === "undefined" || navigator.onLine !== false;
+  // Online cloud/PL: server pehle + local merge — doosre device ka voucher miss mat karo.
+  if (online) {
+    const fs = await raceWithTimeout(readFs().catch(() => empty), LOCAL_MS, empty);
+    const local = await raceWithTimeout(readLocal().catch(() => empty), LOCAL_MS, empty);
+    const merged = new Set<string>([...fs, ...local]);
+    if (merged.size > 0 || fs.size > 0) return merged;
+  }
+
+  if (preferLocalLedgerReads()) {
+    const local = await raceWithTimeout(readLocal().catch(() => empty), LOCAL_MS, empty);
+    if (local.size > 0) return local;
+    const fs = await raceWithTimeout(readFs().catch(() => empty), LOCAL_MS, empty);
+    if (fs.size > 0) return fs;
+    return local;
+  }
+
+  const fs = await raceWithTimeout(readFs().catch(() => empty), LOCAL_MS, empty);
+  if (fs.size > 0) return fs;
+  return raceWithTimeout(readLocal().catch(() => empty), LOCAL_MS, empty);
+}
+
+async function fetchRecurringPeriodEvidenceForTemplate(
+  companyId: string,
+  templateDocId: string,
+  template: RecurringVoucherTemplate,
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (!companyId?.trim() || !templateDocId?.trim()) return out;
+  const sourceVoucher = await getVoucherRecordForRecurring(companyId, String(template.sourceVoucherId || "").trim());
+  const absorbInto = (data: Record<string, unknown>) => {
+    const meta = data.recurringMeta;
+    if (!meta || typeof meta !== "object") return;
+    const tid = String((meta as Record<string, unknown>).templateId || "").trim();
+    if (tid !== templateDocId) return;
+    if (!voucherMatchesRecurringTemplateShape(data, sourceVoucher)) return;
+    const pk = String((meta as Record<string, unknown>).periodKey || "").trim();
+    const pm = parsePeriodKey(pk);
+    if (pm && !recurringNarrationMentionsBsMonth(data.narration, pm.m)) return;
+    if (pk) out.add(pk);
+  };
+  try {
+    const rows = await listCompanyDocsFromBrowserDb(companyId, "vouchers", { includeDeleted: true } as any);
+    for (const row of rows) {
+      if (row && typeof row === "object") absorbInto(row as Record<string, unknown>);
+    }
+  } catch {
+    /* local evidence best effort */
+  }
+  try {
+    const snap = await getDocs(
+      query(
+        collection(firestore, `companies/${companyId}/vouchers`),
+        where("recurringMeta.templateId", "==", templateDocId),
+        limit(400),
+      ),
+    );
+    for (const d of snap.docs) absorbInto(d.data() as Record<string, unknown>);
+  } catch {
+    /* server evidence best effort */
   }
   return out;
+}
+
+async function resolveRecurringSuppressedPeriodSet(
+  companyId: string,
+  templateDocId: string,
+  template: RecurringVoucherTemplate,
+): Promise<Set<string>> {
+  const raw = new Set(
+    Array.isArray(template.suppressedPeriodKeys)
+      ? template.suppressedPeriodKeys.map((k) => String(k).trim()).filter(Boolean)
+      : [],
+  );
+  if (raw.size === 0) return raw;
+  const evidence = await fetchRecurringPeriodEvidenceForTemplate(companyId, templateDocId, template);
+  return new Set([...raw].filter((pk) => evidence.has(pk)));
+}
+
+async function pruneStaleRecurringSuppressedPeriodKeys(
+  companyId: string,
+  templateDocId: string,
+  template: RecurringVoucherTemplate,
+  resolved: Set<string>,
+): Promise<void> {
+  const raw = Array.isArray(template.suppressedPeriodKeys)
+    ? template.suppressedPeriodKeys.map((k) => String(k).trim()).filter(Boolean)
+    : [];
+  const next = [...resolved];
+  if (raw.length === next.length && raw.every((k) => resolved.has(k))) return;
+  const patch = { suppressedPeriodKeys: next, updatedAt: serverTimestamp() };
+  await updateDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateDocId), patch).catch(() => {});
+  await mirrorRecurringTemplateToLocal(companyId, templateDocId, {
+    ...(template as unknown as Record<string, unknown>),
+    suppressedPeriodKeys: next,
+    updatedAt: Date.now(),
+    id: templateDocId,
+  });
+}
+
+async function findLatestAliveRecurringVoucherForTemplate(
+  companyId: string,
+  templateDocId: string,
+): Promise<{ id: string; data: Record<string, unknown>; periodKey: string | null } | null> {
+  let best: { id: string; data: Record<string, unknown>; periodKey: string | null; generatedAtMs: number } | null = null;
+  const absorb = (id: string, data: Record<string, unknown>) => {
+    if (!id || data.isDeleted === true) return;
+    const meta = data.recurringMeta;
+    if (!meta || typeof meta !== "object") return;
+    if (String((meta as Record<string, unknown>).templateId || "").trim() !== templateDocId) return;
+    const pk = String((meta as Record<string, unknown>).periodKey || "").trim() || null;
+    const pm = pk ? parsePeriodKey(pk) : null;
+    if (pm && !recurringNarrationMentionsBsMonth(data.narration, pm.m)) return;
+    const generatedAtMs = Number((meta as Record<string, unknown>).generatedAtMs) || 0;
+    if (!best) {
+      best = { id, data, periodKey: pk, generatedAtMs };
+      return;
+    }
+    if (pk && best.periodKey && comparePeriodKeysAsc(pk, best.periodKey) > 0) best = { id, data, periodKey: pk, generatedAtMs };
+    else if (pk && !best.periodKey) best = { id, data, periodKey: pk, generatedAtMs };
+    else if (!pk && generatedAtMs > best.generatedAtMs) best = { id, data, periodKey: pk, generatedAtMs };
+  };
+
+  try {
+    const rows = await listCompanyDocsFromBrowserDb(companyId, "vouchers");
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const id = String((row as Record<string, unknown>).id || "").trim();
+      absorb(id, row as Record<string, unknown>);
+    }
+  } catch {
+    /* local fallback best-effort */
+  }
+  try {
+    const snap = await getDocs(
+      query(
+        collection(firestore, `companies/${companyId}/vouchers`),
+        where("recurringMeta.templateId", "==", templateDocId),
+        limit(400),
+      ),
+    );
+    for (const d of snap.docs) absorb(d.id, { ...(d.data() as Record<string, unknown>), id: d.id });
+  } catch {
+    /* server fallback best-effort */
+  }
+  return best ? { id: best.id, data: best.data, periodKey: best.periodKey } : null;
+}
+
+/**
+ * Create se pehle: is period ka active auto voucher server (Firebase) pe pehle se hai?
+ * Online required callers pe use — local-only miss se duplicate mat banao.
+ */
+async function serverHasActiveRecurringPeriodVoucher(
+  companyId: string,
+  templateDocId: string,
+  template: RecurringVoucherTemplate,
+  periodKey: string,
+): Promise<{ exists: boolean; voucherId?: string }> {
+  const pk = String(periodKey || "").trim();
+  const tid = String(templateDocId || "").trim();
+  if (!companyId.trim() || !tid || !pk) return { exists: false };
+  const sourceVoucher = await getVoucherRecordForRecurring(companyId, String(template.sourceVoucherId || "").trim());
+  try {
+    const snap = await getDocs(
+      query(
+        collection(firestore, `companies/${companyId}/vouchers`),
+        where("recurringMeta.templateId", "==", tid),
+        limit(400),
+      ),
+    );
+    for (const d of snap.docs) {
+      const data = d.data() as Record<string, unknown>;
+      if (data.isDeleted === true) continue;
+      const meta = data.recurringMeta;
+      if (!meta || typeof meta !== "object") continue;
+      if (String((meta as Record<string, unknown>).periodKey || "").trim() !== pk) continue;
+      if (!voucherMatchesRecurringTemplateShape(data, sourceVoucher)) continue;
+      const pm = parsePeriodKey(pk);
+      if (pm && !recurringNarrationMentionsBsMonth(data.narration, pm.m)) continue;
+      return { exists: true, voucherId: d.id };
+    }
+  } catch {
+    // Server unreachable — caller online gate pehle fail kare; yahan fail-closed for cloud.
+    throw new Error("SERVER_PERIOD_CHECK_FAILED");
+  }
+  return { exists: false };
 }
 
 /**
@@ -365,14 +884,13 @@ async function pickManualRecurringGenerateTarget(
       : null;
   const lastVid = String(template.lastGeneratedVoucherId || "").trim();
 
-  let lastVoucherSnap: Awaited<ReturnType<typeof getDoc>> | null = null;
+  let lastVoucherData: Record<string, unknown> | null = null;
   if (lastVid) {
-    lastVoucherSnap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, lastVid));
+    lastVoucherData = await getVoucherRecordForRecurring(companyId, lastVid, { includeDeleted: true });
   }
   // Template abhi bhi Chaitra id point kare + voucher recycle → dubara sirf jab scheduled due source se peechhe na ho.
   if (lastPk && lastVid) {
-    const goneOrRecycle =
-      lastVoucherSnap?.exists() !== true || (lastVoucherSnap.data() as Record<string, unknown>)?.isDeleted === true;
+    const goneOrRecycle = !lastVoucherData || lastVoucherData.isDeleted === true;
     if (goneOrRecycle && comparePeriodKeysAsc(lastPk, todayPk) <= 0) {
       const pm = parsePeriodKey(lastPk);
       if (pm && periodScheduleDueNotBeforeSourceVoucher(template, pm.y, pm.m, sourceMinDay)) {
@@ -381,12 +899,8 @@ async function pickManualRecurringGenerateTarget(
     }
   }
 
-  const activePks = await fetchActiveRecurringPeriodKeysForTemplate(companyId, templateDocId);
-  const suppressed = new Set(
-    Array.isArray(template.suppressedPeriodKeys)
-      ? template.suppressedPeriodKeys.map((k) => String(k).trim()).filter(Boolean)
-      : [],
-  );
+  const activePks = await fetchActiveRecurringPeriodKeysForTemplate(companyId, templateDocId, template);
+  const suppressed = await resolveRecurringSuppressedPeriodSet(companyId, templateDocId, template);
   const minPk = effectiveMinPeriodKeyForRecurringScan(template, sourceMinDay);
   const sourceOccupiedPk = sourceVoucherBsPeriodKey(sourceMinDay);
   if (sourceOccupiedPk) activePks.add(sourceOccupiedPk);
@@ -434,15 +948,28 @@ export async function listMissingRecurringPeriodSlotsAscending(
 ): Promise<RecurringPeriodSlot[]> {
   const bsToday = adToBs(now);
   const todayPk = toPeriodKey(bsToday.y, bsToday.m);
-  const sourceMinDay = await loadSourceMinLocalDayForTemplate(companyId, template);
+  let sourceMinDay = await loadSourceMinLocalDayForTemplate(companyId, template);
+  if (!sourceMinDay) {
+    // Source voucher missing locally: template createdAt / lastGenerated se floor — empty miss list mat chhodo.
+    const fromCreated = inferTemplateEarliestBsPeriodFromCreatedAt(template);
+    const lastPk =
+      template.lastGeneratedPeriodKey != null && String(template.lastGeneratedPeriodKey).trim()
+        ? String(template.lastGeneratedPeriodKey).trim()
+        : null;
+    const lastPm = lastPk ? parsePeriodKey(lastPk) : null;
+    const floor = lastPm || fromCreated;
+    if (floor) {
+      try {
+        sourceMinDay = startOfLocalDay(bsToAd({ y: floor.y, m: floor.m, d: 1 }));
+      } catch {
+        sourceMinDay = null;
+      }
+    }
+  }
   if (!sourceMinDay) return [];
 
-  const activePks = await fetchActiveRecurringPeriodKeysForTemplate(companyId, templateDocId);
-  const suppressed = new Set(
-    Array.isArray(template.suppressedPeriodKeys)
-      ? template.suppressedPeriodKeys.map((k) => String(k).trim()).filter(Boolean)
-      : [],
-  );
+  const activePks = await fetchActiveRecurringPeriodKeysForTemplate(companyId, templateDocId, template);
+  const suppressed = await resolveRecurringSuppressedPeriodSet(companyId, templateDocId, template);
   const minPk = effectiveMinPeriodKeyForRecurringScan(template, sourceMinDay);
   const sourceOccupiedPk = sourceVoucherBsPeriodKey(sourceMinDay);
   if (sourceOccupiedPk) activePks.add(sourceOccupiedPk);
@@ -471,6 +998,65 @@ export async function listMissingRecurringPeriodSlotsAscending(
   return out;
 }
 
+export async function debugMissingRecurringPeriodScan(
+  companyId: string,
+  templateDocId: string,
+  template: RecurringVoucherTemplate,
+  now: Date = new Date(),
+): Promise<RecurringMissingScanDebug> {
+  const bsToday = adToBs(now);
+  const todayPk = toPeriodKey(bsToday.y, bsToday.m);
+  let sourceMinDay = await loadSourceMinLocalDayForTemplate(companyId, template);
+  if (!sourceMinDay) {
+    const fromCreated = inferTemplateEarliestBsPeriodFromCreatedAt(template);
+    const lastPk =
+      template.lastGeneratedPeriodKey != null && String(template.lastGeneratedPeriodKey).trim()
+        ? String(template.lastGeneratedPeriodKey).trim()
+        : null;
+    const lastPm = lastPk ? parsePeriodKey(lastPk) : null;
+    const floor = lastPm || fromCreated;
+    if (floor) {
+      try {
+        sourceMinDay = startOfLocalDay(bsToAd({ y: floor.y, m: floor.m, d: 1 }));
+      } catch {
+        sourceMinDay = null;
+      }
+    }
+  }
+  const activePks = await fetchActiveRecurringPeriodKeysForTemplate(companyId, templateDocId, template);
+  const suppressed = await resolveRecurringSuppressedPeriodSet(companyId, templateDocId, template);
+  const minPk = effectiveMinPeriodKeyForRecurringScan(template, sourceMinDay);
+  const sourceOccupiedPk = sourceVoucherBsPeriodKey(sourceMinDay);
+  if (sourceOccupiedPk) activePks.add(sourceOccupiedPk);
+  const checked: RecurringMissingScanDebug["checked"] = [];
+  if (sourceMinDay) {
+    const srcBs = adToBs(
+      new Date(sourceMinDay.getFullYear(), sourceMinDay.getMonth(), sourceMinDay.getDate(), 12, 0, 0, 0),
+    );
+    for (let j = 0; j < 6; j++) {
+      const cur = addBsMonths(srcBs.y, srcBs.m, j);
+      const pk = toPeriodKey(cur.y, cur.m);
+      if (comparePeriodKeysAsc(pk, todayPk) > 0) break;
+      checked.push({
+        periodKey: pk,
+        active: activePks.has(pk),
+        suppressed: suppressed.has(pk),
+        dueNotBeforeSource: periodScheduleDueNotBeforeSourceVoucher(template, cur.y, cur.m, sourceMinDay),
+        dueArrived: periodScheduleDueHasArrived(template, cur.y, cur.m, now),
+      });
+    }
+  }
+  return {
+    todayPk,
+    sourceMinDayIso: sourceMinDay ? sourceMinDay.toISOString() : null,
+    sourceOccupiedPk,
+    minPk,
+    activePks: [...activePks].sort(comparePeriodKeysAsc),
+    suppressed: [...suppressed].sort(comparePeriodKeysAsc),
+    checked,
+  };
+}
+
 /**
  * Voucher dialog: pehla gap jisme “Generate now” bhi jata hai — agar us period ka schedule due **aaj se pehle** guzar chuka
  * aur abhi tak zinda auto voucher nahi, to user ko Create / Skip dikhane ke liye (OFF→ON / app miss / runner miss).
@@ -490,25 +1076,20 @@ function inferTemplateEarliestBsPeriodFromCreatedAt(template: RecurringVoucherTe
 }
 
 /**
- * Missing-slot / pick floor: `createdAt` kabhi **aaj** hota hai jab purane date wale voucher par Auto ON karte ho —
- * sirf `createdAt` floor se beechna mahine kaat jate the (tick-popup nahi, sirf 1 “latest” generate).
- * Isliye floor = chronological **pehla** mahina dono me se: template birth ya source voucher BS month.
+ * Missing-slot floor: clone/source voucher ka BS mahina (createdAt=aaj se past gaps mat kaato).
  */
 function effectiveMinPeriodKeyForRecurringScan(
   template: RecurringVoucherTemplate,
   sourceMinDay: Date | null,
 ): string | null {
-  const fromCreated = inferTemplateEarliestBsPeriodFromCreatedAt(template);
-  if (!sourceMinDay) {
-    return fromCreated ? toPeriodKey(fromCreated.y, fromCreated.m) : null;
+  if (sourceMinDay) {
+    const bs = adToBs(
+      new Date(sourceMinDay.getFullYear(), sourceMinDay.getMonth(), sourceMinDay.getDate(), 12, 0, 0, 0),
+    );
+    return toPeriodKey(bs.y, bs.m);
   }
-  const bs = adToBs(
-    new Date(sourceMinDay.getFullYear(), sourceMinDay.getMonth(), sourceMinDay.getDate(), 12, 0, 0, 0),
-  );
-  const sourcePk = toPeriodKey(bs.y, bs.m);
-  if (!fromCreated) return sourcePk;
-  const createdPk = toPeriodKey(fromCreated.y, fromCreated.m);
-  return comparePeriodKeysAsc(createdPk, sourcePk) < 0 ? createdPk : sourcePk;
+  const fromCreated = inferTemplateEarliestBsPeriodFromCreatedAt(template);
+  return fromCreated ? toPeriodKey(fromCreated.y, fromCreated.m) : null;
 }
 
 export async function getPastDueRecurringGapIfAny(
@@ -522,11 +1103,9 @@ export async function getPastDueRecurringGapIfAny(
   const target = await pickManualRecurringGenerateTarget(companyId, templateDocId, template, now, "chronological");
   const minPk = effectiveMinPeriodKeyForRecurringScan(template, sourceMinDay);
   if (minPk && comparePeriodKeysAsc(target.periodKey, minPk) < 0) return null;
-  const activePks = await fetchActiveRecurringPeriodKeysForTemplate(companyId, templateDocId);
+  const activePks = await fetchActiveRecurringPeriodKeysForTemplate(companyId, templateDocId, template);
   if (activePks.has(target.periodKey)) return null;
-  const suppressed = new Set(
-    Array.isArray(template.suppressedPeriodKeys) ? template.suppressedPeriodKeys.map((k) => String(k)) : [],
-  );
+  const suppressed = await resolveRecurringSuppressedPeriodSet(companyId, templateDocId, template);
   if (suppressed.has(target.periodKey)) return null;
   const dueStart = scheduleDueLocalStartForPeriod(template, target.bsY, target.bsM);
   const todayStart = startOfLocalDay(now);
@@ -576,13 +1155,13 @@ function periodScheduleDueNotBeforeSourceVoucher(
   return dueStart.getTime() >= sourceMin.getTime();
 }
 
-/** Template se clone voucher utha kar minimum AD din (Firestore). */
+/** Gap scan floor hamesha original manual-ON voucher se lo; clone body latest auto ho sakta hai. */
 async function loadSourceMinLocalDayForTemplate(companyId: string, template: RecurringVoucherTemplate): Promise<Date | null> {
-  const vid = String(template.cloneSourceVoucherId || template.sourceVoucherId || "").trim();
+  const vid = String(template.sourceVoucherId || template.cloneSourceVoucherId || "").trim();
   if (!companyId.trim() || !vid) return null;
-  const snap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, vid));
-  if (!snap.exists()) return null;
-  return sourceVoucherMinLocalDayStartFromData(snap.data() as Record<string, unknown>);
+  const data = await getVoucherRecordForRecurring(companyId, vid);
+  if (!data) return null;
+  return sourceVoucherMinLocalDayStartFromData(data);
 }
 
 /** Source voucher ki BS mahina — manual voucher pehle se hai; ask / batch list me dubara mat dikhao. */
@@ -607,6 +1186,38 @@ function periodScheduleDueHasArrived(
   const dueStart = scheduleDueLocalStartForPeriod(template, bsY, bsM);
   if (!dueStart) return false;
   return dueStart.getTime() <= startOfLocalDay(now).getTime();
+}
+
+function recurringOverdueAgeDays(
+  template: RecurringVoucherTemplate,
+  bsY: number,
+  bsM: number,
+  now: Date,
+): number | null {
+  const dueStart = scheduleDueLocalStartForPeriod(template, bsY, bsM);
+  if (!dueStart) return null;
+  const diffMs = startOfLocalDay(now).getTime() - dueStart.getTime();
+  return Math.floor(diffMs / 86400000);
+}
+
+export function shouldAutoCreateRecurringWithoutAsk(
+  template: RecurringVoucherTemplate,
+  bsY: number,
+  bsM: number,
+  now: Date = new Date(),
+): boolean {
+  const overdueDays = recurringOverdueAgeDays(template, bsY, bsM, now);
+  return overdueDays != null && overdueDays >= 0 && overdueDays <= AUTO_RECURRING_ASK_GRACE_DAYS;
+}
+
+export function shouldAskForMissedRecurringGap(
+  template: RecurringVoucherTemplate,
+  bsY: number,
+  bsM: number,
+  now: Date = new Date(),
+): boolean {
+  const overdueDays = recurringOverdueAgeDays(template, bsY, bsM, now);
+  return overdueDays != null && overdueDays > AUTO_RECURRING_ASK_GRACE_DAYS;
 }
 
 /** Us BS mahine me template ka scheduled due (local calendar day start) — delete-before-due vs suppress decide karne ke liye. */
@@ -694,6 +1305,53 @@ function effectiveRateAdjustEveryN(template: RecurringVoucherTemplate): number {
   return Math.max(1, Math.min(24, Math.floor(n)));
 }
 
+function recurringLedgerIdEq(a: unknown, b: string): boolean {
+  const target = String(b || "").trim();
+  if (!target || a == null || a === "") return false;
+  if (typeof a === "object" && "id" in (a as Record<string, unknown>)) {
+    return String((a as { id?: unknown }).id || "").trim() === target;
+  }
+  return String(a).trim() === target;
+}
+
+function voucherTouchesRecurringAutoPageScope(v: Record<string, unknown>, scope?: RecurringAutoRunScopeFilter): boolean {
+  if (!scope?.currentPageOnly) return true;
+  const id = String(scope.selectedEntityId || "").trim();
+  if (!id) return false;
+  const path = String(scope.pathname || "").toLowerCase();
+  const checkFields = (fields: string[]) => fields.some((field) => recurringLedgerIdEq(v[field], id));
+  if (path.startsWith("/party")) {
+    if (checkFields(["partyId", "accountId", "staffId", "taxAccountId", "expenseAccountId", "incomeAccountId", "salesAccountId", "purchaseAccountId", "entityId"])) return true;
+  } else if (path.startsWith("/bank-cash")) {
+    if (checkFields(["fromAccountId", "toAccountId", "accountId", "companyBankAccountId", "entityId"])) return true;
+  } else if (path.startsWith("/staff")) {
+    if (checkFields(["staffId", "accountId", "entityId"])) return true;
+  } else if (path.startsWith("/items")) {
+    if (checkFields(["itemId", "entityId"])) return true;
+  } else if (path.startsWith("/incomes") || path.startsWith("/tax")) {
+    if (checkFields(["expenseAccountId", "incomeAccountId", "taxAccountId", "accountId", "entityId"])) return true;
+  } else {
+    return false;
+  }
+  if (Array.isArray(v.entries) && v.entries.some((e) => recurringLedgerIdEq((e as Record<string, unknown>)?.accountId, id))) return true;
+  if (Array.isArray(v.lineItems) && v.lineItems.some((li) => recurringLedgerIdEq((li as Record<string, unknown>)?.itemId, id) || recurringLedgerIdEq((li as Record<string, unknown>)?.taxAccountId, id))) return true;
+  if (Array.isArray(v.items) && v.items.some((li) => recurringLedgerIdEq((li as Record<string, unknown>)?.itemId, id))) return true;
+  return false;
+}
+
+async function recurringTemplateMatchesAutoRunScope(
+  companyId: string,
+  template: RecurringVoucherTemplate,
+  scope?: RecurringAutoRunScopeFilter,
+): Promise<boolean> {
+  if (!scope?.currentPageOnly) return true;
+  const vid = String(template.cloneSourceVoucherId || template.sourceVoucherId || "").trim();
+  if (!vid) return false;
+  const row = await getVoucherRecordForRecurring(companyId, vid);
+  if (!row) return false;
+  return voucherTouchesRecurringAutoPageScope(row as Record<string, unknown>, scope);
+}
+
 /** N>1: monthly = har N BS mahine (effective-from anchor); yearly = har N BS saal (anchor year se). */
 function rateEveryNAllowsBump(template: RecurringVoucherTemplate, bsY: number, bsM: number): boolean {
   const cadence = template.rateAdjustCadence ?? "every_bs_month";
@@ -723,7 +1381,11 @@ function rateEveryNAllowsBump(template: RecurringVoucherTemplate, bsY: number, b
   return true;
 }
 
-/** Yearly bump: sirf jab is generation ka BS month/day anchor se mile; monthly => hamesha true. */
+/**
+ * Yearly bump: us BS mahine me jab generation ka due din yearly-day pe / uske baad ho.
+ * (Pehle `dueD === targetD` tha — “Asar Day 1” + “Last day of month” generate par +fixed kabhi nahi lagta tha.)
+ * Monthly cadence => hamesha true.
+ */
 function rateCadenceAllowsBump(
   template: RecurringVoucherTemplate,
   bsY: number,
@@ -740,7 +1402,7 @@ function rateCadenceAllowsBump(
   if (bsM !== month) return false;
   const dim = getBSMonthDays(bsY)[bsM - 1] || 30;
   const targetD = dayNum >= 32 ? dim : Math.min(dayNum, dim);
-  return dueD === targetD;
+  return dueD >= targetD;
 }
 
 /** Journal / sale row par lagi file refs — Generate now clone par template wali slip dubara na chipke. */
@@ -819,9 +1481,13 @@ export function applyRecurringRateAdjustment(
   const entries = out.entries;
   if (Array.isArray(entries)) {
     (out as any).entries = entries.map((e: Record<string, unknown>) => {
-      const d = typeof e.debit === "number" ? adj(e.debit as number) : e.debit;
-      const c = typeof e.credit === "number" ? adj(e.credit as number) : e.credit;
-      return { ...e, debit: d, credit: c };
+      // Fixed: 0 wali side pe +amount mat lagao — journal Dr/Cr unbalance ho jata tha.
+      const adjSide = (n: unknown) => {
+        if (typeof n !== "number" || !Number.isFinite(n)) return n;
+        if (m === "fixed" && n === 0) return n;
+        return adj(n);
+      };
+      return { ...e, debit: adjSide(e.debit), credit: adjSide(e.credit) };
     });
   }
 
@@ -966,6 +1632,19 @@ async function getNextVoucherNumberForType(
   const rawPrefix = match?.[1] ?? "V-";
   const prefix = rawPrefix || "V-";
   const type = String(sourceVoucher.type || "sale");
+  try {
+    const { getNextVoucherNumberForCompany } = await import("@/lib/nextVoucherNumber");
+    const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
+    const companyDoc = (await getLocalCompanyById(companyId).catch(() => null)) as Record<string, unknown> | null;
+    return await getNextVoucherNumberForCompany({
+      companyId,
+      companyDoc,
+      voucherLike: { type, subType: String(sourceVoucher.subType || "") || undefined },
+      selectedPrefix: prefix,
+    });
+  } catch {
+    /* fall through to Firestore scan */
+  }
   const rows = (await getDocs(query(collection(firestore, `companies/${companyId}/vouchers`), where("type", "==", type)))).docs;
   let maxNo = 0;
   for (const row of rows) {
@@ -984,9 +1663,7 @@ export async function getRecurringTemplateForVoucher(
 ): Promise<RecurringVoucherTemplate | null> {
   if (!companyId?.trim() || !sourceVoucherId?.trim()) return null;
   const docId = await getRecurringTemplateDocIdForVoucher(companyId, sourceVoucherId);
-  const snap = await getDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, docId));
-  if (!snap.exists()) return null;
-  return snap.data() as RecurringVoucherTemplate;
+  return getRecurringTemplateRecord(companyId, docId);
 }
 
 export async function setRecurringTemplateForVoucher(
@@ -1019,23 +1696,52 @@ export async function setRecurringTemplateForVoucher(
     return;
   }
 
-  const vRef = doc(firestore, `companies/${companyId}/vouchers`, payload.sourceVoucherId);
-  const vSnap = await getDoc(vRef);
-  if (!vSnap.exists()) return;
-  const vData = vSnap.data() as Record<string, unknown>;
+  const vData = await getVoucherRecordForRecurring(companyId, payload.sourceVoucherId);
+  if (!vData) return;
   const seriesKey = computeRecurringSeriesKeyFromVoucher(vData);
   const templateDocId = seriesKey || payload.sourceVoucherId;
 
   // Pehle per-voucher doc tha, ab journal series id — purana duplicate hatao taaki ON/OFF ek hi jagah se ho.
   if (seriesKey && templateDocId !== payload.sourceVoucherId) {
     const legacyRef = doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, payload.sourceVoucherId);
-    const leg = await getDoc(legacyRef);
-    if (leg.exists()) await deleteDoc(legacyRef);
+    try {
+      const leg = await getDoc(legacyRef);
+      if (leg.exists()) await deleteDoc(legacyRef);
+    } catch {
+      /* offline */
+    }
+    try {
+      await deleteCompanyDocFromBrowserDb(companyId, RECURRING_TEMPLATE_COLLECTION, payload.sourceVoucherId, {
+        force: true,
+      });
+    } catch {
+      /* offline */
+    }
   }
 
   const ref = doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateDocId);
-  const existing = await getDoc(ref);
-  const existingData = existing.exists() ? (existing.data() as Partial<RecurringVoucherTemplate>) : {};
+  let existingData: Partial<RecurringVoucherTemplate> = {};
+  let existingHadData = false;
+  try {
+    const existing = await getDoc(ref);
+    if (existing.exists()) {
+      existingData = existing.data() as Partial<RecurringVoucherTemplate>;
+      existingHadData = true;
+    }
+  } catch {
+    /* offline */
+  }
+  if (!existingHadData) {
+    const localExisting = await getCompanyDocFromBrowserDb(
+      companyId,
+      RECURRING_TEMPLATE_COLLECTION,
+      templateDocId,
+    ).catch(() => null);
+    if (localExisting) {
+      existingData = localExisting as unknown as Partial<RecurringVoucherTemplate>;
+      existingHadData = true;
+    }
+  }
 
   const resolvedMode = (payload.rateAdjustMode ?? existingData.rateAdjustMode ?? "none") as RecurringRateAdjustMode;
   const effectiveFromMerged =
@@ -1129,21 +1835,58 @@ export async function setRecurringTemplateForVoucher(
         ? payload.rateAdjustYearlyBaseAnchorIso
         : existingData.rateAdjustYearlyBaseAnchorIso ?? null,
     seriesBaseAnchorIso: seriesKey ? seriesBaseMerged : null,
-    createdByUserId: existing.exists() ? existingData.createdByUserId ?? payload.actorUserId ?? null : payload.actorUserId ?? null,
-    createdByName: existing.exists() ? existingData.createdByName ?? payload.actorName ?? null : payload.actorName ?? null,
+    createdByUserId: existingHadData ? existingData.createdByUserId ?? payload.actorUserId ?? null : payload.actorUserId ?? null,
+    createdByName: existingHadData ? existingData.createdByName ?? payload.actorName ?? null : payload.actorName ?? null,
     lastGeneratedPeriodKey: progressResolved.lastGeneratedPeriodKey,
     lastGeneratedVoucherId: progressResolved.lastGeneratedVoucherId,
     suppressedPeriodKeys: Array.isArray(existingData.suppressedPeriodKeys) ? existingData.suppressedPeriodKeys : [],
-    createdAt: existing.exists() ? existingData.createdAt ?? serverTimestamp() : serverTimestamp(),
+    createdAt: existingHadData ? existingData.createdAt ?? serverTimestamp() : serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
-  await setDoc(ref, next, { merge: true });
+  try {
+    await setDoc(ref, next, { merge: true });
+  } catch (e) {
+    // Local-first: Firestore fail par bhi SQLite mirror likho taaki miss-scan / Generate chale.
+    if (!preferLocalLedgerReads()) throw e;
+  }
+  await mirrorRecurringTemplateToLocal(companyId, templateDocId, next as unknown as Record<string, unknown>);
+  await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, payload.sourceVoucherId), {
+    "recurringMeta.templateId": templateDocId,
+    "recurringMeta.activeTriggerSourceVoucherId": payload.sourceVoucherId,
+    "recurringMeta.isActiveTriggerSource": true,
+  }).catch(() => {});
+  await markRecurringTriggerVoucherLocally(companyId, payload.sourceVoucherId, {
+    templateId: templateDocId,
+    activeTriggerSourceVoucherId: payload.sourceVoucherId,
+    isActiveTriggerSource: true,
+  });
 }
 
 export async function clearRecurringTemplateForVoucher(companyId: string, sourceVoucherId: string): Promise<void> {
   if (!companyId?.trim() || !sourceVoucherId?.trim()) return;
   const docId = await getRecurringTemplateDocIdForVoucher(companyId, sourceVoucherId);
-  await deleteDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, docId));
+  const existing = await getRecurringTemplateRecord(companyId, docId).catch(() => null);
+  const activeSource = String(existing?.cloneSourceVoucherId || existing?.sourceVoucherId || sourceVoucherId).trim();
+  try {
+    await deleteDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, docId));
+  } catch {
+    if (!preferLocalLedgerReads()) throw new Error("Failed to clear Auto Monthly template.");
+  }
+  try {
+    await deleteCompanyDocFromBrowserDb(companyId, RECURRING_TEMPLATE_COLLECTION, docId, { force: true });
+  } catch {
+    /* mirror best-effort */
+  }
+  if (activeSource) {
+    await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, activeSource), {
+      "recurringMeta.isActiveTriggerSource": false,
+      "recurringMeta.activeTriggerSourceVoucherId": null,
+    }).catch(() => {});
+    await markRecurringTriggerVoucherLocally(companyId, activeSource, {
+      isActiveTriggerSource: false,
+      activeTriggerSourceVoucherId: null,
+    });
+  }
 }
 
 /**
@@ -1240,8 +1983,8 @@ async function resolveLastGeneratedForTemplateSave(
   if (!lastVid) {
     return { lastGeneratedPeriodKey: lastPk, lastGeneratedVoucherId: null };
   }
-  const vSnap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, lastVid));
-  if (!vSnap.exists() || (vSnap.data() as Record<string, unknown>)?.isDeleted === true) {
+  const vData = await getVoucherRecordForRecurring(companyId, lastVid, { includeDeleted: true });
+  if (!vData || vData.isDeleted === true) {
     return { lastGeneratedPeriodKey: null, lastGeneratedVoucherId: null };
   }
   return { lastGeneratedPeriodKey: lastPk, lastGeneratedVoucherId: lastVid };
@@ -1268,15 +2011,26 @@ export async function reconcileRecurringTemplateAfterAutoVoucherRecycle(
   const tpl = tplSnap.data() as RecurringVoucherTemplate;
   if (String(tpl.lastGeneratedVoucherId || "").trim() !== recycledVoucherId) return;
   const periodKey = String(tpl.lastGeneratedPeriodKey || "").trim();
-  if (!periodKey) {
-    await updateDoc(tplRef, {
-      lastGeneratedPeriodKey: null,
-      lastGeneratedVoucherId: null,
-      updatedAt: serverTimestamp(),
-    });
-    return;
-  }
-  await maybeMarkDeletedAutoVoucherSuppressed(companyId, templateId, tpl, periodKey);
+  const patch: Record<string, unknown> = {
+    enabled: false,
+    cloneSourceVoucherId: null,
+    lastGeneratedPeriodKey: null,
+    lastGeneratedVoucherId: null,
+    updatedAt: serverTimestamp(),
+  };
+  if (periodKey) patch.suppressedPeriodKeys = arrayUnion(periodKey);
+  await updateDoc(tplRef, patch);
+  await mirrorRecurringTemplateToLocal(companyId, templateId, {
+    ...(tpl as unknown as Record<string, unknown>),
+    ...patch,
+    suppressedPeriodKeys: periodKey
+      ? Array.from(new Set([...(Array.isArray(tpl.suppressedPeriodKeys) ? tpl.suppressedPeriodKeys : []), periodKey]))
+      : Array.isArray(tpl.suppressedPeriodKeys)
+        ? tpl.suppressedPeriodKeys
+        : [],
+    updatedAt: Date.now(),
+    id: templateId,
+  });
 }
 
 async function maybeMarkDeletedAutoVoucherSuppressed(
@@ -1330,26 +2084,86 @@ async function createOneRecurringVoucherFromTemplate(
   opts?: { ignoreSuppressed?: boolean },
 ): Promise<{ id: string; voucherNumber: string } | null> {
   const cloneVid = String(template.cloneSourceVoucherId || template.sourceVoucherId || "").trim();
-  const sourceSnap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, cloneVid));
-  if (!sourceSnap.exists()) {
-    await updateDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateId), {
-      enabled: false,
-      updatedAt: serverTimestamp(),
+  let sourceVoucher = await getVoucherRecordForRecurring(companyId, cloneVid);
+  if (!sourceVoucher) {
+    console.info("[AutoRecurringCreate] skip", {
+      companyId,
+      templateId,
+      periodKey,
+      reason: "active_source_missing_or_deleted",
+      sourceVoucherId: cloneVid || null,
     });
     return null;
   }
 
   const suppressed = Array.isArray(template.suppressedPeriodKeys) ? template.suppressedPeriodKeys : [];
-  if (!opts?.ignoreSuppressed && suppressed.includes(periodKey)) return null;
+  if (!opts?.ignoreSuppressed && suppressed.includes(periodKey)) {
+    console.info("[AutoRecurringCreate] skip", { companyId, templateId, periodKey, reason: "suppressed" });
+    return null;
+  }
 
   if (template.lastGeneratedPeriodKey === periodKey && template.lastGeneratedVoucherId) {
-    const vSnap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, template.lastGeneratedVoucherId));
-    if (vSnap.exists() && (vSnap.data() as any)?.isDeleted !== true) {
+    const lastV = await getVoucherRecordForRecurring(companyId, template.lastGeneratedVoucherId, {
+      includeDeleted: true,
+    });
+    if (lastV && lastV.isDeleted !== true) {
+      console.info("[AutoRecurringCreate] skip", {
+        companyId,
+        templateId,
+        periodKey,
+        reason: "last_generated_voucher_exists",
+        voucherId: template.lastGeneratedVoucherId,
+      });
       return null;
     }
   }
 
-  const sourceVoucher = sourceSnap.data() as Record<string, unknown>;
+  // Online Firebase / PL Server: server pe period pehle se voucher hai to generate mat karo.
+  const needsServerVerify =
+    (company != null && isServerGateCompany(company)) ||
+    (company != null && companyUsesOnlineSelectorSyncTicks(company)) ||
+    (company != null && isCloudLinkedCompanyStorage(company));
+  if (needsServerVerify) {
+    try {
+      const serverExisting = await serverHasActiveRecurringPeriodVoucher(companyId, templateId, template, periodKey);
+      if (serverExisting.exists) {
+        console.info("[AutoRecurringCreate] skip", {
+          companyId,
+          templateId,
+          periodKey,
+          reason: "server_active_period_exists",
+          voucherId: serverExisting.voucherId ?? null,
+        });
+        if (serverExisting.voucherId) {
+          const tplRef = doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateId);
+          const patch = {
+            lastGeneratedPeriodKey: periodKey,
+            lastGeneratedVoucherId: serverExisting.voucherId,
+            sourceVoucherId: serverExisting.voucherId,
+            cloneSourceVoucherId: serverExisting.voucherId,
+            updatedAt: serverTimestamp(),
+          };
+          await updateDoc(tplRef, patch).catch(() => {});
+          await mirrorRecurringTemplateToLocal(companyId, templateId, {
+            ...(template as unknown as Record<string, unknown>),
+            ...patch,
+            updatedAt: Date.now(),
+            id: templateId,
+          });
+        }
+        return null;
+      }
+    } catch {
+      console.info("[AutoRecurringCreate] skip", {
+        companyId,
+        templateId,
+        periodKey,
+        reason: "server_period_check_failed",
+      });
+      return null;
+    }
+  }
+
   const nextVoucherNumber = await getNextVoucherNumberForType(companyId, sourceVoucher);
   const monthDays = getBSMonthDays(bsNow.y);
   const dim = monthDays[bsNow.m - 1] || bsNow.d;
@@ -1420,6 +2234,7 @@ async function createOneRecurringVoucherFromTemplate(
   const narrType = String(sourceVoucher.type || template.sourceVoucherType || "journal").trim();
   const narrSuffix = formatRecurringNarrationSearchSuffix(chainKey, srcTagVoucherNo, narrType);
   const narrationFinal = narrCore + (narrSuffix || "");
+  const generatedVoucherId = `voucher_${Date.now().toString(36)}_${clientRandomUUID().slice(0, 12)}`;
 
   const payload = {
     ...base,
@@ -1430,6 +2245,8 @@ async function createOneRecurringVoucherFromTemplate(
     recurringMeta: {
       templateId,
       sourceVoucherId: cloneVid,
+      activeTriggerSourceVoucherId: generatedVoucherId,
+      isActiveTriggerSource: true,
       periodKey,
       generatedAtMs: Date.now(),
       generatedBy: actor.uid,
@@ -1440,26 +2257,105 @@ async function createOneRecurringVoucherFromTemplate(
   };
 
   const saved = await saveVoucher(companyId, actor.uid, payload, null, undefined, {
+    preGeneratedVoucherId: generatedVoucherId,
     forceUnapprovedCreate: true,
     userDisplayNameOverride: "Auto",
     actorDisplayNameOverride: "Auto",
   });
+  // Live mode: SQLite-first create ke baad turant outbox flush taaki Approve / listeners voucher find karen.
+  try {
+    const { flushVoucherOutbox } = await import("@/lib/localVoucherOutbox");
+    void flushVoucherOutbox().catch(() => undefined);
+  } catch {
+    /* optional */
+  }
+
+  const savedVoucherRef = doc(firestore, `companies/${companyId}/vouchers`, saved.id);
+  await updateDoc(savedVoucherRef, {
+    "recurringMeta.activeTriggerSourceVoucherId": saved.id,
+    "recurringMeta.isActiveTriggerSource": true,
+  }).catch(() => {});
+  try {
+    const localSaved = (await getCompanyDocFromBrowserDb(companyId, "vouchers", saved.id).catch(() => null)) as
+      | Record<string, unknown>
+      | null;
+    if (localSaved) {
+      const recurringMeta =
+        localSaved.recurringMeta && typeof localSaved.recurringMeta === "object"
+          ? { ...(localSaved.recurringMeta as Record<string, unknown>) }
+          : {};
+      await upsertCompanyDocInBrowserDb(
+        companyId,
+        "vouchers",
+        saved.id,
+        {
+          ...localSaved,
+          recurringMeta: {
+            ...recurringMeta,
+            activeTriggerSourceVoucherId: saved.id,
+            isActiveTriggerSource: true,
+          },
+        },
+        { force: true },
+      );
+    }
+  } catch {
+    /* local marker best-effort */
+  }
+  if (cloneVid && cloneVid !== saved.id) {
+    await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, cloneVid), {
+      "recurringMeta.isActiveTriggerSource": false,
+      "recurringMeta.activeTriggerSourceVoucherId": saved.id,
+    }).catch(() => {});
+    try {
+      const localPrev = (await getCompanyDocFromBrowserDb(companyId, "vouchers", cloneVid).catch(() => null)) as
+        | Record<string, unknown>
+        | null;
+      if (localPrev) {
+        const recurringMeta =
+          localPrev.recurringMeta && typeof localPrev.recurringMeta === "object"
+            ? { ...(localPrev.recurringMeta as Record<string, unknown>) }
+            : {};
+        await upsertCompanyDocInBrowserDb(
+          companyId,
+          "vouchers",
+          cloneVid,
+          {
+            ...localPrev,
+            recurringMeta: {
+              ...recurringMeta,
+              activeTriggerSourceVoucherId: saved.id,
+              isActiveTriggerSource: false,
+            },
+          },
+          { force: true },
+        );
+      }
+    } catch {
+      /* previous local marker best-effort */
+    }
+  }
 
   const tplRef = doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateId);
   const tplPatch: Record<string, unknown> = {
     lastGeneratedPeriodKey: periodKey,
     lastGeneratedVoucherId: saved.id,
     updatedAt: serverTimestamp(),
-    // Naya auto voucher ab series ka “body” source — UI switch isi par ON; purane voucher par OFF (`ownsRecurringTemplate`).
+    // Original manual-ON source ko stable rakho; sirf clone body latest auto voucher par le jao.
     // `manualOnSourceVoucherNumber` / `recurringChainKey` yahan mat chhedo — narration / Src jab tak user OFF+save na kare purane manual-ON wale se.
-    sourceVoucherId: saved.id,
     cloneSourceVoucherId: saved.id,
   };
   // User ne Generate dabaya + pehle “skip” flag tha → dubara allow (auto scheduler dubara block na kare).
+  const localTplPatch: Record<string, unknown> = { ...tplPatch, updatedAt: Date.now(), id: templateId };
   if (opts?.ignoreSuppressed && suppressed.includes(periodKey)) {
     tplPatch.suppressedPeriodKeys = arrayRemove(periodKey);
+    localTplPatch.suppressedPeriodKeys = suppressed.filter((k) => String(k) !== periodKey);
   }
-  await updateDoc(tplRef, tplPatch);
+  await updateDoc(tplRef, tplPatch).catch(() => {});
+  await mirrorRecurringTemplateToLocal(companyId, templateId, {
+    ...(template as unknown as Record<string, unknown>),
+    ...localTplPatch,
+  });
 
   await sendTransactionAlert(companyId, company, {
     kind: "auto_created",
@@ -1486,6 +2382,8 @@ export async function generateRecurringVoucherNow(
   if (!companyId?.trim() || !sourceVoucherId?.trim() || !actor?.uid) {
     return { ok: false, message: "Missing company or voucher." };
   }
+  const onlineGate = await assertOnlineForRecurringVoucherCreate(companyId, company, actor);
+  if (!onlineGate.ok) return { ok: false, message: onlineGate.message || "Online required." };
   const templateDocId = await getRecurringTemplateDocIdForVoucher(companyId, sourceVoucherId);
   const tplSnap = await getDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateDocId));
   if (!tplSnap.exists()) return { ok: false, message: "Enable Auto Monthly and save the voucher first." };
@@ -1592,6 +2490,22 @@ async function clearStaleManualRecurringLockIfNeeded(lockRef: ReturnType<typeof 
   }
 }
 
+/** App-open auto lock: clear finished/stale locks so a crashed or old skipped pass does not block silent backfill forever. */
+async function clearStaleAutoRecurringLockIfNeeded(lockRef: ReturnType<typeof doc>): Promise<void> {
+  const preLock = await getDoc(lockRef);
+  if (!preLock.exists()) return;
+  const ld = preLock.data() as Record<string, unknown>;
+  const hasFinished = ld.finishedAt != null;
+  const createdRaw = ld.createdAt;
+  let createdMs = 0;
+  if (createdRaw instanceof Timestamp) createdMs = createdRaw.toMillis();
+  else if (typeof createdRaw === "number" && Number.isFinite(createdRaw)) createdMs = createdRaw;
+  const staleIncomplete = !hasFinished && createdMs > 0 && Date.now() - createdMs > MANUAL_RECURRING_LOCK_STALE_MS;
+  if (hasFinished || staleIncomplete) {
+    await deleteDoc(lockRef).catch(() => {});
+  }
+}
+
 /**
  * Chune hue BS periods ke liye auto voucher — chronological order; har success par template clone last voucher pe.
  * `slots` khali na ho; caller sort / filter de.
@@ -1609,6 +2523,8 @@ export async function generateRecurringVouchersForPeriodSlots(
   if (!Array.isArray(slots) || slots.length === 0) {
     return { ok: false, message: "No periods selected.", created: 0 };
   }
+  const onlineGate = await assertOnlineForRecurringVoucherCreate(companyId, company, actor);
+  if (!onlineGate.ok) return { ok: false, message: onlineGate.message || "Online required.", created: 0 };
   const co = company as Record<string, unknown> | null | undefined;
   if (!isRecurringVoucherGenerationEnabled(co as Company | null)) {
     return { ok: false, message: "Company auto recurring is off.", created: 0 };
@@ -1732,78 +2648,178 @@ export async function generateDueRecurringVouchersOnAppOpen(
   companyId: string,
   company: Company | null,
   actor: GenerateActor,
-  options?: { hasTriggerPermission?: boolean },
-): Promise<void> {
-  if (!companyId?.trim() || !actor?.uid) return;
-  if (!isRecurringVoucherGenerationEnabled(company)) return;
-  if (!canRunRecurringAutoOnAppOpen(company, actor.uid, actor.email, options?.hasTriggerPermission === true)) return;
+  options?: { hasTriggerPermission?: boolean; runScope?: RecurringAutoRunScopeFilter },
+) : Promise<number> {
+  if (!companyId?.trim() || !actor?.uid) {
+    console.info("[AutoRecurringAppOpen] skip", { reason: "missing_context", companyId: companyId || null });
+    return 0;
+  }
+  if (!isRecurringVoucherGenerationEnabled(company)) {
+    console.info("[AutoRecurringAppOpen] skip", { reason: "company_recurring_disabled", companyId });
+    return 0;
+  }
+  if (!canRunRecurringAutoOnAppOpen(company, actor.uid, actor.email, options?.hasTriggerPermission === true)) {
+    console.info("[AutoRecurringAppOpen] skip", { reason: "run_scope_or_permission_blocked", companyId });
+    return 0;
+  }
+  const onlineGate = await assertOnlineForRecurringVoucherCreate(companyId, company, actor);
+  if (!onlineGate.ok) {
+    console.info("[AutoRecurringAppOpen] skip", {
+      reason: "online_gate_blocked",
+      companyId,
+      message: onlineGate.message || null,
+    });
+    return 0;
+  }
 
   const now = new Date();
-  const bsNow = adToBs(now);
-  const periodKey = toPeriodKey(bsNow.y, bsNow.m);
   const templatesSnap = await getDocs(
     query(collection(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`), where("enabled", "==", true)),
   );
-  if (templatesSnap.empty) return;
+  if (templatesSnap.empty) {
+    console.info("[AutoRecurringAppOpen] skip", { reason: "no_enabled_templates", companyId });
+    return 0;
+  }
+  let createdCount = 0;
+  console.info("[AutoRecurringAppOpen] start", { companyId, templateCount: templatesSnap.docs.length });
 
   for (const templateDoc of templatesSnap.docs) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     const template = templateDoc.data() as RecurringVoucherTemplate;
     const templateId = templateDoc.id;
     if (!template.sourceVoucherId) continue;
-
-    if (!isBsScheduleDueToday(template, bsNow)) continue;
-
-    await maybeMarkDeletedAutoVoucherSuppressed(companyId, templateId, template, periodKey);
-    const tplAfter = (await getDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateId))).data() as RecurringVoucherTemplate;
-    const suppressed = Array.isArray(tplAfter.suppressedPeriodKeys) ? tplAfter.suppressedPeriodKeys : [];
-    if (suppressed.includes(periodKey)) continue;
-
-    if (tplAfter.lastGeneratedPeriodKey === periodKey && tplAfter.lastGeneratedVoucherId) {
-      const vSnap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, tplAfter.lastGeneratedVoucherId));
-      if (vSnap.exists() && (vSnap.data() as any)?.isDeleted !== true) continue;
-    }
-
-    const lockRef = doc(firestore, `companies/${companyId}/${RECURRING_LOCK_COLLECTION}`, `${templateId}_${periodKey}`);
-    let lockAcquired = false;
-    try {
-      await runTransaction(firestore, async (tx) => {
-        const lockSnap = await tx.get(lockRef);
-        if (lockSnap.exists()) throw new Error("LOCK_EXISTS");
-        tx.set(lockRef, {
-          templateId,
-          periodKey,
-          createdAt: serverTimestamp(),
-          createdBy: actor.uid,
-        });
+    if (!(await recurringTemplateMatchesAutoRunScope(companyId, template, options?.runScope))) {
+      console.info("[AutoRecurringAppOpen] template_skip", {
+        companyId,
+        templateId,
+        reason: "outside_current_page_scope",
       });
-      lockAcquired = true;
-    } catch (error) {
-      if (String((error as Error)?.message || "").includes("LOCK_EXISTS")) continue;
       continue;
     }
+    console.info("[AutoRecurringAppOpen] template_begin", { companyId, templateId });
 
+    // Pehle sirf `isBsScheduleDueToday` — Asar last-day miss → Shrawan me kabhi backfill nahi.
+    // Ab: saare past-due / due-today missing slots (Generate now jaisi list).
+    let slots: RecurringPeriodSlot[] = [];
     try {
-      const refreshed = (await getDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateId))).data() as RecurringVoucherTemplate;
-      const result = await createOneRecurringVoucherFromTemplate(
-        companyId,
-        company,
-        templateId,
-        refreshed,
-        periodKey,
-        bsNow,
-        actor,
+      slots = await raceWithTimeout(
+        listMissingRecurringPeriodSlotsAscending(companyId, templateId, template, now),
+        15000,
+        [],
       );
-      await updateDoc(lockRef, {
-        voucherId: result?.id ?? null,
-        finishedAt: serverTimestamp(),
-      }).catch(() => {});
     } catch (error) {
-      if (lockAcquired) {
-        await deleteDoc(lockRef).catch(() => {});
+      console.error("[recurringVouchers] missing-slot scan failed", templateId, error);
+      continue;
+    }
+    const slotsBeforeGrace = [...slots];
+    slots = slots.filter((slot) => shouldAutoCreateRecurringWithoutAsk(template, slot.bsY, slot.bsM, now));
+    console.info("[AutoRecurringAppOpen] template_scan", {
+      companyId,
+      templateId,
+      sourceVoucherId: template.sourceVoucherId || null,
+      slotsBeforeGrace: slotsBeforeGrace.map((slot) => slot.periodKey),
+      slotsWithinGrace: slots.map((slot) => slot.periodKey),
+    });
+    if (slots.length === 0) continue;
+
+    for (const slot of slots) {
+      const periodKey = slot.periodKey;
+      console.info("[AutoRecurringAppOpen] slot_start", { companyId, templateId, periodKey });
+      const tplLiveSnap = await getDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateId));
+      if (!tplLiveSnap.exists()) break;
+      const tplLive = tplLiveSnap.data() as RecurringVoucherTemplate;
+      if (!tplLive.enabled) break;
+
+      await maybeMarkDeletedAutoVoucherSuppressed(companyId, templateId, tplLive, periodKey);
+      console.info("[AutoRecurringAppOpen] slot_post_recycle_check", { companyId, templateId, periodKey });
+      const tplAfter = (await getDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateId))).data() as RecurringVoucherTemplate;
+      const suppressed = await resolveRecurringSuppressedPeriodSet(companyId, templateId, tplAfter);
+      await pruneStaleRecurringSuppressedPeriodKeys(companyId, templateId, tplAfter, suppressed);
+      if (suppressed.has(periodKey)) {
+        console.info("[AutoRecurringAppOpen] slot_skip", { companyId, templateId, periodKey, reason: "suppressed" });
+        continue;
       }
-      console.error("[recurringVouchers] generation failed", templateId, error);
+
+      if (tplAfter.lastGeneratedPeriodKey === periodKey && tplAfter.lastGeneratedVoucherId) {
+        const vSnap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, tplAfter.lastGeneratedVoucherId));
+        if (vSnap.exists() && (vSnap.data() as any)?.isDeleted !== true) {
+          console.info("[AutoRecurringAppOpen] slot_skip", { companyId, templateId, periodKey, reason: "already_exists" });
+          continue;
+        }
+      }
+
+      const lockRef = doc(firestore, `companies/${companyId}/${RECURRING_LOCK_COLLECTION}`, `${templateId}_${periodKey}`);
+      await clearStaleAutoRecurringLockIfNeeded(lockRef);
+      let lockAcquired = false;
+      try {
+        await runTransaction(firestore, async (tx) => {
+          const lockSnap = await tx.get(lockRef);
+          if (lockSnap.exists()) throw new Error("LOCK_EXISTS");
+          tx.set(lockRef, {
+            templateId,
+            periodKey,
+            createdAt: serverTimestamp(),
+            createdBy: actor.uid,
+            backfill: true,
+          });
+        });
+        lockAcquired = true;
+        console.info("[AutoRecurringAppOpen] slot_lock_acquired", { companyId, templateId, periodKey });
+      } catch (error) {
+        if (String((error as Error)?.message || "").includes("LOCK_EXISTS")) {
+          console.info("[AutoRecurringAppOpen] slot_skip", { companyId, templateId, periodKey, reason: "lock_exists" });
+          continue;
+        }
+        continue;
+      }
+
+      try {
+        const refreshed = (await getDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateId))).data() as RecurringVoucherTemplate;
+        console.info("[AutoRecurringAppOpen] slot_create_begin", { companyId, templateId, periodKey });
+        const refreshedForCreate = {
+          ...refreshed,
+          suppressedPeriodKeys: [...suppressed],
+        };
+        const result = await createOneRecurringVoucherFromTemplate(
+          companyId,
+          company,
+          templateId,
+          refreshedForCreate,
+          periodKey,
+          { y: slot.bsY, m: slot.bsM, d: 1 },
+          actor,
+          { ignoreSuppressed: true },
+        );
+        await updateDoc(lockRef, {
+          voucherId: result?.id ?? null,
+          finishedAt: serverTimestamp(),
+        }).catch(() => {});
+        if (result) {
+          createdCount += 1;
+          console.info("[AutoRecurringAppOpen] slot_created", {
+            companyId,
+            templateId,
+            periodKey,
+            voucherId: result.id,
+          });
+        } else {
+          console.info("[AutoRecurringAppOpen] slot_skip", {
+            companyId,
+            templateId,
+            periodKey,
+            reason: "create_returned_null",
+          });
+        }
+      } catch (error) {
+        if (lockAcquired) {
+          await deleteDoc(lockRef).catch(() => {});
+        }
+        console.error("[recurringVouchers] generation failed", templateId, periodKey, error);
+      }
     }
   }
+  console.info("[AutoRecurringAppOpen] complete", { companyId, createdCount });
+  return createdCount;
 }
 
 export function getNextBsPeriodFromCurrent(y: number, m: number): { y: number; m: number } {
@@ -1813,7 +2829,8 @@ export function getNextBsPeriodFromCurrent(y: number, m: number): { y: number; m
 /**
  * Next AD calendar day when the scheduler would try to create an auto voucher (BS schedule day in a period).
  * Skips periods already generated (`lastGeneratedPeriodKey`) or suppressed (deleted auto voucher).
- * Caller: `resolveRecurringTemplateProgress` se effective period key lo — recycle-bin last auto ko mat skip karo.
+ * Past-due missing months bhi return karta hai (pehle sirf aaj-se-aage scan → Asar miss hide + “in 30 days” galat).
+ * Caller: `resolveRecurringTemplateProgress` / `resolveEffectiveLastGeneratedPeriodKey` se effective period key lo.
  */
 export function getNextRecurringDueAd(
   scheduleBsDay: number,
@@ -1827,10 +2844,12 @@ export function getNextRecurringDueAd(
   );
   const lastPk = lastGeneratedPeriodKey != null && String(lastGeneratedPeriodKey).trim() ? String(lastGeneratedPeriodKey) : null;
   const startBs = adToBs(now);
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const lastPm = lastPk ? parsePeriodKey(lastPk) : null;
+  // Last generated ke agle mahine se. lastPk null → current BS month (purana -12 month “due now” + full accrued bug).
+  const scanFrom = lastPm ? addBsMonths(lastPm.y, lastPm.m, 1) : { y: startBs.y, m: startBs.m };
 
-  for (let i = 0; i < 24; i++) {
-    const { y, m } = addBsMonths(startBs.y, startBs.m, i);
+  for (let i = 0; i < 36; i++) {
+    const { y, m } = addBsMonths(scanFrom.y, scanFrom.m, i);
     const pk = toPeriodKey(y, m);
     if (suppressed.has(pk)) continue;
     if (lastPk !== null && lastPk === pk) continue;
@@ -1843,9 +2862,48 @@ export function getNextRecurringDueAd(
     } catch {
       continue;
     }
-    const dueStart = new Date(dueAd.getFullYear(), dueAd.getMonth(), dueAd.getDate());
-    if (dueStart < todayStart) continue;
     return dueAd;
   }
   return null;
+}
+
+/**
+ * Template lastGenerated stale/null ho to bhi zinda auto + source voucher periods se effective last PK.
+ * Accrual / next-due strip isi se — server pe accrued amount store nahi (har device local calc).
+ */
+export async function resolveEffectiveLastGeneratedPeriodKey(
+  companyId: string,
+  templateDocId: string,
+  template: RecurringVoucherTemplate,
+): Promise<string | null> {
+  let lastPk =
+    template.lastGeneratedPeriodKey != null && String(template.lastGeneratedPeriodKey).trim()
+      ? String(template.lastGeneratedPeriodKey).trim()
+      : null;
+  const active = await fetchActiveRecurringPeriodKeysForTemplate(companyId, templateDocId, template);
+  const sourceMin = await loadSourceMinLocalDayForTemplate(companyId, template);
+  const sourcePk = sourceVoucherBsPeriodKey(sourceMin);
+  if (sourcePk) active.add(sourcePk);
+  const maxActive = maxPeriodKeyAsc(active);
+  if (maxActive && (!lastPk || comparePeriodKeysAsc(maxActive, lastPk) > 0)) {
+    lastPk = maxActive;
+  }
+  return lastPk;
+}
+
+/** Next due — occupied periods heal ke baad (dialog strip + accrual window). */
+export async function resolveNextRecurringDueAd(
+  companyId: string,
+  templateDocId: string,
+  template: RecurringVoucherTemplate,
+  now: Date = new Date(),
+): Promise<Date | null> {
+  const lastPk = await resolveEffectiveLastGeneratedPeriodKey(companyId, templateDocId, template);
+  const suppressed = await resolveRecurringSuppressedPeriodSet(companyId, templateDocId, template);
+  return getNextRecurringDueAd(
+    effectiveScheduleBsDay(template),
+    now,
+    lastPk,
+    [...suppressed],
+  );
 }

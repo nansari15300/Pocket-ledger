@@ -1,6 +1,6 @@
 "use client";
 
-import { getBrowserDb } from "@/lib/localSqlite";
+import { getBrowserDbForCompanyId } from "@/lib/localSqlite";
 import { getOrCreateClientDeviceId } from "@/lib/security/deviceIdentity";
 import type { CloudSyncAction, LocalCloudSyncOperation } from "@/lib/localCloudSync/types";
 import { logLocalCloudSync } from "@/lib/localCloudSync/logger";
@@ -21,7 +21,7 @@ function nextOpId(): string {
 }
 
 async function ensureMetaRow(companyId: string): Promise<CloudSyncMetaRow> {
-  const db = await getBrowserDb();
+  const db = await getBrowserDbForCompanyId(companyId);
   if (!db) throw new Error("cloud_sync: SQLite unavailable");
   const existing = db
     .prepare(`SELECT * FROM cloud_sync_meta WHERE company_id = ?`)
@@ -41,7 +41,7 @@ async function ensureMetaRow(companyId: string): Promise<CloudSyncMetaRow> {
   };
 }
 
-function allocNextOpSeq(db: NonNullable<Awaited<ReturnType<typeof getBrowserDb>>>, companyId: string): number {
+function allocNextOpSeq(db: NonNullable<Awaited<ReturnType<typeof getBrowserDbForCompanyId>>>, companyId: string): number {
   const row = db.prepare(`SELECT last_local_op_seq FROM cloud_sync_meta WHERE company_id = ?`).get(companyId) as
     | { last_local_op_seq: number }
     | undefined;
@@ -64,7 +64,7 @@ export async function enqueueLocalCloudSyncOp(input: {
   const rowId = String(input.rowId || "").trim();
   if (!companyId || !table || !rowId) return;
 
-  const db = await getBrowserDb();
+  const db = await getBrowserDbForCompanyId(companyId);
   if (!db) return;
 
   await ensureMetaRow(companyId);
@@ -103,7 +103,7 @@ export async function enqueueLocalCloudSyncOp(input: {
 }
 
 export async function listPendingLocalCloudSyncOps(companyId: string): Promise<LocalCloudSyncOperation[]> {
-  const db = await getBrowserDb();
+  const db = await getBrowserDbForCompanyId(companyId);
   if (!db) return [];
   const rows = db
     .prepare(
@@ -138,7 +138,7 @@ export async function listPendingLocalCloudSyncOps(companyId: string): Promise<L
 }
 
 export async function markLocalCloudSyncOpsSynced(companyId: string, throughOpSeq: number): Promise<void> {
-  const db = await getBrowserDb();
+  const db = await getBrowserDbForCompanyId(companyId);
   if (!db) return;
   const now = Date.now();
   db.prepare(
@@ -148,7 +148,7 @@ export async function markLocalCloudSyncOpsSynced(companyId: string, throughOpSe
 
 /** Single op — upload ke turant baad mark (batch gap / cursor bug se bachao). */
 export async function markLocalCloudSyncOpSynced(companyId: string, opSeq: number): Promise<void> {
-  const db = await getBrowserDb();
+  const db = await getBrowserDbForCompanyId(companyId);
   if (!db) return;
   const seq = Number(opSeq);
   if (!Number.isFinite(seq) || seq <= 0) return;
@@ -159,7 +159,7 @@ export async function markLocalCloudSyncOpSynced(companyId: string, opSeq: numbe
 }
 
 export async function countPendingLocalCloudSyncOps(companyId: string): Promise<number> {
-  const db = await getBrowserDb();
+  const db = await getBrowserDbForCompanyId(companyId);
   if (!db) return 0;
   const row = db
     .prepare(`SELECT COUNT(*) AS c FROM cloud_sync_outbox WHERE company_id = ? AND synced_at IS NULL`)
@@ -178,7 +178,7 @@ const RECENT_SYNCED_ROW_PROTECT_MS = 120_000;
 /** Pending + isi cycle / haal me upload hue rows — download/opening merge in par overwrite na kare. */
 export async function protectedLocalCloudSyncRowKeySet(companyId: string): Promise<Set<string>> {
   const keys = await pendingLocalCloudSyncRowKeySet(companyId);
-  const db = await getBrowserDb();
+  const db = await getBrowserDbForCompanyId(companyId);
   if (!db) return keys;
   const cutoff = Date.now() - RECENT_SYNCED_ROW_PROTECT_MS;
   try {
@@ -212,7 +212,7 @@ export async function setCloudSyncCursor(
   companyId: string,
   patch: Partial<{ lastSyncedOp: number; lastSyncAt: number; syncStatus: string; lastError: string | null }>
 ): Promise<void> {
-  const db = await getBrowserDb();
+  const db = await getBrowserDbForCompanyId(companyId);
   if (!db) return;
   await ensureMetaRow(companyId);
   if (patch.lastSyncedOp != null) {

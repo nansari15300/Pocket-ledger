@@ -590,6 +590,18 @@ export default function DashboardPage() {
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = React.useState(false);
   const [selectedVoucher, setSelectedVoucher] = React.useState<any>(null);
   const { visibleCard, setVisibleCard } = useDashboard();
+  // One-time: old default "financial-summaries" hid Daybook/Recent on PL Server even when role allowed them.
+  useEffect(() => {
+    if (!company || (company as { plServerShared?: boolean }).plServerShared !== true) return;
+    const key = `pl_dash_show_all_v1_${company.id}`;
+    try {
+      if (localStorage.getItem(key)) return;
+      localStorage.setItem(key, "1");
+    } catch {
+      return;
+    }
+    if (visibleCard === "financial-summaries") setVisibleCard("all");
+  }, [company, company?.id, setVisibleCard, visibleCard]);
   const [greeting, setGreeting] = useState('');
   
   const [recentVoucherTypes, setRecentVoucherTypes] = useState<string[]>(['all']);

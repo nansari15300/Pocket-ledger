@@ -14,12 +14,13 @@
 
 import { doc, getDoc, Timestamp } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
-import { clearBrowserDbCache, getBrowserDb } from "@/lib/localSqlite";
+import { clearBrowserDbCache, getBrowserDbForCompanyId } from "@/lib/localSqlite";
 import { yieldToMain } from "@/lib/yieldToMain";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { companyRowUsesSqliteLedgerWrites } from "@/lib/companyStorageKind";
+import { isOnlineCompanyLedgerCloudSyncAllowed } from "@/lib/onlineCompanySelectorSyncPolicy";
 import { decryptFirestoreCompanyDocIfNeeded, isEncryptedServerBackupDoc } from "@/lib/serverBackupEncryption";
 import { PL_CLIENT_OFFLINE_FIRST_PERSIST_MS, stampLocalMirrorBackedByFirestore } from "@/lib/localMirrorServerMeta";
 import { assertCompanyAllowsLedgerMutations } from "@/lib/security/offlinePlanWriteGate";
@@ -73,10 +74,7 @@ export function notifyBrowserDbCollectionUpdated(
         };
       }
     ).plElectronGate;
-    // Remote client push: main.js already broadcasts to all tabs after delta_push.
-    if (detail.source !== "pl_host_remote_write") {
-      bridge?.publishBrowserDbCollectionBump?.(detail);
-    }
+    bridge?.publishBrowserDbCollectionBump?.(detail);
   } catch {
     /* optional IPC */
   }
@@ -111,6 +109,7 @@ async function shouldPersistCompanyDocToBrowserDb(
   try {
     const row = await getLocalCompanyById(cid, { includeDeleted: true });
     if (row && companyRowUsesSqliteLedgerWrites(row)) return true;
+    if (!isOnlineCompanyLedgerCloudSyncAllowed(cid, row ?? null)) return true;
   } catch {
     /* SQLite unavailable */
   }
@@ -188,8 +187,24 @@ function shouldApplyBrowserCompanyDocMutation(force?: boolean): boolean {
   return shouldMirrorToBrowserDb();
 }
 
+/** Wire/JSON Timestamp shape — `JSON.stringify(Timestamp)` drops `__fsTs` / `toDate`. */
+function plainFirestoreTimestampParts(
+  value: Record<string, unknown>
+): { seconds: number; nanoseconds: number } | null {
+  const secRaw = value.seconds ?? value._seconds;
+  const nsRaw = value.nanoseconds ?? value._nanoseconds ?? 0;
+  if (typeof secRaw !== "number" || !Number.isFinite(secRaw)) return null;
+  if (typeof nsRaw !== "number" || !Number.isFinite(nsRaw)) return null;
+  const keys = Object.keys(value);
+  // Only timestamp-like bags — avoid mistaking unrelated `{ seconds: n, … }` payloads.
+  const allowed = new Set(["seconds", "nanoseconds", "_seconds", "_nanoseconds", "__fsTs", "type"]);
+  if (!keys.every((k) => allowed.has(k))) return null;
+  return { seconds: secRaw, nanoseconds: nsRaw };
+}
+
 /**
  * Deserialize local JSON into Firestore-compatible values (Timestamp + nested).
+ * Also revives plain `{seconds,nanoseconds}` from plserver HTTP JSON (no `__fsTs`).
  */
 export function deserializeLocalDbValue(value: unknown): unknown {
   if (value === null || value === undefined) return value;
@@ -199,6 +214,10 @@ export function deserializeLocalDbValue(value: unknown): unknown {
     if (o.__fsTs === true && typeof o.seconds === "number") {
       const ns = typeof o.nanoseconds === "number" ? o.nanoseconds : 0;
       return Timestamp.fromMillis(o.seconds * 1000 + Math.floor(ns / 1e6));
+    }
+    const plainTs = plainFirestoreTimestampParts(o);
+    if (plainTs) {
+      return Timestamp.fromMillis(plainTs.seconds * 1000 + Math.floor(plainTs.nanoseconds / 1e6));
     }
     const out: Record<string, unknown> = {};
     for (const k of Object.keys(o)) {
@@ -233,7 +252,7 @@ export async function getCompanyDocFromBrowserDb(
   const { isPlServerThinStaffCompany } = await import("@/lib/plServerThinStaffClient");
   const thinStaff = await isPlServerThinStaffCompany(companyId);
   try {
-    const db = await getBrowserDb();
+    const db = await getBrowserDbForCompanyId(companyId);
     if (db) {
       const row = db
         .prepare("SELECT id, data FROM company_docs WHERE company_id = ? AND collection = ? AND id = ?")
@@ -307,7 +326,7 @@ export async function listCompanyDocsFromBrowserDb(
   const { isPlServerThinStaffCompany } = await import("@/lib/plServerThinStaffClient");
   const thinStaff = await isPlServerThinStaffCompany(companyId);
   try {
-    const db = await getBrowserDb();
+    const db = await getBrowserDbForCompanyId(companyId);
     if (db) {
       const rows = db
         .prepare("SELECT id, data FROM company_docs WHERE company_id = ? AND collection = ?")
@@ -361,7 +380,7 @@ export async function listCompanyDocRawRowsWithLocalRefHint(
 ): Promise<Array<{ id: string; data: string }>> {
   if (typeof window === "undefined" || !companyId || !collectionName) return [];
   try {
-    const db = await getBrowserDb();
+    const db = await getBrowserDbForCompanyId(companyId);
     if (!db) return [];
     const sql =
       "SELECT id, data FROM company_docs WHERE company_id = ? AND collection = ? AND data LIKE '%local:%'";
@@ -401,7 +420,7 @@ export async function listVoucherSummaryProjectionFromBrowserDb(
     return mapped;
   }
   try {
-    const db = await getBrowserDb();
+    const db = await getBrowserDbForCompanyId(companyId);
     if (!db) return [];
     const raw = db
       .prepare(
@@ -455,6 +474,11 @@ export function serializeCompanyDocForLocalDb(value: unknown): unknown {
   if (Array.isArray(value)) return (value as unknown[]).map(serializeCompanyDocForLocalDb).filter((v) => v !== undefined);
   if (typeof value === "object") {
     const obj = value as Record<string, unknown>;
+    // plserver wire / Capacitor JSON: plain `{seconds,nanoseconds}` — tag `__fsTs` so round-trip stays stable.
+    const plainTs = plainFirestoreTimestampParts(obj);
+    if (plainTs) {
+      return { __fsTs: true, seconds: plainTs.seconds, nanoseconds: plainTs.nanoseconds };
+    }
     const out: Record<string, unknown> = {};
     for (const k of Object.keys(obj)) {
       const v = serializeCompanyDocForLocalDb(obj[k]);
@@ -516,7 +540,7 @@ async function upsertVoucherProjection(
   data: Record<string, unknown>
 ): Promise<void> {
   if (collectionName !== "vouchers") return;
-  const db = await getBrowserDb();
+  const db = await getBrowserDbForCompanyId(companyId);
   if (!db) return;
   const docType = typeof data.type === "string" ? data.type : null;
   const docDateMs = parseDateToMsLoose(data.date);
@@ -535,7 +559,7 @@ async function upsertVoucherProjection(
 
 async function deleteVoucherProjection(companyId: string, collectionName: string, docId: string): Promise<void> {
   if (collectionName !== "vouchers") return;
-  const db = await getBrowserDb();
+  const db = await getBrowserDbForCompanyId(companyId);
   if (!db) return;
   db.prepare(
     "DELETE FROM company_docs_projection WHERE company_id = ? AND collection = ? AND id = ?"
@@ -600,7 +624,7 @@ function stampUserOriginCompanyDocData(
 /** Before restore: clear old cached rows to avoid stale voucher merges */
 export async function deleteAllCompanyDocsForCompany(companyId: string): Promise<void> {
   try {
-    const db = await getBrowserDb();
+    const db = await getBrowserDbForCompanyId(companyId);
     if (!db || !companyId) return;
     db.prepare(`DELETE FROM company_docs WHERE company_id = ?`).run(companyId);
     // Wipe projection rows with full company_docs wipe so stale dashboard rows do not remain.
@@ -640,7 +664,7 @@ export async function deleteCompanyDocFromBrowserDb(
       .catch(() => undefined);
   }
   try {
-    const db = await getBrowserDb();
+    const db = await getBrowserDbForCompanyId(companyId);
     if (!db) return;
     db.prepare("DELETE FROM company_docs WHERE company_id = ? AND collection = ? AND id = ?").run(companyId, collectionName, docId);
     await deleteVoucherProjection(companyId, collectionName, docId);
@@ -659,7 +683,7 @@ export type PerformCompanyDocUpsertResult = {
 };
 
 async function runCompanyDocSqliteUpsertAndProjection(
-  db: NonNullable<Awaited<ReturnType<typeof getBrowserDb>>>,
+  db: NonNullable<Awaited<ReturnType<typeof getBrowserDbForCompanyId>>>,
   companyId: string,
   collectionName: string,
   docId: string,
@@ -703,7 +727,7 @@ export async function performCompanyDocUpsert(
   options?: { shouldNotify?: boolean }
 ): Promise<PerformCompanyDocUpsertResult> {
   const shouldNotify = options?.shouldNotify !== false;
-  const db = await getBrowserDb();
+  const db = await getBrowserDbForCompanyId(companyId);
   if (!db) return { written: false, persisted: false, stampedData: data, existingParsed: null };
 
   let hasExistingRow = false;
@@ -746,7 +770,7 @@ export async function performCompanyDocUpsert(
   } catch (e) {
     if (!isSqliteBadParamError(e)) throw e;
     clearBrowserDbCache();
-    const retryDb = await getBrowserDb();
+    const retryDb = await getBrowserDbForCompanyId(companyId);
     if (!retryDb) {
       markMirrorSqliteErrorAndMaybePauseWrites(e);
       throw e;
@@ -1005,6 +1029,10 @@ export async function upsertCompanyDocInBrowserDb(
 
     const out = await commitCompanyDocOnRenderer(companyId, collectionName, docId, data, options);
     if (out.persisted) {
+      if (collectionName === "vouchers") {
+        const { dispatchVoucherLivePatch } = await import("@/lib/voucherFormAttachmentSave");
+        dispatchVoucherLivePatch(companyId, docId, { ...out.stampedData, id: docId });
+      }
       scheduleCompanyDocAuthoritativeDispatchAfterLocalCommit(
         companyId,
         collectionName,
@@ -1336,14 +1364,14 @@ export async function mirrorCompanyDocToBrowserDb(
   companyId: string,
   collectionName: string,
   docId: string
-): Promise<void> {
-  if (!shouldMirrorToBrowserDb() || !companyId || !collectionName || !docId) return;
+): Promise<boolean> {
+  if (!shouldMirrorToBrowserDb() || !companyId || !collectionName || !docId) return false;
   try {
     const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
     const fsCompanyId = String(reg?.authoritativeCompanyId || companyId).trim() || companyId;
     const ref = doc(firestore, `companies/${fsCompanyId}/${collectionName}`, docId);
     const snap = await getDoc(ref);
-    if (!snap.exists()) return;
+    if (!snap.exists()) return false;
     let payload: Record<string, unknown> = { id: snap.id, ...(snap.data() as Record<string, unknown>) };
     const ctx = reg ? { encryptServerBackupSalt: (reg as Record<string, unknown>).encryptServerBackupSalt as string | undefined } : null;
     const dec = await decryptFirestoreCompanyDocIfNeeded(
@@ -1352,20 +1380,28 @@ export async function mirrorCompanyDocToBrowserDb(
       companyId
     );
     if (dec) payload = dec;
-    else if (isEncryptedServerBackupDoc(payload)) return;
+    else if (isEncryptedServerBackupDoc(payload)) return false;
     // Server snapshot = trusted read path; voucher plan gate yahan nahi (flush already paid-gated upstream where needed).
     await upsertCompanyDocInBrowserDb(companyId, collectionName, docId, stampLocalMirrorBackedByFirestore(payload), {
       notify: false,
       skipPlanMutationGate: true,
     });
+    return true;
   } catch (e) {
     console.warn("[localCompanyDocMirror] mirror company doc failed", collectionName, docId, e);
+    return false;
   }
 }
 
 /**
- * Voucher-specific alias for older callers (keeps projection row updates in one place).
+ * Voucher-specific alias for user-facing writes. Generic mirror batches stay silent,
+ * but voucher saves/edits need an immediate bump in delta mode where Firestore
+ * collection listeners are intentionally not bound.
  */
-export async function mirrorVoucherDocToBrowserDb(companyId: string, voucherId: string): Promise<void> {
-  await mirrorCompanyDocToBrowserDb(companyId, "vouchers", voucherId);
+export async function mirrorVoucherDocToBrowserDb(companyId: string, voucherId: string): Promise<boolean> {
+  const mirrored = await mirrorCompanyDocToBrowserDb(companyId, "vouchers", voucherId);
+  if (mirrored) {
+    notifyBrowserDbCollectionUpdated(companyId, "vouchers", { immediate: true, source: "local_write" });
+  }
+  return mirrored;
 }

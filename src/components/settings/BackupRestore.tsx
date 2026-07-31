@@ -1469,6 +1469,32 @@ export function BackupRestore() {
       }
     }
 
+    const staticOfflineOnlineCompany =
+      staticBackupClient &&
+      backupIntent === "for_offline" &&
+      !isLocalCompanyBackup;
+    if (staticOfflineOnlineCompany) {
+      const predownload = await runStaticCompanyBackupPredownload({
+        company: backupCompany,
+        companyId,
+        includeAttachments: false,
+        signal: undefined,
+        onProgress: (p) => {
+          setPredownloadProgress(p);
+        },
+      });
+      if (predownload.ok !== true) {
+        setPredownloadProgress(null);
+        toast({
+          variant: "destructive",
+          title: "Backup blocked",
+          description: predownload.error,
+        });
+        return;
+      }
+      window.setTimeout(() => setPredownloadProgress(null), 4000);
+    }
+
     // Static EXE: always SQLite-only. Missing files = user policy (download optional).
     const resolvedSourceMode: CompanyBackupSourceMode = staticBackupClient
       ? "local_only"

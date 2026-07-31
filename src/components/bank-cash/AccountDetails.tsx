@@ -298,7 +298,7 @@ export function AccountDetails({
             v.accountId === account.id ||
             v.toAccountId === account.id ||
             v.fromAccountId === account.id ||
-            (v.entries && v.entries.some((e: any) => e.accountId === account.id));
+            (Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId === account.id));
 
         if (isRelevant) {
             const dateValue = v.date?.toDate ? v.date.toDate() : new Date(v.date);

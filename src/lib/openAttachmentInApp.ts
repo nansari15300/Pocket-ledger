@@ -139,15 +139,15 @@ async function openBlobAttachmentInApp(
     return;
   }
   if (kind === "pdf") {
-    if (shouldOpenPdfInExternalViewer()) {
-      dispose();
-      await openPdfBlobInExternalViewer(blob, opts?.title ? `${opts.title}.pdf` : "document.pdf");
+    if (shouldUseInAppPdfPreviewOverlay()) {
+      await showInAppPdfPreview(bUrl, dispose, {
+        title: opts?.title ?? "PDF",
+        fileName: "document.pdf",
+      });
       return;
     }
-    await showInAppPdfPreview(bUrl, dispose, {
-      title: opts?.title ?? "PDF",
-      fileName: "document.pdf",
-    });
+    dispose();
+    await openPdfBlobInExternalViewer(blob, opts?.title ? `${opts.title}.pdf` : "document.pdf");
     return;
   }
   dispose();
@@ -205,11 +205,11 @@ async function tryOpenAttachmentFromDeviceCacheOnly(
   }
 
   // HTTPS / Storage path / drive: — IndexedDB / native disk / hover LRU only (no network).
+  // Cell-thumb mat pehle — blurry open; full LRU → disk cache → phir cell-thumb last resort.
   try {
     const { peekHoverCachedBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
-    const hoverCached =
-      peekHoverCachedBlobUrl(u) ?? peekHoverCachedBlobUrl(`${u}::cell-thumb`);
-    if (hoverCached && (await openInMemoryUrlAttachment(hoverCached, { title: opts?.title, kind: opts?.kind }))) {
+    const fullCached = peekHoverCachedBlobUrl(u);
+    if (fullCached && (await openInMemoryUrlAttachment(fullCached, { title: opts?.title, kind: opts?.kind }))) {
       return true;
     }
   } catch {
@@ -236,6 +236,16 @@ async function tryOpenAttachmentFromDeviceCacheOnly(
     });
     if (localBlob && localBlob.size > 0) {
       await openBlobAttachmentInApp(localBlob, { title: opts?.title, kind: opts?.kind });
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const { peekHoverCachedBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
+    const cellThumb = peekHoverCachedBlobUrl(`${u}::cell-thumb`);
+    if (cellThumb && (await openInMemoryUrlAttachment(cellThumb, { title: opts?.title, kind: opts?.kind }))) {
       return true;
     }
   } catch {
@@ -383,6 +393,28 @@ export async function openAttachmentInApp(
     const kindHint = opts?.kind ?? "other";
     const sf = opts?.serverFallback;
     const sfCompanyId = String(sf?.companyId || "").trim();
+
+    // Hover LRU full pehle; cell-thumb mat — warna blurry open + full bytes skip.
+    try {
+      const { peekHoverCachedBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
+      const fullCached = peekHoverCachedBlobUrl(u);
+      if (fullCached && (await openInMemoryUrlAttachment(fullCached, { title: opts?.title, kind: kindHint }))) {
+        return;
+      }
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      const cached = await tryOfflineCachedAttachmentBlobMultiKey(u);
+      if (cached && cached.size > 0) {
+        await openBlobAttachmentInApp(cached, { title: opts?.title, kind: kindHint });
+        return;
+      }
+    } catch {
+      /* ignore */
+    }
+
     // Native/APK: image thumb fast-path; PDF/other hamesha bytes se (displayUrl revoke / fetch race avoid).
     if (usesEmbeddedNativeAttachmentStorage()) {
       const meta = getLocalFileRefMetaSync(u) ?? (await getLocalFileRefMeta(u));

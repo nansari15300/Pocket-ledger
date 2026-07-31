@@ -1,6 +1,6 @@
 "use client";
 
-import { getBrowserDb } from "@/lib/localSqlite";
+import { getBrowserDbForCompanyId } from "@/lib/localSqlite";
 import { serializeCompanyDocForLocalDb } from "@/lib/localCompanyDocMirror";
 import { PL_CLIENT_OFFLINE_FIRST_PERSIST_MS } from "@/lib/localMirrorServerMeta";
 import { shouldUseLocalCloudSync } from "@/lib/localCloudSync/companyConfig";
@@ -73,7 +73,7 @@ export async function refreshPendingCloudSyncOpsFromMirrorAfterAttachments(
   if (applyingRemoteCloudSync) return;
   const cid = String(companyId || "").trim();
   if (!cid || !(await shouldUseLocalCloudSync(cid))) return;
-  const db = await getBrowserDb();
+  const db = await getBrowserDbForCompanyId(companyId);
   if (!db) return;
   const pending = db
     .prepare(

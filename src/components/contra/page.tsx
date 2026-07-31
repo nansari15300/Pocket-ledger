@@ -14,9 +14,10 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { startOfDay, isSameDay, format } from "date-fns";
+import { isSameDay, format } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
+import { collectVoucherCalendarDates } from "@/lib/voucherDateNormalize";
 import { useDate } from "@/hooks/useDate";
 import { openPrintDirect } from "@/lib/printDirect";
 import usePermissions from "@/hooks/usePermissions";
@@ -248,16 +249,7 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
         setDaybookFilters(prev => ({...prev, [key]: value}));
     }
 
-    const transactionDates = useMemo(() => {
-      const dates = new Set<number>();
-      vouchers.forEach(v => {
-          const dateValue = v.date?.toDate ? v.date.toDate() : new Date(v.date);
-          if (dateValue instanceof Date && !isNaN(dateValue.getTime())) {
-              dates.add(startOfDay(dateValue).getTime());
-          }
-      });
-      return Array.from(dates).map(d => new Date(d));
-    }, [vouchers]);
+    const transactionDates = useMemo(() => collectVoucherCalendarDates(vouchers), [vouchers]);
 
     const { daybookTransactions, daybookSummary } = useTransactions(
         {id: 'daybook', items: []}, 

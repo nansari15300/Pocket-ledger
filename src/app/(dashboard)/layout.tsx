@@ -228,7 +228,7 @@ function DeviceLimitOverlay() {
 
   useEffect(() => {
     if (!companyId || (!deviceLimitReached && !kickedAndBlocked)) {
-      setActiveDevices([]);
+      setActiveDevices((prev) => (prev.length === 0 ? prev : []));
       return;
     }
     const devicesRef = collection(firestore, "companies", companyId, "devices");

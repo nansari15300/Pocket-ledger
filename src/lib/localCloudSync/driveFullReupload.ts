@@ -4,7 +4,7 @@ import { listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib
 import { COLLECTIONS_TO_BACKUP } from "@/lib/companyBackupCollections";
 import { fetchAttachmentRefBlob } from "@/lib/attachmentRefBlobFetch";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
-import { getBrowserDb } from "@/lib/localSqlite";
+import { getBrowserDbForCompanyId } from "@/lib/localSqlite";
 import { logLocalCloudSync } from "@/lib/localCloudSync/logger";
 import { isCloudSyncTrackableFileRef } from "@/lib/localCloudSync/syncSummaryAttachments";
 import { uploadPendingAttachmentPayloadToDrive } from "@/lib/localCloudSync/driveCloudSyncClient";
@@ -105,7 +105,7 @@ export async function ensureFreshDriveSyncWhenDriveFolderMissing(companyId: stri
 export async function unsyncCloudSyncOutboxForCompany(companyId: string): Promise<number> {
   const cid = String(companyId || "").trim();
   if (!cid) return 0;
-  const db = await getBrowserDb();
+  const db = await getBrowserDbForCompanyId(companyId);
   if (!db) return 0;
   const res = db
     .prepare(

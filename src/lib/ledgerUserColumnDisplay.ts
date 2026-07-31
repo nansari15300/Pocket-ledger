@@ -41,6 +41,17 @@ export function isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay(t: unknown):
   return o.recurringMeta?.generationKind === "recurring_bs_monthly";
 }
 
+/** Auto recurring switch indicator: sirf current trigger/source voucher par dikhao. */
+export function isActiveRecurringTriggerVoucherForLedgerSwitch(t: unknown): boolean {
+  const o = t as { id?: string; recurringMeta?: { generationKind?: string; isActiveTriggerSource?: boolean; activeTriggerSourceVoucherId?: string | null } } | null | undefined;
+  if (!o || typeof o !== "object") return false;
+  const meta = o?.recurringMeta;
+  if (meta?.isActiveTriggerSource === true) return true;
+  const activeId = String(meta?.activeTriggerSourceVoucherId || "").trim();
+  const id = String(o?.id || "").trim();
+  return !!activeId && !!id && activeId === id;
+}
+
 /** Ledger / mobile card User column — stable naam, "Auto" sirf recurring BS-month par. */
 export function resolveLedgerTransactionUserDisplayName(
   transaction: Record<string, unknown> | null | undefined,

@@ -2,8 +2,8 @@
 
 import type { Company } from "@/hooks/useCompany";
 import { isCloudBackedCompanyShape } from "@/lib/offlineFullWarmSync";
-import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
-import { isDeviceLocalCompany } from "@/lib/companyStorageKind";
+import { isOfflineCompanyStorage, isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
+import { isDeviceLocalCompany, isServerGateCompany } from "@/lib/companyStorageKind";
 import {
   DATA_SOURCE_MODE_STORAGE_KEY,
   type DataSourceMode,
@@ -316,13 +316,16 @@ export function filterCompaniesForActiveGate(companies: Company[], gate: GateRec
   }
 
   if (isOnlineGate(gate)) {
-    return visible.filter(
-      (c) =>
-        !isOfflineCompanyStorage(c) ||
-        isCloudBackedCompanyShape(c) ||
-        isDeviceLocalCompany(c) ||
-        String(c.storageOption || "").toLowerCase() === "firebase"
-    );
+    // Online gate: only cloud-linked companies (SQLite `online` folder). No local / PL-server leakage.
+    return visible.filter((c) => {
+      if (isServerGateCompany(c)) return false;
+      if (isDeviceLocalCompany(c) && !isCloudLinkedCompanyStorage(c)) return false;
+      return (
+        isCloudLinkedCompanyStorage(c) ||
+        String(c.storageOption || "").toLowerCase() === "firebase" ||
+        String(c.storageOption || "").toLowerCase() === "drive"
+      );
+    });
   }
 
   if (isLocalServerGate(gate)) {

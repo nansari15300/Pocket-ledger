@@ -32,7 +32,7 @@ export function shouldForceFirestoreWritesOnStaticOrApk(): boolean {
 
 /**
  * deltaa (all platforms): vouchers/masters SQLite + outbox.
- * live web: company row decide karta hai (local = SQLite, online = Firestore).
+ * live web online companies: SQLite-first via online attachment strategy + outbox flush.
  */
 export function apkEmbeddedSqliteFirstWritesPreferred(): boolean {
   return isFirebaseLedgerDeltaSqliteTransportMode();
@@ -45,6 +45,7 @@ export function preferLocalLedgerReads(
   if (isPlServerThinStaffClient()) return true;
   if (company && companyRowUsesSqliteLedgerWrites(company)) return true;
   if (company && isOfflineCompanyStorage(company)) return true;
+  if (company && companyStrategyUsesSqliteFirstLedgerWrites(company)) return true;
   return isLocalOnlyMode() || apkEmbeddedSqliteFirstWritesPreferred() || isClientNavigatorOffline();
 }
 
@@ -62,8 +63,7 @@ export function apkCloudFirestoreMasterWriteFromCompanyShape(company: { storageO
 }
 
 /**
- * SQLite/outbox voucher path — local company web/static/EXE/APK par hamesha;
- * online Firestore company web par seedha Firestore (dev + production).
+ * SQLite/outbox voucher path — local + PL Server + Online Firebase (save local, background sync).
  */
 export async function apkCloudCompanyUsesSqliteFirstWrites(companyId: string): Promise<boolean> {
   if (isPlServerThinStaffClient()) return true;

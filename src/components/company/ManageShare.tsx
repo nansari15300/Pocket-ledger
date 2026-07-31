@@ -41,7 +41,14 @@ import { Checkbox } from "../ui/checkbox";
 import { Switch } from "../ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Permission, PermissionGroups } from "@/lib/permissions";
-import usePermissions, { type PermissionConfig, type UserRole, initialPermissionConfig, normalizePermissionConfig } from "@/hooks/usePermissions";
+import usePermissions, {
+  type PermissionConfig,
+  type UserRole,
+  initialPermissionConfig,
+  normalizePermissionConfig,
+  roleCanPermission,
+} from "@/hooks/usePermissions";
+import { resolvePermissionConfigSource, companyUsesDeviceOrPlPermissionConfig, logPlPerm, summarizePermissionDateLimits } from "@/lib/permissionConfigSource";
 import { cn } from "@/lib/utils";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
@@ -49,7 +56,6 @@ import { isLocalCompanyHostShareable } from "@/lib/listShareableLocalCompaniesFo
 import { isElectronLocalServerApiAvailable } from "@/lib/electronLocalServer";
 import { LocalPlServerSharePanel } from "@/components/settings/LocalPlServerSharePanel";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
-import { updateCompanyDocRoot } from "@/lib/companyDocsClient";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
@@ -146,7 +152,16 @@ export function ManageShare() {
   const { company: companyData, companyId, allCompanies, allCompaniesRegistry, reloadLocalCompanyRegistry, triggerSync, localCompanyRegistryEpoch } = useCompany();
   const { user } = useAuth();
   const { toast } = useToast();
-  const { can } = usePermissions();
+  const {
+    can,
+    role: myAssignedRole,
+    dateLimits: myDateLimits,
+    fileAttachmentLimits: myFileLimits,
+    allowAttachments: myAllowAttachments,
+    permissionConfig: livePermissionConfig,
+    permissionConfigSource,
+    permissionConfigSourceKey,
+  } = usePermissions();
   const livePlans = useLivePlans();
   const [loading, setLoading] = useState(true);
   const [isUpdating, setIsUpdating] = useState<string | null>(null);
@@ -154,6 +169,7 @@ export function ManageShare() {
   const [userToEdit, setUserToEdit] = useState<SharedUser | null>(null);
   const [newPassword, setNewPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [myRoleOpen, setMyRoleOpen] = useState(false);
   
   const [firestorePermissionConfig, setFirestorePermissionConfig] = useState<PermissionConfig>(initialPermissionConfig);
   const [editablePermissionConfig, setEditablePermissionConfig] = useState<PermissionConfig>(initialPermissionConfig);
@@ -274,15 +290,17 @@ export function ManageShare() {
     localStorage.setItem("selectedRoleForPermissions", selectedRoleForPermissions);
   }, [selectedRoleForPermissions]);
 
-  /** Local company: sirf tab permission reload jab SQLite/context me nested config badle — har `companyData` reference par Firestore dubara subscribe na ho. */
+  /** Local/PL: SQLite permission fingerprint — context row omit kar sakti hai; epoch se reload. */
   const localPermissionSyncKey = useMemo(() => {
-    if (!companyData || !isOfflineCompanyStorage(companyData)) return "";
+    if (!companyData || !companyUsesDeviceOrPlPermissionConfig(companyData)) return "";
     try {
-      return JSON.stringify((companyData as { permissionConfig?: PermissionConfig }).permissionConfig ?? null);
+      return `${localCompanyRegistryEpoch}:${JSON.stringify(
+        (companyData as { permissionConfig?: PermissionConfig }).permissionConfig ?? null
+      )}`;
     } catch {
-      return String(Date.now());
+      return `${localCompanyRegistryEpoch}:${Date.now()}`;
     }
-  }, [companyData]);
+  }, [companyData, localCompanyRegistryEpoch]);
 
   useEffect(() => {
     if (!companyId) {
@@ -297,11 +315,40 @@ export function ManageShare() {
       setLoading(true);
     }
 
-    // Device-local company: Firestore share/permission doc nahi — SQLite / context se config.
-    if (companyData && isOfflineCompanyStorage(companyData)) {
-      const raw = (companyData as { permissionConfig?: PermissionConfig }).permissionConfig;
-      applyPermissionConfigFromServer(buildMergedPermissionConfig(raw ?? null));
-      return;
+    // Strict: local / PL-server / gate → Firebase onSnapshot mat (defaults editDays=7 paint + write).
+    const useDeviceOrPl = companyUsesDeviceOrPlPermissionConfig(companyData);
+    if (useDeviceOrPl) {
+      let cancelled = false;
+      void (async () => {
+        try {
+          const row = await getLocalCompanyById(companyId, { includeDeleted: true });
+          if (cancelled) return;
+          const raw =
+            (row as { permissionConfig?: PermissionConfig } | null)?.permissionConfig ??
+            (companyData as { permissionConfig?: PermissionConfig } | null)?.permissionConfig ??
+            null;
+          const merged = buildMergedPermissionConfig(raw);
+          logPlPerm("manage-share-load-sqlite", {
+            companyId,
+            hasSqliteRow: Boolean(row),
+            hasPermissionConfig: Boolean(raw),
+            dateLimits: summarizePermissionDateLimits(merged),
+          });
+          applyPermissionConfigFromServer(merged);
+        } catch (e) {
+          console.error(e);
+          if (!cancelled) {
+            applyPermissionConfigFromServer(
+              buildMergedPermissionConfig(
+                (companyData as { permissionConfig?: PermissionConfig } | null)?.permissionConfig ?? null
+              )
+            );
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
     }
 
     const companyRef = doc(firestore, "companies", companyId);
@@ -333,7 +380,7 @@ export function ManageShare() {
     });
 
     return () => unsubscribe();
-  }, [companyId, companyData?.storageOption, localPermissionSyncKey, applyPermissionConfigFromServer]);
+  }, [companyId, localPermissionSyncKey, applyPermissionConfigFromServer]);
   
   const permissionsForSelectedRole = editablePermissionConfig.roles[selectedRoleForPermissions] || Array(flattenedPermissions.length).fill(false);
   const dateLimitsForSelectedRole = editablePermissionConfig.dateLimits?.[selectedRoleForPermissions] || { entryDays: 0, editDays: 0, deleteDays: 0 };
@@ -471,12 +518,13 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
       const { shouldPersistPermissionConfigViaPlServerHost, notifyPlServerHostCompanyMetaSaved } = await import(
         "@/lib/plServerCompanyMetaSync"
       );
-      const saveViaPlServerHost = await shouldPersistPermissionConfigViaPlServerHost(companyId, companyData);
+      // Strict: local/PL/gate → always SQLite host path (never Firebase write).
+      const saveViaPlServerHost =
+        companyUsesDeviceOrPlPermissionConfig(companyData) ||
+        (await shouldPersistPermissionConfigViaPlServerHost(companyId, companyData));
 
       if (saveViaPlServerHost) {
         // Electron / PL host: SQLite `local_companies` delta export + staff meta ka source of truth.
-        // `updateCompanyDocRoot` → Local HTTP API; woh “ok” ho to bhi alag DB me likh sakta hai —
-        // UI 400 dikhe, voucher runtime pe default manager editDays=7 (initialPermissionConfig).
         try {
           const existing = await getLocalCompanyById(companyId, { includeDeleted: true });
           if (!existing) {
@@ -493,17 +541,44 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
             permissionConfig: configToSave,
             updatedAt: Date.now(),
           } as LocalCompanyDoc);
-          // Best-effort Local API mirror (legacy); failure must not skip SQLite / staff bump.
-          void updateCompanyDocRoot(companyId, { permissionConfig: configToSave });
-          reloadLocalCompanyRegistry();
+          try {
+            const { flushPendingBrowserDbSave } = await import("@/lib/localSqlite");
+            await flushPendingBrowserDbSave();
+          } catch {
+            /* best-effort */
+          }
+          // Verify round-trip — refresh pe 7 revert = write miss.
+          const verify = await getLocalCompanyById(companyId, { includeDeleted: true });
+          const verifiedDays = (verify as { permissionConfig?: PermissionConfig } | null)?.permissionConfig
+            ?.dateLimits?.[selectedRoleForPermissions]?.editDays;
+          const expectedEdit = configToSave.dateLimits?.[selectedRoleForPermissions]?.editDays;
+          logPlPerm("host-save", {
+            companyId,
+            saveViaPlServerHost: true,
+            dateLimits: summarizePermissionDateLimits(configToSave),
+            selectedRole: selectedRoleForPermissions,
+            verifiedEditDays: verifiedDays ?? null,
+            expectedEditDays: expectedEdit ?? null,
+          });
+          if (expectedEdit != null && Number(verifiedDays) !== Number(expectedEdit)) {
+            toast({
+              variant: "destructive",
+              title: "Save verify failed",
+              description: "PermissionConfig SQLite me confirm nahi hua — try again.",
+            });
+            return;
+          }
+          // Do NOT call updateCompanyDocRoot here — local API mirror can race / omit fields.
           commitSavedPermissionConfig(configToSave);
+          reloadLocalCompanyRegistry();
           if (typeof window !== "undefined") {
             const { PL_SERVER_COMPANY_META_UPDATED_EVENT } = await import("@/lib/plServerCompanyMetaSync");
             window.dispatchEvent(
               new CustomEvent(PL_SERVER_COMPANY_META_UPDATED_EVENT, { detail: { companyId } })
             );
           }
-          void notifyPlServerHostCompanyMetaSaved(companyId, { permissionConfig: configToSave });
+          // Live bump staff clients — await so gate gets full permissionConfig patch.
+          await notifyPlServerHostCompanyMetaSaved(companyId, { permissionConfig: configToSave });
           toast({
             title: "Success",
             description: "Permissions saved on this PC — staff clients sync via PL server.",
@@ -520,11 +595,22 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
         }
       }
 
+      // Online company only — Firebase.
+      if (companyUsesDeviceOrPlPermissionConfig(companyData)) {
+        toast({
+          variant: "destructive",
+          title: "Could not save",
+          description: "Local/PL company cannot save role permissions to Firebase.",
+        });
+        return;
+      }
+
       const companyRef = doc(firestore, "companies", companyId);
       await updateDoc(companyRef, { permissionConfig: configToSave });
       commitSavedPermissionConfig(configToSave);
       triggerSync();
       toast({ title: "Success", description: "Permissions have been saved." });
+      return;
     } catch (error) {
       console.error("Error saving permissions:", error);
       toast({ variant: "destructive", title: "Error", description: isCompanyNotFoundError(error) ? COMPANY_NOT_SYNCED_MESSAGE : "Failed to save permission changes." });
@@ -1071,6 +1157,107 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
         </Card>
         )}
         
+        <Dialog open={myRoleOpen} onOpenChange={setMyRoleOpen}>
+          <DialogContent className="max-h-[85vh] w-[min(100vw-1.5rem,80vw)] max-w-5xl overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>My Role (read-only)</DialogTitle>
+              <DialogDescription>
+                Permissions this login actually uses for vouchers — not the dropdown you are editing above.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 text-sm">
+              <div className="rounded-lg border p-3 space-y-1">
+                <p>
+                  <span className="font-semibold">Assigned role:</span>{" "}
+                  {companyShareRoleLabel(myAssignedRole)}
+                </p>
+                <p>
+                  <span className="font-semibold">Provider:</span>{" "}
+                  {permissionConfigSource?.label || resolvePermissionConfigSource(companyData).label}
+                </p>
+                <p className="break-all">
+                  <span className="font-semibold">Source URL:</span>{" "}
+                  {permissionConfigSource?.url || resolvePermissionConfigSource(companyData).url}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Config load path: {permissionConfigSourceKey || "—"}
+                  {permissionConfigSourceKey === "initial-default"
+                    ? " (host permissionConfig missing on client — defaults like manager editDays=7)"
+                    : ""}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {permissionConfigSource?.detail || resolvePermissionConfigSource(companyData).detail}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <h4 className="font-semibold border-b pb-1">Date Control</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {(
+                    [
+                      ["Entry", myDateLimits?.entryDays],
+                      ["Edit", myDateLimits?.editDays],
+                      ["Delete", myDateLimits?.deleteDays],
+                    ] as const
+                  ).map(([label, days]) => (
+                    <div key={label} className="rounded border p-2">
+                      <div className="text-xs text-muted-foreground">Back Date {label}</div>
+                      <div className="font-semibold">{days ?? 0}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <h4 className="font-semibold border-b pb-1">File Attachments</h4>
+                <p>Allow attachments: {myAllowAttachments ? "ON" : "OFF"}</p>
+                <p>Max files: {myFileLimits?.maxFileCount ?? 0}</p>
+                <p>
+                  Image: {myFileLimits?.allowImage ? "ON" : "OFF"} · PDF:{" "}
+                  {myFileLimits?.allowPDF ? "ON" : "OFF"} · Delete:{" "}
+                  {myFileLimits?.allowDelete ? "ON" : "OFF"}
+                </p>
+              </div>
+              <div className="space-y-3">
+                <h4 className="font-semibold border-b pb-1">Permissions</h4>
+                {PermissionGroups.map((group) => (
+                  <div key={group.title} className="space-y-1">
+                    <p className="text-xs font-semibold text-muted-foreground">{group.title}</p>
+                    <ul className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-x-3 gap-y-1">
+                      {group.permissions.map((perm) => {
+                        const on = roleCanPermission(
+                          myAssignedRole,
+                          perm.key,
+                          livePermissionConfig || editablePermissionConfig
+                        );
+                        return (
+                          <li key={perm.key} className="flex items-center gap-2 min-w-0">
+                            <Checkbox checked={on} disabled />
+                            <span className={cn("truncate", on ? "" : "text-muted-foreground")}>{perm.label}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="secondary" onClick={() => setMyRoleOpen(false)}>
+                Close
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setSelectedRoleForPermissions(myAssignedRole);
+                  setMyRoleOpen(false);
+                }}
+              >
+                Jump editor to my role
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         <Dialog open={!!userToEdit} onOpenChange={(open) => !open && setUserToEdit(null)}>
              <DialogContent>
                 <DialogHeader>
@@ -1099,8 +1286,20 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
         <Card className={settingsDetailCardShell} {...{ [companyProfileChromeRoot]: "" }}>
              <CardHeader className={cn(companyProfilePageBg, "flex flex-col md:flex-row justify-between md:items-start gap-4")}>
                 <div className="flex-1">
-                    <CardTitle>Role Permissions</CardTitle>
-                    <CardDescription>Select a role to view and edit its permissions.</CardDescription>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <CardTitle>Role Permissions</CardTitle>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setMyRoleOpen(true)}
+                      >
+                        My Role
+                      </Button>
+                    </div>
+                    <CardDescription>
+                      Select a role to view and edit its permissions. Use <strong>My Role</strong> to see what this login actually enforces.
+                    </CardDescription>
                 </div>
                  <div className="flex items-center text-base font-bold" style={{gap: '10mm'}}>
                     <div className="border rounded-lg p-2 flex items-center">Total: {totalPermissions}</div>

@@ -16,6 +16,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { ResizeWidthHandle, useResizablePixelWidth } from "@/components/layout/ResizablePaneWidth"
 
 interface SidebarContextProps {
   isOpen: boolean
@@ -143,7 +144,7 @@ const sidebarVariants = cva(
   {
     variants: {
       isOpen: {
-        true: "w-64",
+        true: "",
         false: "w-16",
       },
     },
@@ -159,6 +160,12 @@ export const Sidebar = React.forwardRef<
 >(({ className, asChild, children, ...props }, ref) => {
   const { isOpen, isMobile, setIsOpen } = useSidebar()
   const Comp = asChild ? Slot : "aside"
+  const { widthPx, beginResize } = useResizablePixelWidth({
+    storageKey: "pl-app-sidebar-width-px",
+    defaultPx: 256,
+    minPx: Math.round(256 * 0.7),
+    maxPx: Math.round(256 * 1.3),
+  })
 
   // History `pushState` yahan hata diya: LTR edge swipe + React Strict cleanup par `history.back()` galat “page back” / menu taps toot rahe the
 
@@ -196,11 +203,13 @@ export const Sidebar = React.forwardRef<
   return (
     <Comp
       ref={ref}
-      className={cn(sidebarVariants({ isOpen }), className)}
+      className={cn("relative shrink-0", sidebarVariants({ isOpen }), className)}
+      style={isOpen ? { width: `${widthPx}px` } : undefined}
       {...props}
       data-pl-main-sidebar="1"
     >
       {children}
+      {isOpen ? <ResizeWidthHandle onPointerDown={beginResize} title="Resize app sidebar" /> : null}
     </Comp>
   )
 })

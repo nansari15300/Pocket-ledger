@@ -64,6 +64,7 @@ import { logoutFromCompanyOnThisDevice } from "@/lib/logoutFromCompany";
 import { appNavHref } from "@/lib/appNavHref";
 import type { GateRecord } from "@/lib/gates/gateTypes";
 import { getLocalAuthToken, setLocalAuthToken } from "@/lib/localApiClient";
+import { grantOpenLocalCompanySession } from "@/lib/companyUnlockGate";
 import {
   readAnyStoredOfflineUnlockSessionForCompany,
   readStoredOfflineUnlockSession,
@@ -395,8 +396,8 @@ export function GatePageContent() {
     })();
   };
 
-  const syncLocalServerGateToThisClient = async (gate: GateRecord) => {
-    const mirror = await syncPlServerGateToLocalSqlite(gate, { pullFullLedger: true });
+  const syncLocalServerGateCompanyListToThisClient = async (gate: GateRecord) => {
+    const mirror = await syncPlServerGateToLocalSqlite(gate, { pullFullLedger: false });
     writeServerCompaniesLastRefreshMs(gate);
     await reloadLocalCompanyRegistry();
     return mirror;
@@ -596,7 +597,7 @@ export function GatePageContent() {
       }
       const test = await testLocalServerGate(gate.id);
       if (test.ok && shouldMirrorLocalServerGateOnThisClient && !gateHubMode) {
-        const mirror = await syncLocalServerGateToThisClient(gate);
+        const mirror = await syncLocalServerGateCompanyListToThisClient(gate);
         if (mirror.synced > 0) {
           toast.success("Gate added", {
             description: `${mirror.synced} companies synced to this device.`,
@@ -647,7 +648,7 @@ export function GatePageContent() {
       }
       const test = await testLocalServerGate(editingGateId);
       if (test.ok && shouldMirrorLocalServerGateOnThisClient) {
-        const mirror = await syncLocalServerGateToThisClient(gate);
+        const mirror = await syncLocalServerGateCompanyListToThisClient(gate);
         if (mirror.synced > 0) {
           toast.success("Gate updated", {
             description: `${mirror.synced} companies synced to this device.`,
@@ -811,6 +812,7 @@ export function GatePageContent() {
           const quickRequiresLogin =
             picked != null ? loginMetaFromSharedSummary(picked)?.requiresLogin : undefined;
           if (quickRequiresLogin === false) {
+            grantOpenLocalCompanySession(id, { role: "viewer" });
             await openMirroredCompany();
             return;
           }
@@ -823,9 +825,10 @@ export function GatePageContent() {
             appEmail: user?.email,
             appUid: user?.uid,
           }).then(async (loginMeta) => {
-            if (loginMeta.requiresLogin) return;
+            if (loginMeta.requiresLogin !== false) return;
             setCompanyToUnlock(null);
             setUnlockPreferredGate(null);
+            grantOpenLocalCompanySession(id, { role: "viewer" });
             await openMirroredCompany();
           });
         } finally {
@@ -1149,12 +1152,12 @@ export function GatePageContent() {
                           return;
                         }
                         if (shouldMirrorLocalServerGateOnThisClient) {
-                          const mirror = await syncLocalServerGateToThisClient(detailGate);
+                          const mirror = await syncLocalServerGateCompanyListToThisClient(detailGate);
                           if (mirror.error) {
                             toast.warning("Server reachable", { description: mirror.error });
                           } else {
-                            toast.success("Server synced", {
-                              description: `${mirror.synced} companies synced, ${mirror.fullPull} ledger pulls complete.`,
+                            toast.success("Server reachable", {
+                              description: `${mirror.synced} companies loaded from this server.`,
                             });
                           }
                           return;

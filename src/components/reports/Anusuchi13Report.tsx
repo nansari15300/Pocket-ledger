@@ -64,7 +64,7 @@ export function Anusuchi13Report() {
     return allVouchers.filter(
       (v) =>
         v.partyId === selectedParty.id ||
-        (v.entries && v.entries.some((e: any) => e.accountId === selectedParty.id))
+        (Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId === selectedParty.id))
     );
   }, [allVouchers, selectedParty]);
 

@@ -43,10 +43,10 @@ export function voucherTouchesPartyLedger(v: any, partyId: string): boolean {
   if (ledgerIdEq(v.incomeAccountId, partyId)) return true;
   if (ledgerIdEq(v.salesAccountId, partyId)) return true;
   if (ledgerIdEq(v.purchaseAccountId, partyId)) return true;
-  if (v.lineItems?.some((li: any) => ledgerIdEq(li?.itemId, partyId) || ledgerIdEq(li?.taxAccountId, partyId))) return true;
-  if (v.items?.some((li: any) => ledgerIdEq(li?.itemId, partyId))) return true;
+  if (Array.isArray(v.lineItems) && v.lineItems.some((li: any) => ledgerIdEq(li?.itemId, partyId) || ledgerIdEq(li?.taxAccountId, partyId))) return true;
+  if (Array.isArray(v.items) && v.items.some((li: any) => ledgerIdEq(li?.itemId, partyId))) return true;
   // Journal multi-leg — `accountId` string ya ref dono (cross-company copy ke baad Compare Side B rows).
-  if (v.entries?.some((e: any) => ledgerIdEq(e?.accountId, partyId))) return true;
+  if (Array.isArray(v.entries) && v.entries.some((e: any) => ledgerIdEq(e?.accountId, partyId))) return true;
   if (v.type === "note" && ledgerIdEq(v.entityId, partyId)) return true;
   if (v.type === "contra" && (ledgerIdEq(v.fromAccountId, partyId) || ledgerIdEq(v.toAccountId, partyId))) return true;
   // Inter Company — source/target party + IC · Due from/to counterparty

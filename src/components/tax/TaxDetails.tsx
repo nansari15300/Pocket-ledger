@@ -344,9 +344,9 @@ export function TaxDetails({
     vouchers.forEach((v) => {
       const isRelevant =
         v.taxAccountId === tax.id ||
-        (v.lineItems && v.lineItems.some((line: any) => line.taxAccountId === tax.id)) ||
+        (Array.isArray(v.lineItems) && v.lineItems.some((line: any) => line.taxAccountId === tax.id)) ||
         (v.type === 'note' && v.context === 'Tax' && v.entityId === tax.id) ||
-        (v.type === 'journal' && v.entries?.some((e: any) => e.accountId === tax.id));
+        (v.type === 'journal' && Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId === tax.id));
 
       if (isRelevant) {
         const dateValue = v.date?.toDate ? v.date.toDate() : new Date(v.date);

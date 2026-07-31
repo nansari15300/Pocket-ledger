@@ -7,6 +7,7 @@ import type { VisibleColumns, TransactionColumnKey } from "./TransactionsTable";
 export const COLUMN_VISIBILITY_KEY = "transactionVisibleColumns";
 
 export const DEFAULT_VISIBLE_COLUMNS: VisibleColumns = {
+  syncStatus: false,
   date: true,
   type: true,
   voucherNo: true,
@@ -19,6 +20,7 @@ export const DEFAULT_VISIBLE_COLUMNS: VisibleColumns = {
 };
 
 export const COLUMN_LABELS: Record<TransactionColumnKey, string> = {
+  syncStatus: "Sync",
   date: "Date",
   type: "Type",
   voucherNo: "Voucher No.",

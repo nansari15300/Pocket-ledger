@@ -172,7 +172,7 @@ export async function finalizePlServerGateCompanyOpen(
   } catch {
     /* optional */
   }
-  grantOpenLocalCompanySession(id, { role: "manager" });
+  grantOpenLocalCompanySession(id, { role: "viewer" });
   await refreshPlServerStaffCompanyUiAfterOpen(id);
   plGateTrace("gate_company_open_finalized", { companyId: id });
 }

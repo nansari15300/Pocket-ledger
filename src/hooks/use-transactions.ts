@@ -2,7 +2,8 @@
 "use client";
 
 import { useMemo, useCallback } from "react";
-import { startOfDay, endOfDay, subDays } from "date-fns";
+import { startOfDay, endOfDay } from "date-fns";
+import { buildDaybookDailySummary } from "@/lib/accountLedgerDaySummary";
 import type { Party, Group } from "@/components/party/types";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import type { Staff, StaffGroup } from "@/components/staff/types";
@@ -36,7 +37,6 @@ import {
   getInterCompanyLedgerAmounts,
   hideUnapprovedTargetInterCompanyEntityLedger,
   interCompanyKindForContext,
-  interCompanyPaymentDirection,
   interCompanyVoucherTouchesEntity,
   keepUnapprovedInterCompanyLedgerPlaceholderRow,
 } from "@/lib/interCompany/interCompanyLedgerAmounts";
@@ -47,12 +47,27 @@ import {
 import { formatInterCompanyLedgerVoucherNumber } from "@/lib/interCompany/interCompanyVoucherDisplay";
 import { sumJournalAmountsForAccount } from "@/lib/journalLedgerAmounts";
 
+export {
+  computeAccountLedgerDaySummary,
+  getAccountLedgerTransactionAmounts,
+  getAccountDaybookCashFlowInOut,
+  buildDaybookDailySummary,
+} from "@/lib/accountLedgerDaySummary";
 
 type EntityWithItems = { id: string; items: (Item | Staff | Account | ExpenseAccount | Party)[], openingBalance?: number, [key: string]: any };
 
 type Entity = Party | Account | Staff | Tax | Item | Group | AccountGroup | StaffGroup | TaxGroup | ItemGroup | ExpenseAccount | ExpenseGroup | EntityWithItems;
 
 const safeToDate = (date: unknown): Date | null => parseFirestoreDateFieldToJsDate(date);
+
+const ledgerIdEq = (value: unknown, id: string): boolean => {
+    const target = String(id || "").trim();
+    if (!target || value == null || value === "") return false;
+    if (typeof value === "object" && value !== null && "id" in (value as Record<string, unknown>)) {
+        return String((value as { id?: unknown }).id ?? "").trim() === target;
+    }
+    return String(value).trim() === target;
+};
 
 const getParticularsText = (t: any, names: Record<string, string> = {}) => {
     let particulars: string[] = [];
@@ -154,7 +169,11 @@ export const getTransactionAmounts = (
     let quantity = 0;
     let taxableAmount = 0;
     
-    const amount = toNum(transaction.total ?? transaction.amount ?? 0);
+    // Sale/Purchase edits often update `total`; prefer it over stale legacy `amount`.
+    // Other voucher types still keep the old fallback behavior for 0-safe rows.
+    const amount = ['sale', 'purchase'].includes(transaction.type)
+        ? toNum(transaction.total || transaction.amount || 0)
+        : toNum(transaction.amount || transaction.total || 0);
 
     if (['sale', 'purchase'].includes(transaction.type)) {
       const subTotal = toNum(transaction.subTotal);
@@ -227,13 +246,23 @@ export const getTransactionAmounts = (
                     if (["payment_in", "direct_income", "sale"].includes(transaction.type)) debit += amount;
                     if (["payment_out", "direct_expense", "purchase"].includes(transaction.type)) credit += amount;
                 }
-            } else if (transaction.accountId === entity.id) {
+            } else if (ledgerIdEq(transaction.accountId, String(entity.id || ""))) {
                 if (["payment_in", "direct_income", "sale"].includes(transaction.type)) debit += amount;
                 if (["payment_out", "direct_expense", "purchase"].includes(transaction.type)) credit += amount;
             }
             if (transaction.type === "contra") {
-                if (transaction.toAccountId === entity.id) debit = amount; 
-                if (transaction.fromAccountId === entity.id) credit = amount; 
+                const accountId = String(entity?.id || "");
+                const hasToAccount = transaction.toAccountId != null && transaction.toAccountId !== "";
+                const hasFromAccount = transaction.fromAccountId != null && transaction.fromAccountId !== "";
+                const matchesToAccount =
+                    ledgerIdEq(transaction.toAccountId, accountId) ||
+                    (!hasToAccount && (ledgerIdEq(transaction.accountId, accountId) || ledgerIdEq(transaction.bankAccountId, accountId))) ||
+                    ((ledgerIdEq(transaction.accountId, accountId) || ledgerIdEq(transaction.bankAccountId, accountId)) &&
+                        !ledgerIdEq(transaction.fromAccountId, accountId) &&
+                        !ledgerIdEq(transaction.toAccountId, accountId));
+                const matchesFromAccount = hasFromAccount && ledgerIdEq(transaction.fromAccountId, accountId);
+                if (matchesToAccount) debit = amount;
+                if (matchesFromAccount) credit = amount;
             } else if (transaction.type === "journal" && Array.isArray(transaction.entries)) {
                 const journalAmt = sumJournalAmountsForAccount(transaction.entries, entity.id);
                 debit += journalAmt.debit;
@@ -357,7 +386,8 @@ export const getTransactionAmounts = (
             const hasPurchaseAccount = memberIdsInGroup.has('purchase_account');
 
             const isMemberLinkedInGroup =
-                transaction.entries?.some((e: any) => memberIdsInGroup.has(e.accountId)) ||
+                (Array.isArray(transaction.entries) &&
+                  transaction.entries.some((e: any) => memberIdsInGroup.has(e.accountId))) ||
                 memberIdsInGroup.has(transaction.partyId) ||
                 memberIdsInGroup.has(transaction.staffId) ||
                 memberIdsInGroup.has(transaction.accountId) ||
@@ -792,31 +822,6 @@ export const getTaxTransactionAmounts = (transaction: any, taxAccountId: string,
     return { debit, credit, taxableAmount, taxAmount, taxRate, quantity };
 };
 
-/** Daybook Daily Summary — IC clearing legs par Dr+Cr dono; cash-flow me sirf ek side (In ya Out) */
-const getDaybookAccountCashFlowInOut = (
-  v: any,
-  acc: Account,
-  stockView: StockView,
-  entityList: any[] | undefined,
-  processedTaxes: any
-): { tin: number; tout: number } => {
-  const { debit, credit } = getTransactionAmounts(v, "account", acc, stockView, entityList, processedTaxes);
-  if (String(v?.type || "") !== "inter_company" || (!debit && !credit)) {
-    return { tin: debit, tout: credit };
-  }
-  if (debit > 0 && credit > 0) {
-    const amt = Math.max(debit, credit);
-    const dir = interCompanyPaymentDirection(v);
-    if (dir === "out") return { tin: 0, tout: amt };
-    if (dir === "in") return { tin: amt, tout: 0 };
-    const side = interCompanyVoucherViewerSide(v);
-    if (side === "source") return { tin: 0, tout: amt };
-    if (side === "target") return { tin: amt, tout: 0 };
-    return { tin: Math.max(0, debit - credit), tout: Math.max(0, credit - debit) };
-  }
-  return { tin: debit, tout: credit };
-};
-
 export function useTransactions(
     entity: Entity | null | undefined,
     context: Context,
@@ -924,9 +929,11 @@ export function useTransactions(
                     }
 
                     const isMemberLinked =
-                        v.lineItems?.some((li: any) => memberIds.has(li.itemId) || memberIds.has(li.taxAccountId)) ||
+                        (Array.isArray(v.lineItems) &&
+                          v.lineItems.some((li: any) => memberIds.has(li.itemId) || memberIds.has(li.taxAccountId))) ||
                         v.items?.some((li: any) => memberIds.has(li.itemId)) ||
-                        v.entries?.some((e: any) => memberIds.has(e.accountId)) ||
+                        (Array.isArray(v.entries) &&
+                          v.entries.some((e: any) => memberIds.has(e.accountId))) ||
                         memberIds.has(v.partyId) ||
                         memberIds.has(v.staffId) ||
                         memberIds.has(v.accountId) ||
@@ -959,7 +966,7 @@ export function useTransactions(
         } else if (context === 'item') {
             // For items: lineItems/items containing this item, or notes linked to this item (entityId)
             entityTransactions = transactionsToProcess.filter((v: any) =>
-                v.lineItems?.some((li: any) => li.itemId === entity.id) ||
+                (Array.isArray(v.lineItems) && v.lineItems.some((li: any) => li.itemId === entity.id)) ||
                 v.items?.some((li: any) => li.itemId === entity.id) ||
                 (v.type === 'note' && v.entityId === entity.id)
             );
@@ -1001,9 +1008,9 @@ export function useTransactions(
                 v.incomeAccountId === entity.id ||
                 v.salesAccountId === entity.id ||
                 v.purchaseAccountId === entity.id ||
-                v.lineItems?.some((li: any) => li.itemId === entity.id || li.taxAccountId === entity.id) || 
+                (Array.isArray(v.lineItems) && v.lineItems.some((li: any) => li.itemId === entity.id || li.taxAccountId === entity.id)) ||
                 v.items?.some((li: any) => li.itemId === entity.id) || 
-                v.entries?.some((e: any) => e.accountId === entity.id) ||
+                (Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId === entity.id)) ||
                 (v.type === 'note' && v.entityId === entity.id) ||
                     (v.type === 'contra' && (v.fromAccountId === entity.id || v.toAccountId === entity.id)) ||
                 // IC: `companyBankAccountId` + target/source entity ids — sirf staffId se kaafi nahi
@@ -1869,83 +1876,28 @@ export function useTransactions(
         const closing = openingBalanceForPeriod + periodDr - periodCr;
         
         let daybookSummary: any = null;
-        if (context === 'daybook' && dateRange?.from) {
-            const today = startOfDay(dateRange.from);
-
-            /** Daybook summary: account balance kisi din ke end tak — same cash-flow rules as Todays In/Out */
-            const daybookAccountBalanceThroughDay = (acc: Account, throughDay: Date) => {
-                const throughEnd = endOfDay(throughDay);
-                let balance = acc.openingBalance || 0;
-                const accountObDate = safeToDate((acc as any).openingBalanceDate);
-                entityTransactions.forEach((v: any) => {
-                    if (daybookUserIdFilter && String(v.userId || "") !== String(daybookUserIdFilter)) return;
-                    const transactionDate = safeToDate(v.date);
-                    if (!transactionDate || transactionDate > throughEnd) return;
-                    if (accountObDate && transactionDate < accountObDate) return;
-                    const { tin, tout } = getDaybookAccountCashFlowInOut(v, acc, stockView, entityList, processedTaxes);
-                    balance += tin - tout;
-                });
-                return balance;
-            };
-
-            /** Yesterday = pichhle din ka Todays Balance (carry forward), sare voucher dubara scan nahi */
-            const yesterdayDay = subDays(today, 1);
-
-            /** Account ledger Dr/Cr → daybook in/out; IC clearing double-entry ko single-sided cash flow */
-            const addInOutForAccount = (acc: Account, v: any) => {
-                return getDaybookAccountCashFlowInOut(v, acc, stockView, entityList, processedTaxes);
-            };
-
-            const allAccounts = (entityList as Account[]) || [];
-            const bankAccountsSorted = allAccounts.filter(a => a.accountType === "Bank").slice().sort((a, b) => (a.accountName || "").localeCompare(b.accountName || ""));
-            const cashAccountsSorted = allAccounts.filter(a => a.accountType === "Cash").slice().sort((a, b) => (a.accountName || "").localeCompare(b.accountName || ""));
-
-            const mapAccountDaybookSummary = (acc: Account, fallbackName: string) => {
-                let accIn = 0;
-                let accOut = 0;
-                withBalance.forEach((v) => {
-                    const { tin, tout } = addInOutForAccount(acc, v);
-                    accIn += tin;
-                    accOut += tout;
-                });
-                const y = daybookAccountBalanceThroughDay(acc, yesterdayDay);
-                const todayBalance = daybookAccountBalanceThroughDay(acc, today);
-                return {
-                    id: acc.id,
-                    name: acc.accountName || fallbackName,
-                    yesterday: y,
-                    in: accIn,
-                    out: accOut,
-                    today: todayBalance,
-                };
-            };
-
-            const bankAccounts = bankAccountsSorted.map((acc) => mapAccountDaybookSummary(acc, "Bank"));
-            const cashAccounts = cashAccountsSorted.map((acc) => mapAccountDaybookSummary(acc, "Cash"));
-
-            const sumField = (rows: { yesterday: number; in: number; out: number; today: number }[], key: "yesterday" | "in" | "out" | "today") =>
-                rows.reduce((s, r) => s + r[key], 0);
-
-            const bank = {
-                yesterday: sumField(bankAccounts, "yesterday"),
-                in: sumField(bankAccounts, "in"),
-                out: sumField(bankAccounts, "out"),
-                today: sumField(bankAccounts, "today"),
-            };
-            const cash = {
-                yesterday: sumField(cashAccounts, "yesterday"),
-                in: sumField(cashAccounts, "in"),
-                out: sumField(cashAccounts, "out"),
-                today: sumField(cashAccounts, "today"),
-            };
-            const total = {
-                yesterday: bank.yesterday + cash.yesterday,
-                in: bank.in + cash.in,
-                out: bank.out + cash.out,
-                today: bank.today + cash.today,
-            };
-
-            daybookSummary = { bank, cash, total, bankAccounts, cashAccounts };
+        if (context === "daybook" && dateRange?.from) {
+            // Same vouchers + same getTransactionAmounts as AccountDetails bank ledger
+            const ledgerAccounts = ((entityList as Account[]) || []) as Account[];
+            const accountById = new Map(ledgerAccounts.map((a) => [String(a.id), a]));
+            daybookSummary = buildDaybookDailySummary({
+                accounts: ledgerAccounts as any[],
+                vouchers: vouchers ?? transactionsToProcess,
+                selectedDay: startOfDay(dateRange.from),
+                userIdFilter: daybookUserIdFilter,
+                getLedgerAmounts: (v, accountId) => {
+                    const acc = accountById.get(String(accountId)) || ({ id: accountId } as Account);
+                    const { debit, credit } = getTransactionAmounts(
+                        v,
+                        "account",
+                        acc,
+                        stockView,
+                        entityList,
+                        processedTaxes
+                    );
+                    return { debit: Number(debit) || 0, credit: Number(credit) || 0 };
+                },
+            });
         }
 
         // Bill-wise: opening balance row outstanding (amount - linked) and linked voucher nos for status
@@ -1979,7 +1931,7 @@ export function useTransactions(
                 // Add Salary vouchers that link this staff's OB (openingBalanceAllocated) so status and voucher no show on staff OB row
                 (vouchers as any[]).forEach((v: any) => {
                     if (v.type !== 'journal' || v.subType !== 'add_salary') return;
-                    const hasThisStaff = (v.entries as any[] | undefined)?.some((e: any) => e.accountId === entityId);
+                    const hasThisStaff = Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId === entityId);
                     if (!hasThisStaff) return;
                     const obAlloc = Number((v as any).openingBalanceAllocated) || 0;
                     totalAllocatedToOB += obAlloc;
@@ -2062,7 +2014,7 @@ export function useTransactions(
                 });
                 (vouchers as any[]).forEach((v: any) => {
                     if (v.type !== 'journal' || v.subType !== 'add_salary') return;
-                    const hasMemberStaff = (v.entries as any[] | undefined)?.some((e: any) => e.accountId && memberIds.has(String(e.accountId)));
+                    const hasMemberStaff = Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId && memberIds.has(String(e.accountId)));
                     if (!hasMemberStaff) return;
                     const obAlloc = Number((v as any).openingBalanceAllocated) || 0;
                     totalAllocatedToOB += obAlloc;

@@ -225,6 +225,8 @@ export function logCompanyOnlinePlFlip(
   }
 ): void {
   if (typeof window === "undefined") return;
+  const activeGate = getActiveGate();
+  if (activeGate.type !== "local_server") return;
   const beforeKind = flipKind(detail.before);
   const afterKind = flipKind(detail.after);
   const kindChanged = beforeKind !== afterKind;
@@ -239,7 +241,8 @@ export function logCompanyOnlinePlFlip(
   const idBefore = String(detail.before?.id || "").trim();
   const idAfter = String(detail.after?.id || "").trim();
   const source = detail.source || "unknown";
-  const { gateType, gateId } = gateMeta();
+  const gateType = activeGate.type;
+  const gateId = activeGate.id;
   const pathname = detail.pathname || (typeof location !== "undefined" ? location.pathname : null);
 
   // Pulse: har setCompany attempt (same-ref skip caller pe). Filter: CompanySetPulse

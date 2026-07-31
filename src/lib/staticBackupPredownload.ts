@@ -24,6 +24,7 @@ export async function runStaticCompanyBackupPredownload(args: {
   company: Company;
   companyId: string;
   signal?: AbortSignal;
+  includeAttachments?: boolean;
   onProgress: (p: StaticBackupPredownloadProgress) => void;
 }): Promise<{ ok: true } | { ok: false; error: string; cancelled?: boolean }> {
   if (!backupPrefersLocalSnapshot()) {
@@ -57,6 +58,11 @@ export async function runStaticCompanyBackupPredownload(args: {
       }
     } else {
       args.onProgress({ phase: "Reading data", detail: "Using local SQLite on this device…" });
+    }
+
+    if (args.includeAttachments === false) {
+      args.onProgress({ phase: "Complete", detail: "Full company data is on this device.", percent: 100 });
+      return { ok: true };
     }
 
     throwIfAborted();

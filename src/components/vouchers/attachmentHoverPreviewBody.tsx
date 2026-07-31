@@ -57,11 +57,12 @@ export async function prewarmHoverPreviewHttpsUrls(
     );
   }))].slice(0, maxUrls);
   const { markAttachmentUrlReady } = await import("@/lib/attachmentLoadReady");
-  for (const url of unique) {
-    if (options?.signal?.aborted) break;
+
+  const warmOne = async (url: string): Promise<void> => {
+    if (options?.signal?.aborted) return;
     if (peekHoverCachedBlobUrl(url)) {
       markAttachmentUrlReady(url);
-      continue;
+      return;
     }
     try {
       let blob: Blob | null = null;
@@ -75,7 +76,7 @@ export async function prewarmHoverPreviewHttpsUrls(
       if (!blob?.size) {
         blob = await getRemoteAttachmentBlobPreferOfflineCache(url, options?.signal, { companyId });
       }
-      if (!blob || blob.size === 0) continue;
+      if (!blob || blob.size === 0) return;
       const kind = await sniffBlobKindForPreview(blob);
       const mime =
         kind === "pdf"
@@ -95,7 +96,19 @@ export async function prewarmHoverPreviewHttpsUrls(
     } catch {
       // Visible-list warm is best-effort; hover open path will still fetch on demand if needed.
     }
-  }
+  };
+
+  // Parallel pool — serial await made PL-server gallery page flips ~20s for 10 thumbs.
+  const pool = Math.min(8, Math.max(1, unique.length));
+  let cursor = 0;
+  const workers = Array.from({ length: pool }, async () => {
+    while (cursor < unique.length) {
+      if (options?.signal?.aborted) return;
+      const i = cursor++;
+      await warmOne(unique[i]!);
+    }
+  });
+  await Promise.all(workers);
 }
 
 export async function prewarmVisibleAttachmentRefsForInstantOpen(
@@ -382,13 +395,26 @@ function LocalPdfBlobHoverPreview({
   sourceUrl,
   blob,
   onOpen,
+  instantThumbUrl,
 }: {
   sourceUrl: string;
   blob?: Blob | null;
   onOpen: () => void;
+  /** Cell/hover JPEG already warm — show immediately while pdf.js optional upgrade runs. */
+  instantThumbUrl?: string | null;
 }) {
-  const [thumbUrl, setThumbUrl] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(true);
+  const [thumbUrl, setThumbUrl] = React.useState<string | null>(() =>
+    String(instantThumbUrl || "").trim() || null
+  );
+  const [loading, setLoading] = React.useState(() => !String(instantThumbUrl || "").trim());
+
+  React.useEffect(() => {
+    const warm = String(instantThumbUrl || "").trim();
+    if (warm) {
+      setThumbUrl(warm);
+      setLoading(false);
+    }
+  }, [instantThumbUrl]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -397,6 +423,11 @@ function LocalPdfBlobHoverPreview({
     const timeoutId = window.setTimeout(() => ac.abort(), PDF_HOVER_RASTER_TIMEOUT_MS);
     void (async () => {
       try {
+        // Already showing cell thumb — skip expensive pdf.js re-raster for portal open.
+        if (String(instantThumbUrl || "").trim()) {
+          if (!cancelled) setLoading(false);
+          return;
+        }
         setLoading(true);
         let pdfBlob = blob && blob.size > 0 ? blob : null;
         if (!pdfBlob) {
@@ -418,7 +449,7 @@ function LocalPdfBlobHoverPreview({
         created = result.thumbnailUrl;
         setThumbUrl(result.thumbnailUrl);
       } catch {
-        if (!cancelled) setThumbUrl(null);
+        if (!cancelled && !String(instantThumbUrl || "").trim()) setThumbUrl(null);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -435,9 +466,9 @@ function LocalPdfBlobHoverPreview({
         }
       }
     };
-  }, [sourceUrl, blob]);
+  }, [sourceUrl, blob, instantThumbUrl]);
 
-  if (loading) {
+  if (loading && !thumbUrl) {
     return (
       <div className="flex min-h-[280px] min-w-[220px] items-center justify-center p-6">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" aria-label="Loading PDF preview" />
@@ -489,15 +520,42 @@ export function LocalFileRefTooltipPreview({
     readActiveAttachmentCompanyId() ??
     null;
   const effectiveUrl = React.useMemo(() => normalizeAttachmentUrlForDevicePreview(url), [url]);
-  const [state, setState] = React.useState<
-    | { status: "loading" }
-    | { status: "error" }
-    | { status: "ready"; objectUrl: string; mime: string; blob?: Blob }
-  >({ status: "loading" });
-  const [reloadKey, setReloadKey] = React.useState(0);
   const galleryUrlsKey = gallery?.urls?.join("\x1e") ?? "";
   const galleryDepKey =
     gallery && gallery.urls.length > 1 ? `${gallery.startIndex}:${galleryUrlsKey}` : galleryUrlsKey;
+
+  const initialCached = React.useMemo(() => {
+    const cellThumb = peekHoverCachedBlobUrl(`${effectiveUrl}::cell-thumb`);
+    const full = peekHoverCachedBlobUrl(effectiveUrl);
+    // Full bytes pehle — cell-thumb sirf instant paint (blurry 300% zoom avoid).
+    const cachedPreviewUrl = full || cellThumb;
+    if (!cachedPreviewUrl) return null;
+    const fmt = getAttachmentFormatLabel(effectiveUrl);
+    if (full) {
+      if (fmt === "PDF") {
+        return { objectUrl: full, mime: "application/pdf" as const, fromCellThumb: false };
+      }
+      return { objectUrl: full, mime: "image/jpeg" as const, fromCellThumb: false };
+    }
+    // Cell thumb = JPEG raster (incl. PDF first page). `local:` URL label is often "FILE".
+    return { objectUrl: cellThumb!, mime: "image/jpeg" as const, fromCellThumb: true };
+  }, [effectiveUrl]);
+
+  const [state, setState] = React.useState<
+    | { status: "loading" }
+    | { status: "error" }
+    | { status: "ready"; objectUrl: string; mime: string; blob?: Blob; fromCellThumb?: boolean }
+  >(() =>
+    initialCached
+      ? {
+          status: "ready",
+          objectUrl: initialCached.objectUrl,
+          mime: initialCached.mime,
+          fromCellThumb: initialCached.fromCellThumb,
+        }
+      : { status: "loading" }
+  );
+  const [reloadKey, setReloadKey] = React.useState(0);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -506,40 +564,71 @@ export function LocalFileRefTooltipPreview({
     const timeoutId = window.setTimeout(() => ac.abort(), EMBEDDED_PREVIEW_DOWNLOAD_TIMEOUT_MS);
     const cid = companyId ?? readActiveAttachmentCompanyId() ?? undefined;
 
-    const cachedPreviewUrl =
-      peekHoverCachedBlobUrl(effectiveUrl) ?? peekHoverCachedBlobUrl(`${effectiveUrl}::cell-thumb`);
-    if (cachedPreviewUrl) {
+    const cellThumb = peekHoverCachedBlobUrl(`${effectiveUrl}::cell-thumb`);
+    const fullCached = peekHoverCachedBlobUrl(effectiveUrl);
+    if (fullCached) {
       const fmt = getAttachmentFormatLabel(effectiveUrl);
-      const cachedMime =
-        fmt === "PDF"
-          ? cachedPreviewUrl.includes("pdf") || peekHoverCachedBlobUrl(effectiveUrl)
-            ? "application/pdf"
-            : "image/jpeg"
-          : fmt === "FILE" || fmt === "OTHER"
-            ? "application/octet-stream"
-            : "image/jpeg";
-      setState({ status: "ready", objectUrl: cachedPreviewUrl, mime: cachedMime });
+      if (fmt === "PDF") {
+        setState({ status: "ready", objectUrl: fullCached, mime: "application/pdf", fromCellThumb: false });
+        // Continue async — attach blob / optional upgrade.
+      } else {
+        setState({
+          status: "ready",
+          objectUrl: fullCached,
+          mime: "image/jpeg",
+          fromCellThumb: false,
+        });
+        window.clearTimeout(timeoutId);
+        return () => {
+          cancelled = true;
+          ac.abort();
+        };
+      }
+    } else if (cellThumb) {
+      // Instant paint from cell thumb, then continue async to upgrade to full bytes.
+      setState({ status: "ready", objectUrl: cellThumb, mime: "image/jpeg", fromCellThumb: true });
     } else {
       setState({ status: "loading" });
     }
 
     void (async () => {
       try {
-        // Always prefer real bytes + sniff — displayUrl early-return PDF ko "octet-stream"/FILE bana deta tha
-        // aur LocalPdfBlobHoverPreview ke paas blob nahi jata tha (txn row portal blank).
         let blob: Blob | null = null;
+
+        if (fullCached) {
+          try {
+            const fromHover = await fetch(fullCached, { signal: ac.signal }).then((r) =>
+              r.ok ? r.blob() : null
+            );
+            if (fromHover && fromHover.size > 0) blob = fromHover;
+          } catch {
+            /* fall through */
+          }
+        }
+
+        if (!blob?.size) {
+          try {
+            const { tryOfflineCachedAttachmentBlobMultiKey } = await import(
+              "@/lib/offlineAttachmentUrlCache"
+            );
+            blob = await tryOfflineCachedAttachmentBlobMultiKey(effectiveUrl);
+          } catch {
+            /* cache optional */
+          }
+        }
+
         const { isPlRemoteServerClientMode, isPlSharingServerPortOrigin } = await import(
           "@/lib/plRemoteServerClient"
         );
         const staffRemote = isPlRemoteServerClientMode() || isPlSharingServerPortOrigin();
-        if (!staffRemote && isLocalFileRef(effectiveUrl)) {
+        if (!blob?.size && !staffRemote && isLocalFileRef(effectiveUrl)) {
           blob = await getBlobFromLocalFileRef(effectiveUrl, {
             companyId: cid,
           });
         }
         if (
+          !blob?.size &&
           !staffRemote &&
-          (!blob || blob.size <= 0) &&
           usesEmbeddedNativeAttachmentStorage() &&
           isLocalFileRef(effectiveUrl)
         ) {
@@ -565,7 +654,7 @@ export function LocalFileRefTooltipPreview({
         }
         if (cancelled) return;
         if (!blob || blob.size === 0) {
-          setState({ status: "error" });
+          setState((prev) => (prev.status === "ready" ? prev : { status: "error" }));
           return;
         }
         let mime = String(blob.type || "application/octet-stream").toLowerCase();
@@ -578,6 +667,13 @@ export function LocalFileRefTooltipPreview({
           blob = new Blob([await blob.arrayBuffer()], { type: "application/pdf" });
           mime = "application/pdf";
         }
+        // PDF + cell thumb already showing: keep image preview (don't flip to pdf.js spinner),
+        // but remember full PDF blob for Open.
+        if (mime.includes("pdf") && cellThumb && !fullCached) {
+          const ou = URL.createObjectURL(blob);
+          rememberHoverBlobUrl(effectiveUrl, ou);
+          return;
+        }
         const objectUrl = URL.createObjectURL(blob);
         urlRef.current = objectUrl;
         if (cancelled) {
@@ -585,9 +681,17 @@ export function LocalFileRefTooltipPreview({
           urlRef.current = null;
           return;
         }
-        setState({ status: "ready", objectUrl, mime, blob });
+        rememberHoverBlobUrl(effectiveUrl, objectUrl);
+        // Don't seed full key into cell-thumb — keep thumb separate so portal can upgrade.
+        // Don't replace a working cell-thumb image with "octet-stream" / unknown type UI.
+        if (!mime.startsWith("image/") && !mime.includes("pdf") && cellThumb) {
+          return;
+        }
+        setState({ status: "ready", objectUrl, mime, blob, fromCellThumb: false });
       } catch {
-        if (!cancelled) setState({ status: "error" });
+        if (!cancelled) {
+          setState((prev) => (prev.status === "ready" ? prev : { status: "error" }));
+        }
       }
     })();
     return () => {
@@ -607,7 +711,9 @@ export function LocalFileRefTooltipPreview({
         ? "image"
         : state.status === "ready" && (state.mime === "application/pdf" || state.mime.includes("pdf"))
           ? "pdf"
-          : "other";
+          : getAttachmentFormatLabel(effectiveUrl) === "PDF"
+            ? "pdf"
+            : "other";
     const multi =
       gallery && gallery.urls.length > 1 ? { urls: gallery.urls, startIndex: gallery.startIndex } : undefined;
     const serverFallback =
@@ -661,6 +767,10 @@ export function LocalFileRefTooltipPreview({
   const { objectUrl, mime } = state;
   const isImage = mime.startsWith("image/");
   const isPdf = mime === "application/pdf" || mime.includes("pdf");
+  const cellThumbForPdf =
+    isPdf || state.fromCellThumb
+      ? peekHoverCachedBlobUrl(`${effectiveUrl}::cell-thumb`)
+      : null;
 
   /** Voucher FilePreview hover jaisa — max-w-full / center flex mat (AttachmentHoverPortal width-fit + scroll) */
   return (
@@ -684,6 +794,7 @@ export function LocalFileRefTooltipPreview({
           sourceUrl={objectUrl}
           blob={state.status === "ready" ? state.blob : undefined}
           onOpen={openAttachment}
+          instantThumbUrl={cellThumbForPdf || (state.fromCellThumb ? objectUrl : null)}
         />
       ) : (
         <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-muted-foreground">
@@ -697,10 +808,6 @@ export function LocalFileRefTooltipPreview({
   );
 }
 
-/**
- * Ek URL ke liye voucher File column / opening balance jaisa hover body —
- * party-bank stripes list+details avatar hover bhi yahi layout use karta hai.
- */
 export function MultiAttachmentPortalPreview({
   urls,
   companyId: companyIdProp,

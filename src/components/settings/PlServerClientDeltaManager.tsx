@@ -9,6 +9,7 @@ import { syncPlServerSharedCompaniesToLocalSqlite } from "@/lib/plServerClientCo
 import { getActiveGate } from "@/lib/gates/gateStore";
 import { isPlServerStaffOnAppUiOrigin } from "@/lib/plGatePageOrigin";
 import { isPlServerGateClientActive } from "@/lib/plRemoteServerClient";
+import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 
 /** Gate token add par company shell — thin staff: display cache refresh; legacy: SQLite registry only. */
 export function PlServerClientDeltaManager() {
@@ -23,11 +24,15 @@ export function PlServerClientDeltaManager() {
       isPlServerGateClientActive() || (gate.type === "local_server" && Boolean(String(gate.serverUrl || "").trim()));
     if (!hasServerTransport) return;
     ranRef.current = true;
+    const selectedCompanyId = readSelectedCompanyId()?.trim();
 
     if (isPlServerThinStaffClient()) {
       void (async () => {
         const shared = getPlServerSharedCompanies();
-        for (const row of shared) {
+        const rows = selectedCompanyId
+          ? shared.filter((row) => String(row.id || "").trim() === selectedCompanyId)
+          : shared;
+        for (const row of rows) {
           const id = String(row.id || "").trim();
           if (!id) continue;
           await hydratePlServerDisplayCacheFromIdb(id).catch(() => undefined);
@@ -37,7 +42,10 @@ export function PlServerClientDeltaManager() {
       return;
     }
 
-    void syncPlServerSharedCompaniesToLocalSqlite({ pullFullLedger: false }).catch(() => undefined);
+    void syncPlServerSharedCompaniesToLocalSqlite({
+      pullFullLedger: false,
+      ...(selectedCompanyId ? { companyIds: [selectedCompanyId] } : {}),
+    }).catch(() => undefined);
   }, []);
 
   return null;

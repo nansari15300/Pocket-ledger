@@ -21,11 +21,9 @@ import {
   markFirestoreNetworkDisabledByApi,
   settleAfterFirestoreNetworkEnabled,
 } from "@/lib/firebase";
-import { getBrowserDb } from "@/lib/localSqlite";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import { getBrowserDbForCompanyId } from "@/lib/localSqlite";
 import {
   apkEmbeddedSqliteFirstWritesPreferred,
-  isClientNavigatorOffline,
   shouldAutoFlushOutboxAfterEnqueue,
 } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
@@ -229,16 +227,10 @@ export async function enqueueCompanyDocOutbox(
   docId: string,
   payload: Record<string, unknown>
 ): Promise<void> {
-  // Web local-only + embedded SQLite-first + device offline: still enqueue when `isLocalOnlyMode` is false (cloud company on APK).
-  if (
-    (!isLocalOnlyMode() && !apkEmbeddedSqliteFirstWritesPreferred() && !isClientNavigatorOffline()) ||
-    !companyId ||
-    !collectionName ||
-    !docId
-  )
-    return;
+  // SQLite-first callers enqueue; live online Firebase bhi (background flush). Pure local-only canSync false → skip.
+  if (!companyId || !collectionName || !docId) return;
   if (!(await canSyncCompanyCollectionToServer(companyId, collectionName, docId, payload))) return;
-  const db = await getBrowserDb();
+  const db = await getBrowserDbForCompanyId(companyId);
   if (!db) return;
   const outboxId =
     typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -289,7 +281,7 @@ export async function enqueueVoucherOutbox(
 /** Before a full local restore: clear old pending outbox rows or a stale flush can overwrite fresh data */
 export async function clearSyncOutboxForCompany(companyId: string): Promise<void> {
   try {
-    const db = await getBrowserDb();
+    const db = await getBrowserDbForCompanyId(companyId);
     if (!db || !companyId) return;
     db.prepare(`DELETE FROM sync_outbox WHERE company_id = ?`).run(companyId);
   } catch (e) {
@@ -303,13 +295,37 @@ export async function countSyncOutboxRowsForCompany(companyId: string): Promise<
   try {
     const cid = companyId.trim();
     if (!cid) return 0;
-    const db = await getBrowserDb();
+    const db = await getBrowserDbForCompanyId(companyId);
     if (!db) return 0;
     const row = db.prepare(`SELECT COUNT(1) as c FROM sync_outbox WHERE company_id = ?`).get(cid) as { c?: number };
     return Number(row?.c ?? 0);
   } catch {
     return 0;
   }
+}
+
+export async function listPendingOutboxDocIdsForCompany(
+  companyId: string,
+  collectionName: string
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  try {
+    const cid = companyId.trim();
+    const coll = collectionName.trim();
+    if (!cid || !coll) return out;
+    const db = await getBrowserDbForCompanyId(companyId);
+    if (!db) return out;
+    const rows = db.prepare(
+      `SELECT doc_id FROM sync_outbox WHERE company_id = ? AND collection_name = ?`
+    ).all(cid, coll) as Array<{ doc_id?: string }>;
+    for (const row of rows) {
+      const id = String(row?.doc_id || "").trim();
+      if (id) out.add(id);
+    }
+  } catch {
+    /* empty set */
+  }
+  return out;
 }
 
 export async function removeOutboxRowsForCompanyDoc(
@@ -319,7 +335,7 @@ export async function removeOutboxRowsForCompanyDoc(
 ): Promise<void> {
   if (!companyId || !collectionName || !docId) return;
   try {
-    const db = await getBrowserDb();
+    const db = await getBrowserDbForCompanyId(companyId);
     if (!db) return;
     db.prepare(`DELETE FROM sync_outbox WHERE company_id = ? AND collection_name = ? AND doc_id = ?`).run(
       companyId,
@@ -335,7 +351,20 @@ export async function removeOutboxRowsForCompanyDoc(
  * Apply the queue to Firestore; delete rows; refresh local mirror from server snapshots.
  * Stops on the first failing row (network may still be bad).
  */
-export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number }> {
+export type FlushVoucherOutboxOptions = {
+  priority?: {
+    companyId?: string;
+    collectionName?: string;
+    docId?: string;
+  };
+  only?: {
+    companyId?: string;
+    collectionName?: string;
+    docId?: string;
+  };
+};
+
+export async function flushVoucherOutbox(options?: FlushVoucherOutboxOptions): Promise<{ ok: number; failed: number }> {
   // Temporary kill-switch: ledger Firestore upload band (plan sync HTTP alag chalta rahe).
   if (isFirebaseLedgerDataSyncDisabled()) {
     if (process.env.NODE_ENV !== "production") {
@@ -343,14 +372,7 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
     }
     return { ok: 0, failed: 0 };
   }
-  // Flush: web local + embedded SQLite-first (APK/static) — still flush the queue when `isLocalOnlyMode` is false.
-  if (!isLocalOnlyMode() && !apkEmbeddedSqliteFirstWritesPreferred()) {
-    if (process.env.NODE_ENV !== "production") {
-      // Offline→online "refresh" trace: flush kab skip (mode/policy).
-      console.log("[QUEUE_FLUSH]", "skip:not-local-first-mode");
-    }
-    return { ok: 0, failed: 0 };
-  }
+  // Online Firebase SQLite-first outbox bhi flush — pehle sirf local-only/deltaa allow tha.
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     if (process.env.NODE_ENV !== "production") {
       console.log("[QUEUE_FLUSH]", "skip:navigator-offline");
@@ -373,26 +395,58 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
       markFirestoreNetworkDisabledByApi(false);
     });
   }
-  const db = await getBrowserDb();
-  if (!db) return { ok: 0, failed: 0 };
-
+  const { getBrowserDbForNamespace, getBrowserDbForCompanyId: getDbForCid } = await import("@/lib/localSqlite");
+  const { SQLITE_STORAGE_NAMESPACES } = await import("@/lib/sqliteStorageNamespace");
   const { computeSha256HexFromStringUtf8 } = await import("@/lib/security/sha256Hex");
 
-  const rows = db
-    .prepare(
-      `SELECT outbox_id, company_id, collection_name, doc_id, op, payload, client_write_id, nonce, payload_hash FROM sync_outbox ORDER BY created_at ASC`
-    )
-    .all() as Array<{
-      outbox_id: string;
-      company_id: string;
-      collection_name: string;
-      doc_id: string;
-      op: string;
-      payload: string;
-      client_write_id: string | null;
-      nonce: string | null;
-      payload_hash: string | null;
-    }>;
+  let rows: Array<{
+    outbox_id: string;
+    company_id: string;
+    collection_name: string;
+    doc_id: string;
+    op: string;
+    payload: string;
+    client_write_id: string | null;
+    nonce: string | null;
+    payload_hash: string | null;
+  }> = [];
+  for (const ns of SQLITE_STORAGE_NAMESPACES) {
+    const nsDb = await getBrowserDbForNamespace(ns);
+    if (!nsDb) continue;
+    const part = nsDb
+      .prepare(
+        `SELECT outbox_id, company_id, collection_name, doc_id, op, payload, client_write_id, nonce, payload_hash FROM sync_outbox ORDER BY created_at ASC`
+      )
+      .all() as typeof rows;
+    if (part.length) rows = rows.concat(part);
+  }
+
+  const deleteOutboxRow = async (outboxId: string, companyIdForRow: string) => {
+    const rowDb = await getDbForCid(companyIdForRow);
+    rowDb?.prepare(`DELETE FROM sync_outbox WHERE outbox_id = ?`).run(outboxId);
+  };
+
+  const only = options?.only;
+  if (only?.companyId || only?.collectionName || only?.docId) {
+    rows = rows.filter((row) => {
+      if (only.companyId && row.company_id !== only.companyId) return false;
+      if (only.collectionName && row.collection_name !== only.collectionName) return false;
+      if (only.docId && row.doc_id !== only.docId) return false;
+      return true;
+    });
+  }
+
+  const priority = options?.priority;
+  if (priority?.companyId || priority?.collectionName || priority?.docId) {
+    const score = (row: (typeof rows)[number]) => {
+      let s = 0;
+      if (priority.companyId && row.company_id === priority.companyId) s += 4;
+      if (priority.collectionName && row.collection_name === priority.collectionName) s += 2;
+      if (priority.docId && row.doc_id === priority.docId) s += 8;
+      return s;
+    };
+    rows = [...rows].sort((a, b) => score(b) - score(a));
+  }
 
   if (process.env.NODE_ENV !== "production") {
     // Outbox run start — `enableNetwork` may restart Firestore snapshots (refresh-like feel).
@@ -437,7 +491,7 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
             typeof data === "object" && data ? (data as Record<string, unknown>) : undefined
           ));
         if (dropPureLocalRow) {
-          db.prepare(`DELETE FROM sync_outbox WHERE outbox_id = ?`).run(row.outbox_id);
+          await deleteOutboxRow(row.outbox_id, row.company_id);
         }
         continue;
       }
@@ -651,7 +705,7 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
           if (isGhostDelete) {
             const { purgeGhostLocalCompanyDoc } = await import("@/lib/purgeGhostLocalCompanyDoc");
             await purgeGhostLocalCompanyDoc(row.company_id, row.collection_name, row.doc_id);
-            db.prepare(`DELETE FROM sync_outbox WHERE outbox_id = ?`).run(row.outbox_id);
+            await deleteOutboxRow(row.outbox_id, row.company_id);
             ok++;
             continue;
           }
@@ -662,7 +716,7 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
             if (snap.exists()) {
               const p = snap.data() as { payloadHash?: string; applied?: boolean };
               if (p.applied === true && p.payloadHash === payloadHash) {
-                db.prepare(`DELETE FROM sync_outbox WHERE outbox_id = ?`).run(row.outbox_id);
+                await deleteOutboxRow(row.outbox_id, row.company_id);
                 ok++;
                 await mirrorCompanyDocToBrowserDb(row.company_id, row.collection_name, row.doc_id);
                 continue;
@@ -679,14 +733,14 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
       }
 
       if (flushResult === "duplicate") {
-        db.prepare(`DELETE FROM sync_outbox WHERE outbox_id = ?`).run(row.outbox_id);
+        await deleteOutboxRow(row.outbox_id, row.company_id);
         ok++;
         // Idempotent replay: align local SQLite with the server doc (same as a fresh apply).
         await mirrorCompanyDocToBrowserDb(row.company_id, row.collection_name, row.doc_id);
         continue;
       }
 
-      db.prepare(`DELETE FROM sync_outbox WHERE outbox_id = ?`).run(row.outbox_id);
+      await deleteOutboxRow(row.outbox_id, row.company_id);
       ok++;
       // Every collection: align SQLite with server timestamps + hydrated URLs (previously only vouchers were mirrored post-flush).
       await mirrorCompanyDocToBrowserDb(row.company_id, row.collection_name, row.doc_id);
@@ -702,7 +756,7 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
           if (isGhostDelete) {
             const { purgeGhostLocalCompanyDoc } = await import("@/lib/purgeGhostLocalCompanyDoc");
             await purgeGhostLocalCompanyDoc(row.company_id, row.collection_name, row.doc_id);
-            db.prepare(`DELETE FROM sync_outbox WHERE outbox_id = ?`).run(row.outbox_id);
+            await deleteOutboxRow(row.outbox_id, row.company_id);
             ok++;
             continue;
           }

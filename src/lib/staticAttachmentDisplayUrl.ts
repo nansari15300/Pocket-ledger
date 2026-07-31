@@ -74,12 +74,13 @@ export function prefersLocalAttachmentDisplayFirst(
   return typeof pref === "function" ? pref() : pref;
 }
 
-/** Save strategy boundary: local + PL server write SQLite-first; online decides via APK/offline policy. */
+/** Save strategy boundary: local + PL server + online Firebase write SQLite-first. */
 export function companyStrategyUsesSqliteFirstLedgerWrites(
   company: CompanyStrategyRow
 ): boolean {
   const value = strategyForMode(companyAttachmentMode(company)).usesSqliteFirstLedgerWrites;
-  return typeof value === "function" ? value() : value;
+  if (typeof value === "function") return (value as () => boolean)();
+  return Boolean(value);
 }
 
 /** Public resolver: delegates to the isolated local/server/online attachment strategy. */

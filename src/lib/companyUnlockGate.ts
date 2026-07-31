@@ -135,8 +135,12 @@ export function shouldPromptCompanyUnlock(
 ): boolean {
   if (isServerGateCompany(company)) {
     const explicit = (company as { requiresLogin?: boolean }).requiresLogin;
+    // Host access-context flag — client shell pe localCompanyUsers na hone par bhi login chahiye.
+    if (explicit === true) return true;
     if (explicit === false) return false;
-    return companyDocRequiresUnlock(company, userEmail, firebaseUid, company.isOwned);
+    if (companyDocRequiresUnlock(company, userEmail, firebaseUid, company.isOwned)) return true;
+    // PL shared company: passwordless open mat do jab tak host ne explicitly requiresLogin:false na bheja.
+    return true;
   }
   if (isOnlineSharedCompany(company)) {
     return !!company.password || onlineSharedHasPerUserPassword(company, userEmail);
@@ -184,7 +188,7 @@ export async function shouldPromptCompanyUnlockAsync(
 /** Username field: online shared jab Protect on ho ya shared user ka apna password ho; offline shared jab share row me name+password ho */
 export function showCompanyUserNameField(company: CompanyUnlockRow, userEmail?: string | null, firebaseUid?: string | null): boolean {
   if (isServerGateCompany(company)) {
-    return companyDocRequiresUnlock(company, userEmail, firebaseUid, company.isOwned);
+    return shouldPromptCompanyUnlock(company, userEmail, firebaseUid);
   }
   if (isOnlineSharedCompany(company)) {
     return !!company.password || onlineSharedHasPerUserPassword(company, userEmail);

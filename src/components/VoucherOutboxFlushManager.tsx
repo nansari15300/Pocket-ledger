@@ -10,13 +10,15 @@ import { flushVoucherOutbox } from "@/lib/localVoucherOutbox";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
-import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
+import {
+  FIREBASE_LEDGER_DATA_SYNC_CHANGED_EVENT,
+  isFirebaseLedgerDataSyncDisabled,
+} from "@/lib/firebaseLedgerDataSyncDisabled";
 
 export function VoucherOutboxFlushManager() {
   useEffect(() => {
     // PL Server staff: authoritative queue + SQLite mirror — Firestore outbox flush UI churn na kare.
     if (isPlServerThinStaffClient()) return;
-    if (isFirebaseLedgerDataSyncDisabled()) return;
     // Capacitor + Firebase data source: `isLocalOnlyMode` may be false but outbox flush is still required, or masters stay stuck in the queue.
     if (!isLocalOnlyMode() && !apkEmbeddedSqliteFirstWritesPreferred()) return;
     // Local-first sync engine: default ON for online-category companies; disable with env flag.
@@ -32,11 +34,13 @@ export function VoucherOutboxFlushManager() {
       const t = window.setTimeout(() => {
         const i = pendingFlushTimers.indexOf(t);
         if (i !== -1) pendingFlushTimers.splice(i, 1);
+        if (isFirebaseLedgerDataSyncDisabled()) return;
         void flushVoucherOutbox();
       }, delayMs);
       pendingFlushTimers.push(t);
     };
     const tick = () => {
+      if (isFirebaseLedgerDataSyncDisabled()) return;
       void flushVoucherOutbox();
     };
     const onOnline = () => {
@@ -54,10 +58,15 @@ export function VoucherOutboxFlushManager() {
         scheduleFlush(350);
       }
     };
+    const onDataSyncChanged = (event: Event) => {
+      const disabled = Boolean((event as CustomEvent<{ disabled?: boolean }>).detail?.disabled);
+      if (!disabled) scheduleFlush(0);
+    };
     window.addEventListener("online", onOnline);
     window.addEventListener("focus", onVisibleOrFocus);
+    window.addEventListener(FIREBASE_LEDGER_DATA_SYNC_CHANGED_EVENT, onDataSyncChanged);
     document.addEventListener("visibilitychange", onVisibleOrFocus);
-    if (typeof navigator !== "undefined" && navigator.onLine) scheduleFlush(FLUSH_AFTER_ONLINE_MS);
+    if (typeof navigator !== "undefined" && navigator.onLine && !isFirebaseLedgerDataSyncDisabled()) scheduleFlush(FLUSH_AFTER_ONLINE_MS);
     /** Periodic retry jab awaited flush fail / queue baaki ho — 15s→8s taake web/exe cross-device kam late */
     const iv = setInterval(tick, 8_000);
     return () => {
@@ -65,6 +74,7 @@ export function VoucherOutboxFlushManager() {
       pendingFlushTimers.forEach((t) => clearTimeout(t));
       window.removeEventListener("online", onOnline);
       window.removeEventListener("focus", onVisibleOrFocus);
+      window.removeEventListener(FIREBASE_LEDGER_DATA_SYNC_CHANGED_EVENT, onDataSyncChanged);
       document.removeEventListener("visibilitychange", onVisibleOrFocus);
       clearInterval(iv);
     };

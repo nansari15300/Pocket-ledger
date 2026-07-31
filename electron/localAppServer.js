@@ -155,12 +155,70 @@ function readJsonBody(req) {
 
 function stubShareableCompaniesFromIds(allowedIds) {
   if (!Array.isArray(allowedIds) || allowedIds.length === 0) return [];
-  return allowedIds.map((id) => ({
-    id: String(id).trim(),
-    name: String(id).trim(),
-    storageOption: "local",
-    ownerEmail: null,
-  })).filter((row) => row.id);
+  return allowedIds
+    .map((id) => ({
+      id: String(id).trim(),
+      name: String(id).trim(),
+      storageOption: "local",
+      ownerEmail: null,
+    }))
+    .filter((row) => row.id);
+}
+
+function shareableRowHasAccessIdentity(company) {
+  if (!company || typeof company !== "object") return false;
+  if (normalizeAccountEmail(company.ownerEmail)) return true;
+  if (normalizeAccountEmail(company.accessAccount)) return true;
+  const emails = Array.isArray(company.accessEmails) ? company.accessEmails : [];
+  if (emails.some((value) => normalizeAccountEmail(value))) return true;
+  const localUsers = Array.isArray(company.localCompanyUsers) ? company.localCompanyUsers : [];
+  for (const user of localUsers) {
+    if (normalizeAccountEmail(user?.shareEmail)) return true;
+    const username = String(user?.username || "")
+      .trim()
+      .toLowerCase();
+    if (username.includes("@") && normalizeAccountEmail(username)) return true;
+    if (username && !username.includes("@")) return true;
+  }
+  return false;
+}
+
+function indexShareableRowsById(rows) {
+  const map = new Map();
+  if (!Array.isArray(rows)) return map;
+  for (const row of rows) {
+    const id = String(row?.id || "").trim();
+    if (!id) continue;
+    map.set(id, row);
+  }
+  return map;
+}
+
+/** Merge id stubs with last-good / provider rows so remote email filter still works. */
+function enrichShareableRowsWithKnown(rows, knownRowsList) {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  const known = indexShareableRowsById(
+    Array.isArray(knownRowsList) ? knownRowsList.flatMap((list) => (Array.isArray(list) ? list : [])) : []
+  );
+  return rows.map((row) => {
+    const id = String(row?.id || "").trim();
+    const hit = id ? known.get(id) : null;
+    if (!hit) return row;
+    return {
+      ...row,
+      ...hit,
+      id,
+      name: String(hit.name || row.name || id).trim() || id,
+      storageOption: "local",
+    };
+  });
+}
+
+function rememberGoodShareableRows(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return;
+  const usable = rows.filter((row) => row && row.id && shareableRowHasAccessIdentity(row));
+  if (usable.length === 0) return;
+  lastGoodShareableRows = usable;
 }
 
 function normalizeSharedLocalCompanyIds(raw) {
@@ -190,10 +248,24 @@ const SHAREABLE_COMPANIES_CACHE_MS = 4_000;
 /** Remote gate clients: allow bridge + disk snapshot before falling back. */
 const SHAREABLE_PROVIDER_TIMEOUT_MS = 8_000;
 let shareableCompaniesCache = { atMs: 0, cfgKey: "", rows: null };
+/** Last non-empty shareable rows with access identity — survives empty bridge / cfgKey churn. */
+let lastGoodShareableRows = [];
 
 function normalizeAccountEmail(value) {
   const email = String(value || "").trim().toLowerCase();
   return email.includes("@") ? email : "";
+}
+
+function accountEmailMatchesLoginUsername(appEmail, usernameRaw) {
+  const email = normalizeAccountEmail(appEmail);
+  if (!email) return false;
+  const username = String(usernameRaw || "")
+    .trim()
+    .toLowerCase();
+  if (!username) return false;
+  if (username.includes("@")) return normalizeAccountEmail(username) === email;
+  // Shared Users UI guesses Gmail from login username — keep Gate filter aligned.
+  return email === `${username}@gmail.com` || email === `${username}@googlemail.com`;
 }
 
 function requestAppAccountEmail(req) {
@@ -435,16 +507,16 @@ function companyAllowsAppAccount(company, appEmail) {
   const localUsers = Array.isArray(company.localCompanyUsers) ? company.localCompanyUsers : [];
   for (const user of localUsers) {
     if (normalizeAccountEmail(user?.shareEmail) === email) return true;
-    const username = normalizeAccountEmail(user?.username);
-    if (username.includes("@") && username === email) return true;
+    if (accountEmailMatchesLoginUsername(email, user?.username)) return true;
   }
   return false;
 }
 
 function publicCompanySummary(company, appEmail) {
   if (!company || typeof company !== "object") return company;
-  const { accessEmails, ...publicRow } = company;
+  const { accessEmails, localCompanyUsers, ...publicRow } = company;
   void accessEmails;
+  void localCompanyUsers;
   return { ...publicRow, accessAccount: appEmail };
 }
 
@@ -534,9 +606,12 @@ async function shareableCompaniesForToken(allowedIds, cfg, options = {}) {
       // Stale-while-revalidate: serve last good rows immediately.
       if (shareableCompaniesCache.rows && shareableCompaniesCache.cfgKey === cacheKey) {
         all = shareableCompaniesCache.rows;
+      } else if (lastGoodShareableRows.length > 0) {
+        all = lastGoodShareableRows;
       }
       void invokeShareableCompaniesProvider().then((rows) => {
         if (Array.isArray(rows) && rows.length > 0) {
+          rememberGoodShareableRows(rows);
           shareableCompaniesCache = { atMs: Date.now(), cfgKey: cacheKey, rows };
         }
       });
@@ -544,16 +619,23 @@ async function shareableCompaniesForToken(allowedIds, cfg, options = {}) {
       const rows = await invokeShareableCompaniesProvider();
       if (Array.isArray(rows) && rows.length > 0) {
         all = rows;
+        rememberGoodShareableRows(rows);
         shareableCompaniesCache = { atMs: now, cfgKey: cacheKey, rows: all };
-      } else if (shareableCompaniesCache.rows && shareableCompaniesCache.cfgKey === cacheKey) {
-        // Timeout / empty bridge — keep last good list (EXE/APK/web remote Test).
+      } else if (shareableCompaniesCache.rows && shareableCompaniesCache.rows.length > 0) {
+        // Timeout / empty bridge — keep last good list (any cfgKey; do not poison with []).
         all = shareableCompaniesCache.rows;
-      } else if (Array.isArray(rows)) {
-        all = rows;
-        shareableCompaniesCache = { atMs: now, cfgKey: cacheKey, rows: all };
+      } else if (lastGoodShareableRows.length > 0) {
+        all = lastGoodShareableRows;
+      } else {
+        all = [];
+        // Do not cache empty provider results over a previously good list.
       }
     }
   }
+  if ((!Array.isArray(all) || all.length === 0) && lastGoodShareableRows.length > 0) {
+    all = lastGoodShareableRows;
+  }
+  rememberGoodShareableRows(all);
   all = filterShareableByHostConfig(all, cfg);
   const filtered = all.filter((c) => {
     if (!c || !c.id) return false;
@@ -561,12 +643,40 @@ async function shareableCompaniesForToken(allowedIds, cfg, options = {}) {
     if (!idSet) return true;
     return idSet.has(id);
   });
-  if (filtered.length > 0) return filtered;
-  // Email-less id stubs break remote app-account filter (empty Gate list) — only when we have nothing better.
-  if (!idSet && Array.isArray(hostIds) && hostIds.length > 0) {
-    return stubShareableCompaniesFromIds(hostIds);
+  if (filtered.length > 0) {
+    rememberGoodShareableRows(filtered);
+    return filtered;
   }
-  if (idSet?.size) return stubShareableCompaniesFromIds([...idSet]);
+  // Prefer last-good rows with access identity over email-less id stubs (empty Gate list bug).
+  const fallbackIds =
+    !idSet && Array.isArray(hostIds) && hostIds.length > 0
+      ? hostIds
+      : idSet?.size
+        ? [...idSet]
+        : [];
+  if (fallbackIds.length > 0) {
+    const fromLastGood = filterShareableByHostConfig(lastGoodShareableRows, {
+      sharedLocalCompanyIds: fallbackIds,
+    }).filter((c) => {
+      const id = String(c?.id || "").trim();
+      return id && (!idSet || idSet.has(id));
+    });
+    if (fromLastGood.length > 0) return fromLastGood;
+    const enriched = enrichShareableRowsWithKnown(
+      stubShareableCompaniesFromIds(fallbackIds),
+      [shareableCompaniesCache.rows, lastGoodShareableRows]
+    ).filter((row) => shareableRowHasAccessIdentity(row));
+    if (enriched.length > 0) {
+      rememberGoodShareableRows(enriched);
+      return enriched;
+    }
+    // Never return email-less stubs to remote email filter — empty is clearer than false deny-all.
+    plTraceLog.traceLog("PL-SERVER", "shareable_companies_skip_email_less_stubs", {
+      fallbackIdCount: fallbackIds.length,
+      lastGoodCount: lastGoodShareableRows.length,
+    });
+    return [];
+  }
   return filtered;
 }
 
@@ -1078,7 +1188,7 @@ function shouldRedirectToRemoteClientUrl(req, requestUrl) {
   return !accept || accept.includes("text/html") || accept.includes("*/*");
 }
 
-const PL_SERVER_RELAY_TIMEOUT_MS = 180_000;
+const PL_SERVER_RELAY_TIMEOUT_MS = 15_000;
 const PL_SERVER_RELAY_MAX_BINARY_BYTES = 12 * 1024 * 1024;
 const PL_SERVER_RELAY_ALLOWED_PREFIXES = ["/__pl_", "/__firebase_blob_proxy"];
 const PL_SERVER_RELAY_SHARING_PORTS = new Set(["3001", "37123"]);

@@ -28,7 +28,6 @@ import { logoutFromCompanyOnThisDevice } from "@/lib/logoutFromCompany";
 import { useAuth } from "@/hooks/useAuth";
 import {
   AlertDialog,
-  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
@@ -130,6 +129,15 @@ import {
 /** Company picker visibility: admin-hidden rows (`movedToAdminRecycleAt`) normal app me na dikhao. */
 function isCompanyVisibleInSelector(c: CompanyData): boolean {
   return c.isDeleted !== true && (c as CompanyData & { movedToAdminRecycleAt?: unknown }).movedToAdminRecycleAt == null;
+}
+
+function companySelectorListSig(rows: CompanyData[]): string {
+  return rows
+    .map((c) => {
+      const co = c as CompanyData & { storageOption?: string };
+      return `${c.id}\0${c.name ?? ""}\0${String(co.storageOption ?? "")}\0${Boolean((c as CompanyData & { isOwned?: boolean }).isOwned)}`;
+    })
+    .join("|");
 }
 
 /** SSR par port detect nahi hota — mount ke baad origin + bucket re-partition. */
@@ -315,6 +323,67 @@ function companyDisplayName(company: Pick<CompanyData, "id" | "name"> | null | u
   return name && name !== id ? name : "Server company";
 }
 
+type CompanyItemProps = {
+  company: CompanyData;
+  selectedCompanyId: string | null | undefined;
+  onSelectCompany: (company: CompanyData) => void;
+  onOpenDialog: (type: "share" | "addLocalUser", company: CompanyData) => void;
+  onLogoutCompany: (companyId: string) => void;
+};
+
+function CompanyItem({
+  company,
+  selectedCompanyId,
+  onSelectCompany,
+  onOpenDialog,
+  onLogoutCompany,
+}: CompanyItemProps) {
+  const offlineOwned = company.isOwned && isOfflineCompanyStorage(company);
+  const isSelected = company.id === selectedCompanyId;
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between rounded-lg border bg-card p-3 transition-colors hover:bg-muted/50",
+        isSelected && "border-primary/50 bg-primary/5 ring-1 ring-primary/20"
+      )}
+    >
+      <button
+        type="button"
+        className="flex flex-1 items-center gap-4 text-left"
+        onClick={() => onSelectCompany(company)}
+      >
+        <Building2 className="h-6 w-6 shrink-0 text-muted-foreground" />
+        <span className="flex-1 text-lg font-medium">{companyDisplayName(company)}</span>
+        {isSelected ? <Check className="h-5 w-5 shrink-0 text-green-600" aria-label="Selected" /> : null}
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon" className="h-8 w-8">
+            <ChevronDown className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {company.isOwned ? (
+            <DropdownMenuItem onSelect={() => onOpenDialog(offlineOwned ? "addLocalUser" : "share", company)}>
+              {offlineOwned ? (
+                <UserPlus className="mr-2 h-4 w-4" />
+              ) : (
+                <Share2 className="mr-2 h-4 w-4" />
+              )}
+              {offlineOwned ? "Add Person" : "Share"}
+            </DropdownMenuItem>
+          ) : null}
+          {company.isOwned ? <DropdownMenuSeparator /> : null}
+          <DropdownMenuItem onSelect={() => onLogoutCompany(company.id)}>
+            <LogOut className="mr-2 h-4 w-4" />
+            Log out from company
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
 function normalizedEmail(value: unknown): string {
   return String(value || "").trim().toLowerCase();
 }
@@ -417,6 +486,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   const [companies, setCompanies] = useState<CompanyData[]>(() =>
     (initialCompanies ?? []).filter(isCompanyVisibleInSelector)
   );
+  const companiesSigRef = useRef(companySelectorListSig(companies));
 
   const parentCompaniesListSig = useMemo(
     () =>
@@ -601,7 +671,10 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
       (contextCompanies?.length ? contextCompanies : null) ??
       [];
     if (!user && registryRows.length === 0 && !(initialCompanies?.length ?? 0)) {
-      setCompanies([]);
+      if (companiesSigRef.current !== "") {
+        companiesSigRef.current = "";
+        setCompanies([]);
+      }
       return;
     }
     const map = new Map<string, CompanyData>();
@@ -628,8 +701,13 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         isOwned: resolveOwned(c),
       });
     });
-    setCompanies(Array.from(map.values()));
-  }, [user, allCompaniesRegistry, contextCompanies, contextCompanyLoading, parentCompaniesListSig, initialCompanies]);
+    const next = Array.from(map.values());
+    const nextSig = companySelectorListSig(next);
+    if (companiesSigRef.current !== nextSig) {
+      companiesSigRef.current = nextSig;
+      setCompanies(next);
+    }
+  }, [user?.uid, user?.email, allCompaniesRegistry, contextCompanies, contextCompanyLoading, parentCompaniesListSig]);
 
   /** SQLite registry — Drive restore/join rows Firestore list me na hon to bhi Local tab me dikhao. */
   useEffect(() => {
@@ -662,7 +740,11 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
           if (!isCompanyVisibleInSelector(forSelector)) continue;
           map.set(row.id, forSelector);
         }
-        return Array.from(map.values());
+        const next = Array.from(map.values());
+        const nextSig = companySelectorListSig(next);
+        if (companySelectorListSig(prev) === nextSig) return prev;
+        companiesSigRef.current = nextSig;
+        return next;
       });
     })();
     return () => {
@@ -708,6 +790,31 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         readStoredOfflineUnlockSession(user?.uid, company.id, user?.email);
       if (remembered) {
         setLocalAuthToken(company.id, remembered.token, remembered.user);
+        if (isServerGateCompany(company)) {
+          const gate = resolveServerGateForCompany(
+            company as CompanyData & { plServerGateId?: string; plServerGateServerUrl?: string }
+          );
+          const { ensurePlServerHubGateReadyForStaffConnect, preparePlServerStaffCompanyConnect } = await import(
+            "@/lib/plServerStaffCompanyConnect"
+          );
+          const { plServerCompanyLedgerNeedsFullPull } = await import("@/lib/plServerLedgerDeltaGate");
+          await ensurePlServerHubGateReadyForStaffConnect(gate);
+          if (await plServerCompanyLedgerNeedsFullPull(company.id)) {
+            const pulled = await preparePlServerStaffCompanyConnect(company.id, {
+              pullFullLedger: true,
+              timeoutMs: 120_000,
+              plServerGate: gate,
+            });
+            if (!pulled.ok) {
+              toast({
+                variant: "destructive",
+                title: "Could not load company data",
+                description: "Server ledger sync failed. Try Gate → Test, then open the company again.",
+              });
+              return;
+            }
+          }
+        }
         setCompanyId(company.id);
         router.push("/dashboard");
         return;
@@ -747,6 +854,33 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         !forceUnlockPrompt &&
         !(await shouldPromptCompanyUnlockAsync(company, user?.email, user?.uid, false))
       ) {
+        // Host explicitly allows passwordless (requiresLogin:false) — still attach a session + pull ledger.
+        if (!getLocalAuthToken(company.id)) {
+          grantOpenLocalCompanySession(company.id, { role: "viewer" });
+        }
+        const gate = resolveServerGateForCompany(
+          company as CompanyData & { plServerGateId?: string; plServerGateServerUrl?: string }
+        );
+        const { ensurePlServerHubGateReadyForStaffConnect, preparePlServerStaffCompanyConnect } = await import(
+          "@/lib/plServerStaffCompanyConnect"
+        );
+        const { plServerCompanyLedgerNeedsFullPull } = await import("@/lib/plServerLedgerDeltaGate");
+        await ensurePlServerHubGateReadyForStaffConnect(gate);
+        if (await plServerCompanyLedgerNeedsFullPull(company.id)) {
+          const pulled = await preparePlServerStaffCompanyConnect(company.id, {
+            pullFullLedger: true,
+            timeoutMs: 120_000,
+            plServerGate: gate,
+          });
+          if (!pulled.ok) {
+            toast({
+              variant: "destructive",
+              title: "Could not load company data",
+              description: "Server ledger sync failed. Try Gate → Test, then open the company again.",
+            });
+            return;
+          }
+        }
         setCompanyId(company.id);
         router.push("/dashboard");
         return;
@@ -773,16 +907,14 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
       setRememberUnlockDays(rememberUnlockDaysForCompany(company, user?.uid, user?.email));
       primeCompanyUnlockDialogFields(company, { uid: user?.uid, email: user?.email }, setUsernameInput, setRememberSharedUsername);
     } else {
-      if (isOfflineCompanyStorage(company)) {
+      if (isOfflineCompanyStorage(company) && !isServerGateCompany(company)) {
         grantOpenLocalCompanySession(company.id, {
-          role: isServerGateCompany(company)
-            ? "manager"
-            : resolveCompanyIsOwnedForUser(company, {
-                uid: user?.uid || "",
-                email: user?.email ?? null,
-              })
-              ? "owner"
-              : "viewer",
+          role: resolveCompanyIsOwnedForUser(company, {
+            uid: user?.uid || "",
+            email: user?.email ?? null,
+          })
+            ? "owner"
+            : "viewer",
         });
       }
       maybeMarkEmbeddedPendingCompanyDataWarm(user?.uid, company);
@@ -1025,7 +1157,8 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     }
     if (unlockTabPinnedRef.current) return;
     const unlockBuckets = partitionCompaniesForUnlockDialog(unlockPickerCompanies);
-    setUnlockListTab(resolveCompanyUnlockTab(companyToUnlock, unlockBuckets));
+    const nextTab = resolveCompanyUnlockTab(companyToUnlock, unlockBuckets);
+    setUnlockListTab((prev) => (prev === nextTab ? prev : nextTab));
   }, [companyToUnlock?.id, unlockPickerCompanies, companyToUnlock]);
 
   const unlockTabHasSelectedCompany = useMemo(() => {
@@ -1194,58 +1327,12 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     return () => { cancelled = true; };
   }, [sharedOwnerIdsKey]);
 
-  const CompanyItem = ({ company }: { company: CompanyData }) => {
-    // Offline/local owned: Share ki jagah Add User (local API company user) — online owned par Share = Firestore share
-    const offlineOwned = company.isOwned && isOfflineCompanyStorage(company);
-    const isSelected = company.id === companyId;
-    return (
-    <div
-      className={cn(
-        "flex items-center justify-between rounded-lg border bg-card p-3 transition-colors hover:bg-muted/50",
-        isSelected && "border-primary/50 bg-primary/5 ring-1 ring-primary/20"
-      )}
-    >
-      <button
-        className="flex flex-1 items-center gap-4 text-left"
-        onClick={() => handleSelectCompany(company)}
-      >
-        <Building2 className="h-6 w-6 shrink-0 text-muted-foreground" />
-        <span className="flex-1 text-lg font-medium">{companyDisplayName(company)}</span>
-        {isSelected ? <Check className="h-5 w-5 shrink-0 text-green-600" aria-label="Selected" /> : null}
-      </button>
-      <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
-                    <ChevronDown className="h-4 w-4" />
-                </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuPortal>
-              <DropdownMenuContent align="end">
-                  {company.isOwned ? <DropdownMenuItem
-                    onSelect={() =>
-                      offlineOwned
-                        ? setDialogState({ type: "addLocalUser", company })
-                        : setDialogState({ type: "share", company })
-                    }
-                  >
-                      {offlineOwned ? (
-                        <UserPlus className="mr-2 h-4 w-4" />
-                      ) : (
-                        <Share2 className="mr-2 h-4 w-4"/>
-                      )}
-                      {offlineOwned ? "Add Person" : "Share"}
-                  </DropdownMenuItem> : null}
-                  {company.isOwned ? <DropdownMenuSeparator /> : null}
-                  <DropdownMenuItem onSelect={() => handleLogoutCompany(company.id)}>
-                    <LogOut className="mr-2 h-4 w-4" />
-                    Log out from company
-                  </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenuPortal>
-        </DropdownMenu>
-    </div>
-    );
-  };
+  const openCompanyDialog = useCallback(
+    (type: "share" | "addLocalUser", company: CompanyData) => {
+      setDialogState({ type, company });
+    },
+    []
+  );
 
   return (
     <>
@@ -1299,7 +1386,13 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                         <ul className="space-y-3">
                           {myLocalDisplay.map((company) => (
                             <li key={company.id}>
-                              <CompanyItem company={company} />
+                              <CompanyItem
+                                company={company}
+                                selectedCompanyId={companyId}
+                                onSelectCompany={handleSelectCompany}
+                                onOpenDialog={openCompanyDialog}
+                                onLogoutCompany={handleLogoutCompany}
+                              />
                             </li>
                           ))}
                         </ul>
@@ -1311,7 +1404,13 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                         <ul className="space-y-3">
                           {sharedLocalDisplay.map((company) => (
                             <li key={company.id} className="space-y-1">
-                              <CompanyItem company={company} />
+                              <CompanyItem
+                                company={company}
+                                selectedCompanyId={companyId}
+                                onSelectCompany={handleSelectCompany}
+                                onOpenDialog={openCompanyDialog}
+                                onLogoutCompany={handleLogoutCompany}
+                              />
                               {(company.ownerEmail || ownerNames[company.ownerId]) ? (
                                 <p className="pl-10 text-xs text-muted-foreground">
                                   Shared by:{" "}
@@ -1455,7 +1554,13 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                     <ul className="space-y-3">
                       {serverList.map((company) => (
                         <li key={company.id} className="space-y-1">
-                          <CompanyItem company={company} />
+                          <CompanyItem
+                            company={company}
+                            selectedCompanyId={companyId}
+                            onSelectCompany={handleSelectCompany}
+                            onOpenDialog={openCompanyDialog}
+                            onLogoutCompany={handleLogoutCompany}
+                          />
                           {isMyServerCompany(company, user?.email) ? (
                             <p className="pl-10 text-xs text-muted-foreground">Owned on this server</p>
                           ) : (company.ownerEmail || ownerNames[company.ownerId]) ? (
@@ -1540,18 +1645,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         open={!!companyToUnlock}
         onOpenChange={(open) => {
           if (!open) {
-            const closing = companyToUnlock;
-            setCompanyToUnlock(null);
-            setUsernameInput("");
-            setPasswordInput("");
-            setRememberSharedUsername(false);
-            if (closing) {
-              setRememberUnlockDays(
-                isOfflineCompanyStorage(closing)
-                  ? readOfflineUnlockPreferenceDays(user?.uid, closing.id, user?.email)
-                  : readCloudCompanyPasswordUnlockPreferenceDays(user?.uid, closing.id, user?.email)
-              );
-            }
+            closeUnlockDialog();
           }
         }}
       >
@@ -1743,12 +1837,14 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
           <AlertDialogFooter className="flex-row items-center gap-2 sm:justify-end [&>*]:mt-0">
             {/* Keep both actions on one row (mobile + desktop) with pill-style corners. */}
             {/* Color cue: cancel = blue, primary action = green (requested). */}
-            <AlertDialogCancel
+            <Button
+              type="button"
               disabled={isVerifying}
+              onClick={closeUnlockDialog}
               className="mt-0 flex-1 rounded-full border border-blue-600 bg-blue-600 text-white shadow-sm transition-all duration-200 hover:-translate-y-[1px] hover:bg-blue-700 hover:text-white hover:shadow-md focus-visible:ring-2 focus-visible:ring-blue-400/70 focus-visible:ring-offset-1 active:translate-y-0 active:shadow-sm disabled:opacity-60 sm:flex-none"
             >
               Cancel
-            </AlertDialogCancel>
+            </Button>
             <Button
               type="button"
               disabled={isVerifying || !unlockTabHasSelectedCompany}
@@ -1970,6 +2066,31 @@ export function CompanyActions({
         readStoredOfflineUnlockSession(user?.uid, selectedCompany.id, user?.email);
       if (remembered) {
         setLocalAuthToken(selectedCompany.id, remembered.token, remembered.user);
+        if (isServerGateCompany(selectedCompany)) {
+          const gate = resolveServerGateForCompany(
+            selectedCompany as CompanyData & { plServerGateId?: string; plServerGateServerUrl?: string }
+          );
+          const { ensurePlServerHubGateReadyForStaffConnect, preparePlServerStaffCompanyConnect } = await import(
+            "@/lib/plServerStaffCompanyConnect"
+          );
+          const { plServerCompanyLedgerNeedsFullPull } = await import("@/lib/plServerLedgerDeltaGate");
+          await ensurePlServerHubGateReadyForStaffConnect(gate);
+          if (await plServerCompanyLedgerNeedsFullPull(selectedCompany.id)) {
+            const pulled = await preparePlServerStaffCompanyConnect(selectedCompany.id, {
+              pullFullLedger: true,
+              timeoutMs: 120_000,
+              plServerGate: gate,
+            });
+            if (!pulled.ok) {
+              toast({
+                variant: "destructive",
+                title: "Could not load company data",
+                description: "Server ledger sync failed. Try Gate → Test, then open the company again.",
+              });
+              return;
+            }
+          }
+        }
         setCompanyId(selectedCompany.id);
         return;
       }
@@ -2003,6 +2124,32 @@ export function CompanyActions({
         return;
       }
       if (!(await shouldPromptCompanyUnlockAsync(selectedCompany, user?.email, user?.uid, false))) {
+        if (!getLocalAuthToken(selectedCompany.id)) {
+          grantOpenLocalCompanySession(selectedCompany.id, { role: "viewer" });
+        }
+        const gate = resolveServerGateForCompany(
+          selectedCompany as CompanyData & { plServerGateId?: string; plServerGateServerUrl?: string }
+        );
+        const { ensurePlServerHubGateReadyForStaffConnect, preparePlServerStaffCompanyConnect } = await import(
+          "@/lib/plServerStaffCompanyConnect"
+        );
+        const { plServerCompanyLedgerNeedsFullPull } = await import("@/lib/plServerLedgerDeltaGate");
+        await ensurePlServerHubGateReadyForStaffConnect(gate);
+        if (await plServerCompanyLedgerNeedsFullPull(selectedCompany.id)) {
+          const pulled = await preparePlServerStaffCompanyConnect(selectedCompany.id, {
+            pullFullLedger: true,
+            timeoutMs: 120_000,
+            plServerGate: gate,
+          });
+          if (!pulled.ok) {
+            toast({
+              variant: "destructive",
+              title: "Could not load company data",
+              description: "Server ledger sync failed. Try Gate → Test, then open the company again.",
+            });
+            return;
+          }
+        }
         setCompanyId(selectedCompany.id);
         return;
       }
@@ -2036,16 +2183,14 @@ export function CompanyActions({
         setRememberSharedUsername
       );
     } else {
-        if (isOfflineCompanyStorage(selectedCompany)) {
+        if (isOfflineCompanyStorage(selectedCompany) && !isServerGateCompany(selectedCompany)) {
           grantOpenLocalCompanySession(selectedCompany.id, {
-            role: isServerGateCompany(selectedCompany)
-              ? "manager"
-              : resolveCompanyIsOwnedForUser(selectedCompany, {
-                  uid: user?.uid || "",
-                  email: user?.email ?? null,
-                })
-                ? "owner"
-                : "viewer",
+            role: resolveCompanyIsOwnedForUser(selectedCompany, {
+              uid: user?.uid || "",
+              email: user?.email ?? null,
+            })
+              ? "owner"
+              : "viewer",
           });
         }
         maybeMarkEmbeddedPendingCompanyDataWarm(user?.uid, selectedCompany);
@@ -2214,7 +2359,8 @@ export function CompanyActions({
     }
     if (unlockTabPinnedRefHeader.current) return;
     const unlockBuckets = partitionCompaniesForUnlockDialog(unlockPickerCompanies);
-    setUnlockListTab(resolveCompanyUnlockTab(companyToUnlock, unlockBuckets));
+    const nextTab = resolveCompanyUnlockTab(companyToUnlock, unlockBuckets);
+    setUnlockListTab((prev) => (prev === nextTab ? prev : nextTab));
   }, [companyToUnlock?.id, unlockPickerCompanies, companyToUnlock]);
 
   const unlockTabHasSelectedCompanyHeader = useMemo(() => {
@@ -2762,18 +2908,7 @@ export function CompanyActions({
         open={!!companyToUnlock}
         onOpenChange={(open) => {
           if (!open) {
-            const closing = companyToUnlock;
-            setCompanyToUnlock(null);
-            setUsernameInput("");
-            setPasswordInput("");
-            setRememberSharedUsername(false);
-            if (closing) {
-              setRememberUnlockDays(
-                isOfflineCompanyStorage(closing)
-                  ? readOfflineUnlockPreferenceDays(user?.uid, closing.id, user?.email)
-                  : readCloudCompanyPasswordUnlockPreferenceDays(user?.uid, closing.id, user?.email)
-              );
-            }
+            closeUnlockDialogHeader();
           }
         }}
       >
@@ -2964,12 +3099,14 @@ export function CompanyActions({
           <AlertDialogFooter className="flex-row items-center gap-2 sm:justify-end [&>*]:mt-0">
             {/* Keep both actions on one row (mobile + desktop) with pill-style corners. */}
             {/* Color cue: cancel = blue, primary action = green (requested). */}
-            <AlertDialogCancel
+            <Button
+              type="button"
               disabled={isVerifying}
+              onClick={closeUnlockDialogHeader}
               className="mt-0 flex-1 rounded-full border border-blue-600 bg-blue-600 text-white shadow-sm transition-all duration-200 hover:-translate-y-[1px] hover:bg-blue-700 hover:text-white hover:shadow-md focus-visible:ring-2 focus-visible:ring-blue-400/70 focus-visible:ring-offset-1 active:translate-y-0 active:shadow-sm disabled:opacity-60 sm:flex-none"
             >
               Cancel
-            </AlertDialogCancel>
+            </Button>
             <Button
               type="button"
               disabled={isVerifying || !unlockTabHasSelectedCompanyHeader}

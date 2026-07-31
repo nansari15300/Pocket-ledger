@@ -160,11 +160,10 @@ export const DateProvider = ({ children }: { children: ReactNode }) => {
       return formatCurrencyForPrint(amount, options);
     }
     
-    // Use exact duration from settings when enabled
+    // Use exact duration from settings when enabled.
     const duration = options?.duration || animationSettings?.numbers?.duration || 2.5;
 
-    // Ensure duration is at least 1 second when enabled
-    if (duration < 1) {
+    if (duration < 0.05) {
       return formatCurrencyForPrint(amount, options);
     }
 

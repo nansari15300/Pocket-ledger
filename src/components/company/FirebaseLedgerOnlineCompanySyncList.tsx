@@ -17,6 +17,7 @@ import {
   FIREBASE_LEDGER_DATA_SYNC_CHANGED_EVENT,
   isFirebaseLedgerDataSyncEnabled,
 } from "@/lib/firebaseLedgerDataSyncDisabled";
+import { runOfflineFullWarmSync } from "@/lib/offlineFullWarmSync";
 
 type Props = {
   companies: Company[];
@@ -96,11 +97,11 @@ export function FirebaseLedgerOnlineCompanySyncList({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only when id set changes
   }, [companyIdsKey]);
 
-  if (!syncEnabled) {
+  if (!syncEnabled && companies.length === 0) {
     return (
       <p className="rounded-md border border-dashed bg-muted/20 px-2 py-3 text-xs text-muted-foreground">
-        Turn on <strong>Cloud data sync</strong> in the sidebar, then tick <strong>Data</strong> /{" "}
-        <strong>Files</strong> here and tap Save.
+        Turn on <strong>Cloud data sync</strong> in the sidebar to load the Online company list.
+        Already loaded/cached Online companies will remain available from Local SQLite.
       </p>
     );
   }
@@ -145,10 +146,24 @@ export function FirebaseLedgerOnlineCompanySyncList({
     });
   };
 
-  const onSave = () => {
+  const onSave = async () => {
     setSaving(true);
     try {
       replaceFirebaseLedgerCompanySyncEntries(draft);
+      const selectedCompanies = companies.filter((company) => {
+        const id = String(company.id || "").trim();
+        return id && draft[id]?.data === true;
+      });
+      if (syncEnabled && selectedCompanies.length > 0 && typeof navigator !== "undefined" && navigator.onLine) {
+        for (const company of selectedCompanies) {
+          await runOfflineFullWarmSync({
+            company,
+            localCompanyId: String(company.id || "").trim(),
+            includeAttachmentPrefetch: draft[String(company.id || "").trim()]?.attachments === true,
+            skipWarmBootstrapFlag: true,
+          }).catch(() => null);
+        }
+      }
       setDirty(false);
       toast({
         title: "Online sync saved",
@@ -166,6 +181,12 @@ export function FirebaseLedgerOnlineCompanySyncList({
 
   return (
     <div className="space-y-2">
+      {!syncEnabled ? (
+        <p className="rounded-md border border-amber-300 bg-amber-50 px-2 py-2 text-xs text-amber-900">
+          Cloud data sync is OFF. Showing cached SQLite online companies only; Data / Files ticks are
+          inactive until the main Cloud data sync switch is ON.
+        </p>
+      ) : null}
       <div className="-mx-0.5 overflow-x-auto overscroll-x-contain pb-0.5">
         <div className={cn("min-w-[18rem] space-y-1.5", compact ? "min-w-[20rem]" : "min-w-[24rem]")}>
           <div
@@ -225,6 +246,7 @@ export function FirebaseLedgerOnlineCompanySyncList({
                     <Checkbox
                       id={`fb-sync-data-${id}`}
                       checked={entry.data}
+                      disabled={!syncEnabled}
                       onCheckedChange={(v) => setDataTick(id, v === true)}
                       aria-label={`Sync data for ${company.name}`}
                     />
@@ -233,7 +255,7 @@ export function FirebaseLedgerOnlineCompanySyncList({
                     <Checkbox
                       id={`fb-sync-files-${id}`}
                       checked={entry.attachments}
-                      disabled={!entry.data}
+                      disabled={!syncEnabled || !entry.data}
                       onCheckedChange={(v) => setFilesTick(id, v === true)}
                       aria-label={`Sync attachment files for ${company.name}`}
                     />
@@ -253,7 +275,7 @@ export function FirebaseLedgerOnlineCompanySyncList({
         <Button
           type="button"
           size={compact ? "sm" : "default"}
-          disabled={!dirty || saving}
+          disabled={!syncEnabled || !dirty || saving}
           onClick={onSave}
         >
           {saving ? "Saving…" : "Save"}

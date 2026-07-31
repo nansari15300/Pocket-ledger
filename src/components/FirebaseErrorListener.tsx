@@ -21,6 +21,7 @@ import {
   shouldSuppressFirestorePermissionPopup,
 } from '@/lib/firestorePermissionUi';
 import { isLocalOnlyMode } from '@/lib/localMode';
+import { isFirestoreWatchTeardownAssertionMessage } from '@/lib/firestoreWatchAssertionGuard';
 
 /**
  * Global Firestore permission errors — Next.js runtime overlay nahi, user-friendly popup.
@@ -56,7 +57,13 @@ export function FirebaseErrorListener() {
     const onUnhandledRejection = (event: PromiseRejectionEvent) => {
       const reason = event.reason;
       const code = String((reason as { code?: string })?.code ?? '');
-      const message = String((reason as { message?: string })?.message ?? '');
+      const message = String((reason as { message?: string })?.message ?? reason ?? '');
+
+      // firebase.ts capture handler already mutes ca9 — belt-and-suspenders for late listeners.
+      if (isFirestoreWatchTeardownAssertionMessage(message)) {
+        event.preventDefault();
+        return;
+      }
 
       if (isFirestorePermissionLikeError(reason)) {
         event.preventDefault();
@@ -80,6 +87,14 @@ export function FirebaseErrorListener() {
   useEffect(() => {
     const onWindowError = (event: ErrorEvent) => {
       const candidate = event.error ?? event.message;
+      const message =
+        typeof candidate === 'string'
+          ? candidate
+          : `${(candidate as Error)?.message ?? ''}\n${(candidate as Error)?.stack ?? ''}\n${event.message ?? ''}`;
+      if (isFirestoreWatchTeardownAssertionMessage(message)) {
+        event.preventDefault();
+        return;
+      }
       if (!isFirestorePermissionLikeError(candidate)) return;
       event.preventDefault();
       showPermissionPopup();

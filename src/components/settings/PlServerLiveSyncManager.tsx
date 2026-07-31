@@ -32,10 +32,10 @@ import { plServerLiveCollectionsForPathname } from "@/lib/plServerVisiblePageLiv
 import type { CompanyBackupCollection } from "@/lib/companyBackupCollections";
 import { readCurrentAppAccountIdentity } from "@/lib/appAccountIdentity";
 
-const LIVE_FOCUS_POLL_MS = 15_000;
-const LIVE_FULL_CHECK_MS = 60_000;
-const LIVE_POLL_MS_AFTER_FAILURE = 60_000;
-const LIVE_SERVER_EVENT_RETRY_MS = 15_000;
+const LIVE_FOCUS_POLL_MS = 3_000;
+const LIVE_FULL_CHECK_MS = 20_000;
+const LIVE_POLL_MS_AFTER_FAILURE = 10_000;
+const LIVE_SERVER_EVENT_RETRY_MS = 5_000;
 const HUB_COMPANY_META_POLL_MS = 30_000;
 
 function isParallelFocusPullReason(reason: string): boolean {
@@ -271,7 +271,7 @@ export function PlServerLiveSyncManager() {
             });
             if (result.ok && result.changedCollections?.length) {
               for (const col of result.changedCollections) {
-                notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_server_pull" });
+                notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_host_remote_write" });
               }
             }
           } finally {
@@ -387,7 +387,7 @@ export function PlServerLiveSyncManager() {
         if ((result.ok || remoteTriggered) && bumpCollections.length > 0) {
           pollIntervalMsRef.current = LIVE_FOCUS_POLL_MS;
           for (const col of bumpCollections) {
-            notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_server_pull" });
+              notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_host_remote_write" });
             if (col === "vouchers") {
               plServerVoucherFlowLog("ui_bump_dispatched", {
                 trigger: reason,
@@ -515,7 +515,7 @@ export function PlServerLiveSyncManager() {
                 );
                 notifyBrowserDbCollectionUpdated(id, collection, {
                   immediate: true,
-                  source: "pl_server_delta",
+                  source: "pl_host_remote_write",
                 });
                 plServerVoucherFlowLog("server_event_docs_applied", {
                   companyId: id,
@@ -529,7 +529,7 @@ export function PlServerLiveSyncManager() {
             }
             notifyBrowserDbCollectionUpdated(id, collection, {
               immediate: true,
-              source: "pl_server_pull",
+              source: "pl_host_remote_write",
             });
             void runPull(`server_event_${collection}`);
           });
@@ -699,7 +699,7 @@ export function PlServerLiveSyncManager() {
         }
         if (result.ok) {
           for (const col of (result.changedCollections?.length ? result.changedCollections : focusCollections || [])) {
-            notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_server_pull" });
+            notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_host_remote_write" });
             if (col === "vouchers") {
               plServerVoucherFlowLog("ui_bump_dispatched", {
                 trigger: "route_change",

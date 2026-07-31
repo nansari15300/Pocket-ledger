@@ -199,10 +199,25 @@ function notifyLocalAuthChanged(companyId: string) {
 
 export function getLocalAuthToken(companyId: string): string | null {
   if (typeof window === "undefined" || !companyId) return null;
-  const currentAccount = localStorage.getItem("pl_app_account_identity_v1") || "";
-  const tokenAccount = localStorage.getItem(LOCAL_AUTH_ACCOUNT_KEY + companyId) || "";
-  if (!currentAccount || tokenAccount !== currentAccount) return null;
-  return localStorage.getItem(LOCAL_AUTH_TOKEN_KEY + companyId);
+  const token = localStorage.getItem(LOCAL_AUTH_TOKEN_KEY + companyId);
+  if (!token) return null;
+  const currentAccount = (localStorage.getItem("pl_app_account_identity_v1") || "").trim().toLowerCase();
+  const tokenAccount = (localStorage.getItem(LOCAL_AUTH_ACCOUNT_KEY + companyId) || "").trim().toLowerCase();
+  // Unlock often runs before app-account identity is written (APK cold start).
+  // Empty tokenAccount must not drop a valid staff session → false "Permission Denied".
+  if (!tokenAccount) {
+    if (currentAccount) {
+      try {
+        localStorage.setItem(LOCAL_AUTH_ACCOUNT_KEY + companyId, currentAccount);
+      } catch {
+        /* ignore */
+      }
+    }
+    return token;
+  }
+  if (!currentAccount) return token;
+  if (tokenAccount !== currentAccount) return null;
+  return token;
 }
 
 export function setLocalAuthToken(companyId: string, token: string, user?: { id: string; username: string; displayName?: string; role?: string }): void {

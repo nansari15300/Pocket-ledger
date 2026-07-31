@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { persistDevClientAccessToken, refreshPlServerAccessContext } from "@/lib/plServerAccessContext";
 import { syncPlServerSharedCompaniesToLocalSqlite } from "@/lib/plServerClientCompanyDelta";
 import { readAndStripPlRemoteClientLandingQuery, reconcilePlRemoteServerClientSessionOnLoad, reconcilePlHubServerClientSessionOnLoad } from "@/lib/plRemoteServerClient";
+import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 
 /** Remote server landing: refresh gate context — company open via Gate unlock flow, not auto dashboard. */
 export function PlRemoteClientLandingBootstrap() {
@@ -27,7 +28,10 @@ export function PlRemoteClientLandingBootstrap() {
 
     void (async () => {
       await refreshPlServerAccessContext();
-      await syncPlServerSharedCompaniesToLocalSqlite().catch(() => undefined);
+      const selectedCompanyId = readSelectedCompanyId()?.trim();
+      await syncPlServerSharedCompaniesToLocalSqlite(
+        selectedCompanyId ? { companyIds: [selectedCompanyId] } : undefined
+      ).catch(() => undefined);
     })();
   }, []);
 

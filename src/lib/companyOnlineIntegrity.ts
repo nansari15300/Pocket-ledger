@@ -14,9 +14,10 @@ import { shouldPreferPlServerOverCloudRow } from "@/lib/companyOnlinePlFlipTrace
 
 /** Current user company ka owner hai ya nahi (shared vs My companies split). */
 export function isCurrentUserOwnerOfCompanyRow(
-  row: Pick<LocalCompanyDoc, "ownerId" | "ownerEmail"> | { ownerId?: string; ownerEmail?: string },
+  row: Pick<LocalCompanyDoc, "ownerId" | "ownerEmail"> | { ownerId?: string; ownerEmail?: string } | null | undefined,
   user: { uid: string; email: string | null }
 ): boolean {
+  if (!row) return false;
   const uid = (user.uid || "").trim();
   const oid = String(row.ownerId || "").trim();
   if (oid && uid && oid === uid) return true;
@@ -40,9 +41,10 @@ type CompanyShareRow = {
 
 /** Shared-with-you list: emails (legacy + lower) + sharedWith uid/email entries. */
 export function isCurrentUserSharedOnCompanyRow(
-  row: CompanyShareRow,
+  row: CompanyShareRow | null | undefined,
   user: { uid: string; email: string | null }
 ): boolean {
+  if (!row) return false;
   if ((row as { driveSharedJoin?: unknown }).driveSharedJoin === true) return true;
   if (isCurrentUserOwnerOfCompanyRow(row, user)) return false;
 
@@ -74,9 +76,10 @@ export function isCurrentUserSharedOnCompanyRow(
 
 /** Header / registry: owner > shared > stored isOwned flag. */
 export function resolveCompanyIsOwnedForUser(
-  row: CompanyShareRow & { isOwned?: boolean },
+  row: (CompanyShareRow & { isOwned?: boolean }) | null | undefined,
   user: { uid: string; email: string | null }
 ): boolean {
+  if (!row) return false;
   if (isCurrentUserOwnerOfCompanyRow(row, user)) return true;
   if (isCurrentUserSharedOnCompanyRow(row, user)) return false;
   return row.isOwned === true;

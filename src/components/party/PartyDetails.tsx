@@ -175,6 +175,7 @@ const getInitials = (name: string) => {
 
 const COLUMN_VISIBILITY_KEY = "transactionVisibleColumns";
 const DEFAULT_VISIBLE_COLUMNS: VisibleColumns = {
+  syncStatus: true,
   date: true,
   type: true,
   voucherNo: true,
@@ -186,6 +187,7 @@ const DEFAULT_VISIBLE_COLUMNS: VisibleColumns = {
   runningBalance: true,
 };
 const COLUMN_LABELS: Record<TransactionColumnKey, string> = {
+  syncStatus: "Sync",
   date: "Date",
   type: "Type",
   voucherNo: "Voucher No.",
@@ -290,7 +292,7 @@ export function PartyDetails({
   const transactionDates = useMemo(() => {
     const dates = new Set<number>();
     vouchers.forEach((v) => {
-      if (v.partyId === party.id || (v.entries && v.entries.some((e: any) => e.accountId === party.id))) {
+      if (v.partyId === party.id || (Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId === party.id))) {
           const dateValue = v.date?.toDate ? v.date.toDate() : new Date(v.date);
           if (dateValue instanceof Date && !isNaN(dateValue.getTime())) {
               dates.add(startOfDay(dateValue).getTime());

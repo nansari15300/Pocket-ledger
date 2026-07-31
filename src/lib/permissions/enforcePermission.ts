@@ -196,6 +196,14 @@ export function assertCanPerformBackdated(
       customMessage ||
       explain?.(mapped, recordDate) ||
       `${action === "create" ? "Creating" : action === "edit" ? "Editing" : "Deleting"} vouchers with this date is not allowed based on your role's date limits.`;
+    try {
+      // Lazy: avoid circular import weight; DevTools filter PL-PERM
+      void import("@/lib/permissionConfigSource").then(({ logPlPerm }) => {
+        logPlPerm("deny", { action, mapped, message: defaultMessage, recordDate: recordDate?.toISOString?.() ?? null });
+      });
+    } catch {
+      /* ignore */
+    }
     throw new PermissionDeniedError(defaultMessage);
   }
 }

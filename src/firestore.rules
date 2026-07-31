@@ -373,6 +373,17 @@ service cloud.firestore {
       }
 
       /**
+       * Local-first live delta feed: every outbox/direct ledger write also appends one row here.
+       * Without this match, the voucher write transaction fails even when `/vouchers/{id}` itself is allowed.
+       * @path /companies/{companyId}/_pl_change_log/{changeId}
+       */
+      match /_pl_change_log/{changeId} {
+        allow read, list: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
+        allow create: if isCompanyUser(companyId) || isSuperAdmin();
+        allow update, delete: if false;
+      }
+
+      /**
        * Auto Monthly / recurring voucher templates + per-period generation locks (Generate now + app-open runner).
        * Pehle match missing tha — client par "Missing or insufficient permissions" (getDoc / setDoc / transaction).
        * @path /companies/{companyId}/recurring_voucher_templates/{templateId}

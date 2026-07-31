@@ -14,6 +14,7 @@ function shouldKeepTrace(tag, event) {
   const t = String(tag || "");
   const e = String(event || "");
   if (t === "PL-VOUCHER-FORENSIC") return true;
+  if (t === "PL-FIRESTORE") return true;
   if (/error|failed|failure|timeout|denied|reject|incomplete|abort|suspicious/i.test(e)) return true;
   if (
     t === "PL-MAIN" &&

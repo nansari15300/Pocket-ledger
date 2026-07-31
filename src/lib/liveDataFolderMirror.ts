@@ -14,7 +14,7 @@ import {
   ensureLiveMirrorAutoPassphrase,
   clearLiveMirrorAutoPassphrase,
 } from "@/lib/backupSaveLocation";
-import { getBrowserDb, flushBrowserDbToIndexedDB } from "@/lib/localSqlite";
+import { flushBrowserDbToIndexedDB } from "@/lib/localSqlite";
 import { getLocalCompanyById, listLocalCompanies, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { sealLiveMirrorJson } from "@/lib/liveDataFolderCrypto";
@@ -204,9 +204,11 @@ async function blobToBase64Raw(blob: Blob): Promise<string> {
 }
 
 async function buildMirrorPayload(companyId: string): Promise<Record<string, unknown> | null> {
-  const db = await getBrowserDb();
-  if (!db) return null;
   const company = await getLocalCompanyById(companyId);
+  if (!company) return null;
+  const { getBrowserDbForCompanyId } = await import("@/lib/localSqlite");
+  const db = await getBrowserDbForCompanyId(companyId);
+  if (!db) return null;
   if (!company) return null;
   const collections: Record<string, unknown[]> = {};
   for (const col of COLLECTIONS_TO_MIRROR) {

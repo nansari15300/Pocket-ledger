@@ -37,6 +37,7 @@ import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
 import { isPureLocalLedgerCompany, companyRowUsesSqliteLedgerWrites } from "@/lib/companyStorageKind";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 import { companyStrategyUsesSqliteFirstLedgerWrites } from "@/lib/staticAttachmentDisplayUrl";
+import { isOnlineCompanyLedgerCloudSyncAllowed } from "@/lib/onlineCompanySelectorSyncPolicy";
 
 export type WriteEntityOperation = "create" | "update" | "delete";
 
@@ -63,11 +64,12 @@ async function resolveFirestoreCompanyId(localCompanyId: string): Promise<string
   return raw || localCompanyId.trim();
 }
 
-/** Local-first: SQLite UPSERT + sync_outbox — deltaa/all platforms; live web online = Firestore. */
+/** Local-first: SQLite UPSERT + sync_outbox — local / PL Server / Online Firebase. */
 async function shouldWriteLocalLedgerFirst(localCompanyId: string): Promise<boolean> {
   if (isFirebaseLedgerDataSyncDisabled()) return true;
   if (shouldForceFirestoreWritesOnStaticOrApk()) return false;
   const reg = await getLocalCompanyById(localCompanyId, { includeDeleted: true });
+  if (!isOnlineCompanyLedgerCloudSyncAllowed(localCompanyId, reg as Company | null)) return true;
   if (apkEmbeddedSqliteFirstWritesPreferred()) return !!reg;
   if (reg && companyStrategyUsesSqliteFirstLedgerWrites(reg)) return true;
   if (isStaticAppBuild() && reg) return companyRowUsesSqliteLedgerWrites(reg);
@@ -153,7 +155,7 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
   if (await shouldWriteLocalLedgerFirst(companyId)) {
     if (req.operation === "delete") {
       // Static/APK: hard-delete + ghost server doc avoid — tombstone SQLite + outbox `delete` (web local-only: purana hard path).
-      if (isStaticApkLedgerTransportMode()) {
+      if (true) {
         let merged: Record<string, unknown>;
         try {
           merged = await mergeWithExistingLocalDoc(

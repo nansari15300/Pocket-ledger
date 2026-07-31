@@ -20,6 +20,7 @@ type ShareableCompanyBridgeRow = {
   requiresLogin?: boolean;
   usernameHint?: string | null;
   accessEmails?: string[];
+  localCompanyUsers?: unknown[];
 };
 
 declare global {
@@ -54,7 +55,11 @@ declare global {
     __plReadAttachmentBlob?: (
       companyId: string,
       localId: string
-    ) => Promise<{ contentType: string; base64: string; size: number } | null>;
+    ) => Promise<
+      | { contentType: string; base64: string; size: number; relativePath?: undefined }
+      | { contentType: string; relativePath: string; size: number; base64?: undefined }
+      | null
+    >;
     __plPutPendingAttachmentFromRemote?: (
       companyId: string,
       body: {
@@ -277,6 +282,19 @@ export function ServerShareableCompaniesBridge() {
       const companyWithPlan = await withHostPlanFieldsOnCompanyExport(
         company as unknown as Record<string, unknown>
       );
+      try {
+        const { logPlPerm, summarizePermissionDateLimits } = await import("@/lib/permissionConfigSource");
+        const pc = (companyWithPlan as { permissionConfig?: unknown }).permissionConfig;
+        logPlPerm("host-export", {
+          companyId: resolvedCompanyId,
+          hasPermissionConfig: Boolean(pc),
+          dateLimits: summarizePermissionDateLimits(
+            pc as { dateLimits?: Record<string, { entryDays?: number; editDays?: number; deleteDays?: number }> } | undefined
+          ),
+        });
+      } catch {
+        /* ignore */
+      }
       const collections: Record<string, unknown[]> = {};
       for (const col of COLLECTIONS_TO_BACKUP) {
         const rows = await listCompanyDocsFromBrowserDb(resolvedCompanyId, col, { forBackupMerge: true });
@@ -315,12 +333,38 @@ export function ServerShareableCompaniesBridge() {
     };
 
     window.__plReadAttachmentBlob = async (companyId, localId) => {
-      const { getBlobFromLocalFileRef, LOCAL_FILE_PREFIX } = await import("@/lib/localPendingFiles");
+      const {
+        getBlobFromLocalFileRef,
+        getLocalFileRefMeta,
+        getLocalFileRefMetaSync,
+        LOCAL_FILE_PREFIX,
+      } = await import("@/lib/localPendingFiles");
       const rawId = String(localId || "").trim();
       const id = rawId.startsWith(LOCAL_FILE_PREFIX) ? rawId.slice(LOCAL_FILE_PREFIX.length).trim() : rawId;
       const cid = String(companyId || "").trim();
       if (!id || !cid) return null;
-      const blob = await getBlobFromLocalFileRef(`${LOCAL_FILE_PREFIX}${id}`, { companyId: cid });
+      const localRef = `${LOCAL_FILE_PREFIX}${id}`;
+      // Fast path for `/__pl_attachment`: return disk relativePath so Electron main reads binary
+      // (no base64 through executeJavaScript — that made LAN gallery feel like dial-up).
+      const meta = getLocalFileRefMetaSync(localRef) ?? (await getLocalFileRefMeta(localRef));
+      const relativePath = String(meta?.filePath || "").trim();
+      if (relativePath) {
+        let onDisk = true;
+        try {
+          const { electronAttachmentBlobExists } = await import("@/lib/electronAttachmentFs");
+          onDisk = await electronAttachmentBlobExists(relativePath);
+        } catch {
+          onDisk = true; // assume path ok; main will 404 if missing
+        }
+        if (onDisk) {
+          return {
+            contentType: meta?.contentType || "application/octet-stream",
+            relativePath,
+            size: 0,
+          };
+        }
+      }
+      const blob = await getBlobFromLocalFileRef(localRef, { companyId: cid });
       if (!blob?.size) return null;
       const ab = await blob.arrayBuffer();
       const bytes = new Uint8Array(ab);

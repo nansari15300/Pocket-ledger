@@ -1,7 +1,7 @@
 
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef, useMemo } from "react";
+import React, { createContext, useContext, useState, useEffect, useLayoutEffect, ReactNode, useCallback, useRef, useMemo } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "./useAuth";
 import { onSnapshot, collection, query, where, Timestamp, getDocs, getDocsFromServer, doc, getDoc } from "firebase/firestore";
@@ -533,6 +533,12 @@ function keepCompanyRefIfLedgerUnchanged(prev: Company | null, next: Company | n
   // Dual Firebase+PL same id: cloud stamp se PL row overwrite = header Sync/Recon + voucher blink.
   if (shouldRetainPlServerCompanyShape(prev, next)) {
     const merged = mergePlHostCompanyMetaFields(prev, next);
+    // Cloud stamp must never replace device/PL permissionConfig (defaults editDays=7 wipe).
+    if ((prev as { permissionConfig?: unknown }).permissionConfig != null) {
+      (merged as { permissionConfig?: unknown }).permissionConfig = (
+        prev as { permissionConfig?: unknown }
+      ).permissionConfig;
+    }
     logCompanyOnlinePlFlip("keepRef_retain_pl_block_cloud", {
       before: prev,
       after: next,
@@ -752,7 +758,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const [gateEpoch, setGateEpoch] = useState(0);
   /** Gate id change vs list refresh — sirf gate switch par incompatible selection clear karo. */
   const prevGateIdForSelectionRef = useRef<string>(getActiveGate().id);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const onGate = () => setGateEpoch((n) => n + 1);
     window.addEventListener(PL_GATE_CHANGED_EVENT, onGate);
     return () => window.removeEventListener(PL_GATE_CHANGED_EVENT, onGate);
@@ -983,29 +989,34 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     if (!companyId?.trim() || !company) return;
     if (company.isOwned === false) return;
-    if (readCompanyInterCompanyAcNo(company)) return;
+    const existingAc = readCompanyInterCompanyAcNo(company);
+    if (existingAc) return;
 
+    const cid = companyId.trim();
     let cancelled = false;
-    void ensureCompanyInterCompanyAcNo(companyId).then((ac) => {
+    void ensureCompanyInterCompanyAcNo(cid).then((ac) => {
       if (cancelled || !ac) return;
       reloadLocalCompanyRegistry();
     });
     return () => {
       cancelled = true;
     };
-  }, [companyId, company, reloadLocalCompanyRegistry]);
+  }, [companyId, company?.isOwned, company?.interCompanyAccountNo, reloadLocalCompanyRegistry]);
 
   /**
    * Company open: Company Code — shared user Firestore fetch; owner/admin generate if missing.
    */
   useEffect(() => {
     if (!companyId?.trim() || !company) return;
-    if (readCompanyInterCompanyCode(company)) return;
+    const existingCode = readCompanyInterCompanyCode(company);
+    if (existingCode) return;
 
+    const cid = companyId.trim();
+    const companyName = company.name;
     let cancelled = false;
     void resolveOrEnsureCompanyInterCompanyCode({
-      companyId,
-      companyName: company.name,
+      companyId: cid,
+      companyName,
       userUid: user?.uid,
       userEmail: user?.email,
       role: customUser?.role,
@@ -1018,7 +1029,15 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       cancelled = true;
     };
-  }, [companyId, company, customUser?.role, user?.email, user?.uid, reloadLocalCompanyRegistry]);
+  }, [
+    companyId,
+    company?.name,
+    (company as { interCompanyCompanyCode?: string } | null)?.interCompanyCompanyCode,
+    customUser?.role,
+    user?.email,
+    user?.uid,
+    reloadLocalCompanyRegistry,
+  ]);
 
   // Billing success → local SQLite plan patch ke baad list dubara load (offline company).
   useEffect(() => {
@@ -1690,7 +1709,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         if (touchLoading) setLoading(false);
       }
     },
-    [user, customUser?.userDocId, customUser?.email, normalizeLocalCompany, isSuperAdminUser, clearCompanyId, router]
+    [user?.uid, user?.email, customUser?.userDocId, customUser?.email, normalizeLocalCompany, isSuperAdminUser, clearCompanyId, router]
   );
 
   useEffect(() => {
@@ -1764,6 +1783,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         null;
       const tryPlServerHostPlan =
         shouldMergePlServerSharedIntoRegistry() &&
+        !!rowHint &&
         (isServerGateCompany(rowHint) ||
           rowHint?.plServerShared === true ||
           !isCurrentUserOwnerOfCompanyRow(rowHint, { uid: user.uid, email: user.email ?? null }));
@@ -2154,9 +2174,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       }
     };
   }, [
-    user,
+    user?.uid,
     user?.email,
-    customUser,
+    customUser?.userDocId,
     customUser?.email,
     authLoading,
     isBrowserOnline,

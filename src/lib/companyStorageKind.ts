@@ -29,6 +29,15 @@ export type CompanyStorageRow = {
   localPersistence?: string | null;
 };
 
+function hasPlServerGateMarker(c: CompanyStorageRow | null | undefined): boolean {
+  if (!c) return false;
+  return (
+    String(c.plServerGateId ?? "").trim().length > 0 ||
+    String(c.plServerGateServerUrl ?? "").trim().length > 0 ||
+    String(c.plServerHostCompanyId ?? "").trim().length > 0
+  );
+}
+
 /** Explicit SQLite-only local company marker. These rows must never be purged/mirrored as Firestore companies. */
 export function isStrictLocalOnlyCompany(c: CompanyStorageRow | null | undefined): boolean {
   if (!c || isServerGateCompany(c)) return false;
@@ -97,6 +106,7 @@ export function isServerSelectorCompanyRow(
   gateId?: string | null
 ): boolean {
   if (!c) return false;
+  if (c.plServerShared === true && hasPlServerGateMarker(c)) return true;
   if (isCloudLinkedCompanyStorage(c)) return false;
   // Stamped PL share (`plServerShared`) — Local tab me kabhi mat dikhao (gate list id mismatch pe bhi).
   // Gate page already Server-only; company picker pehle `!gid` / share-list miss se Local me leak karta tha.
@@ -124,6 +134,7 @@ export function isLocalSelectorCompanyRow(
   }) | null | undefined
 ): boolean {
   if (!c) return false;
+  if (c.plServerShared === true || hasPlServerGateMarker(c)) return false;
   // Firebase / Firestore mirror — kabhi Local tab me mat dikhao (cloud sync off hone par bhi).
   if (isCloudLinkedCompanyStorage(c)) return false;
   if (isServerGateCompany(c)) return false;
@@ -161,6 +172,7 @@ export function isServerGateCompany(
   c: (CompanyStorageRow & { plServerShared?: boolean }) | null | undefined
 ): boolean {
   if (c?.plServerShared !== true) return false;
+  if (hasPlServerGateMarker(c)) return true;
   if (c.syncedFromCloud === true) return false;
   const so = String(c.storageOption ?? "").toLowerCase().trim();
   if (so === "firebase" || so === "drive") return false;

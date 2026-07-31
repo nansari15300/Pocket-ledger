@@ -108,6 +108,8 @@ export function mirrorMergeApplyLog(detail: Record<string, unknown>): void {
 /** Server-side party/master timestamp lifecycle — verify edit → SQLite → export (merge policy change se pehle). */
 export function serverTimestampTraceLog(phase: string, detail: Record<string, unknown>): void {
   if (!livePullLoggingEnabled()) return;
+  const gate = getActiveGate();
+  if (gate.type !== "local_server") return;
   console.log(`[ServerTimestampTrace] ${phase}`, detail);
 }
 
@@ -155,30 +157,36 @@ export function buildLivePullSchedulerSnapshot(
 ): LivePullSchedulerSnapshot {
   const id = String(companyId || "").trim();
   const gate: GateRecord = getActiveGate();
+  const storageOption = String(company?.storageOption ?? "").toLowerCase().trim();
+  const isCloudBackedCompany =
+    company?.syncedFromCloud === true || storageOption === "firebase" || storageOption === "drive";
   const localAuthTokenPresent = Boolean(id && getLocalAuthToken(id));
   const gateHasServerUrl = gate.type === "local_server" && Boolean(String(gate.serverUrl || "").trim());
   const rowHasServerUrl = Boolean(String(company?.plServerGateServerUrl || "").trim());
   const gateConnected = gateHasServerUrl;
-  const storageIsLocal = String(company?.storageOption ?? "").toLowerCase().trim() === "local";
+  const storageIsLocal = storageOption === "local";
   const rowLooksServerGate =
-    company?.plServerShared === true ||
-    Boolean(String(company?.plServerGateServerUrl || "").trim()) ||
-    Boolean(String(company?.plServerHostCompanyId || "").trim()) ||
-    (gate.type === "local_server" && storageIsLocal);
-  const accessContextEnabled = shouldFetchPlServerAccessContext() || rowLooksServerGate;
+    !isCloudBackedCompany &&
+    (company?.plServerShared === true ||
+      Boolean(String(company?.plServerGateServerUrl || "").trim()) ||
+      Boolean(String(company?.plServerHostCompanyId || "").trim()) ||
+      (gate.type === "local_server" && storageIsLocal));
+  const accessContextEnabled = !isCloudBackedCompany && (shouldFetchPlServerAccessContext() || rowLooksServerGate);
   const gateCompanyAllowed = Boolean(
     id && (isCompanyAllowedOnActiveServerGate(id, gate) || (gate.type === "local_server" && rowLooksServerGate))
   );
   const gatePathOk =
     gate.type === "local_server" && Boolean(gate.serverUrl) && gateCompanyAllowed;
   const canSync =
-    localAuthTokenPresent ||
-    gatePathOk ||
-    Boolean((gateHasServerUrl || rowHasServerUrl) && rowLooksServerGate);
+    !isCloudBackedCompany &&
+    (localAuthTokenPresent ||
+      gatePathOk ||
+      Boolean((gateHasServerUrl || rowHasServerUrl) && rowLooksServerGate));
   const localServerAuthenticatedCompany =
+    !isCloudBackedCompany &&
     gate.type === "local_server" &&
     localAuthTokenPresent &&
-    String(company?.storageOption ?? "").toLowerCase().trim() === "local";
+    storageIsLocal;
   const isServerRow =
     company?.plServerShared === true ||
     isPlServerSharedCompanyRow(id ? { ...company, id } : company, gate.id) ||

@@ -62,6 +62,7 @@ import { isOnlineCompanyAttachmentNetworkAllowed } from "@/lib/onlineCompanySele
 import {
   companyAttachmentMode,
   companyRequiresLocalAttachmentUrlsOnly,
+  companyUsesLocalAttachmentSourcesOnly,
   prefersLocalAttachmentDisplayFirst,
   resolveStaticAttachmentDisplay,
 } from "@/lib/staticAttachmentDisplayUrl";
@@ -88,9 +89,21 @@ function isBlobOrDataDisplayUrl(u: string | null | undefined): boolean {
   return false;
 }
 
-/** `local:` string preview URL nahi — blob / server fetch ke baad hi resolved. */
+/** Raw Firebase object path / `local:` — kabhi `<img src>` mat; pehle blob/native resolve. */
 function isUnresolvedAttachmentPreviewUrl(url: string | null | undefined): boolean {
-  return !url || isLocalFileRef(String(url || "").trim());
+  const u = String(url || "").trim();
+  if (!u) return true;
+  if (isLocalFileRef(u)) return true;
+  // Restore leftovers: `voucher-files/...` as display URL → broken thumb showing path text.
+  if (
+    looksLikeFirebaseStorageObjectPath(u) ||
+    /^voucher-files\//i.test(u) ||
+    /^companies\/[^/]+\/(voucher-files|entity-files|pending-files)\//i.test(u) ||
+    /^entity-files\//i.test(u)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function logFilePreviewForensic(tag: string, payload: Record<string, unknown>) {
@@ -101,7 +114,7 @@ function logFilePreviewForensic(tag: string, payload: Record<string, unknown>) {
 /** Warmed LRU blob abhi paint-able hai? Revoked / dead blob → FilePreview broken `local:` alt. */
 async function isUsableWarmedAttachmentDisplayUrl(displayUrl: string): Promise<boolean> {
   const u = String(displayUrl || "").trim();
-  if (!u) return false;
+  if (!u || isUnresolvedAttachmentPreviewUrl(u)) return false;
   if (u.startsWith("data:")) return true;
   if (!u.startsWith("blob:")) {
     // Native convertFileSrc / https — fetch mat; sirf blob: revoke race check.
@@ -384,6 +397,10 @@ interface FilePreviewProps {
   attachmentCompanyId?: string;
   /** Gallery local company: Firebase Storage/network mat chhedo — sirf cache + `local:`. */
   forceLocalAttachmentOnly?: boolean;
+  /** Voucher `files[].name` / gallery caption — `local:uuid` URL pe extension nahi hoti. */
+  sourceFileName?: string | null;
+  /** Voucher `files[].contentType` — PDF/JPEG type bina sniff. */
+  contentType?: string | null;
 }
 
 const getCleanName = (name: string) => {
@@ -418,6 +435,8 @@ export function FilePreview({
   holdAttachmentClipboard = true,
   attachmentCompanyId,
   forceLocalAttachmentOnly = false,
+  sourceFileName = null,
+  contentType = null,
 }: FilePreviewProps) {
   const voucherAttachmentFb = useVoucherAttachmentFallback();
   const { companyId: shellCompanyId, company } = useCompany();
@@ -444,6 +463,7 @@ export function FilePreview({
   const pathCompanyId = attachmentCompanyId ?? voucherAttachmentFb?.companyId ?? shellCompanyId ?? undefined;
   const localLedgerOnly = React.useMemo(() => {
     if (forceLocalAttachmentOnly || companyRequiresLocalAttachmentUrlsOnly(company)) return true;
+    if (companyUsesLocalAttachmentSourcesOnly(company)) return true;
     const cid = String(pathCompanyId || company?.id || "").trim();
     if (!cid) return false;
     // Files tick OFF → no network fetch; local blob/cache still shows / opens.
@@ -498,8 +518,11 @@ export function FilePreview({
     !policyAllowsAttachmentView &&
     !offlineCacheReadable;
 
-  // URL-only props (e.g. gallery vouchers) par Firebase SDK se blob — fetch/CORS fail hone par bhi thumb mile
+  // URL-only props (e.g. gallery vouchers) par Firebase SDK se blob — fetch/CORS fail hone par bhi thumb mile.
+  // Local/`local:` restore: purana `files[].storagePath` Firebase disturb na kare.
   const resolvedStoragePath = React.useMemo(() => {
+    if (typeof file === "string" && isLocalFileRef(file)) return undefined;
+    if (localLedgerOnly) return undefined;
     if (storagePath) return storagePath;
     if (typeof file === "string") {
       const fromUrl = tryGetStoragePathFromFirebaseDownloadUrl(file);
@@ -514,7 +537,7 @@ export function FilePreview({
       }
     }
     return undefined;
-  }, [file, storagePath, pathCompanyId]);
+  }, [file, storagePath, pathCompanyId, localLedgerOnly]);
 
   /** Voucher attach grid: parent `h-16`/`h-24` + `w-full` — inline 96px style mat lagao (Add box chhota na dikhe) */
   const fillsParentAttachSlot = Boolean(
@@ -543,7 +566,7 @@ export function FilePreview({
       return null;
     }
     const meta = getLocalFileRefMetaSync(file);
-    if (!meta?.displayUrl) return null;
+    if (!meta?.displayUrl || isUnresolvedAttachmentPreviewUrl(meta.displayUrl)) return null;
     let type: "image" | "pdf" | "other" = "other";
     const ct = String(meta.contentType || "").toLowerCase();
     const hintKind = getAttachmentPreviewKindFromHints(meta.fileName, meta.contentType);
@@ -847,7 +870,45 @@ export function FilePreview({
         !isUnresolvedAttachmentPreviewUrl(painted.url) &&
         painted.type !== "other"
       ) {
-        return;
+        // Gallery remount / fileLoadStatus churn: painted URL pehle se hai — full re-resolve mat.
+        // PDF thumb miss (abort ke baad) → schedule regenerate; image → verify blob still usable.
+        const paintedUrlOk =
+          !painted.url.startsWith("blob:") ||
+          (await isUsableWarmedAttachmentDisplayUrl(painted.url));
+        if (!paintedUrlOk) {
+          // Revoked blob — neeche full resolve.
+        } else if (painted.type === "pdf") {
+          setIsLoading(false);
+          const edge = Math.max(layoutW, layoutH);
+          const ck = pdfThumbCacheKey(
+            undefined,
+            typeof file === "string" ? file : painted.url,
+            resolvedStoragePath,
+            edge
+          );
+          const cached = pdfThumbCacheGet(ck);
+          if (cached) {
+            pdfThumbnailKeyRef.current = ck;
+            setPdfThumbnailSafe(cached);
+            return;
+          }
+          if (!controller.signal.aborted) {
+            pdfThumbDebounceTimer = setTimeout(() => {
+              if (!controller.signal.aborted) {
+                // Prefer live blob: URL; warna local: re-read.
+                const pdfSrc =
+                  painted.url?.startsWith("blob:") || painted.url?.startsWith("data:")
+                    ? painted.url
+                    : file;
+                generatePdfThumbnail(pdfSrc!, undefined, resolvedStoragePath, controller.signal);
+              }
+            }, 120);
+          }
+          return;
+        } else {
+          setIsLoading(false);
+          return;
+        }
       }
       if (typeof file === "string") {
         const warmed = peekHoverCachedBlobUrl(file);
@@ -856,8 +917,12 @@ export function FilePreview({
         if (warmed && !controller.signal.aborted && (await isUsableWarmedAttachmentDisplayUrl(warmed))) {
           let warmedType: "image" | "pdf" | "other" = "image";
           const lbl = getAttachmentFormatLabel(file);
-          if (lbl === "PDF" || file.toLowerCase().includes(".pdf")) warmedType = "pdf";
-          else if (isLocalFileRef(file) && (lbl === "FILE" || lbl === "OTHER" || !lbl)) {
+          const hintKind = getAttachmentPreviewKindFromHints(sourceFileName, contentType);
+          if (hintKind === "pdf" || lbl === "PDF" || file.toLowerCase().includes(".pdf")) {
+            warmedType = "pdf";
+          } else if (hintKind === "image") {
+            warmedType = "image";
+          } else if (isLocalFileRef(file) && (lbl === "FILE" || lbl === "OTHER" || !lbl)) {
             // local: extension nahi — sniff se type; default image mat (PDF masters broken).
             try {
               const probe = await fetch(warmed).then((r) => r.blob());
@@ -918,16 +983,24 @@ export function FilePreview({
               objectUrl = URL.createObjectURL(staticResolved.blob);
               resolvedUrl = objectUrl;
             }
-            const nativeCt = String(staticResolved.contentType || "").toLowerCase();
+            const nativeCt = String(staticResolved.contentType || contentType || "").toLowerCase();
             try {
               resolvedName = decodeURIComponent(file.split("/").pop()?.split("?")[0] || "file");
             } catch {
               resolvedName = file.split("/").pop()?.split("?")[0] || "file";
             }
+            if (sourceFileName?.trim()) {
+              try {
+                resolvedName = decodeURIComponent(String(sourceFileName).trim());
+              } catch {
+                resolvedName = String(sourceFileName).trim();
+              }
+            }
             const lbl = getAttachmentFormatLabel(file);
+            const hintKind = getAttachmentPreviewKindFromHints(sourceFileName, contentType || staticResolved.contentType);
             const cleanUrl = file.split("?")[0].toLowerCase();
-            if (nativeCt.includes("pdf")) resolvedType = "pdf";
-            else if (nativeCt.startsWith("image/")) resolvedType = "image";
+            if (nativeCt.includes("pdf") || hintKind === "pdf") resolvedType = "pdf";
+            else if (nativeCt.startsWith("image/") || hintKind === "image") resolvedType = "image";
             else if (lbl === "PDF" || cleanUrl.endsWith(".pdf") || cleanUrl.includes(".pdf")) {
               resolvedType = "pdf";
             } else if (
@@ -936,10 +1009,21 @@ export function FilePreview({
             ) {
               resolvedType = "image";
             }
-            let formatLabel = getAttachmentFormatLabel(file);
+            // `local:uuid` + octet-stream: sniff before early-return (gallery PDF otherwise stuck as FILE).
+            if (resolvedType === "other" && staticResolved.blob && staticResolved.blob.size > 0) {
+              const kind = await sniffBlobKindForPreview(staticResolved.blob);
+              if (kind === "pdf") resolvedType = "pdf";
+              else if (kind === "image") resolvedType = "image";
+            }
+            let formatLabel =
+              getAttachmentFormatLabelFromHints(sourceFileName, contentType || staticResolved.contentType) ||
+              getAttachmentFormatLabel(file);
             if (resolvedType === "pdf") formatLabel = "PDF";
             else if (resolvedType === "image" && (formatLabel === "FILE" || formatLabel === "OTHER")) {
               formatLabel = "IMAGE";
+            }
+            if (resolvedUrl?.startsWith("blob:") || resolvedUrl?.startsWith("data:")) {
+              rememberHoverBlobUrl(file, resolvedUrl);
             }
             setFileInfo({
               url: resolvedUrl,
@@ -955,7 +1039,12 @@ export function FilePreview({
             if (resolvedType === "pdf" && resolvedUrl) {
               pdfThumbDebounceTimer = setTimeout(() => {
                 if (!controller.signal.aborted) {
-                  generatePdfThumbnail(file, undefined, resolvedStoragePath, controller.signal);
+                  // blob: pehle — local: pe dubara IDB read avoid (gallery 20 tiles).
+                  const pdfSrc =
+                    resolvedUrl!.startsWith("blob:") || resolvedUrl!.startsWith("data:")
+                      ? resolvedUrl!
+                      : file;
+                  generatePdfThumbnail(pdfSrc, undefined, resolvedStoragePath, controller.signal);
                 }
               }, 120);
             }
@@ -1158,22 +1247,26 @@ export function FilePreview({
           })();
           return;
         }
+        const fileIsLocalRef = typeof file === "string" && isLocalFileRef(file);
+        // `local:` + leftover storagePath → Firebase object-path branch mat; local bytes pehle.
         const isStorageObjectPath =
-          looksLikeFirebaseStorageObjectPath(file, { companyId: pathCompanyId }) ||
-          Boolean(
-            resolvedStoragePath &&
-              /^voucher-files\//i.test(resolvedStoragePath) &&
-              typeof file === "string" &&
-              !/^https?:\/\//i.test(file)
-          );
-        resolvedUrl = isStorageObjectPath || isLocalFileRef(file) ? null : file;
+          !fileIsLocalRef &&
+          !localLedgerOnly &&
+          (looksLikeFirebaseStorageObjectPath(file, { companyId: pathCompanyId }) ||
+            Boolean(
+              resolvedStoragePath &&
+                /^voucher-files\//i.test(resolvedStoragePath) &&
+                typeof file === "string" &&
+                !/^https?:\/\//i.test(file)
+            ));
+        resolvedUrl = isStorageObjectPath || fileIsLocalRef ? null : file;
         if (isStorageObjectPath) {
           try {
             // Broken relative path flicker avoid: raw `voucher-files/...` ko pehle offline cache/native ref se resolve karo.
             const nativeCached = usesEmbeddedNativeAttachmentStorage()
               ? await getOfflineCachedAttachmentNativeRef(file)
               : null;
-            if (nativeCached?.displayUrl) {
+            if (nativeCached?.displayUrl && !isUnresolvedAttachmentPreviewUrl(nativeCached.displayUrl)) {
               resolvedUrl = nativeCached.displayUrl;
               const ct = String(nativeCached.contentType || "").toLowerCase();
               if (ct.includes("pdf")) resolvedType = "pdf";
@@ -1238,7 +1331,10 @@ export function FilePreview({
               } else if (hintKind === "image" || (localMeta.contentType || "").toLowerCase().startsWith("image/")) {
                 resolvedType = "image";
               }
-              resolvedUrl = localMeta.displayUrl;
+              // Restore leftover: displayUrl kabhi raw Firebase path — paint mat, blob resolve.
+              if (!isUnresolvedAttachmentPreviewUrl(localMeta.displayUrl)) {
+                resolvedUrl = localMeta.displayUrl;
+              }
               localFormatHint = getAttachmentFormatLabelFromHints(localMeta.fileName, localMeta.contentType);
               // Restore ke baad contentType kabhi octet-stream / restored_* name → FILE icon.
               // Bytes sniff karke IMAGE/PDF promote karo (displayUrl pehle se paint ho sake).
@@ -1716,7 +1812,8 @@ export function FilePreview({
       const thumb = thumbnailUrlRef.current;
       if (thumb && !pdfThumbBlobIsCached(thumb)) revokeThumbnailUrl(thumb);
       thumbnailUrlRef.current = null;
-      setPdfThumbnail(null);
+      // Do NOT setPdfThumbnail(null) here — gallery page remount / fileLoadStatus churn
+      // clears PDF thumbs then early-returns without regenerating (blank until full refresh).
     };
   }, [
     normalizedPreviewFile,
@@ -1736,6 +1833,8 @@ export function FilePreview({
     attachmentMode,
     localLedgerOnly,
     preferLocalAttachmentFirst,
+    sourceFileName,
+    contentType,
   ]);
 
   /** Thumbnail click + hover portal par double-click = browser / in-app open (same rules) */
@@ -1905,10 +2004,8 @@ export function FilePreview({
     (viewFileInfo.type === "image" || viewFileInfo.type === "pdf");
 
   const ThumbnailContent = () => {
-    if (
-      !previewTimedOut &&
-      (viewIsLoading || (viewFileInfo.type === "pdf" && isPdfLoading && !pdfThumbnail))
-    ) {
+    // PDF first-page thumb = progressive; spinner mat — icon dikhao jab tak raster ready.
+    if (!previewTimedOut && viewIsLoading && !(viewFileInfo.type === "pdf" && viewFileInfo.url)) {
       return <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />;
     }
 
@@ -1949,10 +2046,11 @@ export function FilePreview({
                 if (typeof normalizedPreviewFile === "string" && bad) {
                   forgetHoverBlobUrl(normalizedPreviewFile, bad);
                 }
+                // Revoked blob → File icon; loading spinner loop mat (gallery remount churn).
                 setFileInfo((prev) =>
                   prev.url === bad ? { ...prev, url: null, type: "other" } : prev
                 );
-                setIsLoading(true);
+                setIsLoading(false);
               }}
             />
           ) : (
@@ -1971,7 +2069,7 @@ export function FilePreview({
                 setFileInfo((prev) =>
                   prev.url === bad ? { ...prev, url: null, type: "other" } : prev
                 );
-                setIsLoading(true);
+                setIsLoading(false);
               }}
             />
           ))
@@ -2003,11 +2101,13 @@ export function FilePreview({
             ))
           );
         }
-        // Fallback to icon if thumbnail generation fails
+        // Fallback to icon if thumbnail generation fails / still in progress
         return (
           <div className="flex h-full w-full flex-col items-center justify-center bg-red-50 text-red-500">
             <FileText className="h-8 w-8 mb-1" />
-            <span className="text-[12px] font-black leading-none">PDF</span>
+            <span className="text-[12px] font-black leading-none">
+              {isPdfLoading ? "…" : "PDF"}
+            </span>
           </div>
         );
       default:

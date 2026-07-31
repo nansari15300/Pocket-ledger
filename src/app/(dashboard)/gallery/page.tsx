@@ -93,6 +93,8 @@ import { getAttachmentFormatLabel, getAttachmentFormatLabelFromHints } from "@/l
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { canSyncCompanyToServer } from "@/lib/localVoucherOutbox";
 import { getPendingFiles, isLocalFileRef, LOCAL_FILE_PREFIX } from "@/lib/localPendingFiles";
+import { usePrewarmVisibleAttachments } from "@/hooks/usePrewarmVisibleAttachments";
+import { companyUsesLocalAttachmentSourcesOnly } from "@/lib/staticAttachmentDisplayUrl";
 
 
 const ATTACHABLE_VOUCHER_TYPES = [
@@ -143,6 +145,24 @@ function getVoucherAttachmentMeta(
   fileIndex: number,
   companyId?: string
 ): { storagePath?: string; fileSize?: number; sourceFileName?: string; contentType?: string } {
+  // Online→local restore: `url` already `local:` — leftover `storagePath` Firebase disturb na kare.
+  if (isLocalFileRef(String(url || "").trim())) {
+    const arr = item?.files;
+    let fileSize: number | undefined;
+    let sourceFileName: string | undefined;
+    let contentType: string | undefined;
+    if (Array.isArray(arr) && arr.length > 0) {
+      const match = arr.find((f: any) => f && (f.url === url || f.downloadUrl === url));
+      const at = arr[fileIndex];
+      const szRaw = match?.size ?? at?.size;
+      fileSize = typeof szRaw === "number" && szRaw > 0 ? szRaw : undefined;
+      const nameRaw = match?.name ?? at?.name ?? match?.fileName ?? at?.fileName;
+      sourceFileName = typeof nameRaw === "string" && nameRaw.trim() ? nameRaw.trim() : undefined;
+      const ctRaw = match?.contentType ?? at?.contentType ?? match?.mimeType;
+      contentType = typeof ctRaw === "string" && ctRaw.includes("/") ? ctRaw.trim() : undefined;
+    }
+    return { storagePath: undefined, fileSize, sourceFileName, contentType };
+  }
   const fromParser = tryGetStoragePathFromFirebaseDownloadUrl(url) ?? undefined;
   // Mirror / SQLite kabhi HTTPS ke bajay encoded tail rakhta hai — `FilePreview` + PDF thumb ke liye SDK path banao.
   const fromBareTail =
@@ -376,6 +396,10 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
   const [pendingLocalLabelsByRef, setPendingLocalLabelsByRef] = useState<Record<string, string>>({});
   const fullPreviewBootstrapDoneRef = useRef(false);
   const { companyId, company } = useCompany();
+  const localAttachmentsOnly = React.useMemo(
+    () => companyUsesLocalAttachmentSourcesOnly(company),
+    [company]
+  );
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const router = useRouter();
   // Defer Radix Popover/Combobox until client mount to avoid hydration mismatch (aria-controls IDs differ on server vs client).
@@ -584,10 +608,10 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                 return item.id === selectedEntityId.replace(`${type}-`, '');
             } else {
                 if (type === 'party') return item.partyId === actualId;
-                if (type === 'staff') return item.staffId === actualId || item.entries?.some((e: any) => e.accountId === actualId);
-                if (type === 'account') return item.accountId === actualId || item.fromAccountId === actualId || item.toAccountId === actualId || item.entries?.some((e: any) => e.accountId === actualId);
-                if (type === 'item') return item.lineItems?.some((li: any) => li.itemId === actualId);
-                if (type === 'tax') return item.taxAccountId === actualId || item.lineItems?.some((li:any) => li.taxAccountId === actualId) || item.entries?.some((e: any) => e.accountId === actualId);
+                if (type === 'staff') return item.staffId === actualId || (Array.isArray(item.entries) && item.entries.some((e: any) => e.accountId === actualId));
+                if (type === 'account') return item.accountId === actualId || item.fromAccountId === actualId || item.toAccountId === actualId || (Array.isArray(item.entries) && item.entries.some((e: any) => e.accountId === actualId));
+                if (type === 'item') return Array.isArray(item.lineItems) && item.lineItems.some((li: any) => li.itemId === actualId);
+                if (type === 'tax') return item.taxAccountId === actualId || (Array.isArray(item.lineItems) && item.lineItems.some((li:any) => li.taxAccountId === actualId)) || (Array.isArray(item.entries) && item.entries.some((e: any) => e.accountId === actualId));
             }
             return false;
         });
@@ -602,7 +626,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                 return item.type === typeMap[selectedAccountType];
             } else {
                 if (selectedAccountType === 'party') return !!item.partyId;
-                if (selectedAccountType === 'staff') return !!item.staffId || item.entries?.some((e: any) => processedStaff.some(s => s.id === e.accountId));
+                if (selectedAccountType === 'staff') return !!item.staffId || (Array.isArray(item.entries) && item.entries.some((e: any) => processedStaff.some(s => s.id === e.accountId)));
                 if (selectedAccountType === 'bank_cash') return !!item.accountId || !!item.fromAccountId || !!item.toAccountId;
                 if (selectedAccountType === 'items') return item.lineItems?.length > 0;
                 if (selectedAccountType === 'tax') return !!item.taxAccountId;
@@ -643,6 +667,13 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
     [companyFlatRows, companySliceStart, companyFilesPerPage]
   );
 
+  const paginatedCompanyUrls = useMemo(
+    () => paginatedCompanyRows.map(({ url }) => String(url || "").trim()).filter(Boolean),
+    [paginatedCompanyRows]
+  );
+  // Page flip: warm current tiles (incl. PL-server `local:`) before/while FilePreview mounts.
+  usePrewarmVisibleAttachments(paginatedCompanyUrls, companyId);
+
   useEffect(() => {
     if (companyFilesPage !== companyPageClamped) setCompanyFilesPage(companyPageClamped);
   }, [companyFilesPage, companyPageClamped]);
@@ -654,16 +685,23 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
   );
   const hasPdfToPrewarmOnPage = useMemo(
     () =>
-      paginatedCompanyRows.some(({ url }) => {
+      paginatedCompanyRows.some(({ item, url, fileIndex }) => {
         const u = String(url);
-        // `getAttachmentFormatLabel`: Firebase download URL jahan path me `.pdf` slice se na mile
-        return (
+        if (
           u.startsWith("data:application/pdf") ||
           getAttachmentFormatLabel(u) === "PDF" ||
           u.split("?")[0].toLowerCase().endsWith(".pdf")
-        );
+        ) {
+          return true;
+        }
+        // `local:uuid` — URL pe .pdf nahi; voucher meta / pending label se PDF detect.
+        const meta = getVoucherAttachmentMeta(item, url, fileIndex, companyId);
+        if (getAttachmentFormatLabelFromHints(meta.sourceFileName, meta.contentType) === "PDF") {
+          return true;
+        }
+        return pendingLocalLabelsByRef[u] === "PDF";
       }),
-    [paginatedCompanyRows]
+    [paginatedCompanyRows, companyId, pendingLocalLabelsByRef]
   );
 
   const companyLocalRefsKey = useMemo(
@@ -712,7 +750,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
     void (async () => {
       setPdfPrewarmLoading(true);
       try {
-        await prewarmPdfThumbnailsForGallery(entries, ac.signal);
+        await prewarmPdfThumbnailsForGallery(entries, ac.signal, localAttachmentsOnly);
       } finally {
         setPdfPrewarmLoading(false);
         if (ac.signal.aborted) return;
@@ -730,7 +768,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
     })();
 
     return () => ac.abort();
-  }, [mounted, companyPdfPrewarmKey, hasPdfToPrewarmOnPage, companyId]);
+  }, [mounted, companyPdfPrewarmKey, hasPdfToPrewarmOnPage, companyId, localAttachmentsOnly]);
 
  const getAccountNameFromVoucher = (voucher: any) => {
     if (voucher.isAvatar) return voucher.name;
@@ -849,7 +887,10 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                               size={Number(previewSize)}
                               storagePath={attachMeta.storagePath}
                               fileSize={attachMeta.fileSize}
+                              sourceFileName={attachMeta.sourceFileName}
+                              contentType={attachMeta.contentType}
                               attachmentCompanyId={companyId}
+                              forceLocalAttachmentOnly={localAttachmentsOnly}
                               enableHoverFullPreview={false}
                               holdAttachmentClipboard={false}
                             />
@@ -892,9 +933,10 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                       </div>
               );
 
-              // Prewarm chalta hue hover preview band — PDF tooltip turant na khule
+              // Keep stable Tooltip wrapper — swapping div↔Tooltip on pdfPrewarmLoading
+              // remounts every FilePreview and aborts in-flight PL thumb fetches (blank next page).
               const hoverPreviewActive = fullHoverPreview && !pdfPrewarmLoading;
-              if (isMobile || !hoverPreviewActive) {
+              if (isMobile) {
                 return (
                   <div key={`${item.id}-${index}`}>
                     {tileEl}
@@ -903,7 +945,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
               }
 
               return (
-                <Tooltip key={`${item.id}-${index}`}>
+                <Tooltip key={`${item.id}-${index}`} open={hoverPreviewActive ? undefined : false}>
                     <TooltipTrigger asChild>
                       {tileEl}
                     </TooltipTrigger>
@@ -935,7 +977,10 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                                   file={url}
                                   storagePath={attachMeta.storagePath}
                                   fileSize={attachMeta.fileSize}
+                                  sourceFileName={attachMeta.sourceFileName}
+                                  contentType={attachMeta.contentType}
                                   attachmentCompanyId={companyId}
+                                  forceLocalAttachmentOnly={localAttachmentsOnly}
                                   size={700}
                                   previewBox={GALLERY_HOVER_PREVIEW_BOX}
                                   objectFit="contain"
@@ -1308,6 +1353,10 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
   const isMobile = useIsMobile();
   const { user } = useAuth();
   const { company, companyId } = useCompany();
+  const localAttachmentsOnly = React.useMemo(
+    () => companyUsesLocalAttachmentSourcesOnly(company),
+    [company]
+  );
   // Company users only: owner + shared (for user filter dropdown)
   const companyUserIds = useMemo(() => {
     if (!company) return new Set<string>();
@@ -1773,7 +1822,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     void (async () => {
       setPdfPrewarmLoading(true);
       try {
-        await prewarmPdfThumbnailsForGallery(entries, ac.signal);
+        await prewarmPdfThumbnailsForGallery(entries, ac.signal, localAttachmentsOnly);
       } finally {
         setPdfPrewarmLoading(false);
         if (ac.signal.aborted) return;
@@ -1789,7 +1838,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
       }
     })();
     return () => ac.abort();
-  }, [isHydrated, unassignedPdfPrewarmKey, hasPdfToPrewarmUnassignedPage]);
+  }, [isHydrated, unassignedPdfPrewarmKey, hasPdfToPrewarmUnassignedPage, localAttachmentsOnly]);
 
   useEffect(() => {
     if (unassignedFilesPage !== unassignedPageClamped) setUnassignedFilesPage(unassignedPageClamped);
@@ -1881,7 +1930,8 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
                       file={file.url}
                       size={Number(previewSize)}
                       fileSize={file.size}
-                      storagePath={file.path}
+                      storagePath={isLocalFileRef(String(file.url || "")) ? undefined : file.path}
+                      forceLocalAttachmentOnly={localAttachmentsOnly}
                       enableHoverFullPreview={false}
                       holdAttachmentClipboard={false}
                     />
@@ -1963,7 +2013,8 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
                         {(() => (
                           <FilePreview
                             file={file.url}
-                            storagePath={file.path}
+                            storagePath={isLocalFileRef(String(file.url || "")) ? undefined : file.path}
+                            forceLocalAttachmentOnly={localAttachmentsOnly}
                             size={700}
                             previewBox={GALLERY_HOVER_PREVIEW_BOX}
                             objectFit="contain"

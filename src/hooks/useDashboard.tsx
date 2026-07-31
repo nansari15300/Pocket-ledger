@@ -11,7 +11,8 @@ type DashboardContextType = {
 const DashboardContext = createContext<DashboardContextType | undefined>(undefined);
 
 export const DashboardProvider = ({ children }: { children: ReactNode }) => {
-  const [visibleCard, setVisibleCardState] = useState("financial-summaries");
+  // Default "all" so Daybook + Recent show for PL Server staff (role ticks apply via can()).
+  const [visibleCard, setVisibleCardState] = useState("all");
 
   useEffect(() => {
     const savedCard = localStorage.getItem("dashboardVisibleCard");

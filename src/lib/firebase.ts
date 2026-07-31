@@ -22,6 +22,9 @@ import { isEmbeddedOfflinePreloadClient } from '@/lib/isEmbeddedOfflinePreloadCl
 import { getEmbeddedLockShellKind } from '@/lib/embeddedDeviceLock';
 import { isClientNavigatorOffline } from '@/lib/apkOnlineFirestoreWritePolicy';
 import { clearEmbeddedWarmBootstrapFlags } from '@/lib/embeddedWarmBootstrapFlags';
+import { isFirestoreWatchTeardownAssertionMessage } from '@/lib/firestoreWatchAssertionGuard';
+
+export { isFirestoreWatchTeardownAssertionMessage } from '@/lib/firestoreWatchAssertionGuard';
 
 const firebaseConfig = {
   apiKey: "AIzaSyAtHvZ3PY50rwF5oqHjtRMjbec6NzMl6dM",
@@ -57,20 +60,59 @@ function useFirestoreSingleTabPersistence(): boolean {
   return isEmbeddedOfflinePreloadClient();
 }
 
-/** Window to mute Firestore watch-teardown noise during / after `signOutWithFirestoreTeardown` (ca9 / b815). */
+/** Extra mute window during / after `signOutWithFirestoreTeardown` (ca9 / b815). */
 let firestoreWatchTeardownSuppressionUntil = 0;
+/** Rate-limit user-visible warn + file trace for the same SDK assert. */
+let lastFirestoreWatchAssertionReportAt = 0;
 
-function isFirestoreWatchTeardownAssertionMessage(message: string): boolean {
-  return (
-    message.includes('INTERNAL ASSERTION FAILED') &&
-    (message.includes('ca9') || message.includes('b815') || message.includes('"ve":-1'))
-  );
+function reportSuppressedFirestoreWatchAssertion(source: string, message: string): void {
+  const now = Date.now();
+  if (now - lastFirestoreWatchAssertionReportAt < 2500) return;
+  lastFirestoreWatchAssertionReportAt = now;
+  const clipped = message.length > 500 ? `${message.slice(0, 500)}…` : message;
+  try {
+    // Keep one visible line so "check console" is not empty; do not use console.error (Next overlay).
+    console.warn(
+      `[Firestore] Suppressed SDK watch assertion (${source}). App kept running. See pl-trace.log if on EXE.`,
+      clipped
+    );
+  } catch {
+    /* ignore */
+  }
+  try {
+    const bridge = (
+      window as Window & {
+        plElectronTrace?: { log?: (tag: string, event: string, detail?: unknown) => void };
+      }
+    ).plElectronTrace;
+    bridge?.log?.('PL-FIRESTORE', 'internal_assertion_failed', {
+      source,
+      message: clipped,
+      at: new Date(now).toISOString(),
+    });
+  } catch {
+    /* ignore */
+  }
 }
 
-function shouldSuppressFirestoreWatchAssertionNow(): boolean {
-  // Embedded static runtime me Firebase SDK ka known watch-state assertion user-facing uncaught popup deta hai.
-  if (isEmbeddedOfflinePreloadClient()) return true;
-  return Date.now() < firestoreWatchTeardownSuppressionUntil;
+function swallowFirestoreWatchAssertionEvent(
+  event: Event & { preventDefault(): void; stopImmediatePropagation?: () => void },
+  source: string,
+  message: string
+): boolean {
+  if (!isFirestoreWatchTeardownAssertionMessage(message)) return false;
+  try {
+    event.preventDefault();
+  } catch {
+    /* ignore */
+  }
+  try {
+    event.stopImmediatePropagation?.();
+  } catch {
+    /* ignore */
+  }
+  reportSuppressedFirestoreWatchAssertion(source, message);
+  return true;
 }
 
 // Suppress Firebase console errors for offline/unavailable; track PERMISSION_DENIED (skip when logged out)
@@ -102,11 +144,10 @@ if (typeof window !== 'undefined') {
     if (isFirestorePersistenceLeaseError(errorMessage)) {
       return;
     }
-    // Firestore 12.12: signOut + snapshot teardown → ca9; AsyncQueue sometimes wraps it as b815 (SDK bug).
-    if (
-      shouldSuppressFirestoreWatchAssertionNow() &&
-      isFirestoreWatchTeardownAssertionMessage(errorMessage)
-    ) {
+    // Firestore 12.x: signOut / wake / enableNetwork races → ca9/b815 (SDK bug). Never console.error
+    // (Next turns that into "Application error / check console" with an empty console on EXE).
+    if (isFirestoreWatchTeardownAssertionMessage(errorMessage)) {
+      reportSuppressedFirestoreWatchAssertion('console.error', errorMessage);
       return;
     }
     // PERMISSION_DENIED after logout is expected (listeners still firing with null auth) — don't log
@@ -183,11 +224,8 @@ if (typeof window !== 'undefined') {
         }
         return;
       }
-      if (
-        shouldSuppressFirestoreWatchAssertionNow() &&
-        isFirestoreWatchTeardownAssertionMessage(msg)
-      ) {
-        event.preventDefault();
+      if (swallowFirestoreWatchAssertionEvent(event, 'unhandledrejection', msg)) {
+        return;
       }
     },
     { capture: true }
@@ -197,11 +235,8 @@ if (typeof window !== 'undefined') {
     'error',
     (event) => {
       const msg = `${event.message ?? ''}\n${(event.error as Error)?.message ?? ''}\n${(event.error as Error)?.stack ?? ''}`;
-      if (
-        shouldSuppressFirestoreWatchAssertionNow() &&
-        isFirestoreWatchTeardownAssertionMessage(msg)
-      ) {
-        event.preventDefault();
+      if (swallowFirestoreWatchAssertionEvent(event, 'window.error', msg)) {
+        return;
       }
     },
     { capture: true }
@@ -258,11 +293,11 @@ export function queueFirestoreNetworkOp<T>(fn: () => Promise<T>): Promise<T> {
 
 /**
  * `enableNetwork` ke turant baad active `onSnapshot` + watch stream retarget overlap → Firestore 12.12 INTERNAL ASSERTION (ca9, ve:-1).
- * Ek chhota yield + delay se multiplexer state settle ho jata hai.
+ * Microtask + short delay se multiplexer state settle; idle/wake races ke liye pehle se thoda zyada wait.
  */
 export async function settleAfterFirestoreNetworkEnabled(): Promise<void> {
   await new Promise<void>((r) => queueMicrotask(r));
-  await new Promise<void>((r) => setTimeout(r, 50));
+  await new Promise<void>((r) => setTimeout(r, 250));
 }
 
 /**

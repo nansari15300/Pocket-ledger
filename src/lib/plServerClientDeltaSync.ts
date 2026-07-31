@@ -539,6 +539,7 @@ export async function maybeQueuePlServerDeltaAfterDocWrite(
   }
 
   if (!(await shouldPushPlServerDeltaDoc(companyId))) {
+    if (!resolvePlServerDeltaTransport(companyId)) return;
     let rowUrl = "";
     let rowShared = false;
     let rowServerGate = false;
@@ -550,6 +551,7 @@ export async function maybeQueuePlServerDeltaAfterDocWrite(
     } catch {
       /* debug only */
     }
+    if (!rowShared && !rowServerGate && !rowUrl) return;
     let locationOrigin = "";
     let locationPort = "";
     try {

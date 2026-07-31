@@ -13,6 +13,7 @@ export type ShareableCompanySnapshotRow = {
   requiresLogin?: boolean;
   usernameHint?: string | null;
   accessEmails?: string[];
+  localCompanyUsers?: unknown[];
 };
 
 type ElectronSnapshotBridge = {

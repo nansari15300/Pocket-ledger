@@ -109,15 +109,18 @@ function SelectCompanyPageContent() {
       try {
         const rows = await listLocalCompanies();
         if (cancelled) return;
-        setSqliteLocalRows(
-          rows
+        setSqliteLocalRows((prev) => {
+          const next = rows
             .filter((r) => !localCompanyRowIsDeleted(r))
             .map((r) => ({
               ...(r as Company),
               id: r.id,
               name: typeof r.name === "string" ? r.name : r.id,
-            }))
-        );
+            }));
+          const prevSig = prev.map((c) => `${c.id}:${c.name}`).join("|");
+          const nextSig = next.map((c) => `${c.id}:${c.name}`).join("|");
+          return prevSig === nextSig ? prev : next;
+        });
       } catch {
         if (!cancelled) setSqliteLocalRows([]);
       }
@@ -135,7 +138,8 @@ function SelectCompanyPageContent() {
     if (authLoading || !user?.uid) return;
     reloadLocalCompanyRegistry();
     if (!isLocalOnlyMode()) triggerSync();
-  }, [reloadLocalCompanyRegistry, triggerSync, user, customUser?.email, authLoading, isOnline]);
+    // Full `user` object identity churned Auth context → registry reload → Popper update-depth loops.
+  }, [reloadLocalCompanyRegistry, triggerSync, user?.uid, customUser?.email, authLoading, isOnline]);
 
   // When redirected from company create with ?new=companyId, fetch that company so it shows without refresh
   const newCompanyId = searchParams.get("new");

@@ -173,10 +173,8 @@ export function useAttachmentThumbDisplayUrl(
               : new Blob([await blob.arrayBuffer()], { type: "image/jpeg" });
           const ou = URL.createObjectURL(typed);
           // Cell thumb alag key — hover portal `url` key overwrite se revoke na ho.
+          // Full LRU me cell-thumb mat seed — portal/open blurry 300% zoom avoid.
           rememberHoverBlobUrl(thumbCacheKey(url), ou);
-          if (!peekHoverCachedBlobUrl(url)) {
-            rememberHoverBlobUrl(url, ou);
-          }
           if (!cancelled) setThumb(ou);
           markAttachmentUrlReady(url);
           return;

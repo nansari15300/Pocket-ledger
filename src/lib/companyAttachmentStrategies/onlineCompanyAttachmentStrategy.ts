@@ -13,7 +13,6 @@ import {
   getRemoteAttachmentBlobPreferOfflineCache,
   tryOfflineCachedAttachmentBlobMultiKey,
 } from "@/lib/offlineAttachmentUrlCache";
-import { isFirebaseLedgerDeltaSqliteTransportMode } from "@/lib/firebaseLedgerSyncPolicy";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 import { isFirebaseLedgerCompanyAttachmentSyncEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
 import { looksLikeFirebaseStorageDownloadUrl } from "@/lib/storageGetBlobFromDownloadUrl";
@@ -106,7 +105,8 @@ export async function resolveOnlineCompanyAttachmentDisplay(
 
 export const onlineCompanyAttachmentStrategy = {
   mode: "online" as const,
-  usesSqliteFirstLedgerWrites: isFirebaseLedgerDeltaSqliteTransportMode,
+  /** Online Firebase: SQLite pehle, background outbox sync (seedha Firestore write mat). */
+  usesSqliteFirstLedgerWrites: true,
   requiresLocalAttachmentUrlsOnly: false,
   prefersLocalAttachmentDisplayFirst: usesEmbeddedNativeAttachmentStorage,
   resolveAttachmentDisplay: resolveOnlineCompanyAttachmentDisplay,

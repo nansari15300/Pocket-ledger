@@ -324,7 +324,7 @@ async function syncLedgerCollectionsFromServer(
       authoritativeSnapshot: false,
     });
     if (deltaStats.upserted > 0) {
-      notifyBrowserDbCollectionUpdated(companyId, col, { immediate: true, source: "pl_server_delta" });
+      notifyBrowserDbCollectionUpdated(companyId, col, { immediate: true, source: "pl_host_remote_write" });
     }
     livePullDevLog("browser_db_updated", {
       companyId,
@@ -363,7 +363,7 @@ async function syncFocusCollectionsFromServer(
       incomingWins: true,
     });
     if (deltaStats.upserted > 0) {
-      notifyBrowserDbCollectionUpdated(companyId, col, { immediate: true, source: "pl_server_delta" });
+      notifyBrowserDbCollectionUpdated(companyId, col, { immediate: true, source: "pl_host_remote_write" });
       changedCollections.push(col);
     }
     livePullDevLog("focus_collection_updated", {
@@ -465,13 +465,45 @@ async function syncSharedCompanyRows(
     const id = String(row.id || "").trim();
     if (!id) continue;
     if (pullGeneration != null && isPlServerPullGenerationStale(id, pullGeneration)) break;
-    await upsertLocalCompany(
-      plServerClientLocalCompanyRow(id, String(row.name || id), row.ownerEmail, null, {
-        gate: options?.serverGate ?? null,
-        hostCompanyId: id,
-      })
-    );
-    synced += 1;
+
+    // Focus-only (post-voucher SSE): do NOT skeleton-replace company root.
+    // Skeleton upsert drops permissionConfig → client falls back to manager editDays=7 → 2nd save denied.
+    const existingLocal = await getLocalCompanyById(id, { includeDeleted: true });
+    if (pullFull || !existingLocal) {
+      await upsertLocalCompany(
+        plServerClientLocalCompanyRow(
+          id,
+          String(row.name || existingLocal?.name || id),
+          row.ownerEmail ?? existingLocal?.ownerEmail ?? null,
+          existingLocal
+            ? ({
+                permissionConfig: (existingLocal as { permissionConfig?: unknown }).permissionConfig,
+                localCompanyUsers: (existingLocal as { localCompanyUsers?: unknown }).localCompanyUsers,
+              } as Record<string, unknown>)
+            : null,
+          {
+            gate: options?.serverGate ?? null,
+            hostCompanyId: id,
+          }
+        )
+      );
+      synced += 1;
+    } else {
+      // Still refresh gate stamps without wiping meta.
+      await upsertLocalCompany(
+        plServerClientLocalCompanyRow(
+          id,
+          String(existingLocal.name || row.name || id),
+          row.ownerEmail ?? existingLocal.ownerEmail ?? null,
+          existingLocal as unknown as Record<string, unknown>,
+          {
+            gate: options?.serverGate ?? null,
+            hostCompanyId: id,
+          }
+        )
+      );
+      synced += 1;
+    }
 
     if (focusCollections.length > 0 && baseUrl) {
       const focus = await syncFocusCollectionsFromServer(
@@ -529,7 +561,7 @@ async function syncSharedCompanyRows(
         incomingWins: true,
       });
       if (deltaStats.upserted > 0) {
-        notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_server_delta" });
+        notifyBrowserDbCollectionUpdated(id, col, { immediate: true, source: "pl_host_remote_write" });
         changedCollections.add(col);
       }
     }

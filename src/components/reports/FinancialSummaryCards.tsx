@@ -11,6 +11,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { cn } from "@/lib/utils";
 import { proDashboardRibbonClass } from "@/lib/proTheme";
 import { DASHBOARD_VIEW_DETAILS_TABLE_CN } from "@/lib/dashboardViewDetailsTableClass";
+import {
+    LEDGER_HEADER_PILL_CN,
+    LEDGER_HEADER_PILL_ICON_SIZE_CN,
+} from "@/lib/ledgerHeaderChrome";
 import { useDate } from "@/hooks/useDate";
 import usePermissions from "@/hooks/usePermissions";
 import { useCompany } from "@/hooks/useCompany";
@@ -44,6 +48,7 @@ import {
     voucherCountsAsDashboardPaySalary,
     voucherCountsAsDashboardPaymentOutExcludingPaySalary,
 } from "@/lib/dashboardPaySalaryStat";
+import { getTransactionAmounts as getLedgerTransactionAmounts } from "@/hooks/use-transactions";
 import { dashboardStatCardReportHref } from "@/lib/dashboardStatCardReportHref";
 import {
     computeReceivablesPayablesFinancialSummary,
@@ -59,6 +64,10 @@ import {
 import { ReceivablesPayablesDialogFooter } from "@/components/reports/ReceivablesPayablesDialogFooter";
 import { ReceivablesPayablesDialogEntityList, rpDialogListScrollHandlers } from "@/components/reports/ReceivablesPayablesDialogEntityList";
 import { ReceivablesPayablesEntitySettings } from "@/components/reports/ReceivablesPayablesEntitySettings";
+import {
+    DaybookAccountDayPeekDialog,
+    daybookSummaryAccountRowCn,
+} from "@/components/reports/DaybookAccountDayPeekDialog";
 import { useReceivablesPayablesEntityVisibility } from "@/hooks/useReceivablesPayablesEntityVisibility";
 import { useMasterListRowMotion } from "@/hooks/useMasterListRowMotion";
 import { RP_DIALOG_SCROLL_CN } from "@/lib/receivablesPayablesEntityKeys";
@@ -498,7 +507,6 @@ export function FinancialSummaryCards({
     const [cashFlowDateRange, setCashFlowDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
     const [taxDateRange, setTaxDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
     const [stockDateRange, setStockDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
-    const [bankCashDateRange, setBankCashDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
     const [voucherStatsDateRange, setVoucherStatsDateRange] = useState<DateRange | undefined>(() => currentDashboardMonthRange());
 
     const previousDateSystemRef = useRef(dateSystem);
@@ -517,7 +525,6 @@ export function FinancialSummaryCards({
         keepCurrentMonthMode(setCashFlowDateRange);
         keepCurrentMonthMode(setTaxDateRange);
         keepCurrentMonthMode(setStockDateRange);
-        keepCurrentMonthMode(setBankCashDateRange);
         keepCurrentMonthMode(setVoucherStatsDateRange);
         previousDateSystemRef.current = dateSystem;
     }, [dateSystem]);
@@ -529,6 +536,13 @@ export function FinancialSummaryCards({
     const [stockSummaryOpen, setStockSummaryOpen] = useState(false);
     const [bankCashSummaryOpen, setBankCashSummaryOpen] = useState(false);
     const [bankCashRotated, setBankCashRotated] = useState(false);
+    const [selectedBankCashRowId, setSelectedBankCashRowId] = useState<string | null>(null);
+    const [bankCashAccountPeek, setBankCashAccountPeek] = useState<{
+        account: any;
+        in: number;
+        out: number;
+        closing: number;
+    } | null>(null);
     /** "View full" — `pointsByDay` se range (Day/Month/…) filter; ~90% screen. */
     const [dashboardChartFullView, setDashboardChartFullView] = useState<{
         subtitle: string;
@@ -1301,55 +1315,22 @@ export function FinancialSummaryCards({
             totalCashOutflow: 0
         };
         
-        const fromDate = bankCashDateRange?.from ? startOfDay(bankCashDateRange.from) : null;
-        const toDate = bankCashDateRange?.to ? endOfDay(bankCashDateRange.to) : fromDate ? endOfDay(fromDate) : null;
+        const todayEnd = endOfDay(new Date());
         
         const summaryAccounts = processedAccounts.map((acc) => {
             const newAcc = { ...acc, inflow: 0, outflow: 0, balance: Number(acc.openingBalance) || 0 };
-            
-            const prePeriodTx = vouchers.filter(v => {
-                if (!fromDate) return false;
-                const txDate = safeToDate(v.date);
-                return txDate && txDate < fromDate;
-            });
-            
-            let openingForPeriod = Number(acc.openingBalance) || 0;
-            prePeriodTx.forEach(v => {
-                const amount = v.total || v.amount || 0;
-                if (['payment_in', 'direct_income', 'sale'].includes(v.type) && v.accountId === acc.id) openingForPeriod += amount;
-                if (['payment_out', 'direct_expense', 'purchase'].includes(v.type) && v.accountId === acc.id) openingForPeriod -= amount;
-                if (v.type === 'contra') {
-                    if (v.toAccountId === acc.id) openingForPeriod += amount;
-                    if (v.fromAccountId === acc.id) openingForPeriod -= amount;
-                }
-                if (v.type === "journal" && Array.isArray(v.entries)) {
-                    const entry = v.entries.find((e: any) => e.accountId === acc.id);
-                    if (entry) openingForPeriod += Number(entry.debit || 0) - Number(entry.credit || 0);
-                }
-            });
-            newAcc.balance = openingForPeriod;
-            
+            const accountObDate = safeToDate((acc as any).openingBalanceDate);
+
             const periodTx = vouchers.filter(v => {
-                if (!fromDate || !toDate) return true;
                 const txDate = safeToDate(v.date);
-                return txDate && txDate >= fromDate && txDate <= toDate;
+                if (accountObDate && txDate && txDate < accountObDate) return false;
+                return txDate && txDate <= todayEnd;
             });
             
             periodTx.forEach((v) => {
-                const amount = v.total || v.amount || 0;
-                if (['payment_in', 'direct_income', 'sale'].includes(v.type) && v.accountId === acc.id) newAcc.inflow += amount;
-                if (['payment_out', 'direct_expense', 'purchase', 'salary', 'add_salary'].includes(v.type) && v.accountId === acc.id) newAcc.outflow += amount;
-                if (v.type === 'contra') {
-                    if (v.toAccountId === acc.id) newAcc.inflow += amount;
-                    if (v.fromAccountId === acc.id) newAcc.outflow += amount;
-                }
-                if (v.type === "journal" && Array.isArray(v.entries)) {
-                    const entry = v.entries.find((e: any) => e.accountId === acc.id);
-                    if (entry) {
-                        newAcc.inflow += Number(entry.debit || 0);
-                        newAcc.outflow += Number(entry.credit || 0);
-                    }
-                }
+                const { debit, credit } = getLedgerTransactionAmounts(v, "account", acc, "amount", processedItems, processedTaxes);
+                newAcc.inflow += Number(debit) || 0;
+                newAcc.outflow += Number(credit) || 0;
             });
             
             newAcc.balance += newAcc.inflow - newAcc.outflow;
@@ -1383,7 +1364,7 @@ export function FinancialSummaryCards({
             totalCashInflow,
             totalCashOutflow
         };
-    }, [processedAccounts, vouchers, bankCashDateRange]);
+    }, [processedAccounts, vouchers, processedItems, processedTaxes]);
 
     // Print handlers
     const handlePrint = () => {
@@ -1817,18 +1798,12 @@ export function FinancialSummaryCards({
     };
 
     const handlePrintBankCash = () => {
-        let dateRangeText = "All Time";
-        if(bankCashDateRange?.from) {
-            const from = bankCashDateRange.from;
-            const to = bankCashDateRange.to || from;
-            const fromBS = formatDateBS(from);
-            const toBS = formatDateBS(to);
-            const fromAD = formatDate(from);
-            const toAD = formatDate(to);
-            if (dateSystem === 'AD') dateRangeText = `AD: ${fromAD}${!isSameDay(from, to) ? ` to ${toAD}`: ''}`;
-            else if (dateSystem === 'BS') dateRangeText = `BS: ${fromBS}${!isSameDay(from, to) ? ` to ${toBS}`: ''}`;
-            else dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
-        }
+        const today = new Date();
+        const dateRangeText = dateSystem === "BS"
+            ? `Today: ${formatDateBS(today)}`
+            : dateSystem === "AD"
+                ? `Today: ${formatDate(today)}`
+                : `Today: ${formatDate(today)} / ${formatDateBS(today)}`;
 
         const body: any[] = [
             [
@@ -2433,10 +2408,12 @@ export function FinancialSummaryCards({
         };
     }, [showVoucherDateCharts, processedAccounts, dateSystem, formatDate, formatDateBS]);
 
-    // Lambe currency amounts: har track `min-content` tak wide ho sakta hai — card cut/wrap kam
+    // Chart mode only: jitni width available ho, cards usme stretch ho jayein; normal Summary mode purana fixed slots rakhe.
     const gridCols = compact
         ? ""
-        : "grid-cols-1 sm:grid-cols-[repeat(2,minmax(min-content,1fr))] lg:grid-cols-[repeat(3,minmax(min-content,1fr))] xl:grid-cols-[repeat(5,minmax(min-content,1fr))]";
+        : showVoucherDateCharts
+          ? "grid-cols-1 sm:grid-cols-[repeat(auto-fit,minmax(min(100%,300px),1fr))]"
+          : "grid-cols-1 sm:grid-cols-[repeat(2,minmax(min-content,1fr))] lg:grid-cols-[repeat(3,minmax(min-content,1fr))] xl:grid-cols-[repeat(5,minmax(min-content,1fr))]";
     /** Outstanding / Cash Flow / Tax / Bank / Auto recurring — ek row me same height. */
     const topSummaryRowWrapClass = compact
         ? ""
@@ -2904,7 +2881,7 @@ export function FinancialSummaryCards({
 
     return (
         <div
-            className={`${compact ? "financial-summary-grid" : `grid ${gridCols} max-w-full overflow-x-auto items-start`} ${cardSpacing} ${compact ? "w-full" : ""}`}
+            className={`${compact ? "financial-summary-grid" : `grid ${gridCols} w-full max-w-full items-start`} ${cardSpacing} ${compact ? "w-full" : ""}`}
         >
             <Dialog
                 open={!!dashboardChartFullView}
@@ -4037,11 +4014,9 @@ export function FinancialSummaryCards({
             <Card className={`col-span-1 transition-colors ${topSummaryCardShellClass} ${dashboardCardRibbonClass} ${cardWrapperClass} ${ribbonTone(4)}`}>
                 <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                     <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Bank & Cash Summary</CardTitle>
-                    {compact ? (
-                        <ReportMonthYearFilter dateRange={bankCashDateRange} setDateRange={setBankCashDateRange} dateSystem={dateSystem} />
-                    ) : (
-                        <MonthYearFilter dateRange={bankCashDateRange} setDateRange={setBankCashDateRange} dateSystem={dateSystem} />
-                    )}
+                    <Button variant="outline" size="sm" className="h-8 rounded-full px-3" disabled>
+                        Today
+                    </Button>
                 </CardHeader>
                 <CardContent className={cn("p-4 pt-0 space-y-2", contentClass, topSummaryCardBodyClass)}>
                     <div className="flex items-baseline justify-between">
@@ -4087,35 +4062,40 @@ export function FinancialSummaryCards({
                                 setBankCashSummaryOpen(open);
                                 if (!open) {
                                     setBankCashRotated(false);
+                                    setSelectedBankCashRowId(null);
                                 }
                             }}>
                                 <DialogTrigger asChild>
                                     <Button variant="link" size="sm" className="h-auto p-0">View Details</Button>
                                 </DialogTrigger>
                                 <DialogContent className={cn(
-                                    "dashboard-financial-popup p-0 rounded-lg flex flex-col transition-all duration-300",
+                                    "dashboard-financial-popup p-0 rounded-xl overflow-hidden flex flex-col transition-all duration-300",
                                     isMobile && bankCashRotated ? "max-w-[90vh] w-[90vh] h-[100vw] m-0 fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rotate-90" : "",
                                     isMobile && !bankCashRotated ? "max-w-[100vw] w-[100vw] h-[90vh] m-0" : "",
                                     !isMobile ? "max-w-6xl h-[90vh]" : ""
                                 )}>
-                                    <DialogHeader className={cn("border-b flex flex-col", isMobile ? "p-2 space-y-2" : "p-4 flex-row justify-between items-center")}>
-                                        <div className="flex flex-col"><DialogTitle className={cn(isMobile && "text-sm")}>Bank & Cash Summary Details</DialogTitle></div>
+                                    <DialogHeader className={cn(
+                                        "border-b bg-white/95 dark:bg-card flex flex-col",
+                                        isMobile ? "p-2 space-y-2" : "p-3 flex-row justify-between items-center"
+                                    )}>
+                                        <div className="flex flex-col">
+                                            <DialogTitle className={cn("font-bold", isMobile ? "text-sm" : "text-xl")}>
+                                                Bank & Cash Summary Details
+                                            </DialogTitle>
+                                        </div>
                                         <div className={cn("flex items-center gap-2", isMobile ? "w-full justify-between" : "mr-12")}>
-                                            <div className={cn(
-                                                isMobile && "[&_button]:h-9 [&_button]:text-xs",
-                                                isMobile && !bankCashRotated && "[&_button_svg]:hidden"
-                                            )}>
-                                                <MonthYearFilter dateRange={bankCashDateRange} setDateRange={setBankCashDateRange} dateSystem={dateSystem} />
-                                            </div>
+                                            <Button variant="chromePill" size="sm" className={cn("rounded-full", LEDGER_HEADER_PILL_CN)} disabled>
+                                                Today
+                                            </Button>
                                             {isMobile && (
                                                 <>
                                                     <Button 
-                                                        variant="outline" 
+                                                        variant="chromePill"
                                                         size="sm" 
-                                                        className="h-9 text-xs flex items-center gap-2 flex-shrink-0"
+                                                        className={cn("flex items-center gap-2", LEDGER_HEADER_PILL_CN)}
                                                         onClick={() => setBankCashRotated(!bankCashRotated)}
                                                     >
-                                                        {bankCashRotated && <RotateCw className="h-4 w-4" />}
+                                                        {bankCashRotated && <RotateCw className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />}
                                                         Rotate
                                                     </Button>
                                                     <div className="flex items-center gap-1 text-xs font-semibold flex-shrink-0 h-9 px-2 border rounded-md bg-muted/50">
@@ -4127,36 +4107,68 @@ export function FinancialSummaryCards({
                                                 </>
                                             )}
                                             <Button 
-                                                variant="outline" 
+                                                variant="chromePill"
                                                 size="sm" 
                                                 type="button"
                                                 onClick={(e) => {
                                                     e.stopPropagation();
                                                     handlePrintBankCash();
                                                 }}
-                                                className={cn("flex items-center gap-2 flex-shrink-0", isMobile && "h-9 text-xs")}
+                                                className={cn("flex items-center gap-2", LEDGER_HEADER_PILL_CN)}
                                             >
-                                                Print {isMobile && bankCashRotated && <Printer className="h-4 w-4" />}
-                                                {!isMobile && <Printer className="h-4 w-4" />}
+                                                Print {isMobile && bankCashRotated && <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />}
+                                                {!isMobile && <Printer className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />}
                                             </Button>
                                         </div>
                                     </DialogHeader>
                                     <div className={cn("flex-1 flex flex-col min-h-0", isMobile ? "p-2" : "p-4")}>
-                                        <div className="border rounded-lg flex-1 flex flex-col min-h-0 overflow-hidden">
+                                        <div
+                                            className="border rounded-lg flex-1 flex flex-col min-h-0 overflow-hidden"
+                                            onClick={() => setSelectedBankCashRowId(null)}
+                                        >
                                             <div className="flex-1 overflow-x-auto overflow-y-auto">
-                                                <Table className={cn("w-full min-w-[600px]", DASHBOARD_VIEW_DETAILS_TABLE_CN)}>
-                                                    <TableHeader>
-                                                        <TableRow>
-                                                            <TableHead className={cn(isMobile && "text-xs whitespace-nowrap")}>Account</TableHead>
-                                                            <TableHead className={cn(isMobile && "text-xs whitespace-nowrap")}>Type</TableHead>
-                                                            <TableHead className={cn("text-right", isMobile && "text-xs whitespace-nowrap")}>Total In</TableHead>
-                                                            <TableHead className={cn("text-right", isMobile && "text-xs whitespace-nowrap")}>Total Out</TableHead>
-                                                            <TableHead className={cn("text-right", isMobile && "text-xs whitespace-nowrap")}>Balance</TableHead>
+                                                <Table className={cn(
+                                                    "w-full min-w-[600px]",
+                                                    "[&_thead_tr]:!border-b-[3px] [&_thead_tr]:!border-foreground [&_tbody_tr]:!border-b-[1.5px] [&_tbody_tr]:!border-foreground/85",
+                                                    "[&_tbody_tr.font-bold]:!border-t-[3px] [&_tbody_tr.font-bold]:!border-b-[3px] [&_tbody_tr.font-bold]:!border-foreground",
+                                                    "[&_tbody_tr]:cursor-pointer [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-blue-50/60",
+                                                    DASHBOARD_VIEW_DETAILS_TABLE_CN
+                                                )}>
+                                                    <TableHeader className="bg-gray-100 dark:bg-muted/70">
+                                                        <TableRow className="border-b-[3px] border-foreground hover:bg-gray-100 dark:hover:bg-muted/70">
+                                                            <TableHead className={cn("font-bold text-foreground", isMobile && "text-xs whitespace-nowrap")}>Account</TableHead>
+                                                            <TableHead className={cn("font-bold text-foreground", isMobile && "text-xs whitespace-nowrap")}>Type</TableHead>
+                                                            <TableHead className={cn("text-right font-bold text-foreground", isMobile && "text-xs whitespace-nowrap")}>Total In</TableHead>
+                                                            <TableHead className={cn("text-right font-bold text-foreground", isMobile && "text-xs whitespace-nowrap")}>Total Out</TableHead>
+                                                            <TableHead className={cn("text-right font-bold text-foreground", isMobile && "text-xs whitespace-nowrap")}>Balance</TableHead>
                                                         </TableRow>
                                                     </TableHeader>
                                                     <TableBody>
-                                                        {bankCashSummary.bankAccounts.map(acc => (
-                                                            <TableRow key={acc.id}>
+                                                        {bankCashSummary.bankAccounts.map(acc => {
+                                                            const rowKey = `bank:${acc.id}`;
+                                                            const selected = selectedBankCashRowId === rowKey;
+                                                            return (
+                                                            <TableRow
+                                                                key={rowKey}
+                                                                aria-selected={selected}
+                                                                data-state={selected ? "selected" : undefined}
+                                                                data-pl-daybook-summary-selected={selected ? "" : undefined}
+                                                                onClick={(event) => {
+                                                                    event.stopPropagation();
+                                                                    setSelectedBankCashRowId(rowKey);
+                                                                }}
+                                                                onDoubleClick={(event) => {
+                                                                    event.stopPropagation();
+                                                                    setSelectedBankCashRowId(rowKey);
+                                                                    setBankCashAccountPeek({
+                                                                        account: acc,
+                                                                        in: acc.inflow,
+                                                                        out: acc.outflow,
+                                                                        closing: acc.balance,
+                                                                    });
+                                                                }}
+                                                                className={cn(daybookSummaryAccountRowCn(selected), "pl-daybook-summary-row", selected && "pl-daybook-summary-row-selected")}
+                                                            >
                                                                 <TableCell className={cn(isMobile && "text-xs whitespace-nowrap")}>{acc.accountName}</TableCell>
                                                                 <TableCell className={cn(isMobile && "text-xs whitespace-nowrap")}>{acc.accountType}</TableCell>
                                                                 <TableCell className={cn("text-right text-green-600", isMobile && "text-xs whitespace-nowrap")}>{acc.inflow > 0 ? formatCurrency(acc.inflow, { noSuffix: true }) : '-'}</TableCell>
@@ -4165,8 +4177,18 @@ export function FinancialSummaryCards({
                                                                     {acc.balance !== 0 ? formatCurrency(acc.balance, { showDrCr: true }) : 'Rs. 0.00 Dr'}
                                                                 </TableCell>
                                                             </TableRow>
-                                                        ))}
-                                                        <TableRow className="font-bold bg-muted/50 border-b border-border/75">
+                                                            );
+                                                        })}
+                                                        <TableRow
+                                                            aria-selected={selectedBankCashRowId === "bank:total"}
+                                                            data-state={selectedBankCashRowId === "bank:total" ? "selected" : undefined}
+                                                            data-pl-daybook-summary-selected={selectedBankCashRowId === "bank:total" ? "" : undefined}
+                                                            onClick={(event) => {
+                                                                event.stopPropagation();
+                                                                setSelectedBankCashRowId("bank:total");
+                                                            }}
+                                                            className={cn("font-bold pl-daybook-summary-row", selectedBankCashRowId === "bank:total" && "pl-daybook-summary-row-selected")}
+                                                        >
                                                             <TableCell colSpan={2} className={cn(isMobile && "text-xs whitespace-nowrap")}>Bank Total</TableCell>
                                                             <TableCell className={cn("text-right text-green-600", isMobile && "text-xs whitespace-nowrap")}>{formatCurrency(bankCashSummary.totalBankInflow, {noSuffix: true})}</TableCell>
                                                             <TableCell className={cn("text-right text-red-600", isMobile && "text-xs whitespace-nowrap")}>{formatCurrency(bankCashSummary.totalBankOutflow, {noSuffix: true})}</TableCell>
@@ -4174,8 +4196,31 @@ export function FinancialSummaryCards({
                                                                 {formatCurrency(bankCashSummary.bankAccounts.reduce((sum, a) => sum + a.balance, 0), { showDrCr: true })}
                                                             </TableCell>
                                                         </TableRow>
-                                                        {bankCashSummary.cashAccounts.map(acc => (
-                                                            <TableRow key={acc.id}>
+                                                        {bankCashSummary.cashAccounts.map(acc => {
+                                                            const rowKey = `cash:${acc.id}`;
+                                                            const selected = selectedBankCashRowId === rowKey;
+                                                            return (
+                                                            <TableRow
+                                                                key={rowKey}
+                                                                aria-selected={selected}
+                                                                data-state={selected ? "selected" : undefined}
+                                                                data-pl-daybook-summary-selected={selected ? "" : undefined}
+                                                                onClick={(event) => {
+                                                                    event.stopPropagation();
+                                                                    setSelectedBankCashRowId(rowKey);
+                                                                }}
+                                                                onDoubleClick={(event) => {
+                                                                    event.stopPropagation();
+                                                                    setSelectedBankCashRowId(rowKey);
+                                                                    setBankCashAccountPeek({
+                                                                        account: acc,
+                                                                        in: acc.inflow,
+                                                                        out: acc.outflow,
+                                                                        closing: acc.balance,
+                                                                    });
+                                                                }}
+                                                                className={cn(daybookSummaryAccountRowCn(selected), "pl-daybook-summary-row", selected && "pl-daybook-summary-row-selected")}
+                                                            >
                                                                 <TableCell className={cn(isMobile && "text-xs whitespace-nowrap")}>{acc.accountName}</TableCell>
                                                                 <TableCell className={cn(isMobile && "text-xs whitespace-nowrap")}>{acc.accountType}</TableCell>
                                                                 <TableCell className={cn("text-right text-green-600", isMobile && "text-xs whitespace-nowrap")}>{acc.inflow > 0 ? formatCurrency(acc.inflow, { noSuffix: true }) : '-'}</TableCell>
@@ -4184,8 +4229,18 @@ export function FinancialSummaryCards({
                                                                     {acc.balance !== 0 ? formatCurrency(acc.balance, { showDrCr: true }) : 'Rs. 0.00 Dr'}
                                                                 </TableCell>
                                                             </TableRow>
-                                                        ))}
-                                                        <TableRow className="font-bold bg-muted/50 border-b border-border/75">
+                                                            );
+                                                        })}
+                                                        <TableRow
+                                                            aria-selected={selectedBankCashRowId === "cash:total"}
+                                                            data-state={selectedBankCashRowId === "cash:total" ? "selected" : undefined}
+                                                            data-pl-daybook-summary-selected={selectedBankCashRowId === "cash:total" ? "" : undefined}
+                                                            onClick={(event) => {
+                                                                event.stopPropagation();
+                                                                setSelectedBankCashRowId("cash:total");
+                                                            }}
+                                                            className={cn("font-bold pl-daybook-summary-row", selectedBankCashRowId === "cash:total" && "pl-daybook-summary-row-selected")}
+                                                        >
                                                             <TableCell colSpan={2} className={cn(isMobile && "text-xs whitespace-nowrap")}>Cash Total</TableCell>
                                                             <TableCell className={cn("text-right text-green-600", isMobile && "text-xs whitespace-nowrap")}>{formatCurrency(bankCashSummary.totalCashInflow, {noSuffix: true})}</TableCell>
                                                             <TableCell className={cn("text-right text-red-600", isMobile && "text-xs whitespace-nowrap")}>{formatCurrency(bankCashSummary.totalCashOutflow, {noSuffix: true})}</TableCell>
@@ -4200,6 +4255,17 @@ export function FinancialSummaryCards({
                                     </div>
                                 </DialogContent>
                             </Dialog>
+                            <DaybookAccountDayPeekDialog
+                                open={!!bankCashAccountPeek}
+                                onOpenChange={(open) => {
+                                    if (!open) setBankCashAccountPeek(null);
+                                }}
+                                account={bankCashAccountPeek?.account ?? null}
+                                daybookDate={undefined}
+                                summaryIn={bankCashAccountPeek?.in}
+                                summaryOut={bankCashAccountPeek?.out}
+                                summaryClosing={bankCashAccountPeek?.closing}
+                            />
                         </div>
                     )}
                 </CardContent>

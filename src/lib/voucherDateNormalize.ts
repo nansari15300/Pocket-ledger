@@ -270,3 +270,17 @@ export function coerceVoucherDocumentDate(data: Record<string, unknown> | null |
   }
   data["date"] = Timestamp.now();
 }
+
+/**
+ * Calendar orange dots: voucher `date` → unique local start-of-day Dates.
+ * Uses `parseFirestoreDateFieldToJsDate` so plserver wire `{seconds,nanoseconds}` (no `toDate`) still marks days.
+ */
+export function collectVoucherCalendarDates(vouchers: Array<{ date?: unknown } | null | undefined>): Date[] {
+  const dates = new Set<number>();
+  for (const v of vouchers) {
+    if (!v) continue;
+    const dateValue = parseFirestoreDateFieldToJsDate(v.date);
+    if (dateValue) dates.add(startOfDay(dateValue).getTime());
+  }
+  return Array.from(dates, (ms) => new Date(ms));
+}

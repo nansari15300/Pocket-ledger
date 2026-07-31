@@ -14,6 +14,23 @@ export function normalizeFileUrlsField(val: unknown): string[] {
   return [];
 }
 
+/**
+ * EXE/PL restore kabhi `entries` / `lineItems` ko object bana deta hai.
+ * `x?.some(...)` phir bhi crash: truthy object pe `.some is not a function`.
+ */
+export function normalizeVoucherArrayField<T = unknown>(val: unknown): T[] {
+  if (Array.isArray(val)) return val as T[];
+  if (val == null) return [];
+  if (typeof val === "object") {
+    // Firestore-ish map / sparse object → values if they look like row objects
+    const values = Object.values(val as Record<string, unknown>);
+    if (values.length > 0 && values.every((v) => v != null && typeof v === "object")) {
+      return values as T[];
+    }
+  }
+  return [];
+}
+
 /** Ledger File column + edit dialog — `fileUrls` array/string + legacy `unassignedFile.url`. */
 export function getVoucherAttachmentUrlsForUi(
   row: { fileUrls?: unknown; unassignedFile?: unknown } | null | undefined
@@ -75,13 +92,41 @@ export function voucherAttachmentUrlsForFormState(
   return dedupeVoucherAttachmentUrlList(getVoucherAttachmentUrlsForUi(row));
 }
 
-/** Voucher list rows — table / filters ke liye hamesha `fileUrls: string[]`. */
+const VOUCHER_COLLECTION_FIELDS = [
+  "entries",
+  "lineItems",
+  "items",
+  "allocations",
+  "files",
+] as const;
+
+/**
+ * Voucher list rows — table / filters / staff calendar:
+ * - `fileUrls: string[]`
+ * - `entries` / `lineItems` / … hamesha arrays (EXE restore object crash avoid)
+ */
 export function normalizeVoucherRowAttachmentsForUi<T extends Record<string, unknown>>(row: T): T {
+  let next: Record<string, unknown> = row;
+  let changed = false;
+
   const urls = getVoucherAttachmentUrlsForUi(row);
-  const prev = normalizeFileUrlsField(row.fileUrls);
-  if (urls.length === prev.length && urls.every((u, i) => u === prev[i])) {
-    if (Array.isArray(row.fileUrls)) return row;
-    if (row.fileUrls === undefined || row.fileUrls === null) return row;
+  const prevUrls = normalizeFileUrlsField(row.fileUrls);
+  const urlsSame =
+    urls.length === prevUrls.length && urls.every((u, i) => u === prevUrls[i]) && Array.isArray(row.fileUrls);
+  if (!urlsSame && (urls.length > 0 || row.fileUrls != null)) {
+    next = { ...next, fileUrls: urls };
+    changed = true;
   }
-  return { ...row, fileUrls: urls };
+
+  for (const key of VOUCHER_COLLECTION_FIELDS) {
+    const raw = next[key] ?? row[key];
+    if (raw === undefined) continue;
+    if (Array.isArray(raw)) continue;
+    const normalized = normalizeVoucherArrayField(raw);
+    if (!changed) next = { ...next };
+    next[key] = normalized;
+    changed = true;
+  }
+
+  return (changed ? next : row) as T;
 }

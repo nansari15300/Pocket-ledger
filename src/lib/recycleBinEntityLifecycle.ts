@@ -19,6 +19,7 @@ import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { coerceDeletedAtToDate } from "@/lib/coerceDeletedAt";
 import { isLocalFileRef, removePendingFile } from "@/lib/localPendingFiles";
 import { writeEntity, type WriteEntityResult } from "@/lib/writeGateway";
+import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { patchVoucherFields, softDeleteVoucherMoveToRecycleBin } from "@/lib/writeGateway/voucherActionsClient";
 import { purgeInterCompanyCounterpartyPartyIfUnused } from "@/lib/interCompany/cleanupInterCompanyCounterpartyParty";
 import { collectDriveAttachmentRefsFromDoc, deleteDriveAttachmentRef } from "@/lib/localCloudSync/driveAttachmentDelete";
@@ -128,11 +129,7 @@ export async function softDeleteCompanySubdocToRecycleBin(
   if (!res.ok) return res;
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
   const fsId = String((reg as { authoritativeCompanyId?: string } | null)?.authoritativeCompanyId || cid).trim();
-  try {
-    await updateDoc(doc(firestore, `companies/${fsId}/${collectionName}`, id), patch);
-  } catch {
-    /* Firestore row optional on pure local+Drive */
-  }
+  void updateDoc(doc(firestore, `companies/${fsId}/${collectionName}`, id), patch).catch(() => {});
   return res;
 }
 
@@ -160,11 +157,7 @@ export async function restoreCompanySubdocFromRecycleBin(
   }
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
   const fsId = String((reg as { authoritativeCompanyId?: string } | null)?.authoritativeCompanyId || cid).trim();
-  try {
-    await updateDoc(doc(firestore, `companies/${fsId}/${collectionPath}`, id), patch);
-  } catch {
-    /* Firestore row optional on pure local+Drive */
-  }
+  void updateDoc(doc(firestore, `companies/${fsId}/${collectionPath}`, id), patch).catch(() => {});
 }
 
 function collectFirebaseStoragePaths(data: Record<string, unknown>): string[] {
@@ -302,12 +295,14 @@ export async function permanentDeleteCompanySubdocFromRecycleBin(
   await deleteFirebaseStorageFilesForDoc(data, cid);
 
   await deleteCompanyDocFromBrowserDb(cid, collectionPath, id, { force: true, notify: true });
+  await enqueueCompanyDocOutbox(cid, collectionPath, "delete", id, {
+    ...data,
+    id,
+    [PL_PERMANENT_PURGE_KEY]: true,
+    isDeleted: true,
+  }).catch(() => {});
 
-  try {
-    await deleteDoc(doc(firestore, `companies/${fsId}/${collectionPath}`, id));
-  } catch {
-    /* pure local row */
-  }
+  void deleteDoc(doc(firestore, `companies/${fsId}/${collectionPath}`, id)).catch(() => {});
 
   if (collectionPath === "vouchers" && String(data.type || "") === "inter_company") {
     const partyId = String(data.interCompanyCounterpartyPartyId || "").trim();

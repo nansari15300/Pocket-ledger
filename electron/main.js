@@ -723,6 +723,7 @@ function loadShareableCompaniesSnapshot() {
           storageOption: "local",
           ownerEmail: row?.ownerEmail ?? null,
           ...(Array.isArray(row?.accessEmails) ? { accessEmails: row.accessEmails } : {}),
+          ...(Array.isArray(row?.localCompanyUsers) ? { localCompanyUsers: row.localCompanyUsers } : {}),
           ...(row?.planId != null && String(row.planId).trim() ? { planId: String(row.planId).trim() } : {}),
           ...(planExpiryMs != null ? { planExpiryMs } : {}),
           ...(offlineLicenseValidUntilMs != null ? { offlineLicenseValidUntilMs } : {}),
@@ -1173,14 +1174,28 @@ localAppServer.setAttachmentBlobProvider(async (companyId, ref) => {
     })()`,
     { requireFn: "__plReadAttachmentBlob" }
   );
-  if (!payload || typeof payload !== "object" || !payload.base64) return null;
+  if (!payload || typeof payload !== "object") return null;
+  const contentType = String(payload.contentType || "application/octet-stream");
+  // Prefer disk path from renderer — avoid giant base64 through executeJavaScript (LAN kbps feel).
+  const rel = String(payload.relativePath || payload.filePath || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
+  if (rel && !rel.includes("..")) {
+    try {
+      const primary = path.join(userDataPath(), "PocketLedgerData", rel);
+      const legacy = path.join(userDataPath(), "pl-attachments", rel);
+      const full = fs.existsSync(primary) ? primary : legacy;
+      if (fs.existsSync(full)) {
+        const buffer = fs.readFileSync(full);
+        if (buffer.length > 0) return { buffer, contentType };
+      }
+    } catch (_) {
+      /* fall through to base64 */
+    }
+  }
+  if (!payload.base64) return null;
   try {
     const buffer = Buffer.from(String(payload.base64), "base64");
     if (!buffer.length) return null;
-    return {
-      buffer,
-      contentType: String(payload.contentType || "application/octet-stream"),
-    };
+    return { buffer, contentType };
   } catch (_) {
     return null;
   }
@@ -1358,12 +1373,16 @@ function destroyServerTray() {
 
 /** Shortcut / second instance / tray: window band ho to naya kholna, warna pehle wala dikhao. */
 async function focusOrOpenMainWindow() {
-  const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed());
+  const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && windowTabs.has(w.id));
   if (wins.length > 0) {
     const w = wins[0];
     if (w.isMinimized()) w.restore();
     w.show();
+    updateBrowserViewBounds(w);
+    sendWindowMaxState(w);
+    pushTabStripState(w);
     w.focus();
+    notifyLiveSyncResume("app_reopen", w);
     return;
   }
   await createWindow();
@@ -2417,6 +2436,9 @@ async function createWindow() {
     frame: !USE_MERGED_TITLEBAR,
     autoHideMenuBar: USE_MERGED_TITLEBAR,
   });
+  if (USE_MERGED_TITLEBAR) {
+    win.setMenuBarVisibility(false);
+  }
   // Initialize per-window tab state; each window manages its own tab stack (+ stripView baad me).
   windowTabs.set(win.id, { tabs: [], activeIndex: -1, printMode: PRINT_MODE_FIT_PAGE, stripView: null });
   // Sync BrowserView bounds across all desktop window state changes.

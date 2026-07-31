@@ -159,6 +159,7 @@ const getInitials = (name: string) => {
 
 const COLUMN_VISIBILITY_KEY = "transactionVisibleColumns";
 const DEFAULT_VISIBLE_COLUMNS: VisibleColumns = {
+  syncStatus: false,
   date: true,
   type: true,
   voucherNo: true,
@@ -170,6 +171,7 @@ const DEFAULT_VISIBLE_COLUMNS: VisibleColumns = {
   runningBalance: true,
 };
 const COLUMN_LABELS: Record<TransactionColumnKey, string> = {
+  syncStatus: "Sync",
   date: "Date",
   type: "Type",
   voucherNo: "Voucher No.",

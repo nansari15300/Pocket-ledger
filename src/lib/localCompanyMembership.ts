@@ -22,6 +22,14 @@ export function localCompanyAccessEmails(row: Partial<LocalCompanyDoc> | null | 
   for (const user of parseLocalCompanyUserRows(row.localCompanyUsers)) {
     add(user.shareEmail);
     add(user.username);
+    // Shared Users UI guesses Gmail from login username — keep P2P access list aligned.
+    const username = String(user.username || "")
+      .trim()
+      .toLowerCase();
+    if (username && !username.includes("@")) {
+      add(`${username}@gmail.com`);
+      add(`${username}@googlemail.com`);
+    }
   }
   return [...values];
 }

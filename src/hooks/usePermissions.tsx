@@ -18,6 +18,7 @@ import { resolveCompanyIsOwnedForUser } from "@/lib/companyOnlineIntegrity";
 import { companyRowUsesSqliteLedgerWrites, isServerGateCompany, isServerSelectorCompanyRow } from "@/lib/companyStorageKind";
 import { isPlServerThinStaffClient } from "@/lib/plServerThinStaffClient";
 import { PL_SERVER_COMPANY_META_UPDATED_EVENT } from "@/lib/plServerCompanyMetaSync";
+import { logPlPerm, resolvePermissionConfigSource, summarizePermissionDateLimits, companyUsesDeviceOrPlPermissionConfig } from "@/lib/permissionConfigSource";
 
 /** Offline company SQLite session — ye role Firebase owner se alag ho sakta hai (same email owner + staff login). */
 function isLocalStorageCompany(c: { storageOption?: string } | null | undefined): boolean {
@@ -45,7 +46,8 @@ export function roleCanPermission(
   if (role === "owner") return true;
   const index = flattenedPermissions.indexOf(permission);
   if (index === -1) return false;
-  const storedRolePerms = config.roles[role] || [];
+  const storedRaw = config.roles[role];
+  const storedRolePerms = Array.isArray(storedRaw) ? storedRaw : [];
   const defaultRolePerms = initialPermissionConfig.roles[role] || [];
   const rolePermissions = flattenedPermissions.map((_, i) =>
     i < storedRolePerms.length ? !!storedRolePerms[i] : !!defaultRolePerms[i]
@@ -203,6 +205,7 @@ const usePermissions = () => {
     const [sqlitePermissionConfig, setSqlitePermissionConfig] = useState<PermissionConfig | null>(null);
     /** Async reload / missing row pe default 7-day flash mat do — last good config sticky. */
     const sqlitePermissionStickyRef = useRef<{ companyId: string; config: PermissionConfig } | null>(null);
+    const plPermLogSigRef = useRef<string>("");
     useEffect(() => {
       const onAuth = () => setLocalAuthEpoch((n) => n + 1);
       window.addEventListener(LOCAL_AUTH_CHANGED_EVENT, onAuth);
@@ -235,8 +238,9 @@ const usePermissions = () => {
           if (cancelled) return;
           const cfg = (row as { permissionConfig?: PermissionConfig } | null)?.permissionConfig;
           if (cfg && typeof cfg === "object") {
-            sqlitePermissionStickyRef.current = { companyId: cid, config: cfg };
-            setSqlitePermissionConfig(cfg);
+            const normalized = normalizePermissionConfig(cfg);
+            sqlitePermissionStickyRef.current = { companyId: cid, config: normalized };
+            setSqlitePermissionConfig(normalized);
             return;
           }
           // Row me config missing: sticky mat mitao — warna Manager editDays 7 default flash.
@@ -286,13 +290,7 @@ const usePermissions = () => {
     }, [company?.id, company?.plServerShared]);
 
     const permissions = useMemo(() => {
-        const plStaffSurface =
-          !!company &&
-          (company.plServerShared === true ||
-            isServerGateCompany(company) ||
-            isPlServerThinStaffClient() ||
-            Boolean(String((company as { plServerHostCompanyId?: string }).plServerHostCompanyId || "").trim()) ||
-            isServerSelectorCompanyRow(company));
+        const plStaffSurface = companyUsesDeviceOrPlPermissionConfig(company);
         const localStaffCompany = companyUsesLocalStaffPermissions(company);
         const localAuthToken =
           company?.id && localStaffCompany ? getLocalAuthToken(company.id) : null;
@@ -304,6 +302,22 @@ const usePermissions = () => {
           company?.id && sqlitePermissionStickyRef.current?.companyId === company.id
             ? sqlitePermissionStickyRef.current.config
             : null;
+        const configSource =
+          localStaffCompany || plStaffSurface
+            ? sqlitePermissionConfig
+              ? "sqlite"
+              : stickyCfg
+                ? "sticky"
+                : company?.permissionConfig
+                  ? "company-row"
+                  : "initial-default"
+            : company?.permissionConfig
+              ? "company-row"
+              : sqlitePermissionConfig
+                ? "sqlite"
+                : stickyCfg
+                  ? "sticky"
+                  : "initial-default";
         const config = normalizePermissionConfig(
           localStaffCompany || plStaffSurface
             ? sqlitePermissionConfig || stickyCfg || company?.permissionConfig || initialPermissionConfig
@@ -462,6 +476,29 @@ const usePermissions = () => {
         const allowAttachments =
           (config.allowAttachments !== false) && canAddFileImagePdf && planMaxFiles > 0;
 
+        const permSource = resolvePermissionConfigSource(company);
+        const runtimeSig = [
+          company?.id ?? "",
+          role,
+          configSource,
+          String(dateLimits.editDays ?? ""),
+          String(config.dateLimits?.manager?.editDays ?? ""),
+          permSource.kind,
+        ].join("|");
+        if (plPermLogSigRef.current !== runtimeSig) {
+          plPermLogSigRef.current = runtimeSig;
+          logPlPerm("runtime", {
+            companyId: company?.id ?? null,
+            role,
+            configSource,
+            provider: permSource.kind,
+            providerUrl: permSource.url,
+            dateLimits: summarizePermissionDateLimits(config, role),
+            managerEditDays: config.dateLimits?.manager?.editDays ?? null,
+            usingInitialDefault: configSource === "initial-default",
+          });
+        }
+
         return { 
             can, 
             role, 
@@ -473,6 +510,9 @@ const usePermissions = () => {
             allowAttachments,
             canAddAvatar,
             canAddFileImagePdf,
+            permissionConfig: config,
+            permissionConfigSource: permSource,
+            permissionConfigSourceKey: configSource,
         };
 
     }, [customUser, company, allCompanies, livePlans, localAuthEpoch, localCompanyRegistryEpoch, plServerMetaEpoch, sqlitePermissionConfig]);

@@ -30,12 +30,14 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { motion, AnimatePresence } from "framer-motion";
+import AnimatedNumber from "@/components/ui/AnimatedNumber";
 import { Virtuoso } from "react-virtuoso";
 import { VoucherTypeFilter } from "@/components/vouchers/VoucherTypeFilter";
 import {
   type Context,
   type Transaction,
   TransactionRow,
+  MobileTransactionFilePreview,
   OpeningBalanceFileCellContent,
   getConversionFactor,
   formatQuantity,
@@ -59,6 +61,12 @@ import {
   parseFirestoreDateFieldToJsDate,
   parseOpeningBalanceDateToLocalNoon,
 } from "@/lib/voucherDateNormalize";
+import { flushVoucherOutbox, listPendingOutboxDocIdsForCompany } from "@/lib/localVoucherOutbox";
+import { mirrorVoucherDocToBrowserDb } from "@/lib/localCompanyDocMirror";
+import {
+  FIREBASE_LEDGER_DATA_SYNC_CHANGED_EVENT,
+  isFirebaseLedgerDataSyncDisabled,
+} from "@/lib/firebaseLedgerDataSyncDisabled";
 import { SPEND_WISE_OPENING_GROUP_ID } from "@/lib/spendWiseDateRangeGroups";
 import { resolveSpendWiseRowBaseVoucherId } from "@/lib/spendWisePagination";
 import { useCompany } from "@/hooks/useCompany";
@@ -97,7 +105,7 @@ import {
 
 export type { Context, Transaction };
 
-export type TransactionColumnKey = "date" | "type" | "voucherNo" | "user" | "file" | "dr" | "cr" | "status" | "runningBalance";
+export type TransactionColumnKey = "syncStatus" | "date" | "type" | "voucherNo" | "user" | "file" | "dr" | "cr" | "status" | "runningBalance";
 export type VisibleColumns = Partial<Record<TransactionColumnKey, boolean>>;
 
 export { TransactionRow, getConversionFactor, formatQuantity };
@@ -336,6 +344,64 @@ export function TransactionsTable({
   spendWiseGroupPrint,
 }: TransactionsTableProps) {
   const { company, companyId } = useCompany();
+  const [syncingVoucherIds, setSyncingVoucherIds] = useState<Set<string>>(() => new Set());
+  const [pendingOutboxVoucherIds, setPendingOutboxVoucherIds] = useState<Set<string>>(() => new Set());
+  const [dataSyncEpoch, setDataSyncEpoch] = useState(0);
+  const autoPrioritySyncKeyRef = useRef<string>("");
+  const markVoucherSyncing = useCallback((voucherId: string, syncing: boolean) => {
+    setSyncingVoucherIds((prev) => {
+      const next = new Set(prev);
+      if (syncing) next.add(voucherId);
+      else next.delete(voucherId);
+      return next;
+    });
+  }, []);
+  const refreshPendingOutboxVoucherIds = useCallback(() => {
+    const cid = String(companyId || "").trim();
+    if (!cid) {
+      setPendingOutboxVoucherIds(new Set());
+      return;
+    }
+    void listPendingOutboxDocIdsForCompany(cid, "vouchers").then(setPendingOutboxVoucherIds);
+  }, [companyId]);
+  const handleSyncVoucherNow = useCallback(
+    async (transaction: any) => {
+      const voucherId = String(transaction?.id || "").trim();
+      const cid = String(companyId || "").trim();
+      if (!cid || !voucherId) return;
+      markVoucherSyncing(voucherId, true);
+      try {
+        const result = await flushVoucherOutbox({
+          only: { companyId: cid, collectionName: "vouchers", docId: voucherId },
+        });
+        if (result.ok > 0) toast.success("Voucher synced", { duration: 1800 });
+        else if (result.failed > 0) toast.error("Voucher sync failed", { duration: 2500 });
+        else {
+          const mirrored = await mirrorVoucherDocToBrowserDb(cid, voucherId);
+          if (mirrored) toast.success("Voucher already synced", { duration: 1800 });
+          else toast.message("No pending sync for this voucher", { duration: 1800 });
+        }
+      } finally {
+        markVoucherSyncing(voucherId, false);
+        refreshPendingOutboxVoucherIds();
+      }
+    },
+    [companyId, markVoucherSyncing, refreshPendingOutboxVoucherIds]
+  );
+  useEffect(() => {
+    refreshPendingOutboxVoucherIds();
+    const onDataSyncChanged = () => {
+      autoPrioritySyncKeyRef.current = "";
+      refreshPendingOutboxVoucherIds();
+      setDataSyncEpoch((v) => v + 1);
+    };
+    window.addEventListener(FIREBASE_LEDGER_DATA_SYNC_CHANGED_EVENT, onDataSyncChanged);
+    window.addEventListener("online", onDataSyncChanged);
+    return () => {
+      window.removeEventListener(FIREBASE_LEDGER_DATA_SYNC_CHANGED_EVENT, onDataSyncChanged);
+      window.removeEventListener("online", onDataSyncChanged);
+    };
+  }, [refreshPendingOutboxVoucherIds]);
   // FY merge: neela divider row — company par local fiscal merge `useCompany` se aa chuka hai.
   const fiscalPartitionOpts = useMemo(() => {
     if (company?.fiscalSplitMode !== "merge") return { at: null as Date | null, label: undefined as string | undefined };
@@ -357,9 +423,39 @@ export function TransactionsTable({
         ? insertFiscalPartitionRows(transactions as any[], fiscalPartitionOpts.at, fiscalMergeBannerLabel)
         : transactions;
     list = stripSpendWiseSyntheticOpeningMaster(list) as typeof list;
-    return list;
-  }, [transactions, fiscalPartitionOpts.at, fiscalMergeBannerLabel]);
+    return (list as any[]).map((row) => {
+      const id = String(row?.id || "").trim();
+      if (!id || row?.type === FISCAL_YEAR_PARTITION_ROW_TYPE) return row;
+      const nextStatus = pendingOutboxVoucherIds.has(id) ? "sync_due" : "synced";
+      return row?.__plSyncStatus === nextStatus ? row : { ...row, __plSyncStatus: nextStatus };
+    }) as typeof list;
+  }, [transactions, fiscalPartitionOpts.at, fiscalMergeBannerLabel, pendingOutboxVoucherIds]);
   /** OB narration row blue tint — openingBalanceNarrationRow `useSpendWiseOpeningBalanceCard` se pehle chahiye */
+  useEffect(() => {
+    const cid = String(companyId || "").trim();
+    if (!cid || isFirebaseLedgerDataSyncDisabled()) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+    const due = (tableTransactions as any[])
+      .filter((t) => t && t.type !== FISCAL_YEAR_PARTITION_ROW_TYPE && String(t.__plSyncStatus || "").trim() !== "synced")
+      .map((t) => String(t.id || "").trim())
+      .filter(Boolean);
+    if (!due.length) return;
+    const firstId = due[0];
+    const key = `${cid}:${firstId}:${due.length}`;
+    if (autoPrioritySyncKeyRef.current === key) return;
+    autoPrioritySyncKeyRef.current = key;
+    markVoucherSyncing(firstId, true);
+    void (async () => {
+      const result = await flushVoucherOutbox({
+        priority: { companyId: cid, collectionName: "vouchers", docId: firstId },
+      });
+      if (result.ok === 0 && result.failed === 0) {
+        await mirrorVoucherDocToBrowserDb(cid, firstId);
+      }
+    })().finally(() => {
+      markVoucherSyncing(firstId, false);
+    });
+  }, [companyId, tableTransactions, markVoucherSyncing, dataSyncEpoch]);
   const hasSpendWiseGroups = tableTransactions?.some((t: any) => typeof t._spendWiseGroupColorIndex === "number");
   const useSpendWiseOpeningBalanceCard = context === "account" && hasSpendWiseGroups;
   const { user, customUser } = useAuth();
@@ -377,7 +473,8 @@ export function TransactionsTable({
         await approveVoucherWithHistory(companyId, transaction.id, user.uid, approverName);
         toast.success("Transaction approved.");
       } catch (e) {
-        toast.error("Failed to approve transaction.");
+        const message = e instanceof Error && e.message ? e.message : "Failed to approve transaction.";
+        toast.error(message);
       }
     },
     [companyId, user?.uid, user?.displayName, user?.email, customUser?.displayName]
@@ -731,9 +828,12 @@ export function TransactionsTable({
   // Get animation settings - check enabled flag explicitly (match PartyList / list motion). Disable when parent asks (e.g. view toggle).
   const isRowAnimationEnabled = !disableLayoutAnimation && animationSettings?.rows?.enabled === true;
   const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 0.4) : 0;
+  const isNumberAnimationEnabled = animationSettings?.numbers?.enabled === true;
+  const numberAnimationDuration = isNumberAnimationEnabled ? (animationSettings?.numbers?.duration ?? 2.5) : 0;
   /** Framer `layout` on `<tr>` mis-projects row menu on account/user columns — party/staff/statement safe. */
   const useTxnRowLayoutAnimation =
-    isRowAnimationEnabled && (hasSpendWiseGroups || context !== "account");
+    isRowAnimationEnabled &&
+    (hasSpendWiseGroups || context !== "account");
   /** Date filter par popLayout purani row positions preserve karta hai — spend-wise list neeche chipak jati hai. */
   const spendWiseListAnimateKey = useMemo(() => {
     if (!ledgerDateFilterActive) return "spend-wise-all";
@@ -1151,7 +1251,8 @@ export function TransactionsTable({
   const fileCol = showFileBySelection ? 1 : 0;
   const isItemPartyContext = context === "item" || (context === "group" && groupEntityType === "item");
   // Item/Item-group Party column count should follow page-level visibility toggle.
-  const baseCols = dateCols + 2 + userCol + fileCol + (context === 'daybook' ? 1 : 0) + (isItemPartyContext && showItemPartyColumn ? 1 : 0);
+  const syncStatusCol = showCol("syncStatus") ? 1 : 0;
+  const baseCols = syncStatusCol + dateCols + 2 + userCol + fileCol + (context === 'daybook' ? 1 : 0) + (isItemPartyContext && showItemPartyColumn ? 1 : 0);
   const debitCol = hideDebitColumn ? 0 : 1;
   const creditCol = hideCreditColumn ? 0 : 1;
   // Hide status column in statement view (bill-wise only shows per-bill status)
@@ -1160,7 +1261,7 @@ export function TransactionsTable({
 
   const visibleDateCols = visibleColumns != null ? (showCol("date") ? dateCols : 0) : dateCols;
   const visibleBaseCols = visibleColumns != null
-    ? (showCol("date") ? dateCols : 0) + (showCol("type") ? 1 : 0) + (showCol("voucherNo") ? 1 : 0) + (context === 'daybook' ? 1 : 0) + (isItemPartyContext && showItemPartyColumn ? 1 : 0) + (showCol("user") && context !== 'note' ? 1 : 0) + (showFileBySelection ? 1 : 0)
+    ? (showCol("syncStatus") ? 1 : 0) + (showCol("date") ? dateCols : 0) + (showCol("type") ? 1 : 0) + (showCol("voucherNo") ? 1 : 0) + (context === 'daybook' ? 1 : 0) + (isItemPartyContext && showItemPartyColumn ? 1 : 0) + (showCol("user") && context !== 'note' ? 1 : 0) + (showFileBySelection ? 1 : 0)
     : baseCols;
   const visibleDebitCol = visibleColumns != null ? (showCol("dr") && !hideDebitColumn ? 1 : 0) : debitCol;
   const visibleCreditCol = visibleColumns != null ? (showCol("cr") && !hideCreditColumn ? 1 : 0) : creditCol;
@@ -1215,6 +1316,7 @@ export function TransactionsTable({
   const openingBalanceNarrationColSpan =
     visibleColumns == null
       ? dateCols +
+        (showCol("syncStatus") ? 1 : 0) +
         2 +
         (context === "daybook" ? 1 : 0) +
         (isItemPartyContext && showItemPartyColumn ? 1 : 0) +
@@ -1222,7 +1324,8 @@ export function TransactionsTable({
         fileCol +
         visibleDebitCol +
         visibleCreditCol
-      : (showCol("date") ? dateCols : 0) +
+      : (showCol("syncStatus") ? 1 : 0) +
+        (showCol("date") ? dateCols : 0) +
         (showCol("type") ? 1 : 0) +
         (showCol("voucherNo") ? 1 : 0) +
         (context === "daybook" ? 1 : 0) +
@@ -1261,23 +1364,27 @@ export function TransactionsTable({
   ]);
 
   /** Opening row dates — normal transaction row jaisa */
-  const renderOpeningBalanceDateCells = (rowDate: Date | null) =>
-    showOpeningBalance && showLedgerOpeningRows && showCol("date") ? (
-      dateSystem === "Both" ? (
-        <>
+  const renderOpeningBalanceDateCells = (rowDate: Date | null) => (
+    <>
+      {showCol("syncStatus") && <TableCell className={cn("text-center align-top", ensureMinGaps && "min-w-[78px] px-[5px]")}>-</TableCell>}
+      {showOpeningBalance && showLedgerOpeningRows && showCol("date") ? (
+        dateSystem === "Both" ? (
+          <>
+            <TableCell className={cn("align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
+              {rowDate ? formatDateBS(rowDate) : ""}
+            </TableCell>
+            <TableCell className={cn("align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
+              {rowDate ? formatDate(rowDate) : ""}
+            </TableCell>
+          </>
+        ) : (
           <TableCell className={cn("align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
-            {rowDate ? formatDateBS(rowDate) : ""}
+            {rowDate ? (dateSystem === "AD" ? formatDate(rowDate) : formatDateBS(rowDate)) : ""}
           </TableCell>
-          <TableCell className={cn("align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
-            {rowDate ? formatDate(rowDate) : ""}
-          </TableCell>
-        </>
-      ) : (
-        <TableCell className={cn("align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
-          {rowDate ? (dateSystem === "AD" ? formatDate(rowDate) : formatDateBS(rowDate)) : ""}
-        </TableCell>
-      )
-    ) : null;
+        )
+      ) : null}
+    </>
+  );
 
   const renderOpeningBalanceMiddleCells = (
     pillLabel: string,
@@ -1456,6 +1563,7 @@ export function TransactionsTable({
   const spendWiseColWidths = useMemo((): number[] => {
     if (!hasSpendWiseGroups) return [];
     const w: number[] = [];
+    if (showCol("syncStatus")) w.push(78);
     if (showCol("date")) {
       if (dateSystem === "Both") {
         w.push(95, 112);
@@ -1774,6 +1882,23 @@ export function TransactionsTable({
       const isItemQty = context === "item" && stockView === "qty";
       const formatAmountOrQty = (val: number) =>
         isItemQty && item ? `${formatQuantity(val)} ${displayUnit || ""}` : formatCurrency(val, { noSuffix: true, context: "transaction", noAnimation: true });
+      const renderMobileAmountOrQty = (val: number) => {
+        if (isItemQty && item) return `${formatQuantity(val)} ${displayUnit || ""}`;
+        if (!isNumberAnimationEnabled || numberAnimationDuration <= 0) {
+          return formatCurrency(val, { noSuffix: true, context: "transaction", noAnimation: true });
+        }
+        return (
+          <AnimatedNumber
+            value={val}
+            duration={numberAnimationDuration}
+            formatter={(next) => formatCurrency(Number(next) || 0, { noSuffix: true, context: "transaction", noAnimation: true })}
+          />
+        );
+      };
+      const renderHighlightedMobileAmountOrQty = (val: number): React.ReactNode => {
+        const rendered = renderMobileAmountOrQty(val);
+        return typeof rendered === "string" || typeof rendered === "number" ? hl(String(rendered)) : rendered;
+      };
       const oppositeLabel = getOppositeAccountLabel(t, names, context, contextId, groupEntityType);
       const titleLabel = (context === "daybook" || context === "item" || (context === "group" && (t.type === "sale" || t.type === "purchase")))
         ? `${t.voucherNumber} - ${oppositeLabel}`
@@ -1836,9 +1961,10 @@ export function TransactionsTable({
             <div className="min-w-0 flex-1 overflow-hidden">
               <p className="font-bold text-sm truncate">{hl(titleLabel)}</p>
             </div>
-            <p className={cn("font-bold text-sm shrink-0", mainAmountClass)}>
-              {amount > 0 ? hl(String(formatAmountOrQty(amount))) : "-"}
-            </p>
+            <div className={cn("flex shrink-0 items-center justify-end gap-1.5 font-bold text-sm", mainAmountClass)}>
+              {showFileBySelection ? <MobileTransactionFilePreview transaction={t} /> : null}
+              <span>{amount > 0 ? renderHighlightedMobileAmountOrQty(amount) : "-"}</span>
+            </div>
           </div>
           <div className="flex justify-between items-start gap-2 min-w-0 mt-0.5">
             <p className="text-xs text-muted-foreground break-words whitespace-normal line-clamp-none min-w-0 flex-1">
@@ -1874,7 +2000,9 @@ export function TransactionsTable({
                   balance >= 0 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200" : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200"
                 )}
               >
-                {hl(`Bal:${formatAmountOrQty(balanceAbs)}${isItemQty ? "" : ` ${balanceSuffix}`}`)}
+                <span>Bal:</span>
+                {renderHighlightedMobileAmountOrQty(balanceAbs)}
+                {!isItemQty ? <span> {balanceSuffix}</span> : null}
               </Badge>
             ) : null}
           </div>
@@ -1921,7 +2049,9 @@ export function TransactionsTable({
                     balance >= 0 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200" : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200"
                   )}
                 >
-                  {hl(`Bal:${formatAmountOrQty(balanceAbs)}${isItemQty ? "" : ` ${balanceSuffix}`}`)}
+                  <span>Bal:</span>
+                  {renderHighlightedMobileAmountOrQty(balanceAbs)}
+                  {!isItemQty ? <span> {balanceSuffix}</span> : null}
                 </Badge>
               )}
               {/* User line: single row — `max-w-[120px]` se lamba naam wrap ho jata tha */}
@@ -2228,6 +2358,7 @@ export function TransactionsTable({
         )}
         <TableHeader>
         <TableRow className="border-b-4 border-black hover:bg-transparent">
+          {showCol("syncStatus") && renderHeaderWithFilter("syncStatus", "Sync", false, ensureMinGaps ? 78 : undefined)}
           {showCol("date") && (dateSystem === "Both" ? (
             <>
               {renderHeaderWithFilter("date_bs", "Date (BS)", false, ensureMinGaps ? 95 : undefined)}
@@ -2523,6 +2654,8 @@ export function TransactionsTable({
                                           fileShowAll={fileShowAll}
                                           statusBillWiseOnly={statusBillWiseOnly}
                                           highlightPendingApproval={highlightPendingApproval}
+                                          syncInFlight={syncingVoucherIds.has(String((t as any).id || ""))}
+                                          onSyncNow={handleSyncVoucherNow}
                                           textSearchHighlight={transactionCardSearchHighlight}
                                           {...getSpendWiseRowMenuProps(t)}
                                         />
@@ -2593,6 +2726,8 @@ export function TransactionsTable({
                           fileShowAll={fileShowAll}
                           statusBillWiseOnly={statusBillWiseOnly}
                           highlightPendingApproval={highlightPendingApproval}
+                          syncInFlight={syncingVoucherIds.has(String((t as any).id || ""))}
+                          onSyncNow={handleSyncVoucherNow}
                           textSearchHighlight={transactionCardSearchHighlight}
                           {...getSpendWiseRowMenuProps(t)}
                         />
@@ -2667,6 +2802,8 @@ export function TransactionsTable({
                         fileShowAll={fileShowAll}
                         statusBillWiseOnly={statusBillWiseOnly}
                         highlightPendingApproval={highlightPendingApproval}
+                        syncInFlight={syncingVoucherIds.has(String((t as any).id || ""))}
+                        onSyncNow={handleSyncVoucherNow}
                         textSearchHighlight={transactionCardSearchHighlight}
                         {...getSpendWiseRowMenuProps(t)}
                       />

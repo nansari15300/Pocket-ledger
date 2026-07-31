@@ -19,7 +19,8 @@ import { sniffBlobKindForPreview } from "@/lib/attachmentFormatLabel";
 import { isLocalAppServerHost } from "@/lib/localAppServerDevPreview";
 import { resolvePlServerHostLoopbackTransport } from "@/lib/plServerHostDeltaPublish";
 
-const PL_SERVER_ATTACHMENT_FETCH_CONCURRENCY = 3;
+/** LAN gallery: 3 was dial-up feel (10 thumbs ~20s). Keep modest for Wi‑Fi + host disk. */
+const PL_SERVER_ATTACHMENT_FETCH_CONCURRENCY = 10;
 let activePlServerAttachmentFetches = 0;
 const plServerAttachmentFetchQueue: Array<() => void> = [];
 const inFlightPlServerAttachmentFetches = new Map<string, Promise<Blob | null>>();
@@ -165,101 +166,118 @@ export async function resolvePlServerStaffAttachmentPreviewBlob(
   rawUrl: string,
   options?: { companyId?: string; galleryUrls?: readonly string[]; signal?: AbortSignal }
 ): Promise<Blob | null> {
+  /** Budget starts when work begins — not while waiting behind the concurrency queue. */
   const budgetMs = 22_000;
-  const budgetCtrl = new AbortController();
-  const budgetTimer = setTimeout(() => budgetCtrl.abort(), budgetMs);
-  const linked = options?.signal
-    ? (() => {
-        if (options.signal!.aborted) budgetCtrl.abort();
-        else options.signal!.addEventListener("abort", () => budgetCtrl.abort(), { once: true });
-        return budgetCtrl.signal;
-      })()
-    : budgetCtrl.signal;
 
   const run = async (): Promise<Blob | null> => {
-    const cid = String(options?.companyId || "").trim();
-    const u = normalizeAttachmentUrlForDevicePreview(String(rawUrl || "").trim());
-    if (!u || !isLocalFileRef(u)) return null;
+    if (options?.signal?.aborted) return null;
+    const budgetCtrl = new AbortController();
+    const budgetTimer = setTimeout(() => budgetCtrl.abort(), budgetMs);
+    const linked = options?.signal
+      ? (() => {
+          if (options.signal!.aborted) budgetCtrl.abort();
+          else options.signal!.addEventListener("abort", () => budgetCtrl.abort(), { once: true });
+          return budgetCtrl.signal;
+        })()
+      : budgetCtrl.signal;
 
     try {
-      const { tryOfflineCachedAttachmentBlobMultiKey, getOfflineCachedAttachmentNativeRef } = await import(
-        "@/lib/offlineAttachmentUrlCache"
-      );
-      const cached = await tryOfflineCachedAttachmentBlobMultiKey(u);
-      if (cached && cached.size > 0) return cached;
-      const native = await getOfflineCachedAttachmentNativeRef(u);
-      if (native?.displayUrl?.trim()) {
-        const diskBlob = await tryOfflineCachedAttachmentBlobMultiKey(u);
-        if (diskBlob && diskBlob.size > 0) return diskBlob;
-      }
-    } catch {
-      /* cache optional */
-    }
+      const cid = String(options?.companyId || "").trim();
+      const u = normalizeAttachmentUrlForDevicePreview(String(rawUrl || "").trim());
+      if (!u || !isLocalFileRef(u)) return null;
 
-    /** Staff / gate tab: bytes host par — local SQLite/disk scan slow + spinner loop; server pehle. */
-    if ((isPlRemoteServerClientMode() || isPlSharingServerPortOrigin()) && cid) {
-      const remoteEarly = await fetchPlServerAttachmentBlob(cid, u, linked);
-      if (remoteEarly && remoteEarly.size > 0) {
-        void import("@/lib/offlineAttachmentUrlCache").then((m) =>
-          m.seedOfflineAttachmentCacheFromBlob(u, remoteEarly)
-        );
-        try {
-          const objectUrl = URL.createObjectURL(remoteEarly);
-          const { rememberHoverBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
-          rememberHoverBlobUrl(u, objectUrl);
-          rememberHoverBlobUrl(`${u}::cell-thumb`, objectUrl);
-          const { markAttachmentUrlReady } = await import("@/lib/attachmentLoadReady");
-          markAttachmentUrlReady(u);
-        } catch {
-          /* preview seed optional */
+      // Instant portal/open: hover LRU already has blob URL — no /__pl_attachment round-trip.
+      try {
+        const { peekHoverCachedBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
+        const hoverUrl = peekHoverCachedBlobUrl(u);
+        if (hoverUrl) {
+          const fromHover = await fetch(hoverUrl, { signal: linked }).then((r) => (r.ok ? r.blob() : null));
+          if (fromHover && fromHover.size > 0) return fromHover;
         }
-        return remoteEarly;
+      } catch {
+        /* optional */
       }
-    }
 
-    if (usesEmbeddedNativeAttachmentStorage()) {
-      const meta = getLocalFileRefMetaSync(u) ?? (await getLocalFileRefMeta(u));
-      if (meta?.filePath || meta?.fileUri) {
-        const local = await getBlobFromLocalFileRef(u, { companyId: cid || undefined });
-        if (local && local.size > 0) return local;
-      }
-    }
-
-    const fromChain = await getBlobFromAttachmentRefPreferLocalFirst(u, {
-      companyId: cid || undefined,
-      galleryUrls: options?.galleryUrls,
-    });
-    if (fromChain && fromChain.size > 0) return fromChain;
-
-    if (cid) {
-      const remote = await fetchPlServerAttachmentBlob(cid, u, linked);
-      if (remote && remote.size > 0) {
-        // Next open / tile: host re-fetch skip — staff device pe cache seed.
-        void import("@/lib/offlineAttachmentUrlCache").then((m) =>
-          m.seedOfflineAttachmentCacheFromBlob(u, remote)
+      try {
+        const { tryOfflineCachedAttachmentBlobMultiKey, getOfflineCachedAttachmentNativeRef } = await import(
+          "@/lib/offlineAttachmentUrlCache"
         );
-        try {
-          const objectUrl = URL.createObjectURL(remote);
-          const { rememberHoverBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
-          rememberHoverBlobUrl(u, objectUrl);
-          rememberHoverBlobUrl(`${u}::cell-thumb`, objectUrl);
-          const { markAttachmentUrlReady } = await import("@/lib/attachmentLoadReady");
-          markAttachmentUrlReady(u);
-        } catch {
-          /* preview seed optional */
+        const cached = await tryOfflineCachedAttachmentBlobMultiKey(u);
+        if (cached && cached.size > 0) return cached;
+        const native = await getOfflineCachedAttachmentNativeRef(u);
+        if (native?.displayUrl?.trim()) {
+          const diskBlob = await tryOfflineCachedAttachmentBlobMultiKey(u);
+          if (diskBlob && diskBlob.size > 0) return diskBlob;
         }
-        return remote;
+      } catch {
+        /* cache optional */
       }
+
+      /** Staff / gate tab: bytes host par — local SQLite/disk scan slow + spinner loop; server pehle. */
+      if ((isPlRemoteServerClientMode() || isPlSharingServerPortOrigin()) && cid) {
+        const remoteEarly = await fetchPlServerAttachmentBlob(cid, u, linked);
+        if (remoteEarly && remoteEarly.size > 0) {
+          void import("@/lib/offlineAttachmentUrlCache").then((m) =>
+            m.seedOfflineAttachmentCacheFromBlob(u, remoteEarly)
+          );
+          try {
+            const objectUrl = URL.createObjectURL(remoteEarly);
+            const { rememberHoverBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
+            rememberHoverBlobUrl(u, objectUrl);
+            rememberHoverBlobUrl(`${u}::cell-thumb`, objectUrl);
+            const { markAttachmentUrlReady } = await import("@/lib/attachmentLoadReady");
+            markAttachmentUrlReady(u);
+          } catch {
+            /* preview seed optional */
+          }
+          return remoteEarly;
+        }
+      }
+
+      if (usesEmbeddedNativeAttachmentStorage()) {
+        const meta = getLocalFileRefMetaSync(u) ?? (await getLocalFileRefMeta(u));
+        if (meta?.filePath || meta?.fileUri) {
+          const local = await getBlobFromLocalFileRef(u, { companyId: cid || undefined });
+          if (local && local.size > 0) return local;
+        }
+      }
+
+      const fromChain = await getBlobFromAttachmentRefPreferLocalFirst(u, {
+        companyId: cid || undefined,
+        galleryUrls: options?.galleryUrls,
+      });
+      if (fromChain && fromChain.size > 0) return fromChain;
+
+      if (cid) {
+        const remote = await fetchPlServerAttachmentBlob(cid, u, linked);
+        if (remote && remote.size > 0) {
+          // Next open / tile: host re-fetch skip — staff device pe cache seed.
+          void import("@/lib/offlineAttachmentUrlCache").then((m) =>
+            m.seedOfflineAttachmentCacheFromBlob(u, remote)
+          );
+          try {
+            const objectUrl = URL.createObjectURL(remote);
+            const { rememberHoverBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
+            rememberHoverBlobUrl(u, objectUrl);
+            rememberHoverBlobUrl(`${u}::cell-thumb`, objectUrl);
+            const { markAttachmentUrlReady } = await import("@/lib/attachmentLoadReady");
+            markAttachmentUrlReady(u);
+          } catch {
+            /* preview seed optional */
+          }
+          return remote;
+        }
+      }
+      return null;
+    } finally {
+      clearTimeout(budgetTimer);
     }
-    return null;
   };
 
   try {
     return await run();
   } catch {
     return null;
-  } finally {
-    clearTimeout(budgetTimer);
   }
 }
 
@@ -330,7 +348,8 @@ export async function fetchPlServerAttachmentBlob(
         }
         const normalized = await normalizePlServerAttachmentBlob(blob, contentType);
         await seedPlServerAttachmentUiCaches(`${LOCAL_FILE_PREFIX}${ref}`, normalized);
-        await persistFetchedPlServerAttachmentRef(cid, ref, normalized);
+        // Thumb path: don't block next gallery tiles on SQLite/disk pending write.
+        void persistFetchedPlServerAttachmentRef(cid, ref, normalized);
         return normalized;
       } catch {
         return null;

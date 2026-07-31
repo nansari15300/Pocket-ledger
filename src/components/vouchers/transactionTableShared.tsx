@@ -4,7 +4,7 @@ import * as React from "react";
 import { TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { MoreVertical, Pencil, History, CheckCircle, Printer, MousePointerClick } from "lucide-react";
+import { MoreVertical, Pencil, History, CheckCircle, Printer, MousePointerClick, RefreshCw, Loader2 } from "lucide-react";
 import { VoucherAttachmentFileIndicator } from "@/components/vouchers/VoucherAttachmentFileIndicator";
 import {
   DropdownMenu,
@@ -27,7 +27,9 @@ import { useAuth } from "@/hooks/useAuth";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import usePermissions from "@/hooks/usePermissions";
 import { useIsMobile } from "@/hooks/use-mobile";
+import AnimatedNumber from "@/components/ui/AnimatedNumber";
 import { cn } from "@/lib/utils";
+import { Switch } from "@/components/ui/switch";
 import { isLedgerTransactionUnapproved } from "@/lib/ledgerPendingApproval";
 import { txnSelectedMainRowCn, txnSelectedNarrationRowCn, txnTableIconBtnCn } from "@/lib/listSelectionChrome";
 import { getAllocationTotal } from "@/lib/payment-allocation-utils";
@@ -41,6 +43,7 @@ import { getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize"
 import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
 import {
+  isActiveRecurringTriggerVoucherForLedgerSwitch,
   isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay,
   resolveLedgerTransactionUserDisplayName,
 } from "@/lib/ledgerUserColumnDisplay";
@@ -68,8 +71,57 @@ function toLedgerAmount(v: unknown): number {
     }
     if ("amount" in o) return toLedgerAmount(o.amount);
   }
-  const n = Number(v as number);
+const n = Number(v as number);
   return Number.isFinite(n) ? n : 0;
+}
+
+export function getDisplayVoucherNumber(t: any): string {
+  if (!t) return "";
+  const rawVoucherNumber = String(t.voucherNumber ?? t.voucher_number ?? "").trim();
+  if (t.type !== "contra") return rawVoucherNumber;
+  const outNo = String(t.voucherNumberOut ?? "").trim();
+  const inNo = String(t.voucherNumberIn ?? "").trim();
+  if (rawVoucherNumber) return rawVoucherNumber;
+  return outNo || inNo || "";
+}
+
+function getContraVoucherSearchAliases(t: any): string[] {
+  if (!t || t.type !== "contra") return [];
+  const aliases = new Set<string>(["cntr", "contra"]);
+  const outNo = String(t.voucherNumberOut ?? "").trim();
+  const inNo = String(t.voucherNumberIn ?? "").trim();
+  const rawVoucherNumber = String(t.voucherNumber ?? t.voucher_number ?? "").trim();
+
+  if (outNo) {
+    aliases.add(outNo);
+    aliases.add("out");
+    aliases.add("cntr out");
+    aliases.add("contra out");
+    aliases.add("cntra out");
+  }
+  if (inNo) {
+    aliases.add(inNo);
+    aliases.add("in");
+    aliases.add("cntr in");
+    aliases.add("contra in");
+    aliases.add("cntra in");
+  }
+  if (rawVoucherNumber) {
+    const lower = rawVoucherNumber.toLowerCase();
+    if (/\bout\b/.test(lower)) {
+      aliases.add("out");
+      aliases.add("cntr out");
+      aliases.add("contra out");
+      aliases.add("cntra out");
+    }
+    if (/\bin\b/.test(lower)) {
+      aliases.add("in");
+      aliases.add("cntr in");
+      aliases.add("contra in");
+      aliases.add("cntra in");
+    }
+  }
+  return Array.from(aliases);
 }
 
 export type Context =
@@ -179,6 +231,49 @@ export function OpeningBalanceFileCellContent({
   );
 }
 
+export function MobileTransactionFilePreview({
+  transaction,
+}: {
+  transaction?: { fileUrls?: unknown; unassignedFile?: unknown; id?: unknown } | null;
+}) {
+  const { company } = useCompany();
+  const urls = getVoucherAttachmentUrlsForUi(transaction).map((u) => String(u)).filter((s) => s.length > 0);
+  const firstUrl = urls[0];
+  if (!firstUrl) return null;
+  const previewUrls = [firstUrl];
+  const localLedgerOnly = companyRequiresLocalAttachmentUrlsOnly(company);
+  const serverFallback =
+    company?.id
+      ? {
+          companyId: company.id,
+          voucherId: String(transaction?.id || ""),
+          clientFileUrls: urls,
+        }
+      : undefined;
+  const singlePdfOpen =
+    getAttachmentFormatLabel(firstUrl) === "PDF"
+      ? (e: React.MouseEvent<HTMLDivElement>) => {
+          e.stopPropagation();
+          void openAttachmentInApp(firstUrl, {
+            kind: "pdf",
+            localLedgerOnly,
+            serverFallback,
+            gateCompany: company,
+          });
+        }
+      : undefined;
+  return (
+    <AttachmentHoverPortal
+      triggerClassName="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded border border-border/70 bg-background"
+      onPreviewDoubleClick={singlePdfOpen}
+      galleryUrls={urls.length > 1 ? urls : undefined}
+      preview={<StableAttachmentPortalPreview urls={previewUrls} companyId={company?.id} />}
+    >
+      <VoucherAttachmentFileIndicator urls={previewUrls} displayMode="preview" size="sm" aria-label="Open attachment preview" />
+    </AttachmentHoverPortal>
+  );
+}
+
 const safeToDate = (date: any): Date | null => {
   // Transaction rows may come from Firestore, local SQLite, or backup JSON; one parser keeps date/dueDate stable.
   return parseFirestoreDateFieldToJsDate(date);
@@ -221,6 +316,52 @@ const getDisplayType = (t: any) => {
   if (t.type === "inter_company") return "Inter Company";
   return t.type.replace(/_/g, " ");
 };
+
+function getTransactionSyncStatus(t: any): "synced" | "sync_due" {
+  return String(t?.__plSyncStatus || "").trim() === "sync_due" ? "sync_due" : "synced";
+}
+
+function TransactionSyncStatusCell({
+  transaction,
+  ensureMinGaps,
+  syncInFlight,
+  onSyncNow,
+}: {
+  transaction: any;
+  ensureMinGaps?: boolean;
+  syncInFlight?: boolean;
+  onSyncNow?: (transaction: any) => void;
+}) {
+  const status = getTransactionSyncStatus(transaction);
+  if (status === "synced") {
+    return (
+      <TableCell className={cn("text-center align-middle", ensureMinGaps && "min-w-[78px] px-[5px]")}>
+        <span className="inline-flex items-center justify-center rounded-full text-green-600" title="Synced">
+          <CheckCircle className="h-4 w-4" />
+        </span>
+      </TableCell>
+    );
+  }
+  return (
+    <TableCell className={cn("text-center align-middle", ensureMinGaps && "min-w-[78px] px-[5px]")}>
+      <span className="inline-flex h-5 items-center gap-1 rounded-full border border-amber-500/60 bg-amber-50 pl-2 pr-1 text-[10px] font-semibold text-amber-700">
+        {syncInFlight ? "Syncing" : "Sync due"}
+        <button
+          type="button"
+          className="inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-amber-100 disabled:cursor-wait"
+          title={syncInFlight ? "Syncing this voucher" : "Sync this voucher now"}
+          disabled={syncInFlight}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSyncNow?.(transaction);
+          }}
+        >
+          {syncInFlight ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+        </button>
+      </span>
+    </TableCell>
+  );
+}
 
 /** Type column pill: row amount Dr → green, Cr → red (`note` alag — neutral rehta hai). */
 export type TxnDrCrSide = "dr" | "cr";
@@ -606,7 +747,9 @@ export function getTransactionQuickSearchHaystack(
   groupEntityType?: "party" | "account" | "staff" | "tax" | "expense" | "item"
 ): string {
   const chunks: string[] = [
-    t?.voucherNumber,
+    getDisplayVoucherNumber(t),
+    t?.voucherNumberOut,
+    t?.voucherNumberIn,
     getDisplayType(t),
     t?.narration,
     typeof t?.partyName === "string" ? t.partyName : "",
@@ -614,6 +757,7 @@ export function getTransactionQuickSearchHaystack(
     typeof t?.userDisplayName === "string" ? t.userDisplayName : "",
     typeof t?.userName === "string" ? t.userName : "",
     getParticularsText(t, names),
+    ...getContraVoucherSearchAliases(t),
   ];
   const uid = t?.userId;
   if (uid && names[uid]) chunks.push(names[uid]);
@@ -938,6 +1082,8 @@ export const TransactionRow = React.memo(
     spendWiseInGroupCard = false,
     showSpendWiseGroupMenuActions = false,
     onPrintRow,
+    syncInFlight = false,
+    onSyncNow,
   }: any) => {
     const { company } = useCompany();
     const localLedgerOnly = companyRequiresLocalAttachmentUrlsOnly(company);
@@ -1009,7 +1155,7 @@ export const TransactionRow = React.memo(
       if (isMobileView && key === "date") return true;
       return visibleColumns == null || visibleColumns[key] !== false;
     };
-    const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
+    const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } = useDate();
     const { effectiveNotificationSettings } = useCompany();
     const { user, customUser } = useAuth();
     const currentUserUid = user?.uid ?? null;
@@ -1018,7 +1164,10 @@ export const TransactionRow = React.memo(
     const isNote = context === "note";
     const { settings: animationSettings } = useAnimationSettings();
     const isRowAnimationEnabled = animationSettings?.rows?.enabled === true;
-    const rowAnimationDuration = isRowAnimationEnabled ? animationSettings.rows.duration : 0;
+    const rawRowDuration = isRowAnimationEnabled ? animationSettings.rows.duration : 0;
+    const rowAnimationDuration = rawRowDuration;
+    const isNumberAnimationEnabled = animationSettings?.numbers?.enabled === true;
+    const numberAnimationDuration = isNumberAnimationEnabled ? (animationSettings?.numbers?.duration ?? 2.5) : 0;
 
     const d = safeToDate(transaction.date);
     // Desktop table me bhi mobile card wali same entry-time priority dikhani hai: createdAt -> edited/updated -> voucher date.
@@ -1083,15 +1232,27 @@ export const TransactionRow = React.memo(
       shouldRowModeSameVoucherBlink ||
       ((isRelatedBlink || isSelectedRowBlink) && !isSelected);
 
+    const formatAnimatedAmountText = (value: number) =>
+      formatCurrencyForPrint(value, { noSuffix: true, context: "transaction" });
+
     const formatBalanceCell = (value: number) => {
       const isItemQty = context === "item" && stockView === "qty";
       if (isItemQty)
         return `${formatQuantity(value)} ${displayUnit || ""}`;
       const absValue = Math.abs(value);
       const suffix = value >= 0 ? "Dr" : "Cr";
+      const formattedText = `${formatAnimatedAmountText(absValue)} ${suffix}`;
       return (
         <span className={cn("font-bold", value >= 0 ? "text-green-700" : "text-red-700")}>
-          {formatCurrency(absValue, { noSuffix: true, context: "transaction" })} {suffix}
+          {isNumberAnimationEnabled && numberAnimationDuration > 0 ? (
+            <AnimatedNumber
+              value={absValue}
+              duration={numberAnimationDuration}
+              formatter={(n) => `${formatAnimatedAmountText(Math.abs(Number(n) || 0))} ${suffix}`}
+            />
+          ) : (
+            formattedText
+          )}
         </span>
       );
     };
@@ -1102,14 +1263,6 @@ export const TransactionRow = React.memo(
       const hasDrAmount = (Number(debit) || 0) > 0;
       const value = hasDrAmount ? out : -out;
       return formatBalanceCell(value);
-    };
-
-    const formatAmountCell = (val: number) => {
-      const n = toLedgerAmount(val);
-      if (n === 0) return "-";
-      if (context === "item" && stockView === "qty")
-        return `${formatQuantity(n)} ${displayUnit || ""}`;
-      return getDisplayValue(n);
     };
 
     /** Daybook search highlight: string pe `hl`, `AnimatedNumber` jaisa ReactNode seedha (String() se [object Object] na bane) */
@@ -1126,9 +1279,36 @@ export const TransactionRow = React.memo(
     const hl = (s: string) =>
       context === "daybook" && hlQ ? (highlightQueryInText(s, hlQ) as React.ReactNode) : s;
     const isItemPartyContext = context === "item" || (context === "group" && groupEntityType === "item");
+    const shouldDisableAmountTextAnimation = (context === "daybook" && hlQ.length > 0) || (context === "item" && stockView === "qty");
+
+    const formatAmountCell = (val: number) => {
+      const n = toLedgerAmount(val);
+      if (n === 0) return "-";
+      if (context === "item" && stockView === "qty") {
+        return `${formatQuantity(n)} ${displayUnit || ""}`;
+      }
+      if (!isNumberAnimationEnabled || numberAnimationDuration <= 0 || shouldDisableAmountTextAnimation) {
+        return getDisplayValue(n);
+      }
+      return (
+        <AnimatedNumber
+          value={n}
+          duration={numberAnimationDuration}
+          formatter={(next) => formatAnimatedAmountText(Number(next) || 0)}
+        />
+      );
+    };
 
     const mainRowContent = (
       <>
+        {showCol("syncStatus") && (
+          <TransactionSyncStatusCell
+            transaction={transaction}
+            ensureMinGaps={ensureMinGaps}
+            syncInFlight={syncInFlight}
+            onSyncNow={onSyncNow}
+          />
+        )}
         {showCol("date") &&
           (dateSystem === "Both" ? (
             <>
@@ -1183,12 +1363,14 @@ export const TransactionRow = React.memo(
         )}
         {showCol("voucherNo") && (
           <TableCell className={ensureMinGaps ? "min-w-[105px] px-[5px]" : undefined}>
-            {hl(String(transaction.voucherNumber ?? transaction.voucher_number ?? ""))}
+            {hl(getDisplayVoucherNumber(transaction))}
           </TableCell>
         )}
         {context === "daybook" && (
-          <TableCell className="max-w-[200px] truncate">
-            {hl(getParticularsText(transaction, names))}
+          <TableCell className="max-w-[260px] min-w-[210px] overflow-hidden">
+            <span className="block truncate" title={getParticularsText(transaction, names)}>
+              {hl(getParticularsText(transaction, names))}
+            </span>
           </TableCell>
         )}
         {/* Item + Item-group page: Party/Entity column should respect page-level show/hide toggle. */}
@@ -1198,7 +1380,31 @@ export const TransactionRow = React.memo(
           </TableCell>
         )}
         {showCol("user") && context !== "note" && (
-          <TableCell className={ensureMinGaps ? "min-w-[85px] px-[5px]" : undefined}>{hl(displayName)}</TableCell>
+          <TableCell className={cn("max-w-[150px] min-w-[120px] overflow-hidden", ensureMinGaps && "px-[5px]")}>
+            {(() => {
+              const isAutoRecurringRow = isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay(transaction);
+              const showAutoRecurringSwitch = isActiveRecurringTriggerVoucherForLedgerSwitch(transaction);
+              // PC / web / EXE table: Auto recurring ON → user name + switch (mobile = text only).
+              if (!isMobileView && showAutoRecurringSwitch) {
+                return (
+                  <span
+                    className="inline-flex max-w-full items-center gap-1.5"
+                    onClick={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    <span className="min-w-0 truncate" title={displayName}>{hl(displayName)}</span>
+                    <Switch
+                      checked
+                      disabled
+                      aria-label="Auto recurring voucher"
+                      className="shrink-0 origin-center scale-[0.72] border-2 border-green-600 data-[state=checked]:border-green-600 dark:border-green-500 dark:data-[state=checked]:border-green-500"
+                    />
+                  </span>
+                );
+              }
+              return <span className="block truncate" title={displayName}>{hl(displayName)}</span>;
+            })()}
+          </TableCell>
         )}
         {showFileColumn && (
           <TableCell className={cn("text-center", ensureMinGaps && "min-w-[44px] px-[5px]")} onClick={(e) => e.stopPropagation()}>
@@ -1379,7 +1585,7 @@ export const TransactionRow = React.memo(
             );
           })()}
         <TableCell
-          className="w-10 p-1 text-center align-middle"
+          className="w-11 min-w-[44px] p-1 text-center align-middle"
           data-pl-txn-row-menu=""
           onClick={(e) => e.stopPropagation()}
         >
@@ -1450,8 +1656,9 @@ export const TransactionRow = React.memo(
     const dateCols = dateSystem === "Both" ? 2 : 1;
     const colsThroughCredit =
       visibleColumns == null
-        ? dateCols + 1 + 1 + (context === "daybook" ? 1 : 0) + (isItemPartyContext && showItemPartyColumn ? 1 : 0) + (context !== "note" ? 1 : 0) + (showFileColumn ? 1 : 0) + 1 + 1
-        : (showCol("date") ? dateCols : 0) +
+        ? (showCol("syncStatus") ? 1 : 0) + dateCols + 1 + 1 + (context === "daybook" ? 1 : 0) + (isItemPartyContext && showItemPartyColumn ? 1 : 0) + (context !== "note" ? 1 : 0) + (showFileColumn ? 1 : 0) + 1 + 1
+        : (showCol("syncStatus") ? 1 : 0) +
+          (showCol("date") ? dateCols : 0) +
           (showCol("type") ? 1 : 0) +
           (showCol("voucherNo") ? 1 : 0) +
           (context === "daybook" ? 1 : 0) +

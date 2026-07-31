@@ -76,6 +76,7 @@ import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { assertCompanyAllowsLedgerMutations } from "@/lib/security/offlinePlanWriteGate";
 import { isFirebaseLedgerDataSyncDisabled } from "@/lib/firebaseLedgerDataSyncDisabled";
 import { isFirebaseLedgerCompanyDataSyncEnabled } from "@/lib/firebaseLedgerCompanySyncPrefs";
+import { isOnlineCompanyLedgerCloudSyncAllowed } from "@/lib/onlineCompanySelectorSyncPolicy";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { hydrateVoucherLocalAttachmentsForServer } from "@/lib/hydrateVoucherLocalAttachmentsForServer";
 import {
@@ -162,8 +163,18 @@ function isFirebaseStorageAttachmentPath(path: unknown): boolean {
  */
 async function allowLocalFirestoreFailureQueue(companyId: string): Promise<boolean> {
   if (isClientNavigatorOffline()) return true;
+  if (await shouldUseLocalVoucherPipeline(companyId)) return true;
   if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) return true;
   return !isCapacitorNativeApp() && (isLocalOnlyMode() || isStaticAppBuild());
+}
+
+async function shouldUseLocalVoucherPipeline(companyId: string): Promise<boolean> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return false;
+  if (apkEmbeddedSqliteFirstWritesPreferred() || isClientNavigatorOffline()) return true;
+  if (await apkCloudCompanyUsesSqliteFirstWrites(cid)) return true;
+  const company = await getLocalCompanyById(cid, { includeDeleted: true }).catch(() => null);
+  return !isOnlineCompanyLedgerCloudSyncAllowed(cid, company as Company | null);
 }
 
 /** Shared / mirror registry id → Firestore `companies/{id}` path (Storage upload + voucher write same id). */
@@ -740,7 +751,7 @@ export async function patchVoucherFields(
     if (!localRow && !onServer) return;
   }
   const sqliteFirst =
-    options?.forceSqliteFirst === true || (await apkCloudCompanyUsesSqliteFirstWrites(companyId));
+    options?.forceSqliteFirst === true || (await shouldUseLocalVoucherPipeline(companyId));
   if (sqliteFirst) {
     // Local-first: SQLite turant; online mirror company ke liye Firestore bhi seedha — warna outbox/JSON se delete server pe late/miss, refresh pe voucher wapas.
     const existing = (await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId)) || {};
@@ -757,6 +768,7 @@ export async function patchVoucherFields(
 
     // Ledger Firebase sync off — SQLite tombstone kaafi; Firestore/outbox mat chalao.
     if (isFirebaseLedgerDataSyncDisabled() || !isFirebaseLedgerCompanyDataSyncEnabled(companyId)) {
+      await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
       return;
     }
 
@@ -891,7 +903,8 @@ export async function softDeleteVoucherMoveToRecycleBin(
   const fsCompanyId = String((reg as { authoritativeCompanyId?: string } | null)?.authoritativeCompanyId || companyId).trim();
   const sqliteFirst =
     options?.forceSqliteFirst === true ||
-    (reg && ((await apkCloudCompanyUsesSqliteFirstWrites(companyId)) || isServerGateCompany(reg)));
+    (await shouldUseLocalVoucherPipeline(companyId)) ||
+    Boolean(reg && isServerGateCompany(reg));
   const deletedAt = sqliteFirst ? Timestamp.now() : voucherRecycleBinDeletedAt();
   voucherDeleteDebugLog("soft_delete_start", {
     companyId,
@@ -1054,7 +1067,7 @@ export async function balanceOpeningBalanceWithCapital(
     let currentCapitalOB = 0;
 
     // APK/static/EXE/server-delta: OB ledger bhi SQLite-first. Firestore getDoc yahan foreground save ko atka sakta hai.
-    if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) {
+    if (await shouldUseLocalVoucherPipeline(companyId)) {
       const reg = await getLocalCompanyById(companyId);
       let ownerId = String((reg as Record<string, unknown>)?.ownerId ?? "").trim();
       if (!ownerId) {
@@ -1389,9 +1402,7 @@ export async function saveVoucher(
   const voucherPath = `companies/${companyId}/vouchers`;
   /** APK/static/EXE + offline: hamesha SQLite/outbox — Firestore/Storage await se "Saving…" (attachments) na atke. */
   const sqliteFirstEarly =
-    apkEmbeddedSqliteFirstWritesPreferred() ||
-    isClientNavigatorOffline() ||
-    (await apkCloudCompanyUsesSqliteFirstWrites(companyId));
+    await shouldUseLocalVoucherPipeline(companyId);
   // Local company + Copy To slip: Firebase HTTPS URL save se pehle `local:` pending me materialize.
   if (sqliteFirstEarly) {
     await rewriteRemoteVoucherAttachmentsForOfflineCompany(
@@ -1468,6 +1479,15 @@ export async function saveVoucher(
     if (cleanVoucherData.type === "sale_service" || cleanVoucherData.type === "sale") cleanVoucherData.type = "sale";
     else if (cleanVoucherData.type === "purchase_service" || cleanVoucherData.type === "purchase") cleanVoucherData.type = "purchase";
     else if (!cleanVoucherData.type) cleanVoucherData.type = "sale";
+  }
+  if (
+    (cleanVoucherData.type === "sale" || cleanVoucherData.type === "purchase") &&
+    cleanVoucherData.total !== undefined &&
+    cleanVoucherData.total !== null &&
+    String(cleanVoucherData.total).trim() !== ""
+  ) {
+    // Keep legacy consumers in sync on edit/create; merged edits otherwise preserve stale `amount`.
+    cleanVoucherData.amount = cleanVoucherData.total;
   }
 
   if (sqliteFirst) {
@@ -1643,7 +1663,7 @@ export async function saveVoucher(
       ? await voucherPayloadHydrateLocalFilesForFirestore(fsIdCreate, createPayloadForFs)
       : cleanedCreateBase;
 
-    const canSetClientVoucherId = !awaitHydrateCreate && hasLocalCreate && preGenCreate.length > 0;
+    const canSetClientVoucherId = !awaitHydrateCreate && preGenCreate.length > 0;
 
     let newId: string;
     let docRef: ReturnType<typeof doc>;
@@ -1884,7 +1904,7 @@ export async function updateVoucherSpendWiseLinks(
   if (!companyId || !voucherId) throw new Error("Missing companyId or voucherId");
   // Spend-wise patch = local SQLite/outbox burst — shield `saveVoucher` / `patchVoucherFields` jaisa
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
-  if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) {
+  if (await shouldUseLocalVoucherPipeline(companyId)) {
     // Local-only mode me spend-wise links browser DB me update karke outbox queue karo.
     const oldData = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId);
     if (!oldData) throw new Error("Voucher not found");
@@ -1923,7 +1943,8 @@ export async function updateVoucherSpendWiseLinks(
     });
     return;
   }
-  const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucherId);
+  const fsCompanyId = await resolveAuthoritativeFirestoreCompanyId(companyId);
+  const voucherRef = doc(firestore, `companies/${fsCompanyId}/vouchers`, voucherId);
   const authUser = auth.currentUser;
   const currentUserName = authUser?.displayName || authUser?.email?.split("@")?.[0] || userId;
   const now = new Date();
@@ -2014,7 +2035,7 @@ export async function syncBillWiseAllocationsToTargetVouchers(
   if (!hasNew && !hasPrev) return;
   // Multi-doc allocation sync — APK par turant-heavy write burst; ledger shield ek hi entry se arm
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
-  if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) {
+  if (await shouldUseLocalVoucherPipeline(companyId)) {
     // Local-only mode me reverse allocation links local vouchers par maintain karo.
     const prevIds = new Set(
       previousAllocations
@@ -2164,67 +2185,102 @@ export async function approveVoucherWithHistory(
   }
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
 
-  if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) {
+  // Live + SQLite-first: local row ho to local approve; warna Firestore (live) pe try — local-only force mat karo.
+  const localResolved = await resolveVoucherSnapshotForLocalWrite(companyId, voucherId);
+  const preferLocalPipeline = await shouldUseLocalVoucherPipeline(companyId);
+  if (preferLocalPipeline && localResolved) {
     await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName);
+    void flushVoucherOutbox().catch(() => undefined);
     return;
   }
-  const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucherId);
+
+  const authFsId = await resolveAuthoritativeFirestoreCompanyId(companyId);
+  const fsCompanyIds = Array.from(
+    new Set([String(companyId).trim(), String(authFsId || "").trim()].filter(Boolean))
+  );
   const { enabled: historyEnabled, limit: historyLimit } = await getEffectiveHistorySettings(companyId);
 
-  try {
-    const preApproveSnap = await getDoc(voucherRef);
-    if (!preApproveSnap.exists()) throw new Error("Voucher not found.");
-    await assertInterCompanyTargetApproveAllowed(preApproveSnap.data() as Record<string, unknown>);
-
-    await runTransaction(firestore, async (tx) => {
-      const snap = await tx.get(voucherRef);
-      if (!snap.exists()) throw new Error("Voucher not found.");
-
-      const voucher = snap.data() as any;
-      if (voucher?.isApproved === true) return;
-
-      const existingHistory = Array.isArray(voucher?.history) ? voucher.history : [];
-      const approverName = approvedByName || approvedByUserId;
-      const previousApprover = voucher?.approvedByUserName || voucher?.approvedByUserId || "N/A";
-
-      const approvalEntry = {
-        changedAt: new Date(),
-        changedBy: approvedByUserId,
-        changes: {
-          isApproved: { from: voucher?.isApproved === true ? true : false, to: true },
-          approvedByUserName: { from: voucher?.approvedByUserName || "N/A", to: approverName },
-          approvedByUserId: { from: voucher?.approvedByUserId || "N/A", to: approvedByUserId },
-          approvedBy: { from: previousApprover, to: approverName },
-        },
-      };
-
-      const newHistory = historyEnabled ? [approvalEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
-      const icLegPatch = buildInterCompanyApprovalPatch(voucher as Record<string, unknown>);
-
-      tx.update(voucherRef, {
-        ...icLegPatch,
-        isApproved: true,
-        approvedByUserId: approvedByUserId,
-        approvedByUserName: approverName,
-        approvedAt: serverTimestamp(),
-        history: newHistory,
-      });
-    });
-    const approvedSnap = await getDoc(voucherRef);
-    if (approvedSnap.exists()) {
-      const approvedRow = { ...approvedSnap.data(), id: voucherId } as Record<string, unknown>;
-      if (interCompanyVoucherViewerSide(approvedRow) === "source") {
-        await syncInterCompanySourceApprovedToPeerTarget(approvedRow);
+  let approvedViaFs = false;
+  for (const fsCompanyId of fsCompanyIds) {
+    const voucherRef = doc(firestore, `companies/${fsCompanyId}/vouchers`, voucherId);
+    try {
+      const preApproveSnap = await getDoc(voucherRef);
+      if (!preApproveSnap.exists()) {
+        continue;
       }
+      await assertInterCompanyTargetApproveAllowed(preApproveSnap.data() as Record<string, unknown>);
+
+      await runTransaction(firestore, async (tx) => {
+        const snap = await tx.get(voucherRef);
+        if (!snap.exists()) throw new Error("Voucher not found.");
+
+        const voucher = snap.data() as any;
+        if (voucher?.isApproved === true) return;
+
+        const existingHistory = Array.isArray(voucher?.history) ? voucher.history : [];
+        const approverName = approvedByName || approvedByUserId;
+        const previousApprover = voucher?.approvedByUserName || voucher?.approvedByUserId || "N/A";
+
+        const approvalEntry = {
+          changedAt: new Date(),
+          changedBy: approvedByUserId,
+          changes: {
+            isApproved: { from: voucher?.isApproved === true ? true : false, to: true },
+            approvedByUserName: { from: voucher?.approvedByUserName || "N/A", to: approverName },
+            approvedByUserId: { from: voucher?.approvedByUserId || "N/A", to: approvedByUserId },
+            approvedBy: { from: previousApprover, to: approverName },
+          },
+        };
+
+        const newHistory = historyEnabled ? [approvalEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
+        const icLegPatch = buildInterCompanyApprovalPatch(voucher as Record<string, unknown>);
+
+        tx.update(voucherRef, {
+          ...icLegPatch,
+          isApproved: true,
+          approvedByUserId: approvedByUserId,
+          approvedByUserName: approverName,
+          approvedAt: serverTimestamp(),
+          history: newHistory,
+        });
+      });
+      const approvedSnap = await getDoc(voucherRef);
+      if (approvedSnap.exists()) {
+        const approvedRow = { ...approvedSnap.data(), id: voucherId } as Record<string, unknown>;
+        if (interCompanyVoucherViewerSide(approvedRow) === "source") {
+          await syncInterCompanySourceApprovedToPeerTarget(approvedRow);
+        }
+      }
+      approvedViaFs = true;
+      break;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e || "");
+      if (msg === "Voucher not found.") {
+        continue;
+      }
+      if (!isLikelyOfflineFirestoreError(e)) throw e;
+      if (!(await allowLocalFirestoreFailureQueue(companyId))) throw e;
+      if (localResolved) {
+        await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName);
+        void flushVoucherOutbox().catch(() => undefined);
+        return;
+      }
+      throw e;
     }
-  } catch (e) {
-    // `saveVoucher` jaisa: APK + Firestore company par offline queue mat — seedha throw (allowLocalFirestoreFailureQueue false).
-    if (!isLikelyOfflineFirestoreError(e)) throw e;
-    if (!(await allowLocalFirestoreFailureQueue(companyId))) throw e;
-    await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName);
+  }
+
+  if (approvedViaFs) {
+    await mirrorVoucherDocToBrowserDb(companyId, voucherId);
     return;
   }
-  await mirrorVoucherDocToBrowserDb(companyId, voucherId);
+
+  // Live Firestore miss + SQLite pending outbox row → local approve.
+  if (localResolved) {
+    await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName);
+    void flushVoucherOutbox().catch(() => undefined);
+    return;
+  }
+  throw new Error("Voucher not found.");
 }
 
 /**
@@ -2237,7 +2293,7 @@ export async function resetVoucherHistory(
   voucherId: string
 ): Promise<{ success: true }> {
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
-  if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) {
+  if (await shouldUseLocalVoucherPipeline(companyId)) {
     // Local-only mode: history clear local voucher doc me apply karo.
     const voucher = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId);
     if (!voucher) throw new Error("Voucher not found");
@@ -2325,7 +2381,7 @@ export async function deleteHistoryEntries(
   changedAtMs: number[]
 ): Promise<{ success: true }> {
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
-  if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) {
+  if (await shouldUseLocalVoucherPipeline(companyId)) {
     // Local-only mode: selected history rows local voucher se remove karo.
     const voucher = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId);
     if (!voucher) throw new Error("Voucher not found");

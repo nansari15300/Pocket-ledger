@@ -10,6 +10,7 @@ import {
 import { CreateCompanyForm } from "@/components/company/CreateCompanyForm";
 import { EditCompanyForm } from "@/components/company/EditCompanyForm";
 import { ForceUploadLocalDataButton } from "@/components/company/ForceUploadLocalDataButton";
+import { UploadCompanyToCloudCard } from "@/components/company/UploadCompanyToCloudCard";
 import { useCompany } from "@/hooks/useCompany";
 import { useRouter } from "next/navigation";
 import { Card, CardHeader, CardTitle, CardDescription } from "../ui/card";
@@ -84,7 +85,10 @@ export function CompanySettings({ readOnly = false }: { readOnly?: boolean }) {
           </TabsTrigger>
         </TabsList>
         <TabsContent value="edit_company" className={`mt-3 p-4 ${companyProfileGreenZone}`}>
-          <EditCompanyForm />
+          <div className="space-y-4">
+            <UploadCompanyToCloudCard />
+            <EditCompanyForm />
+          </div>
         </TabsContent>
         <TabsContent value="add_company" className={`mt-3 p-4 ${companyProfileGreenZone}`}>
           <CreateCompanyForm onCompanyCreated={handleCompanyCreated} />

@@ -310,10 +310,30 @@ export function computeTemplateAccruedAmount(
   effectiveLastGeneratedPeriodKey?: string | null,
 ): number | null {
   const scheduleDay = effectiveScheduleBsDay(template);
-  const lastPkForDue =
+  let lastPkForDue =
     effectiveLastGeneratedPeriodKey !== undefined
       ? effectiveLastGeneratedPeriodKey
       : template.lastGeneratedPeriodKey;
+  // Stale/null lastGenerated → body voucher BS month se heal (warna -old due + full accrued).
+  try {
+    const rawDate = bodyVoucher?.date;
+    const d =
+      rawDate instanceof Date
+        ? rawDate
+        : typeof rawDate === "string" || typeof rawDate === "number"
+          ? new Date(rawDate)
+          : rawDate && typeof rawDate === "object" && typeof (rawDate as { toDate?: () => Date }).toDate === "function"
+            ? (rawDate as { toDate: () => Date }).toDate()
+            : null;
+    if (d && !Number.isNaN(d.getTime())) {
+      const bs = adToBs(new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0, 0));
+      const bodyPk = `${bs.y}-${String(bs.m).padStart(2, "0")}`;
+      const lastS = lastPkForDue != null && String(lastPkForDue).trim() ? String(lastPkForDue).trim() : null;
+      if (!lastS || bodyPk > lastS) lastPkForDue = bodyPk;
+    }
+  } catch {
+    /* keep lastPkForDue */
+  }
   const nextDue = getNextRecurringDueAd(
     scheduleDay,
     new Date(nowMs),
@@ -337,7 +357,7 @@ export function computeTemplateAccruedAmount(
     template,
     nextDue,
     lastGeneratedAtMs,
-    effectiveLastGeneratedPeriodKey,
+    lastPkForDue,
   );
   const endMs = new Date(nextDue.getFullYear(), nextDue.getMonth(), nextDue.getDate(), 23, 59, 59, 999).getTime();
   const totalSpan = endMs - periodStart;

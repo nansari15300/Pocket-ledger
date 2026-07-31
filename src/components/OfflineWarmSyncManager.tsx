@@ -29,8 +29,8 @@ import {
 } from "@/contexts/EmbeddedAttachmentPrefetchContext";
 
 const WARM_DEBOUNCE_MS = 2_200;
-/** EXE: startup par turant file open (HTTPS) — attachment bytes background me baad me (bandwidth clash avoid). */
-const EMBEDDED_MULTI_WALK_START_MS_ELECTRON = 90_000;
+/** EXE: dashboard paint ke turant baad selected/company attachment warm start ho, 90s baad nahi. */
+const EMBEDDED_MULTI_WALK_START_MS_ELECTRON = 3_000;
 /** Doosri company ka warm overlap na ho selected company ke debounced run se (`WARM_DEBOUNCE_MS` ke baad shuru). */
 const EMBEDDED_MULTI_WALK_START_MS = 200;
 /** Har company warm ke beech thoda gap — APK memory / bandwidth. */

@@ -30,7 +30,7 @@ import {
 import { syncPendingMasterMutations } from "@/lib/localPendingMasters";
 import { syncPendingVoucherMutations } from "@/lib/localPendingVouchers";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
-import { getBrowserDb } from "@/lib/localSqlite";
+import { flushPendingBrowserDbSave } from "@/lib/localSqlite";
 import { yieldToMain } from "@/lib/yieldToMain";
 
 export type ForceUploadProgress = {
@@ -206,13 +206,15 @@ async function requeueLocalAttachmentRefs(
 async function flushOutboxUntilIdle(maxRounds = 8): Promise<{ ok: number; failed: number }> {
   let ok = 0;
   let failed = 0;
+  const { getBrowserDbForNamespace } = await import("@/lib/localSqlite");
+  const { SQLITE_STORAGE_NAMESPACES } = await import("@/lib/sqliteStorageNamespace");
   for (let i = 0; i < maxRounds; i++) {
-    const db = await getBrowserDb();
-    const pending =
-      db
-        ?.prepare(`SELECT COUNT(*) AS c FROM sync_outbox`)
-        .get() as { c?: number } | undefined;
-    const count = Number(pending?.c ?? 0);
+    let count = 0;
+    for (const ns of SQLITE_STORAGE_NAMESPACES) {
+      const db = await getBrowserDbForNamespace(ns);
+      const pending = db?.prepare(`SELECT COUNT(*) AS c FROM sync_outbox`).get() as { c?: number } | undefined;
+      count += Number(pending?.c ?? 0);
+    }
     if (!count) break;
     const round = await flushVoucherOutbox();
     ok += round.ok;

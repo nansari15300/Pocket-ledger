@@ -16,19 +16,18 @@ export const PL_SERVER_COMPANY_META_UPDATED_EVENT = "pl-server-company-meta-upda
 /** Host par shareable local company — permissions Firebase nahi, SQLite + PL server delta se staff tak. */
 export async function shouldPersistPermissionConfigViaPlServerHost(
   companyId: string,
-  companyRow?: { storageOption?: string; syncedFromCloud?: boolean } | null
+  companyRow?: { storageOption?: string; syncedFromCloud?: boolean; plServerShared?: boolean; syncPolicy?: string; authoritativeCompanyId?: string } | null
 ): Promise<boolean> {
   const id = String(companyId || "").trim();
   if (!id) return false;
-  const { isOfflineCompanyStorage } = await import("@/lib/companyUnlockGate");
-  if (companyRow && isOfflineCompanyStorage(companyRow)) return true;
+  const { companyUsesDeviceOrPlPermissionConfig } = await import("@/lib/permissionConfigSource");
+  if (companyRow && companyUsesDeviceOrPlPermissionConfig(companyRow)) return true;
   try {
     const { getLocalCompanyById } = await import("@/lib/localCompanyStore");
     const { normalizeLocalCompanyRowForHost } = await import("@/lib/listShareableLocalCompaniesForHost");
-    const { isLocalServerShareableCompany } = await import("@/lib/localServerShareableCompanies");
     const row = await getLocalCompanyById(id, { includeDeleted: true });
     if (!row) return false;
-    return isLocalServerShareableCompany(normalizeLocalCompanyRowForHost(row));
+    return companyUsesDeviceOrPlPermissionConfig(normalizeLocalCompanyRowForHost(row));
   } catch {
     return false;
   }
@@ -160,6 +159,16 @@ export async function applyPlServerCompanyMetaPatch(
     hasPermissionConfig: Boolean(patch.permissionConfig),
     hasLocalCompanyUsers: Array.isArray(patch.localCompanyUsers),
   });
+  try {
+    const { logPlPerm, summarizePermissionDateLimits } = await import("@/lib/permissionConfigSource");
+    logPlPerm("client-patch", {
+      companyId: id,
+      hasPermissionConfig: Boolean(patch.permissionConfig),
+      dateLimits: summarizePermissionDateLimits(patch.permissionConfig as { dateLimits?: Record<string, { entryDays?: number; editDays?: number; deleteDays?: number }> } | undefined),
+    });
+  } catch {
+    /* ignore */
+  }
   return true;
 }
 
@@ -219,6 +228,17 @@ export async function pullPlServerCompanyMetaFromHost(companyId: string): Promis
     hasPermissionConfig: Boolean(permissionConfig),
     userCount: Array.isArray(localCompanyUsers) ? localCompanyUsers.length : 0,
   });
+  try {
+    const { logPlPerm, summarizePermissionDateLimits } = await import("@/lib/permissionConfigSource");
+    logPlPerm("client-pull", {
+      companyId: id,
+      metaChanged,
+      hasPermissionConfig: Boolean(permissionConfig),
+      dateLimits: summarizePermissionDateLimits(permissionConfig),
+    });
+  } catch {
+    /* ignore */
+  }
   return true;
 }
 

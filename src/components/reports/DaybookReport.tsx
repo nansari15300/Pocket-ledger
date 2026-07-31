@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { startOfDay, isSameDay, addDays } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdCalendar from "@/components/ui/ad-calendar";
+import { collectVoucherCalendarDates } from "@/lib/voucherDateNormalize";
 import { useDate } from "@/hooks/useDate";
 import { useCalendarMonths } from "@/hooks/use-mobile";
 import usePermissions from "@/hooks/usePermissions";
@@ -37,6 +38,11 @@ import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { useVouchers } from "@/hooks/useVouchers";
 import { Skeleton } from "../ui/skeleton";
 import { useTransactions } from "@/hooks/use-transactions";
+import { useServerDaybookDailySummary } from "@/hooks/useServerDaybookDailySummary";
+import {
+  DaybookAccountDayPeekDialog,
+  daybookSummaryAccountRowCn,
+} from "@/components/reports/DaybookAccountDayPeekDialog";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -127,8 +133,17 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
     const [daybookUserFilter, setDaybookUserFilter] = useState<string | null>(null);
     const [daybookBankExpanded, setDaybookBankExpanded] = useState(false);
     const [daybookCashExpanded, setDaybookCashExpanded] = useState(false);
+    const [selectedDaybookSummaryRowId, setSelectedDaybookSummaryRowId] = useState<string | null>(null);
     /** Daily Summary bank/cash list filter — transaction table par effect nahi */
     const [daybookSummaryAccountSearch, setDaybookSummaryAccountSearch] = useState("");
+    /** Double-click Daily Summary account → day ledger peek */
+    const [daybookAccountPeek, setDaybookAccountPeek] = useState<{
+      account: Account;
+      opening: number;
+      in: number;
+      out: number;
+      closing: number;
+    } | null>(null);
     const isMobile = useIsMobile();
     const calendarMonths = useCalendarMonths();
 
@@ -303,16 +318,8 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
         setDaybookFilters(prev => ({...prev, [key]: value}));
     }
 
-    const transactionDates = useMemo(() => {
-      const dates = new Set<number>();
-      vouchers.forEach(v => {
-          const dateValue = v.date?.toDate ? v.date.toDate() : new Date(v.date);
-          if (dateValue instanceof Date && !isNaN(dateValue.getTime())) {
-              dates.add(startOfDay(dateValue).getTime());
-          }
-      });
-      return Array.from(dates).map(d => new Date(d));
-    }, [vouchers]);
+    // plserver/APK: dates often plain `{seconds,nanoseconds}` after JSON wire — not `toDate()` / `new Date(obj)`.
+    const transactionDates = useMemo(() => collectVoucherCalendarDates(vouchers), [vouchers]);
 
     // User filter: sirf company owner + sharedWith — reconciliation / voucher ke extra userId mat dikhao
     const { daybookUserFilterIds, daybookUserLabelHints } = useMemo(() => {
@@ -344,7 +351,7 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
         }
     }, [daybookUserFilterIds, daybookUserFilter]);
 
-    const { daybookTransactions, daybookSummary } = useTransactions(
+    const { daybookTransactions, daybookSummary: clientDaybookSummary } = useTransactions(
         {id: 'daybook', items: []}, 
         'daybook', 
         daybookDate ? {from: daybookDate, to: daybookDate} : undefined, 
@@ -359,6 +366,21 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
         undefined,
         daybookUserFilter
       );
+
+    // Server only jab client voucher cache khali/incomplete ho — warna ledger jaisi client math (Aftab Settled vs -5000 bug).
+    const {
+      summary: serverDaybookSummary,
+    } = useServerDaybookDailySummary({
+      companyId: companyId || undefined,
+      storageOption: (company as any)?.storageOption,
+      selectedDay: daybookDate,
+      userIdFilter: daybookUserFilter,
+      enabled: !(vouchers && vouchers.length > 0),
+    });
+    const daybookSummary =
+      clientDaybookSummary ||
+      serverDaybookSummary ||
+      null;
 
     // Daily Summary account search — sirf bank/cash rows; trxn table alag (column filter / daybookFilters)
     const daybookAccountSearchTerm = daybookSummaryAccountSearch.trim().toLowerCase();
@@ -487,24 +509,36 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                         <CardContent className={cn("pb-4", isMobile ? "px-2" : "px-4")}>
                           {/* Summary borders: Bank/Cash/Total dono side moti; child account rows ~50% patli */}
                           <div
-                            className={
+                            onClick={() => setSelectedDaybookSummaryRowId(null)}
+                            className={cn(
                               isMobile
                                 ? "[&_thead_tr]:!border-b-[3px] [&_tbody_tr]:!border-b-[1.2px] [&_tbody_tr.daybook-summary-group-row]:!border-t-[3px] [&_tbody_tr.daybook-summary-group-row]:!border-b-[3px]"
-                                : "[&_thead_tr]:!border-b-[3px] [&_tbody_tr]:!border-b-[1.5px] [&_tbody_tr.daybook-summary-group-row]:!border-t-[3px] [&_tbody_tr.daybook-summary-group-row]:!border-b-[3px]"
-                            }
+                                : "[&_thead_tr]:!border-b-[3px] [&_tbody_tr]:!border-b-[1.5px] [&_tbody_tr.daybook-summary-group-row]:!border-t-[3px] [&_tbody_tr.daybook-summary-group-row]:!border-b-[3px]",
+                              "[&_thead_tr]:!border-foreground [&_tbody_tr]:!border-foreground/85 [&_tbody_tr.daybook-summary-group-row]:cursor-pointer [&_tbody_tr.daybook-summary-group-row]:transition-colors [&_tbody_tr.daybook-summary-group-row:hover]:bg-blue-100/40"
+                            )}
                           >
                            <Table>
-                            <TableHeader><TableRow><TableHead className="font-bold">Account</TableHead><TableHead className="text-right font-bold">Yesterdays Balance</TableHead><TableHead className="text-right font-bold text-green-600">Todays In</TableHead><TableHead className="text-right font-bold text-red-600">Todays Out</TableHead><TableHead className="text-right font-bold">Todays Balance</TableHead></TableRow></TableHeader>
+                            <TableHeader><TableRow><TableHead className="font-bold">Account</TableHead><TableHead className="text-right font-bold">Opening Balance</TableHead><TableHead className="text-right font-bold text-green-600">Today In</TableHead><TableHead className="text-right font-bold text-red-600">Today Out</TableHead><TableHead className="text-right font-bold">Today Balance</TableHead></TableRow></TableHeader>
                             <TableBody>
                                 {/* Bank group — search par sirf tab dikhao jab match ho */}
                                 {(!daybookAccountSearchTerm || (displayDaybookSummary as any).bankAccounts?.length > 0) && (
                                 <>
-                                <TableRow className="hover:bg-blue-100/40 daybook-summary-group-row">
+                                <TableRow
+                                    aria-selected={selectedDaybookSummaryRowId === "bank:group"}
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        setSelectedDaybookSummaryRowId("bank:group");
+                                    }}
+                                    className={cn("daybook-summary-group-row", selectedDaybookSummaryRowId === "bank:group" && "!bg-blue-200/70 hover:!bg-blue-200/70")}
+                                >
                                     <TableCell className="font-medium">
                                         <button
                                             type="button"
                                             className="flex items-center gap-1 text-left"
-                                            onClick={() => setDaybookBankExpanded((e) => !e)}
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                setDaybookBankExpanded((e) => !e);
+                                            }}
                                             aria-expanded={daybookBankExpanded}
                                         >
                                             {daybookBankExpanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
@@ -516,25 +550,61 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                                     <TableCell className="text-right text-red-600">{formatCurrency(displayDaybookSummary.bank.out, {noSuffix: true})}</TableCell>
                                     <TableCell className={cn("text-right", displayDaybookSummary.bank.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(displayDaybookSummary.bank.today)}</TableCell>
                                 </TableRow>
-                                {daybookBankExpanded && (displayDaybookSummary as any).bankAccounts?.map((row: { id: string; name: string; yesterday: number; in: number; out: number; today: number }) => (
-                                    <TableRow key={`bank-${row.id}`} className="bg-blue-100/30 text-sm">
+                                {daybookBankExpanded && (displayDaybookSummary as any).bankAccounts?.map((row: { id: string; name: string; yesterday: number; in: number; out: number; today: number }) => {
+                                    const rowKey = `bank:${row.id}`;
+                                    const selected = selectedDaybookSummaryRowId === rowKey;
+                                    return (
+                                    <TableRow
+                                        key={rowKey}
+                                        aria-selected={selected}
+                                        data-pl-daybook-summary-selected={selected ? "" : undefined}
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            setSelectedDaybookSummaryRowId(rowKey);
+                                        }}
+                                        onDoubleClick={(event) => {
+                                            event.stopPropagation();
+                                            const acc = (accounts || []).find((a) => String(a.id) === String(row.id));
+                                            if (!acc) return;
+                                            setSelectedDaybookSummaryRowId(rowKey);
+                                            setDaybookAccountPeek({
+                                              account: acc as Account,
+                                              opening: row.yesterday,
+                                              in: row.in,
+                                              out: row.out,
+                                              closing: row.today,
+                                            });
+                                        }}
+                                        className={cn(daybookSummaryAccountRowCn(selected), "pl-daybook-summary-row", selected && "pl-daybook-summary-row-selected")}
+                                    >
                                         <TableCell className="pl-9 text-muted-foreground">{row.name}</TableCell>
                                         <TableCell className={cn("text-right", row.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(row.yesterday)}</TableCell>
                                         <TableCell className="text-right text-green-600">{formatCurrency(row.in, { noSuffix: true })}</TableCell>
                                         <TableCell className="text-right text-red-600">{formatCurrency(row.out, { noSuffix: true })}</TableCell>
                                         <TableCell className={cn("text-right", row.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(row.today)}</TableCell>
                                     </TableRow>
-                                ))}
+                                    );
+                                })}
                                 </>
                                 )}
                                 {(!daybookAccountSearchTerm || (displayDaybookSummary as any).cashAccounts?.length > 0) && (
                                 <>
-                                <TableRow className="hover:bg-blue-100/40 daybook-summary-group-row">
+                                <TableRow
+                                    aria-selected={selectedDaybookSummaryRowId === "cash:group"}
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        setSelectedDaybookSummaryRowId("cash:group");
+                                    }}
+                                    className={cn("daybook-summary-group-row", selectedDaybookSummaryRowId === "cash:group" && "!bg-blue-200/70 hover:!bg-blue-200/70")}
+                                >
                                     <TableCell className="font-medium">
                                         <button
                                             type="button"
                                             className="flex items-center gap-1 text-left"
-                                            onClick={() => setDaybookCashExpanded((e) => !e)}
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                setDaybookCashExpanded((e) => !e);
+                                            }}
                                             aria-expanded={daybookCashExpanded}
                                         >
                                             {daybookCashExpanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
@@ -546,20 +616,52 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                                     <TableCell className="text-right text-red-600">{formatCurrency(displayDaybookSummary.cash.out, {noSuffix: true})}</TableCell>
                                     <TableCell className={cn("text-right", displayDaybookSummary.cash.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(displayDaybookSummary.cash.today)}</TableCell>
                                 </TableRow>
-                                {daybookCashExpanded && (displayDaybookSummary as any).cashAccounts?.map((row: { id: string; name: string; yesterday: number; in: number; out: number; today: number }) => (
-                                    <TableRow key={`cash-${row.id}`} className="bg-blue-100/30 text-sm">
+                                {daybookCashExpanded && (displayDaybookSummary as any).cashAccounts?.map((row: { id: string; name: string; yesterday: number; in: number; out: number; today: number }) => {
+                                    const rowKey = `cash:${row.id}`;
+                                    const selected = selectedDaybookSummaryRowId === rowKey;
+                                    return (
+                                    <TableRow
+                                        key={rowKey}
+                                        aria-selected={selected}
+                                        data-pl-daybook-summary-selected={selected ? "" : undefined}
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            setSelectedDaybookSummaryRowId(rowKey);
+                                        }}
+                                        onDoubleClick={(event) => {
+                                            event.stopPropagation();
+                                            const acc = (accounts || []).find((a) => String(a.id) === String(row.id));
+                                            if (!acc) return;
+                                            setSelectedDaybookSummaryRowId(rowKey);
+                                            setDaybookAccountPeek({
+                                              account: acc as Account,
+                                              opening: row.yesterday,
+                                              in: row.in,
+                                              out: row.out,
+                                              closing: row.today,
+                                            });
+                                        }}
+                                        className={cn(daybookSummaryAccountRowCn(selected), "pl-daybook-summary-row", selected && "pl-daybook-summary-row-selected")}
+                                    >
                                         <TableCell className="pl-9 text-muted-foreground">{row.name}</TableCell>
                                         <TableCell className={cn("text-right", row.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(row.yesterday)}</TableCell>
                                         <TableCell className="text-right text-green-600">{formatCurrency(row.in, { noSuffix: true })}</TableCell>
                                         <TableCell className="text-right text-red-600">{formatCurrency(row.out, { noSuffix: true })}</TableCell>
                                         <TableCell className={cn("text-right", row.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(row.today)}</TableCell>
                                     </TableRow>
-                                ))}
+                                    );
+                                })}
                                 </>
                                 )}
                                 <TableRow
+                                  aria-selected={selectedDaybookSummaryRowId === "total"}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setSelectedDaybookSummaryRowId("total");
+                                  }}
                                   className={cn(
-                                    "font-bold border-foreground daybook-summary-group-row"
+                                    "font-bold border-foreground daybook-summary-group-row",
+                                    selectedDaybookSummaryRowId === "total" && "!bg-blue-200/70 hover:!bg-blue-200/70"
                                   )}
                                 >
                                   <TableCell>Total</TableCell>
@@ -727,6 +829,18 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
         </Card>
         <AddVoucherDialog isOpen={isVoucherDialogOpen} onOpenChange={setIsVoucherDialogOpen} voucher={selectedVoucher} onVoucherCreated={() => setSelectedVoucher(null)} />
         <HistoryDialog voucher={historyVoucher} isOpen={!!historyVoucher} onOpenChange={(open) => !open && setHistoryVoucher(null)} onHistoryReset={() => setHistoryVoucher((prev: any) => prev ? { ...prev, history: [] } : null)} />
+        <DaybookAccountDayPeekDialog
+          open={!!daybookAccountPeek}
+          onOpenChange={(open) => {
+            if (!open) setDaybookAccountPeek(null);
+          }}
+          account={daybookAccountPeek?.account ?? null}
+          daybookDate={daybookDate}
+          summaryOpening={daybookAccountPeek?.opening}
+          summaryIn={daybookAccountPeek?.in}
+          summaryOut={daybookAccountPeek?.out}
+          summaryClosing={daybookAccountPeek?.closing}
+        />
         {linkAdvancesVoucher && (
           <LinkAdvancesToVoucherDialog
             isOpen={!!linkAdvancesVoucher}
