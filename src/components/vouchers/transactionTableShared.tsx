@@ -144,14 +144,16 @@ export type FileColumnDisplayMode = "preview" | "tick";
 function StableAttachmentPortalPreview({
   urls,
   companyId,
+  voucherId,
 }: {
   urls: readonly string[];
   companyId?: string | null;
+  voucherId?: string | null;
 }) {
   const urlsKey = React.useMemo(() => urls.join("\x1e"), [urls]);
   const preview = React.useMemo(
-    () => <MultiAttachmentPortalPreview urls={urls} companyId={companyId} />,
-    [urlsKey, companyId, urls]
+    () => <MultiAttachmentPortalPreview urls={urls} companyId={companyId} voucherId={voucherId} />,
+    [urlsKey, companyId, voucherId, urls]
   );
   return preview;
 }
@@ -267,9 +269,23 @@ export function MobileTransactionFilePreview({
       triggerClassName="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded border border-border/70 bg-background"
       onPreviewDoubleClick={singlePdfOpen}
       galleryUrls={urls.length > 1 ? urls : undefined}
-      preview={<StableAttachmentPortalPreview urls={previewUrls} companyId={company?.id} />}
+      preview={
+        <StableAttachmentPortalPreview
+          urls={previewUrls}
+          companyId={company?.id}
+          voucherId={String(transaction?.id || "")}
+        />
+      }
     >
-      <VoucherAttachmentFileIndicator urls={previewUrls} displayMode="preview" size="sm" aria-label="Open attachment preview" />
+      <VoucherAttachmentFileIndicator
+        urls={previewUrls}
+        displayMode="preview"
+        size="sm"
+        aria-label="Open attachment preview"
+        companyId={company?.id}
+        voucherId={String(transaction?.id || "")}
+        clientFileUrls={urls}
+      />
     </AttachmentHoverPortal>
   );
 }
@@ -1419,6 +1435,9 @@ export const TransactionRow = React.memo(
                           urls={[url]}
                           displayMode="preview"
                           aria-label={`Attachment ${index + 1}`}
+                          companyId={company?.id}
+                          voucherId={String(transaction.id || "")}
+                          clientFileUrls={rowUrls}
                         />
                       </span>
                     ))}
@@ -1428,6 +1447,9 @@ export const TransactionRow = React.memo(
                     urls={rowUrls}
                     displayMode={fileDisplayMode}
                     aria-label="Has attachment"
+                    companyId={company?.id}
+                    voucherId={String(transaction.id || "")}
+                    clientFileUrls={rowUrls}
                   />
                 );
               // Files tick OFF: portal still opens local cache only (openAttachmentInApp — no download).
@@ -1455,7 +1477,13 @@ export const TransactionRow = React.memo(
                   triggerClassName="inline-flex cursor-pointer"
                   onPreviewDoubleClick={singlePdfOpen}
                   galleryUrls={rowUrls.length > 1 ? rowUrls : undefined}
-                  preview={<StableAttachmentPortalPreview urls={rowUrls} companyId={company?.id} />}
+                  preview={
+                    <StableAttachmentPortalPreview
+                      urls={rowUrls}
+                      companyId={company?.id}
+                      voucherId={String(transaction.id || "")}
+                    />
+                  }
                 >
                   {indicator}
                 </AttachmentHoverPortal>

@@ -577,13 +577,43 @@ export function AttachmentHoverPortal({
       applyLayoutAll();
     };
 
-    const onImgLoad = () => {
+    const forcePdfFit = () => {
       lastFitSignatureRef.current = "";
+      fitModeRef.current = "window";
+      setFitMode("window");
+      setZoom(1);
+      setPanelWidth(null);
+      setPanelHeight(null);
+      requestAnimationFrame(() => {
+        applyFitWindow();
+        syncPanelWidthFromContent();
+        requestAnimationFrame(() => {
+          applyFitWindow();
+          syncPanelWidthFromContent();
+          scrollRef.current?.scrollTo({ left: 0, top: 0, behavior: "auto" });
+        });
+      });
+    };
+
+    const onImgLoad = (ev?: Event) => {
+      const target = ev?.target as HTMLElement | null;
+      lastFitSignatureRef.current = "";
+      if (target?.hasAttribute("data-pdf-portal-page")) {
+        forcePdfFit();
+        return;
+      }
       refitIfNeeded();
     };
     const bindImgLoads = () => {
       root.querySelectorAll("img").forEach((img) => {
-        if (!img.complete) img.addEventListener("load", onImgLoad, { once: true });
+        if (img.hasAttribute("data-pdf-portal-page") && img.complete && img.naturalWidth > 1) {
+          if (img.dataset.pdfPortalFitApplied !== "1") {
+            img.dataset.pdfPortalFitApplied = "1";
+            requestAnimationFrame(() => onImgLoad({ target: img } as unknown as Event));
+          }
+          return;
+        }
+        if (!img.complete) img.addEventListener("load", onImgLoad as EventListener, { once: true });
       });
     };
 
@@ -735,6 +765,20 @@ export function AttachmentHoverPortal({
     if (effectiveDisabled || !openOnHover) return;
     if (useTapMode || globalClickMode) return;
     handleOpen(galleryIndexFromPointerTarget(e.target));
+  };
+
+  const handleTriggerPointerMove = (e: React.PointerEvent<HTMLSpanElement>) => {
+    if (effectiveDisabled || !openOnHover || useTapMode || globalClickMode || !galleryActive) return;
+    const targetIndex = galleryIndexFromPointerTarget(e.target);
+    if (targetIndex == null) return;
+    const nextIndex = clampGalleryIndex(targetIndex);
+    if (nextIndex === galleryState.index) return;
+    cancelClose();
+    setGalleryIndex(nextIndex);
+    if (!open) {
+      updatePosition();
+      setOpen(true);
+    }
   };
 
   /** `openOnHover={false}` par bhi chhodne par delay-close — panel `pointerenter` se cancel (thumb→panel gap safe) */
@@ -1034,6 +1078,7 @@ export function AttachmentHoverPortal({
         ref={triggerRef}
         className={cn("inline-flex", triggerClassName)}
         onPointerEnter={handleTriggerPointerEnter}
+        onPointerMove={handleTriggerPointerMove}
         onPointerLeave={handleTriggerPointerLeave}
         onClick={handleTriggerClick}
       >

@@ -140,10 +140,15 @@ async function openBlobAttachmentInApp(
   }
   if (kind === "pdf") {
     if (shouldUseInAppPdfPreviewOverlay()) {
-      await showInAppPdfPreview(bUrl, dispose, {
-        title: opts?.title ?? "PDF",
-        fileName: "document.pdf",
-      });
+      const openedAsImage = await openPdfBlobAsImagePreview(blob, opts?.title ?? "PDF");
+      if (openedAsImage) {
+        dispose();
+      } else {
+        await showInAppPdfPreview(bUrl, dispose, {
+          title: opts?.title ?? "PDF",
+          fileName: "document.pdf",
+        });
+      }
       return;
     }
     dispose();
@@ -152,6 +157,37 @@ async function openBlobAttachmentInApp(
   }
   dispose();
   window.open(bUrl, "_blank", "noopener,noreferrer");
+}
+
+async function openPdfBlobAsImagePreview(blob: Blob, title: string): Promise<boolean> {
+  try {
+    const { convertPdfFirstPageToImage } = await import("@/lib/pdfToImage");
+    const pdfBlob =
+      blob.type === "application/pdf" ? blob : new Blob([await blob.arrayBuffer()], { type: "application/pdf" });
+    const result = await convertPdfFirstPageToImage(pdfBlob, 0.92, 1800);
+    showInAppImagePreview(
+      result.thumbnailUrl,
+      () => {
+        try {
+          URL.revokeObjectURL(result.thumbnailUrl);
+        } catch {}
+      },
+      { title }
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function openPdfUrlAsImagePreview(url: string, title: string): Promise<boolean> {
+  try {
+    const blob = await fetch(url).then((r) => (r.ok ? r.blob() : null));
+    if (!blob?.size) return false;
+    return await openPdfBlobAsImagePreview(blob, title);
+  } catch {
+    return false;
+  }
 }
 
 async function tryOpenPlServerLocalAttachment(
@@ -528,7 +564,12 @@ export async function openAttachmentInApp(
       }
       if (kindHint === "pdf" || mime.includes("pdf")) {
         if (shouldUseInAppPdfPreviewOverlay()) {
-          await showInAppPdfPreview(bUrl, dispose, { title: opts?.title ?? "PDF" });
+          const openedAsImage = await openPdfBlobAsImagePreview(blob, opts?.title ?? "PDF");
+          if (openedAsImage) {
+            dispose();
+          } else {
+            await showInAppPdfPreview(bUrl, dispose, { title: opts?.title ?? "PDF" });
+          }
           return;
         }
         dispose();
@@ -569,9 +610,13 @@ export async function openAttachmentInApp(
     }
     if (kind === "pdf" || isDataPdf || pathLooksPdf(pathOnly)) {
       if (shouldUseInAppPdfPreviewOverlay()) {
-        void showInAppPdfPreview(u, () => {}, {
-          title: opts?.title ?? "PDF",
-          fileName: "document.pdf",
+        void openPdfUrlAsImagePreview(u, opts?.title ?? "PDF").then((ok) => {
+          if (!ok) {
+            void showInAppPdfPreview(u, () => {}, {
+              title: opts?.title ?? "PDF",
+              fileName: "document.pdf",
+            });
+          }
         });
         void getRemoteAttachmentBlobPreferOfflineCache(u, undefined, { awaitDiskWrite: false });
         return;
@@ -643,10 +688,13 @@ export async function openAttachmentInApp(
       });
       if (resolved.displayUrl) {
         if (shouldUseInAppPdfPreviewOverlay()) {
-          await showInAppPdfPreview(resolved.displayUrl, () => {}, {
-            title: opts?.title ?? "PDF",
-            fileName: "document.pdf",
-          });
+          const openedAsImage = await openPdfUrlAsImagePreview(resolved.displayUrl, opts?.title ?? "PDF");
+          if (!openedAsImage) {
+            await showInAppPdfPreview(resolved.displayUrl, () => {}, {
+              title: opts?.title ?? "PDF",
+              fileName: "document.pdf",
+            });
+          }
           return;
         }
         await openHttpPdfInExternalBrowser(resolved.displayUrl);
@@ -657,11 +705,14 @@ export async function openAttachmentInApp(
           await openPdfBlobInExternalViewer(resolved.blob, opts?.title ?? "PDF");
           return;
         }
-        const bUrl = URL.createObjectURL(resolved.blob);
-        await showInAppPdfPreview(bUrl, () => URL.revokeObjectURL(bUrl), {
-          title: opts?.title ?? "PDF",
-          fileName: "document.pdf",
-        });
+        const openedAsImage = await openPdfBlobAsImagePreview(resolved.blob, opts?.title ?? "PDF");
+        if (!openedAsImage) {
+          const bUrl = URL.createObjectURL(resolved.blob);
+          await showInAppPdfPreview(bUrl, () => URL.revokeObjectURL(bUrl), {
+            title: opts?.title ?? "PDF",
+            fileName: "document.pdf",
+          });
+        }
         return;
       }
       if (localLedgerOnly) {
@@ -704,10 +755,15 @@ export async function openAttachmentInApp(
         await openPdfBlobInExternalViewer(blob, opts?.title ? `${opts.title}.pdf` : "document.pdf");
         return;
       }
-      showInAppPdfPreview(bUrl, dispose, {
-        title: opts?.title ?? "PDF",
-        fileName: "document.pdf",
-      });
+      const openedAsImage = await openPdfBlobAsImagePreview(blob, opts?.title ?? "PDF");
+      if (openedAsImage) {
+        dispose();
+      } else {
+        showInAppPdfPreview(bUrl, dispose, {
+          title: opts?.title ?? "PDF",
+          fileName: "document.pdf",
+        });
+      }
       return;
     }
     dispose();
@@ -732,7 +788,11 @@ async function openPdfFromUrl(u: string, title?: string): Promise<void> {
       usesEmbeddedNativeAttachmentStorage() &&
       shouldUseInAppPdfPreviewOverlay()
     ) {
-      void showInAppPdfPreview(u, () => {}, { title: title ?? "PDF", fileName: "document.pdf" });
+      void openPdfUrlAsImagePreview(u, title ?? "PDF").then((ok) => {
+        if (!ok) {
+          void showInAppPdfPreview(u, () => {}, { title: title ?? "PDF", fileName: "document.pdf" });
+        }
+      });
       void getRemoteAttachmentBlobPreferOfflineCache(u, undefined, { awaitDiskWrite: false });
       return;
     }
@@ -753,11 +813,14 @@ async function openPdfFromUrl(u: string, title?: string): Promise<void> {
           await openPdfBlobInExternalViewer(cachedBlob, fileName);
           return;
         }
-        const cachedUrl = URL.createObjectURL(cachedBlob);
-        showInAppPdfPreview(cachedUrl, () => URL.revokeObjectURL(cachedUrl), {
-          title: title ?? "PDF",
-          fileName: "document.pdf",
-        });
+        const openedAsImage = await openPdfBlobAsImagePreview(cachedBlob, title ?? "PDF");
+        if (!openedAsImage) {
+          const cachedUrl = URL.createObjectURL(cachedBlob);
+          showInAppPdfPreview(cachedUrl, () => URL.revokeObjectURL(cachedUrl), {
+            title: title ?? "PDF",
+            fileName: "document.pdf",
+          });
+        }
         return;
       }
     } catch {
@@ -765,8 +828,7 @@ async function openPdfFromUrl(u: string, title?: string): Promise<void> {
     }
   }
 
-  // HTTP(S) pe seedha browser / Custom Tab — fetch + blob duplicate load bachta hai
-  if (shouldOpenPdfInExternalViewer() && isHttp) {
+  if (shouldOpenPdfInExternalViewer() && isHttp && !(await openPdfUrlAsImagePreview(u, title ?? "PDF"))) {
     await openHttpPdfInExternalBrowser(u);
     return;
   }
@@ -794,14 +856,21 @@ async function openPdfFromUrl(u: string, title?: string): Promise<void> {
       blob = await res.blob();
     }
     if (shouldOpenPdfInExternalViewer()) {
-      await openPdfBlobInExternalViewer(blob, fileName);
+      const openedAsImage = await openPdfBlobAsImagePreview(blob, title ?? "PDF");
+      if (!openedAsImage) {
+        await openPdfBlobInExternalViewer(blob, fileName);
+        return;
+      }
       return;
     }
-    const bUrl = URL.createObjectURL(blob);
-    showInAppPdfPreview(bUrl, () => URL.revokeObjectURL(bUrl), {
-      title: title ?? "PDF",
-      fileName: "document.pdf",
-    });
+    const openedAsImage = await openPdfBlobAsImagePreview(blob, title ?? "PDF");
+    if (!openedAsImage) {
+      const bUrl = URL.createObjectURL(blob);
+      showInAppPdfPreview(bUrl, () => URL.revokeObjectURL(bUrl), {
+        title: title ?? "PDF",
+        fileName: "document.pdf",
+      });
+    }
     // Background: next offline open ke liye bytes cache me likho.
     if (blob.size > 0 && (isStaticAppBuild() || isElectronDesktopApp())) {
       void getRemoteAttachmentBlobPreferOfflineCache(u).catch(() => undefined);

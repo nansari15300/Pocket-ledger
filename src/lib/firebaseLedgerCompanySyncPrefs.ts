@@ -7,6 +7,10 @@ export const FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT =
   "pl-firebase-ledger-company-sync-prefs-changed";
 export const FIREBASE_LEDGER_COMPANY_REGISTRY_PULL_EVENT = "pl-firebase-ledger-company-registry-pull";
 
+export type FirebaseLedgerCompanySyncPrefsChangedDetail = {
+  companyIds?: string[];
+};
+
 export type FirebaseLedgerCompanySyncEntry = {
   /**
    * Legacy “Sync” column — now mirrors Data (UI no longer shows Sync).
@@ -56,7 +60,10 @@ export function readFirebaseLedgerCompanySyncPrefs(): FirebaseLedgerCompanySyncP
   }
 }
 
-export function saveFirebaseLedgerCompanySyncPrefs(prefs: FirebaseLedgerCompanySyncPrefs): void {
+export function saveFirebaseLedgerCompanySyncPrefs(
+  prefs: FirebaseLedgerCompanySyncPrefs,
+  detail?: FirebaseLedgerCompanySyncPrefsChangedDetail
+): void {
   if (typeof window === "undefined") return;
   const companies: Record<string, FirebaseLedgerCompanySyncEntry> = {};
   for (const [id, entry] of Object.entries(prefs.companies || {})) {
@@ -73,7 +80,11 @@ export function saveFirebaseLedgerCompanySyncPrefs(prefs: FirebaseLedgerCompanyS
     /* ignore */
   }
   try {
-    window.dispatchEvent(new CustomEvent(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT));
+    window.dispatchEvent(
+      new CustomEvent(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, {
+        detail: detail ?? { companyIds: Object.keys(companies) },
+      })
+    );
   } catch {
     /* ignore */
   }
@@ -95,7 +106,7 @@ export function patchFirebaseLedgerCompanySyncEntry(
   const prev = prefs.companies[id] ?? { ...EMPTY_ENTRY };
   const next = normalizeEntry({ ...prev, ...patch });
   const out = { companies: { ...prefs.companies, [id]: next } };
-  saveFirebaseLedgerCompanySyncPrefs(out);
+  saveFirebaseLedgerCompanySyncPrefs(out, { companyIds: [id] });
   return out;
 }
 
@@ -111,7 +122,7 @@ export function replaceFirebaseLedgerCompanySyncEntries(
     companies[cid] = normalizeEntry(entry);
   }
   const out = { companies };
-  saveFirebaseLedgerCompanySyncPrefs(out);
+  saveFirebaseLedgerCompanySyncPrefs(out, { companyIds: Object.keys(entries || {}) });
   return out;
 }
 

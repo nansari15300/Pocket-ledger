@@ -30,7 +30,7 @@ import {
 import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { sortTransactionsWithFiscalMergeForCompany, sortTransactions, DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
 import { Checkbox } from "@/components/ui/checkbox";
-import { AlertCircle, Filter, MoreVertical, Pencil, Printer, History } from "lucide-react";
+import { AlertCircle, CheckSquare, Filter, MoreVertical, Pencil, Printer, History, X } from "lucide-react";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import {
   LEDGER_HEADER_PILL_CN,
@@ -38,6 +38,15 @@ import {
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
 } from "@/lib/ledgerHeaderChrome";
 import { txnSelectedMainRowCn, txnSelectedNarrationRowCn, txnTableIconBtnCn } from "@/lib/listSelectionChrome";
+import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import { getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize";
+import {
+  resolveTxnDrCrSide,
+  transactionRowHasFileAttachment,
+  OpeningBalanceFileCellContent,
+  voucherTypePillClassName,
+  type FileColumnDisplayMode,
+} from "@/components/vouchers/transactionTableShared";
 import {
   matchesOverdueImportanceFilter,
   readOverdueImportanceFilter,
@@ -57,13 +66,14 @@ import { openPrintDirect } from "@/lib/printDirect";
 import { toast } from "sonner";
 import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 
-export type OverdueColumnKey = "date" | "type" | "voucherNo" | "party" | "user" | "debit" | "credit" | "status" | "netBalance";
+export type OverdueColumnKey = "date" | "type" | "voucherNo" | "party" | "user" | "file" | "debit" | "credit" | "status" | "netBalance";
 const OVERDUE_COLUMN_LABELS: Record<OverdueColumnKey, string> = {
   date: "Date",
   type: "Type",
   voucherNo: "Voucher No.",
   party: "Accounts",
   user: "User",
+  file: "File",
   debit: "Debit",
   credit: "Credit",
   status: "Status",
@@ -76,11 +86,34 @@ const DEFAULT_OVERDUE_VISIBLE: OverdueVisibleColumns = {
   voucherNo: true,
   party: true,
   user: true,
+  file: true,
   debit: true,
   credit: true,
   status: true,
   netBalance: true,
 };
+const OVERDUE_FILE_COLUMN_VIEW_PREF_KEY = "pocket-ledger:transactions:file-column-view:v1";
+
+function readOverdueFileColumnPrefs(): { displayMode: FileColumnDisplayMode; showAll: boolean } {
+  if (typeof window === "undefined") return { displayMode: "preview", showAll: false };
+  try {
+    const raw = window.localStorage.getItem(OVERDUE_FILE_COLUMN_VIEW_PREF_KEY);
+    if (!raw) return { displayMode: "preview", showAll: false };
+    const parsed = JSON.parse(raw) as { displayMode?: unknown; showAll?: unknown };
+    const displayMode: FileColumnDisplayMode = parsed.displayMode === "tick" ? "tick" : "preview";
+    return { displayMode, showAll: displayMode === "preview" && parsed.showAll === true };
+  } catch {
+    return { displayMode: "preview", showAll: false };
+  }
+}
+
+function saveOverdueFileColumnPrefs(displayMode: FileColumnDisplayMode, showAll: boolean) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    OVERDUE_FILE_COLUMN_VIEW_PREF_KEY,
+    JSON.stringify({ displayMode, showAll: displayMode === "preview" && showAll })
+  );
+}
 
 export type OverdueTransactionRow = {
   id: string;
@@ -101,6 +134,8 @@ export type OverdueTransactionRow = {
   userId?: string;
   userName?: string;
   narration?: string;
+  fileUrls?: string[];
+  unassignedFile?: unknown;
   createdAt?: any;
   lastEditedAt?: any;
   updatedAt?: any;
@@ -147,7 +182,7 @@ export function OverdueAccountView({
   onAddLink?: (row: OverdueTransactionRow) => void;
   userNames?: Record<string, string>;
 }) {
-  const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
+  const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } = useDate();
   const { company } = useCompany();
   const { can } = usePermissions();
   const { settings: animationSettings } = useAnimationSettings();
@@ -155,6 +190,8 @@ export function OverdueAccountView({
   const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 0) : 0;
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
+  const [fileDisplayMode, setFileDisplayMode] = useState<FileColumnDisplayMode>(() => readOverdueFileColumnPrefs().displayMode);
+  const [fileShowAll, setFileShowAll] = useState(() => readOverdueFileColumnPrefs().showAll);
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [internalImportanceFilter, setInternalImportanceFilter] = useState<OverdueImportanceFilter>(() =>
@@ -173,6 +210,15 @@ export function OverdueAccountView({
   /** Main + narration hover ek block — globals.css [data-pl-txn-hovered] (normal ledger jaisa) */
   const [hoveredTxnId, setHoveredTxnId] = useState<string | null>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
+  const filterInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const focusFilterInputSoon = useCallback((key: string) => {
+    requestAnimationFrame(() => {
+      const input = filterInputRefs.current[key];
+      if (!input) return;
+      if (typeof document !== "undefined" && document.activeElement === input) return;
+      input.focus({ preventScroll: true });
+    });
+  }, []);
 
   const clearOverduePairHoverUnlessMovingTo = useCallback(
     (txnId: string, e: React.MouseEvent, siblingDomId: string) => {
@@ -221,9 +267,21 @@ export function OverdueAccountView({
 
   const filteredRows = useMemo(() => {
     let list = overdueTransactions.filter((t) => matchesOverdueImportanceFilter(t, importanceFilter));
-    const typeVal = (filters.type || "").toLowerCase();
-    if (typeVal === "sale" || typeVal === "purchase") {
-      list = list.filter((t) => t.type === typeVal);
+    const dateQ = (filters.date || "").trim().toLowerCase();
+    if (dateQ) {
+      list = list.filter((t) => {
+        const d = safeToDate(t.date);
+        const values = [
+          d ? formatDateBS(d) : "",
+          d ? formatDate(d) : "",
+          formatVoucherEntryTimeLocal(t as unknown as Record<string, unknown>),
+        ];
+        return values.some((value) => String(value || "").toLowerCase().includes(dateQ));
+      });
+    }
+    const typeVal = (filters.type || "").trim().toLowerCase();
+    if (typeVal) {
+      list = list.filter((t) => String(t.type || "").replace(/_/g, " ").toLowerCase().includes(typeVal));
     }
     const voucherQ = (filters.voucherNumber || "").trim().toLowerCase();
     if (voucherQ) {
@@ -244,8 +302,59 @@ export function OverdueAccountView({
         return name.includes(userQ) || (t.userId || "").toLowerCase().includes(userQ);
       });
     }
+    const fileMode = (filters.file || "").trim().toLowerCase();
+    if (fileMode === "with") {
+      list = list.filter((t) => transactionRowHasFileAttachment(t));
+    } else if (fileMode === "without") {
+      list = list.filter((t) => !transactionRowHasFileAttachment(t));
+    }
+    const debitQ = (filters.debit || "").trim().toLowerCase();
+    if (debitQ) {
+      list = list.filter((t) =>
+        [t.debit, formatCurrencyForPrint(t.debit || 0, { noSuffix: true, context: "transaction" })]
+          .some((value) => String(value ?? "").toLowerCase().includes(debitQ))
+      );
+    }
+    const creditQ = (filters.credit || "").trim().toLowerCase();
+    if (creditQ) {
+      list = list.filter((t) =>
+        [t.credit, formatCurrencyForPrint(t.credit || 0, { noSuffix: true, context: "transaction" })]
+          .some((value) => String(value ?? "").toLowerCase().includes(creditQ))
+      );
+    }
+    const statusDaysMode = filters.statusDaysMode;
+    const statusDays = Number((filters.statusDays || "").trim());
+    const hasStatusDaysFilter =
+      (statusDaysMode === "less" || statusDaysMode === "more") && Number.isFinite(statusDays);
+    const statusQ = hasStatusDaysFilter ? "" : (filters.status || "").trim().toLowerCase();
+    if (statusQ) {
+      list = list.filter((t) => {
+        const days = getOverdueDays(t.dueDate);
+        return ["overdue", days > 0 ? `${days} ${days === 1 ? "day" : "days"}` : ""].some((value) =>
+          value.toLowerCase().includes(statusQ)
+        );
+      });
+    }
+    if (hasStatusDaysFilter) {
+      list = list.filter((t) => {
+        const days = getOverdueDays(t.dueDate);
+        return statusDaysMode === "less" ? days < statusDays : days > statusDays;
+      });
+    }
+    const balanceQ = (filters.balance || "").trim().toLowerCase();
+    if (balanceQ) {
+      list = list.filter((t) => {
+        const value = t.type === "purchase" ? -t.outstanding : t.outstanding;
+        const side = value >= 0 ? "Dr" : "Cr";
+        return [
+          value,
+          Math.abs(value),
+          `${formatCurrencyForPrint(Math.abs(value), { noSuffix: true, context: "transaction" })} ${side}`,
+        ].some((candidate) => String(candidate ?? "").toLowerCase().includes(balanceQ));
+      });
+    }
     return list;
-  }, [overdueTransactions, importanceFilter, filters, userNames]);
+  }, [overdueTransactions, importanceFilter, filters, userNames, formatDateBS, formatDate, formatCurrencyForPrint]);
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
@@ -275,10 +384,23 @@ export function OverdueAccountView({
 
   const totalPages = overduePaging.totalPages;
   const paginatedRows = overduePaging.pageRows;
+  const hasAnyFilter = useMemo(
+    () => Object.values(filters).some((value) => String(value || "").trim().length > 0),
+    [filters]
+  );
+  const clearAllFilters = useCallback(() => {
+    setFilters({});
+    setActiveFilter(null);
+    setCurrentPage(1);
+  }, []);
 
   useEffect(() => {
     setCurrentPage((p) => Math.min(Math.max(1, p), totalPages));
   }, [totalPages]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filters]);
 
   useEffect(() => {
     if (selectedId && !paginatedRows.some((t) => t.id === selectedId)) setSelectedId(null);
@@ -315,11 +437,52 @@ export function OverdueAccountView({
     debit: 100,
     credit: 100,
     status: 95,
-    netBalance: 115,
+    netBalance: 145,
   } as const;
 
   const renderHeaderWithFilter = (key: string, label: string, isNumeric: boolean = false, minWidthPx?: number) => {
-    const isFiltered = !!(filters[key] ?? "").trim();
+    const isFiltered =
+      !!(filters[key] ?? "").trim() ||
+      (key === "status" && (!!(filters.statusDaysMode ?? "").trim() || !!(filters.statusDays ?? "").trim()));
+    const filterValue = filters[key] ?? "";
+    const renderTextFilterInput = () => (
+      <div className="relative">
+        <Input
+          ref={(el) => {
+            filterInputRefs.current[key] = el;
+            if (el && activeFilter === key) focusFilterInputSoon(key);
+          }}
+          className={cn(
+            key === "status"
+              ? "h-9 border border-input shadow-none outline-none focus:outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
+              : "border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0",
+            filterValue && "pr-9"
+          )}
+          placeholder={`Filter ${label}...`}
+          value={filterValue}
+          onChange={(e) => setFilters((p) => ({ ...p, [key]: e.target.value }))}
+          onKeyDown={(e) => { if (e.key === "Enter") setActiveFilter(null); }}
+          autoFocus
+        />
+        {filterValue ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 rounded-full text-muted-foreground hover:text-foreground"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setFilters((p) => ({ ...p, [key]: "" }));
+              focusFilterInputSoon(key);
+            }}
+            aria-label={`Clear ${label} filter`}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        ) : null}
+      </div>
+    );
     return (
       <TableHead className={cn("p-0", isNumeric && "text-right")} style={minWidthPx != null ? { minWidth: `${minWidthPx}px` } : undefined}>
         {/* Header style — TransactionsTable jaisa (black bar + filter icons) */}
@@ -331,22 +494,148 @@ export function OverdueAccountView({
                 <Filter className={cn("h-4 w-4", isFiltered && "text-red-600")} />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="p-2 w-48" align="start" onOpenAutoFocus={(e) => e.preventDefault()} onCloseAutoFocus={(e) => e.preventDefault()}>
-              {key === "type" ? (
-                <div className="space-y-1">
-                  <Button variant={(!filters.type || filters.type === "all") ? "secondary" : "ghost"} size="sm" className="w-full justify-start" onClick={() => { setFilters((p) => ({ ...p, type: "" })); setActiveFilter(null); }}>All types</Button>
-                  <Button variant={filters.type === "sale" ? "secondary" : "ghost"} size="sm" className="w-full justify-start" onClick={() => { setFilters((p) => ({ ...p, type: "sale" })); setActiveFilter(null); }}>Sale</Button>
-                  <Button variant={filters.type === "purchase" ? "secondary" : "ghost"} size="sm" className="w-full justify-start" onClick={() => { setFilters((p) => ({ ...p, type: "purchase" })); setActiveFilter(null); }}>Purchase</Button>
+            <PopoverContent
+              side="top"
+              align="center"
+              sideOffset={6}
+              className={cn("overflow-hidden", key === "status" ? "w-72 p-0" : "w-48 p-0")}
+              onOpenAutoFocus={(e) => {
+                e.preventDefault();
+                focusFilterInputSoon(key);
+              }}
+              onCloseAutoFocus={(e) => e.preventDefault()}
+            >
+              {key === "status" ? (
+                <div className="space-y-2 p-2">
+                  {renderTextFilterInput()}
+                  <div className="grid grid-cols-[1fr_1fr_80px] gap-2">
+                    <Button
+                      type="button"
+                      variant={filters.statusDaysMode === "less" ? "default" : "outline"}
+                      className="h-9 rounded-md"
+                      onClick={() => setFilters((p) => ({ ...p, statusDaysMode: "less" }))}
+                    >
+                      Less than
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={filters.statusDaysMode === "more" ? "default" : "outline"}
+                      className="h-9 rounded-md"
+                      onClick={() => setFilters((p) => ({ ...p, statusDaysMode: "more" }))}
+                    >
+                      More than
+                    </Button>
+                    <Input
+                      className="h-9 border border-input shadow-none outline-none focus:outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                      inputMode="numeric"
+                      placeholder="Overdue days"
+                      value={filters.statusDays ?? ""}
+                      onChange={(e) => setFilters((p) => ({ ...p, statusDays: e.target.value.replace(/[^\d]/g, "") }))}
+                      onKeyDown={(e) => e.stopPropagation()}
+                    />
+                  </div>
                 </div>
               ) : (
-                <Input
-                  placeholder={`Filter ${label}...`}
-                  value={filters[key] ?? ""}
-                  onChange={(e) => setFilters((p) => ({ ...p, [key]: e.target.value }))}
-                  onKeyDown={(e) => { if (e.key === "Enter") setActiveFilter(null); }}
-                  autoFocus
-                />
+                renderTextFilterInput()
               )}
+            </PopoverContent>
+          </Popover>
+        </div>
+      </TableHead>
+    );
+  };
+
+  const renderFileHeaderWithFilter = () => {
+    const fileFilterRaw = filters.file ?? "";
+    const fileFilterMode: "all" | "with" | "without" =
+      fileFilterRaw === "with" || fileFilterRaw === "without" ? fileFilterRaw : "all";
+    const isFiltered = fileFilterMode !== "all";
+    const setFileFilter = (mode: "all" | "with" | "without") => {
+      setFilters((prev) => ({ ...prev, file: mode === "all" ? "" : mode }));
+    };
+    return (
+      <TableHead className="p-0 text-center font-semibold" style={{ minWidth: "44px" }} data-theme-header="file">
+        <div className={cn("flex items-center justify-center gap-1 whitespace-nowrap px-2 py-3 font-bold", isFiltered ? "text-red-600" : "text-black")}>
+          <span>File</span>
+          <Popover modal open={activeFilter === "file"} onOpenChange={(open) => setActiveFilter(open ? "file" : null)}>
+            <PopoverTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                data-pl-txn-icon-btn=""
+                className={cn(txnTableIconBtnCn, "h-6 w-6")}
+                aria-label="Filter by file attachment"
+              >
+                <CheckSquare className={cn("h-4 w-4", isFiltered && "text-red-600")} />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-64 p-2" align="center" onCloseAutoFocus={(e) => e.preventDefault()}>
+              <div className="flex items-center gap-2 py-1">
+                <Checkbox
+                  id="overdue-file-filter-all"
+                  checked={fileFilterMode === "all"}
+                  onCheckedChange={() => setFileFilter("all")}
+                />
+                <label htmlFor="overdue-file-filter-all" className="flex-1 cursor-pointer text-sm font-medium">
+                  All
+                </label>
+              </div>
+              <div className="flex items-center gap-2 py-1">
+                <Checkbox
+                  id="overdue-file-filter-with"
+                  checked={fileFilterMode === "with"}
+                  onCheckedChange={() => setFileFilter("with")}
+                />
+                <label htmlFor="overdue-file-filter-with" className="flex-1 cursor-pointer text-sm font-medium">
+                  With file
+                </label>
+              </div>
+              <div className="flex items-center gap-2 py-1">
+                <Checkbox
+                  id="overdue-file-filter-without"
+                  checked={fileFilterMode === "without"}
+                  onCheckedChange={() => setFileFilter("without")}
+                />
+                <label htmlFor="overdue-file-filter-without" className="flex-1 cursor-pointer text-sm font-medium">
+                  Without file
+                </label>
+              </div>
+              <div className="mt-2 border-t pt-2 text-[11px] font-bold uppercase text-muted-foreground">View</div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-2 py-1">
+                <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+                  <Checkbox
+                    checked={fileDisplayMode === "preview"}
+                    onCheckedChange={() => setFileDisplayMode("preview")}
+                  />
+                  Preview
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+                  <Checkbox
+                    checked={fileDisplayMode === "preview" && fileShowAll}
+                    disabled={fileDisplayMode !== "preview"}
+                    onCheckedChange={(checked) => setFileShowAll(checked === true)}
+                  />
+                  Show all
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+                  <Checkbox
+                    checked={fileDisplayMode === "tick"}
+                    onCheckedChange={() => setFileDisplayMode("tick")}
+                  />
+                  Tick only
+                </label>
+              </div>
+              <Button
+                type="button"
+                className="mt-2 h-9 w-full rounded-full"
+                onClick={() => {
+                  saveOverdueFileColumnPrefs(fileDisplayMode, fileShowAll);
+                  setActiveFilter(null);
+                  toast.success("File view saved.");
+                }}
+              >
+                Save
+              </Button>
             </PopoverContent>
           </Popover>
         </div>
@@ -448,6 +737,19 @@ export function OverdueAccountView({
             >
               Normal
             </Button>
+            {hasAnyFilter ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className={LEDGER_HEADER_PILL_ICON_CN}
+                onClick={clearAllFilters}
+                title="Clear all filters"
+                aria-label="Clear all filters"
+              >
+                <X className={LEDGER_HEADER_PILL_ICON_SIZE_CN} />
+              </Button>
+            ) : null}
             <Button
               variant="outline"
               size="icon"
@@ -477,18 +779,19 @@ export function OverdueAccountView({
             onKeyDown={handleTableKeyDown}
             onClick={() => tableContainerRef.current?.focus()}
           >
-          <Table className="table-auto w-full min-w-0 border-b-2 border-border">
+          <Table className="table-auto w-full min-w-0 border-separate border-spacing-0 border-b-2 border-border">
             <TableHeader>
-              <TableRow className="border-b-4 border-black hover:bg-transparent">
-                {visibleColumns.date && <TableHead className="p-0 pl-3 pr-2 font-bold whitespace-nowrap" style={{ minWidth: OVERDUE_HEADER_MIN_PX.date }}><div className="px-2 py-3 font-bold text-black">Date</div></TableHead>}
+              <TableRow className="border-b-2 border-black hover:bg-transparent [&>th]:border-b-2 [&>th]:border-black">
+                {visibleColumns.date && renderHeaderWithFilter("date", "Date", false, OVERDUE_HEADER_MIN_PX.date)}
                 {visibleColumns.type && renderHeaderWithFilter("type", "Type", false, OVERDUE_HEADER_MIN_PX.type)}
                 {visibleColumns.voucherNo && renderHeaderWithFilter("voucherNumber", "Voucher No.", false, OVERDUE_HEADER_MIN_PX.voucherNo)}
                 {visibleColumns.party && renderHeaderWithFilter("party", "Accounts", false, OVERDUE_HEADER_MIN_PX.party)}
                 {visibleColumns.user && renderHeaderWithFilter("user", "User", false, OVERDUE_HEADER_MIN_PX.user)}
-                {visibleColumns.debit && <TableHead className="p-0 text-right whitespace-nowrap" style={{ minWidth: OVERDUE_HEADER_MIN_PX.debit }}><div className="px-2 py-3 font-bold text-black">Debit</div></TableHead>}
-                {visibleColumns.credit && <TableHead className="p-0 text-right whitespace-nowrap" style={{ minWidth: OVERDUE_HEADER_MIN_PX.credit }}><div className="px-2 py-3 font-bold text-black">Credit</div></TableHead>}
-                {visibleColumns.status && <TableHead className="p-0 text-center whitespace-nowrap" style={{ minWidth: OVERDUE_HEADER_MIN_PX.status }}><div className="px-2 py-3 font-bold text-black">Status</div></TableHead>}
-                {visibleColumns.netBalance && <TableHead className="p-0 text-right whitespace-nowrap" style={{ minWidth: OVERDUE_HEADER_MIN_PX.netBalance }}><div className="px-2 py-3 font-bold text-black">Net Balance</div></TableHead>}
+                {visibleColumns.file && renderFileHeaderWithFilter()}
+                {visibleColumns.debit && renderHeaderWithFilter("debit", "Debit", true, OVERDUE_HEADER_MIN_PX.debit)}
+                {visibleColumns.credit && renderHeaderWithFilter("credit", "Credit", true, OVERDUE_HEADER_MIN_PX.credit)}
+                {visibleColumns.status && renderHeaderWithFilter("status", "Status", false, OVERDUE_HEADER_MIN_PX.status)}
+                {visibleColumns.netBalance && renderHeaderWithFilter("balance", "Net Balance", true, OVERDUE_HEADER_MIN_PX.netBalance)}
                 <TableHead className="w-10 min-w-10 p-1 pr-[5px] text-center font-semibold align-middle" />
               </TableRow>
             </TableHeader>
@@ -506,11 +809,16 @@ export function OverdueAccountView({
                 const pairHovered = hoveredTxnId === t.id;
                 const mainRowDomId = `overdue-main-${t.id}`;
                 const narrRowDomId = `overdue-narr-${t.id}`;
+                const highlightQ = Object.values(filters)
+                  .map((v) => String(v || "").trim())
+                  .filter((v) => v && v !== "with" && v !== "without")
+                  .join(" ");
+                const hl = (s: string) => highlightQ ? (highlightQueryInText(s, highlightQ) as React.ReactNode) : s;
                 return (
                   <React.Fragment key={t.id}>
                   <motion.tr
                     id={mainRowDomId}
-                    layout
+                    layout="position"
                     initial={false}
                     exit={{ transition: { duration: 0 } }}
                     transition={{
@@ -533,28 +841,49 @@ export function OverdueAccountView({
                   >
                     {visibleColumns.date && (
                       <TableCell className="whitespace-nowrap pl-3 pr-2">
-                        {dateStr}
-                        {entryClock ? <span className="ml-1 text-[10px] text-muted-foreground">• {entryClock}</span> : null}
+                        {hl(dateStr)}
+                        {entryClock ? <span className="ml-1 text-[10px] text-muted-foreground">• {hl(entryClock)}</span> : null}
                       </TableCell>
                     )}
                     {visibleColumns.type && (
                       <TableCell>
-                        <Badge variant="outline" className="capitalize">
-                          {t.type.replace(/_/g, " ")}
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            voucherTypePillClassName(resolveTxnDrCrSide(t.debit || 0, t.credit || 0, balanceVal)),
+                            "capitalize"
+                          )}
+                        >
+                          {hl(t.type.replace(/_/g, " "))}
                         </Badge>
                       </TableCell>
                     )}
-                    {visibleColumns.voucherNo && <TableCell>{t.voucherNumber || "—"}</TableCell>}
-                    {visibleColumns.party && <TableCell className="font-medium">{t.partyName || "—"}</TableCell>}
-                    {visibleColumns.user && <TableCell className="text-muted-foreground">{displayUserName}</TableCell>}
+                    {visibleColumns.voucherNo && <TableCell>{hl(t.voucherNumber || "—")}</TableCell>}
+                    {visibleColumns.party && <TableCell className="font-medium">{hl(t.partyName || "—")}</TableCell>}
+                    {visibleColumns.user && <TableCell className="text-muted-foreground">{hl(displayUserName)}</TableCell>}
+                    {visibleColumns.file && (
+                      <TableCell className="min-w-[44px] px-[5px] text-center" onClick={(e) => e.stopPropagation()}>
+                        {(() => {
+                          const rowUrls = getVoucherAttachmentUrlsForUi(t);
+                          if (rowUrls.length === 0) return "-";
+                          return (
+                            <OpeningBalanceFileCellContent
+                              fileUrls={rowUrls}
+                              displayMode={fileDisplayMode}
+                              showAll={fileShowAll}
+                            />
+                          );
+                        })()}
+                      </TableCell>
+                    )}
                     {visibleColumns.debit && (
                       <TableCell className="text-right text-green-600">
-                        {t.debit > 0 ? formatCurrency(t.debit, { noSuffix: true, context: "transaction" }) : "—"}
+                        {t.debit > 0 ? hl(formatCurrencyForPrint(t.debit, { noSuffix: true, context: "transaction" })) : "—"}
                       </TableCell>
                     )}
                     {visibleColumns.credit && (
                       <TableCell className="text-right text-red-600">
-                        {t.credit > 0 ? formatCurrency(t.credit, { noSuffix: true, context: "transaction" }) : "—"}
+                        {t.credit > 0 ? hl(formatCurrencyForPrint(t.credit, { noSuffix: true, context: "transaction" })) : "—"}
                       </TableCell>
                     )}
                     {visibleColumns.status && (
@@ -562,14 +891,14 @@ export function OverdueAccountView({
                         {/* Overdue days hamesha yahi — pehle sirf "Show Narration" row me tha; static/APK par narration off ho to blank lagta tha */}
                         <div className="flex flex-col items-center justify-center gap-0.5">
                           <Badge variant="outline" className="text-red-600 border-red-600/50 inline-flex h-[22px] font-semibold shrink-0">
-                            Overdue
+                            {hl("Overdue")}
                           </Badge>
                           {(() => {
                             const overdueDays = getOverdueDays(t.dueDate);
                             if (overdueDays <= 0) return null;
                             return (
                               <span className="text-[10px] text-red-600 font-medium leading-tight">
-                                {overdueDays} {overdueDays === 1 ? "day" : "days"}
+                                {hl(`${overdueDays} ${overdueDays === 1 ? "day" : "days"}`)}
                               </span>
                             );
                           })()}
@@ -577,9 +906,8 @@ export function OverdueAccountView({
                       </TableCell>
                     )}
                     {visibleColumns.netBalance && (
-                      <TableCell className={cn("text-right font-semibold", balanceVal >= 0 ? "text-green-600" : "text-red-600")}>
-                        {formatCurrency(Math.abs(balanceVal), { noSuffix: true, context: "transaction" })}{" "}
-                        {balanceVal >= 0 ? "Dr" : "Cr"}
+                      <TableCell className={cn("min-w-[145px] whitespace-nowrap text-right font-semibold", balanceVal >= 0 ? "text-green-600" : "text-red-600")}>
+                        {hl(`${formatCurrencyForPrint(Math.abs(balanceVal), { noSuffix: true, context: "transaction" })} ${balanceVal >= 0 ? "Dr" : "Cr"}`)}
                       </TableCell>
                     )}
                     <TableCell
@@ -621,12 +949,20 @@ export function OverdueAccountView({
                           (visibleColumns.voucherNo ? 1 : 0) +
                           (visibleColumns.party ? 1 : 0) +
                           (visibleColumns.user ? 1 : 0) +
+                          (visibleColumns.file ? 1 : 0) +
                           (visibleColumns.debit ? 1 : 0) +
                           (visibleColumns.credit ? 1 : 0) +
                           (visibleColumns.status ? 0 : 1);
                     return (
-                    <tr
+                    <motion.tr
                       id={narrRowDomId}
+                      layout="position"
+                      initial={false}
+                      exit={{ transition: { duration: 0 } }}
+                      transition={{
+                        duration: isRowAnimationEnabled ? rowAnimationDuration : 0,
+                        ease: "easeInOut",
+                      }}
                       role="button"
                       tabIndex={-1}
                       onClick={() => setSelectedId(t.id)}
@@ -645,14 +981,14 @@ export function OverdueAccountView({
                         colSpan={narrationColSpan}
                         className="pt-0.5 pb-0.5 px-3 text-[11px] italic text-muted-foreground leading-tight align-top whitespace-normal break-words min-w-0 max-w-full"
                       >
-                        <span className="font-semibold not-italic">Narration:</span> {t.narration || "No narration"}
+                        <span className="font-semibold not-italic">Narration:</span> {hl(t.narration || "No narration")}
                       </TableCell>
                       {visibleColumns.status && (
                         <TableCell className="pt-0.5 pb-0.5 px-2 text-center align-top" aria-hidden="true" />
                       )}
                       {visibleColumns.netBalance && <TableCell className="py-0 w-10 p-0" />}
                       <TableCell className="py-0 w-10 p-0" />
-                    </tr>
+                    </motion.tr>
                     );
                   })()}
                 </React.Fragment>
@@ -668,7 +1004,8 @@ export function OverdueAccountView({
                     (visibleColumns.type ? 1 : 0) +
                     (visibleColumns.voucherNo ? 1 : 0) +
                     (visibleColumns.party ? 1 : 0) +
-                    (visibleColumns.user ? 1 : 0)
+                    (visibleColumns.user ? 1 : 0) +
+                    (visibleColumns.file ? 1 : 0)
                   }
                   className="pl-3 pr-2"
                 >Total</TableCell>

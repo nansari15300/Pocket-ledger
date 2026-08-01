@@ -552,23 +552,61 @@ export function openAttachmentGalleryInApp(
         });
       } else {
         const wrap = document.createElement("div");
+        let shouldAppendWrap = true;
         wrap.style.cssText =
           "box-sizing:border-box;width:100%;height:100%;max-height:100%;overflow:auto;padding:8px 56px;display:flex;align-items:center;justify-content:center;-webkit-overflow-scrolling:touch";
 
         if (resolved.kind === "pdf") {
-          // Electron / static: `<iframe src=blob|https>` PDF often blank — same PDF.js overlay as `openAttachmentInApp`
-          showInAppPdfPreview(resolved.src, resolved.revoke, {
-            title: `${baseTitle} (${idx + 1}/${list.length})`,
-            fileName: `attachment-${idx + 1}.pdf`,
-            onAfterPreviewLayerRemoved: () => setAttachmentPreviewHardwareBackHandler(safeClose),
-          });
-          wrap.appendChild(
-            Object.assign(document.createElement("p"), {
-              textContent: "PDF opened above — close it to return here. Use ‹ › for other files.",
-              style:
-                "color:#a3a3a3;text-align:center;padding:16px;font-size:13px;margin:0;line-height:1.35;max-width:min(92vw,320px)",
-            }),
-          );
+          try {
+            const pdfBlob = await fetch(resolved.src).then((r) => (r.ok ? r.blob() : null));
+            if (!pdfBlob?.size) throw new Error("empty_pdf");
+            const { convertPdfFirstPageToImage } = await import("@/lib/pdfToImage");
+            const result = await convertPdfFirstPageToImage(pdfBlob, 0.92, 1800);
+            resolved.revoke();
+            currentRevoke = () => {
+              try {
+                URL.revokeObjectURL(result.thumbnailUrl);
+              } catch {}
+            };
+            shouldAppendWrap = false;
+            const scrollHost = document.createElement("div");
+            stageEl.appendChild(scrollHost);
+            const img = document.createElement("img");
+            img.src = result.thumbnailUrl;
+            img.alt = "";
+            img.onerror = () => {
+              imageZoomApi?.dispose();
+              imageZoomApi = null;
+              setZoomControlsVisible(zoomOutBtn, zoomInBtn, fitWidthBtn, fitHeightBtn, false);
+              scrollHost.replaceChildren();
+              scrollHost.appendChild(
+                Object.assign(document.createElement("p"), {
+                  textContent: "PDF preview failed",
+                  style: "color:#fcc;padding:16px;text-align:center",
+                })
+              );
+            };
+            imageZoomApi = mountGalleryImageZoom(scrollHost, img, (s) => {
+              currentImageScale = s;
+            });
+            setZoomControlsVisible(zoomOutBtn, zoomInBtn, fitWidthBtn, fitHeightBtn, true);
+            const syncFitH = () => styleFitButtons(false);
+            if (img.complete && img.naturalWidth > 1) syncFitH();
+            else img.addEventListener("load", syncFitH, { once: true });
+          } catch {
+            showInAppPdfPreview(resolved.src, resolved.revoke, {
+              title: `${baseTitle} (${idx + 1}/${list.length})`,
+              fileName: `attachment-${idx + 1}.pdf`,
+              onAfterPreviewLayerRemoved: () => setAttachmentPreviewHardwareBackHandler(safeClose),
+            });
+            wrap.appendChild(
+              Object.assign(document.createElement("p"), {
+                textContent: "PDF opened above — close it to return here. Use ‹ › for other files.",
+                style:
+                  "color:#a3a3a3;text-align:center;padding:16px;font-size:13px;margin:0;line-height:1.35;max-width:min(92vw,320px)",
+              })
+            );
+          }
         } else {
           const p = document.createElement("p");
           p.style.cssText = "color:#ddd;text-align:center;padding:16px";
@@ -586,7 +624,7 @@ export function openAttachmentGalleryInApp(
           wrap.appendChild(box);
         }
 
-        stageEl.appendChild(wrap);
+        if (shouldAppendWrap) stageEl.appendChild(wrap);
       }
     } catch {
       if (seq === loadSeq && !closed) {

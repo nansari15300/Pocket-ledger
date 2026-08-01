@@ -117,17 +117,39 @@ async function normalizePlServerAttachmentBlob(blob: Blob, contentType?: string 
   return blob;
 }
 
-async function seedPlServerAttachmentUiCaches(localRef: string, blob: Blob): Promise<void> {
+export async function seedPlServerAttachmentUiCaches(localRef: string, blob: Blob): Promise<void> {
   if (!localRef || !blob?.size) return;
   await import("@/lib/offlineAttachmentUrlCache")
     .then((m) => m.seedOfflineAttachmentCacheFromBlob(localRef, blob))
     .catch(() => false);
   try {
-    const objectUrl = URL.createObjectURL(blob);
+    const kind = await sniffBlobKindForPreview(blob);
     const { rememberHoverBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
+    const { markAttachmentUrlReady } = await import("@/lib/attachmentLoadReady");
+    const { seedOfflineAttachmentCacheFromBlob } = await import("@/lib/offlineAttachmentUrlCache");
+    if (kind === "pdf") {
+      const pdfBlob =
+        blob.type === "application/pdf"
+          ? blob
+          : new Blob([await blob.arrayBuffer()], { type: "application/pdf" });
+      const objectUrl = URL.createObjectURL(pdfBlob);
+      rememberHoverBlobUrl(localRef, objectUrl);
+      const { convertPdfFirstPageToImage } = await import("@/lib/pdfToImage");
+      const small = await convertPdfFirstPageToImage(pdfBlob, 0.55, 96);
+      rememberHoverBlobUrl(`${localRef}::cell-thumb`, small.thumbnailUrl);
+      void seedOfflineAttachmentCacheFromBlob(`${localRef}::cell-thumb`, small.thumbnailBlob);
+      markAttachmentUrlReady(localRef);
+      void convertPdfFirstPageToImage(pdfBlob, 0.92, 1800)
+        .then((full) => {
+          rememberHoverBlobUrl(`${localRef}::pdf-portal`, full.thumbnailUrl);
+          void seedOfflineAttachmentCacheFromBlob(`${localRef}::pdf-portal`, full.thumbnailBlob);
+        })
+        .catch(() => undefined);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(blob);
     rememberHoverBlobUrl(localRef, objectUrl);
     rememberHoverBlobUrl(`${localRef}::cell-thumb`, objectUrl);
-    const { markAttachmentUrlReady } = await import("@/lib/attachmentLoadReady");
     markAttachmentUrlReady(localRef);
   } catch {
     /* preview seed optional */
@@ -220,16 +242,7 @@ export async function resolvePlServerStaffAttachmentPreviewBlob(
           void import("@/lib/offlineAttachmentUrlCache").then((m) =>
             m.seedOfflineAttachmentCacheFromBlob(u, remoteEarly)
           );
-          try {
-            const objectUrl = URL.createObjectURL(remoteEarly);
-            const { rememberHoverBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
-            rememberHoverBlobUrl(u, objectUrl);
-            rememberHoverBlobUrl(`${u}::cell-thumb`, objectUrl);
-            const { markAttachmentUrlReady } = await import("@/lib/attachmentLoadReady");
-            markAttachmentUrlReady(u);
-          } catch {
-            /* preview seed optional */
-          }
+          void seedPlServerAttachmentUiCaches(u, remoteEarly);
           return remoteEarly;
         }
       }
@@ -255,16 +268,7 @@ export async function resolvePlServerStaffAttachmentPreviewBlob(
           void import("@/lib/offlineAttachmentUrlCache").then((m) =>
             m.seedOfflineAttachmentCacheFromBlob(u, remote)
           );
-          try {
-            const objectUrl = URL.createObjectURL(remote);
-            const { rememberHoverBlobUrl } = await import("@/lib/attachmentHoverBlobCache");
-            rememberHoverBlobUrl(u, objectUrl);
-            rememberHoverBlobUrl(`${u}::cell-thumb`, objectUrl);
-            const { markAttachmentUrlReady } = await import("@/lib/attachmentLoadReady");
-            markAttachmentUrlReady(u);
-          } catch {
-            /* preview seed optional */
-          }
+          void seedPlServerAttachmentUiCaches(u, remote);
           return remote;
         }
       }

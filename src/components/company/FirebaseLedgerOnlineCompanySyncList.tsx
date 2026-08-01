@@ -18,6 +18,7 @@ import {
   isFirebaseLedgerDataSyncEnabled,
 } from "@/lib/firebaseLedgerDataSyncDisabled";
 import { runOfflineFullWarmSync } from "@/lib/offlineFullWarmSync";
+import { requestAttachmentUiRefresh } from "@/lib/attachmentLoadReady";
 
 type Props = {
   companies: Company[];
@@ -149,7 +150,15 @@ export function FirebaseLedgerOnlineCompanySyncList({
   const onSave = async () => {
     setSaving(true);
     try {
-      replaceFirebaseLedgerCompanySyncEntries(draft);
+      const entriesToSave: DraftMap = { ...draft };
+      for (const company of companies) {
+        const registryId = String(company.id || "").trim();
+        const authoritativeId = String(company.authoritativeCompanyId || "").trim();
+        if (!registryId || !authoritativeId || registryId === authoritativeId) continue;
+        entriesToSave[authoritativeId] = draft[registryId] ?? emptyEntry();
+      }
+      replaceFirebaseLedgerCompanySyncEntries(entriesToSave);
+      requestAttachmentUiRefresh();
       const selectedCompanies = companies.filter((company) => {
         const id = String(company.id || "").trim();
         return id && draft[id]?.data === true;

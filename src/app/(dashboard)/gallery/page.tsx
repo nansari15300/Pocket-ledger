@@ -891,6 +891,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                               contentType={attachMeta.contentType}
                               attachmentCompanyId={companyId}
                               forceLocalAttachmentOnly={localAttachmentsOnly}
+                              stableLocalPreviewOnly
                               enableHoverFullPreview={false}
                               holdAttachmentClipboard={false}
                             />
@@ -981,6 +982,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                                   contentType={attachMeta.contentType}
                                   attachmentCompanyId={companyId}
                                   forceLocalAttachmentOnly={localAttachmentsOnly}
+                                  stableLocalPreviewOnly
                                   size={700}
                                   previewBox={GALLERY_HOVER_PREVIEW_BOX}
                                   objectFit="contain"
@@ -1932,6 +1934,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
                       fileSize={file.size}
                       storagePath={isLocalFileRef(String(file.url || "")) ? undefined : file.path}
                       forceLocalAttachmentOnly={localAttachmentsOnly}
+                      stableLocalPreviewOnly
                       enableHoverFullPreview={false}
                       holdAttachmentClipboard={false}
                     />
@@ -2015,6 +2018,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
                             file={file.url}
                             storagePath={isLocalFileRef(String(file.url || "")) ? undefined : file.path}
                             forceLocalAttachmentOnly={localAttachmentsOnly}
+                            stableLocalPreviewOnly
                             size={700}
                             previewBox={GALLERY_HOVER_PREVIEW_BOX}
                             objectFit="contain"

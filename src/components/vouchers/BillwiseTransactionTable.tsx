@@ -424,7 +424,7 @@ export function BillwiseTransactionTable({
               <motion.tr
                 key="opening-balance-row"
                 data-row="opening-balance"
-                layout
+                layout="position"
                 initial={false}
                 exit={{ transition: { duration: 0 } }}
                 transition={

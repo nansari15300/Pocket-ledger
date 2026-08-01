@@ -12,6 +12,8 @@ import {
   getOfflineCachedAttachmentNativeRef,
   getRemoteAttachmentBlobPreferOfflineCache,
   isOfflineCachedAttachmentOnDevice,
+  seedOfflineAttachmentCacheFromBlob,
+  tryOfflineCachedAttachmentBlobMultiKey,
 } from "@/lib/offlineAttachmentUrlCache";
 import { useCompany } from "@/hooks/useCompany";
 import {
@@ -21,9 +23,17 @@ import {
   requestAttachmentUiRefresh,
   subscribeAttachmentLoadStore,
 } from "@/lib/attachmentLoadReady";
+import {
+  looksLikeFirebaseStorageDownloadUrl,
+  tryGetBlobFromFirebaseStorageDownloadUrl,
+} from "@/lib/storageGetBlobFromDownloadUrl";
 
 function thumbCacheKey(url: string): string {
   return `${url}::cell-thumb`;
+}
+
+function pdfPortalCacheKey(url: string): string {
+  return `${url}::pdf-portal`;
 }
 
 function isInlineImagePreviewUrl(raw: string): boolean {
@@ -51,11 +61,20 @@ export function useAttachmentThumbDisplayUrl(
   rawUrl: string | undefined | null,
   ready: boolean,
   companyIdProp?: string,
-  refreshKey = 0
+  refreshKey = 0,
+  resolveFallback?: {
+    voucherId?: string;
+    clientFileUrls?: readonly string[] | null;
+    filesNetworkAllowed?: boolean;
+  }
 ): string | null {
   const { companyId: shellCid } = useCompany();
   const companyId = companyIdProp ?? shellCid;
   const url = String(rawUrl || "").trim();
+  const fallbackClientFileUrlsKey =
+    !resolveFallback?.clientFileUrls || resolveFallback.clientFileUrls.length === 0
+      ? ""
+      : resolveFallback.clientFileUrls.map((u) => String(u || "").trim()).join("\u0001");
   const [uiRefreshTick, setUiRefreshTick] = useState(() => getAttachmentUiRefreshTick());
 
   const [thumb, setThumb] = useState<string | null>(() => {
@@ -108,6 +127,14 @@ export function useAttachmentThumbDisplayUrl(
           markAttachmentUrlReady(url);
           return;
         }
+        const persistedThumb = await tryOfflineCachedAttachmentBlobMultiKey(thumbCacheKey(url));
+        if (persistedThumb?.size) {
+          const thumbUrl = URL.createObjectURL(persistedThumb);
+          rememberHoverBlobUrl(thumbCacheKey(url), thumbUrl);
+          if (!cancelled) setThumb(thumbUrl);
+          markAttachmentUrlReady(url);
+          return;
+        }
         // PDF native displayUrl ko `<img>` mat — pehle sniff/raster path (neeche ready effect).
         if (isLocalFileRef(url)) return;
         const native = await getOfflineCachedAttachmentNativeRef(url);
@@ -155,9 +182,47 @@ export function useAttachmentThumbDisplayUrl(
           const { getBlobFromLocalFileRef } = await import("@/lib/localPendingFiles");
           blob = await getBlobFromLocalFileRef(url, { companyId: companyId ?? undefined });
         }
+        if (
+          !blob?.size &&
+          isLocalFileRef(url) &&
+          companyId &&
+          resolveFallback?.voucherId &&
+          resolveFallback.filesNetworkAllowed !== false
+        ) {
+          try {
+            const { tryResolveRemoteUrlForStaleLocalAttachment } = await import(
+              "@/lib/resolveVoucherAttachmentRemoteUrl"
+            );
+            const remoteUrl = await tryResolveRemoteUrlForStaleLocalAttachment(
+              companyId,
+              resolveFallback.voucherId,
+              url,
+              resolveFallback.clientFileUrls
+            );
+            if (remoteUrl && !isLocalFileRef(remoteUrl)) {
+              if (looksLikeFirebaseStorageDownloadUrl(remoteUrl)) {
+                blob = await tryGetBlobFromFirebaseStorageDownloadUrl(remoteUrl);
+              }
+              if (!blob?.size) {
+                blob = await getRemoteAttachmentBlobPreferOfflineCache(remoteUrl, undefined, {
+                  companyId: companyId ?? undefined,
+                });
+              }
+              if (blob?.size) {
+                void seedOfflineAttachmentCacheFromBlob(url, blob);
+                void seedOfflineAttachmentCacheFromBlob(remoteUrl, blob);
+              }
+            }
+          } catch {
+            /* stale online fallback optional */
+          }
+        }
         if (!blob?.size && isLocalFileRef(url) && companyId) {
           const { resolvePlServerStaffAttachmentPreviewBlob } = await import("@/lib/plServerAttachmentFetch");
           blob = await resolvePlServerStaffAttachmentPreviewBlob(url, { companyId });
+        }
+        if (!blob?.size && looksLikeFirebaseStorageDownloadUrl(url)) {
+          blob = await tryGetBlobFromFirebaseStorageDownloadUrl(url);
         }
         if (!blob?.size) {
           blob = await getRemoteAttachmentBlobPreferOfflineCache(url, undefined, {
@@ -187,8 +252,17 @@ export function useAttachmentThumbDisplayUrl(
           const { convertPdfFirstPageToImage } = await import("@/lib/pdfToImage");
           const result = await convertPdfFirstPageToImage(pdfBlob, 0.55, 96);
           rememberHoverBlobUrl(thumbCacheKey(url), result.thumbnailUrl);
+          void seedOfflineAttachmentCacheFromBlob(thumbCacheKey(url), result.thumbnailBlob);
           if (!cancelled) setThumb(result.thumbnailUrl);
           markAttachmentUrlReady(url);
+          if (!peekHoverCachedBlobUrl(pdfPortalCacheKey(url))) {
+            void convertPdfFirstPageToImage(pdfBlob, 0.92, 1800)
+              .then((full) => {
+                rememberHoverBlobUrl(pdfPortalCacheKey(url), full.thumbnailUrl);
+                void seedOfflineAttachmentCacheFromBlob(pdfPortalCacheKey(url), full.thumbnailBlob);
+              })
+              .catch(() => undefined);
+          }
         }
       } catch {
         /* thumb optional — Preview mode placeholder / tick-only fallback */
@@ -198,7 +272,16 @@ export function useAttachmentThumbDisplayUrl(
     return () => {
       cancelled = true;
     };
-  }, [url, ready, companyId, uiRefreshTick, refreshKey]);
+  }, [
+    url,
+    ready,
+    companyId,
+    uiRefreshTick,
+    refreshKey,
+    resolveFallback?.voucherId,
+    fallbackClientFileUrlsKey,
+    resolveFallback?.filesNetworkAllowed,
+  ]);
 
   return thumb;
 }

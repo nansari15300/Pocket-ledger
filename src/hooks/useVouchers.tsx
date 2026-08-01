@@ -140,7 +140,7 @@ type VoucherContextType = {
   journalAccountNames: Record<string, string>;
   userNames: Record<string, string>;
   /** Overdue sale/purchase transactions across all parties (for "Overdue Vouchers" view). */
-  overdueTransactions: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; overdueImportant?: boolean; userId?: string; userName?: string; narration?: string; createdAt?: any; lastEditedAt?: any; updatedAt?: any }>;
+  overdueTransactions: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; overdueImportant?: boolean; userId?: string; userName?: string; narration?: string; fileUrls?: string[]; unassignedFile?: unknown; createdAt?: any; lastEditedAt?: any; updatedAt?: any }>;
   hasOverdueTransactions: boolean;
   /** Entity profile edit save — turant list/detail UI update (Firestore snapshot se pehle). */
   patchMasterEntity: (
@@ -2502,7 +2502,7 @@ export const VoucherProvider = ({
 
   const { overdueTransactions, hasOverdueTransactions } = useMemo(() => {
     const partyNameById = new Map(processedParties.map((p) => [p.id, p.name]));
-    const list: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; overdueImportant?: boolean; userId?: string; userName?: string; narration?: string; createdAt?: any; lastEditedAt?: any; updatedAt?: any }> = [];
+    const list: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; overdueImportant?: boolean; userId?: string; userName?: string; narration?: string; fileUrls?: string[]; unassignedFile?: unknown; createdAt?: any; lastEditedAt?: any; updatedAt?: any }> = [];
     for (const v of vouchersForDisplay) {
       if (!isSaleOrPurchaseBillVoucherType(v.type) || !v.partyId) continue;
       const total = Number(v.total ?? v.amount ?? ((v.subTotal ?? 0) - (v.discount ?? 0) + (v.tax ?? 0))) || 0;
@@ -2543,6 +2543,8 @@ export const VoucherProvider = ({
         userId: fallbackUserId,
         userName: fallbackUserName,
         narration: (v as any).narration,
+        fileUrls: Array.isArray((v as any).fileUrls) ? (v as any).fileUrls : undefined,
+        unassignedFile: (v as any).unassignedFile,
         createdAt: (v as any).createdAt,
         lastEditedAt: (v as any).lastEditedAt,
         updatedAt: (v as any).updatedAt,

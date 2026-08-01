@@ -26,6 +26,7 @@ import { OnlineResumeRouteShield } from "@/components/OnlineResumeRouteShield";
 import { OfflineWarmSyncManager } from "@/components/OfflineWarmSyncManager";
 import { CompanyAttachmentOfflineBackfillManager } from "@/components/CompanyAttachmentOfflineBackfillManager";
 import { LocalCompanySqliteWarmBootstrap } from "@/components/LocalCompanySqliteWarmBootstrap";
+import { PlServerAttachmentPreloadManager } from "@/components/PlServerAttachmentPreloadManager";
 import { LiveMirrorFolderMissingDialog } from "@/components/LiveMirrorFolderMissingDialog";
 import { AppAlertDialog } from "@/components/AppAlertDialog";
 import { FirstDeviceCompanyHydrationOverlay } from "@/components/FirstDeviceCompanyHydrationOverlay";
@@ -153,6 +154,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 <OfflineWarmSyncManager />
                 {/* Online: mirror ki saari attachment URLs IndexedDB/native — offline par open jaisa online */}
                 <CompanyAttachmentOfflineBackfillManager />
+                <PlServerAttachmentPreloadManager />
                 <LocalCompanySqliteWarmBootstrap />
                 <LiveMirrorFolderMissingDialog />
                 <AppAlertDialog />

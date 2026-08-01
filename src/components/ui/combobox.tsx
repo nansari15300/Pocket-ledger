@@ -147,7 +147,12 @@ export function Combobox({
   };
 
   const focusSearchSoon = React.useCallback(() => {
-    requestAnimationFrame(() => searchInputRef.current?.focus({ preventScroll: true }));
+    requestAnimationFrame(() => {
+      const input = searchInputRef.current;
+      if (!input) return;
+      if (typeof document !== "undefined" && document.activeElement === input) return;
+      input.focus({ preventScroll: true });
+    });
   }, []);
 
   const handleSingleSelect = (val: string) => {

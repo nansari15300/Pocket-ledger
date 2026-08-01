@@ -841,7 +841,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
       };
     }, [isMobile, router]);
 
-    const noLayoutPages = ["/company", "/company/create"];
+    const noLayoutPages = ["/company/create"];
     const isEmbedRoute = pathname?.startsWith("/embed");
 
     if (noLayoutPages.includes(pathname)) {

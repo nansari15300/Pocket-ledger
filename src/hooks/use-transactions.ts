@@ -1112,52 +1112,52 @@ export function useTransactions(
                 
                 const d = safeToDate(t.date);
         
-                // Build searchable text from all transaction fields
-                const allSearchableFields: string[] = [];
+                const narrationFields = [t.narration, t.title];
+                const dateFields: string[] = [];
                 
                 // Date fields
                 if (d) {
-                    allSearchableFields.push(formatDateBS(d).toLowerCase());
-                    allSearchableFields.push(formatDate(d).toLowerCase());
+                    dateFields.push(formatDateBS(d));
+                    dateFields.push(formatDate(d));
                 }
                 
                 // Type
                 const displayType = t.type ? (t.subType === 'add_salary' ? 'Add Salary' : t.type.replace(/_/g, " ")) : "";
-                allSearchableFields.push(displayType.toLowerCase());
                 
                 // Voucher No. column filter — dono field names (Firestore / legacy)
                 const vn = t.voucherNumber ?? t.voucher_number;
-                if (vn) {
-                    allSearchableFields.push(String(vn).toLowerCase());
-                }
                 
                 // User — same resolver as table column (Auto flicker fix)
                 const userName = resolveLedgerTransactionUserDisplayName(t, userNames);
-                allSearchableFields.push(String(userName).toLowerCase());
-                
-                // Accounts/Particulars
-                const particularsText = getParticularsText(t, { ...journalAccountNames, ...userNames });
-                allSearchableFields.push(particularsText.toLowerCase());
-                
-                // Narration
-                if (t.narration) {
-                    allSearchableFields.push(t.narration.toLowerCase());
-                }
-                
-                // Title (for notes)
-                if (t.title) {
-                    allSearchableFields.push(t.title.toLowerCase());
-                }
                 
                 // Amount fields
                 const { debit, credit } = getTransactionAmounts(t, context, entity, stockView, entityList, processedTaxes);
                 const debitStr = formatCurrency(debit, { noSuffix: true, noAnimation: true })?.toString() ?? "";
                 const creditStr = formatCurrency(credit, { noSuffix: true, noAnimation: true })?.toString() ?? "";
-                allSearchableFields.push(debitStr.toLowerCase());
-                allSearchableFields.push(creditStr.toLowerCase());
+                const balanceValue =
+                    typeof t.balance === "number"
+                        ? t.balance
+                        : typeof t.runningBalance === "number"
+                          ? t.runningBalance
+                          : debit - credit;
+                const balanceAbsStr = formatCurrency(Math.abs(balanceValue), { noSuffix: true, noAnimation: true })?.toString() ?? "";
+                const balanceSide = balanceValue >= 0 ? "Dr" : "Cr";
+                const columnFieldsByKey: Record<string, unknown[]> = {
+                    syncStatus: [t.syncStatus, t.syncState, t.pendingSync ? "pending" : "", t.isSynced ? "synced" : ""],
+                    date: dateFields,
+                    date_bs: d ? [formatDateBS(d)] : [],
+                    date_ad: d ? [formatDate(d)] : [],
+                    type: [displayType, t.type, t.subType],
+                    voucherNumber: [vn],
+                    user: [userName, t.userId, t.createdBy, t.updatedBy],
+                    debit: [debit, debitStr],
+                    credit: [credit, creditStr],
+                    status: [t.paymentStatus, t.status, t.isApproved === true ? "approved" : "unapproved"],
+                    balance: [balanceValue, Math.abs(balanceValue), balanceAbsStr, `${balanceAbsStr} ${balanceSide}`, balanceSide],
+                };
+                const columnFields = columnFieldsByKey[key] ?? [];
                 
-                // Combine all fields into one searchable string
-                const combinedSearchText = allSearchableFields.join(" ");
+                const combinedSearchText = [...columnFields, ...narrationFields].join(" ");
                 
                 // For amount fields, also check numeric matching (works with 1+ characters)
                 if (key === "debit" || key === "credit" || key === "balance") {
@@ -1169,8 +1169,6 @@ export function useTransactions(
                     }
                 }
                 
-                // General text search across all fields (works with 1+ characters)
-                // Allow matching even with single character
                 if (rawSearchTerm.length > 0 && combinedSearchText.includes(rawSearchTerm)) {
                     return true;
                 }

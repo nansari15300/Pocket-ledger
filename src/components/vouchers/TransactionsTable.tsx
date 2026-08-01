@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import type { StockView, Item } from "@/components/items/types";
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Filter, MoreVertical, CheckSquare, MousePointerClick, Printer, Pencil } from "lucide-react";
+import { Filter, MoreVertical, CheckSquare, MousePointerClick, Printer, Pencil, X } from "lucide-react";
 import { txnTableIconBtnCn } from "@/lib/listSelectionChrome";
 import { scrollTransactionSelectedRowIntoView } from "@/lib/ledgerScrollToSelection";
 import {
@@ -500,7 +500,12 @@ export function TransactionsTable({
   const patchActiveFilter = setActiveFilter ?? setInternalActiveFilter;
   const filterInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const focusFilterInputSoon = useCallback((key: string) => {
-    requestAnimationFrame(() => filterInputRefs.current[key]?.focus({ preventScroll: true }));
+    requestAnimationFrame(() => {
+      const input = filterInputRefs.current[key];
+      if (!input) return;
+      if (typeof document !== "undefined" && document.activeElement === input) return;
+      input.focus({ preventScroll: true });
+    });
   }, []);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -878,6 +883,51 @@ export function TransactionsTable({
     const isFiltered = !!(filters && filters[key]) || (key === 'type' && voucherTypes && !voucherTypes.includes('all'));
     const thClass = cn('p-0', isNumeric && 'text-right');
     const innerPadding = ensureMinGaps ? "px-[10px]" : "px-2";
+    const filterValue = filters ? filters[key] || "" : "";
+    const renderTextFilterInput = () => {
+      if (!setFilters) return null;
+      return (
+        <div className="relative">
+          <Input
+            ref={(el) => {
+              filterInputRefs.current[key] = el;
+              if (el && activeFilter === key) focusFilterInputSoon(key);
+            }}
+            className={cn(
+              "border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0",
+              filterValue && "pr-9"
+            )}
+            placeholder={`Filter ${label}...`}
+            value={filterValue}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+              const newValue = e.target.value;
+              setFilters((prev: Record<string, string>) => ({ ...prev, [key]: newValue }));
+            }}
+            onKeyDown={(e: React.KeyboardEvent) => {
+              if (e.key === "Enter" && setActiveFilter) setActiveFilter(null);
+            }}
+            autoFocus
+          />
+          {filterValue ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 rounded-full text-muted-foreground hover:text-foreground"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setFilters((prev: Record<string, string>) => ({ ...prev, [key]: "" }));
+                focusFilterInputSoon(key);
+              }}
+              aria-label={`Clear ${label} filter`}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          ) : null}
+        </div>
+      );
+    };
 
     return (
       <TableHead className={thClass} style={ensureMinGaps && minWidthPx != null ? { minWidth: `${minWidthPx}px` } : undefined}>
@@ -901,28 +951,10 @@ export function TransactionsTable({
                     focusFilterInputSoon(key);
                   }}
                   onCloseAutoFocus={(e: Event) => e.preventDefault()}
-                  onPointerUpCapture={() => focusFilterInputSoon(key)}
-                  onClickCapture={() => focusFilterInputSoon(key)}
                 >
                     {key === 'type' && onVoucherTypeChange ? (
                         <VoucherTypeFilter selectedTypes={voucherTypes || ['all']} onSelectionChange={onVoucherTypeChange} />
-                    ) : setFilters ? (
-                        <Input
-                        ref={(el) => {
-                          filterInputRefs.current[key] = el;
-                          if (el && activeFilter === key) focusFilterInputSoon(key);
-                        }}
-                        className="border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                        placeholder={`Filter ${label}...`}
-                        value={filters ? filters[key] || '' : ''}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                            const newValue = e.target.value;
-                            setFilters((prev: Record<string, string>) => ({ ...prev, [key]: newValue }));
-                        }}
-                        onKeyDown={(e: React.KeyboardEvent) => { if (e.key === 'Enter' && setActiveFilter) setActiveFilter(null); }}
-                        autoFocus
-                        />
-                    ) : null}
+                    ) : renderTextFilterInput()}
                   </PopoverContent>
               </Popover>
             )}
@@ -943,28 +975,10 @@ export function TransactionsTable({
                     focusFilterInputSoon(key);
                   }}
                   onCloseAutoFocus={(e: Event) => e.preventDefault()}
-                  onPointerUpCapture={() => focusFilterInputSoon(key)}
-                  onClickCapture={() => focusFilterInputSoon(key)}
                 >
                     {key === 'type' && onVoucherTypeChange ? (
                         <VoucherTypeFilter selectedTypes={voucherTypes || ['all']} onSelectionChange={onVoucherTypeChange} />
-                    ) : setFilters ? (
-                        <Input
-                        ref={(el) => {
-                          filterInputRefs.current[key] = el;
-                          if (el && activeFilter === key) focusFilterInputSoon(key);
-                        }}
-                        className="border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                        placeholder={`Filter ${label}...`}
-                        value={filters ? filters[key] || '' : ''}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                            const newValue = e.target.value;
-                            setFilters((prev: Record<string, string>) => ({ ...prev, [key]: newValue }));
-                        }}
-                        onKeyDown={(e: React.KeyboardEvent) => { if (e.key === 'Enter' && setActiveFilter) setActiveFilter(null); }}
-                        autoFocus
-                        />
-                    ) : null}
+                    ) : renderTextFilterInput()}
                   </PopoverContent>
               </Popover>
             )}
@@ -2322,7 +2336,7 @@ export function TransactionsTable({
                 return (
                   <motion.div
                     key={groupKey}
-                    layout
+                    layout="position"
                     initial={false}
                     transition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
                     className={cn("space-y-1", groupContainerClass(block.colorIndex))}
@@ -2330,7 +2344,7 @@ export function TransactionsTable({
                     {block.items.map((t: any, itemIdx: number) => (
                       <motion.div
                         key={`${blockIdx}-${itemIdx}-${t.id ?? (t as any)._rowKey ?? ""}`}
-                        layout
+                        layout="position"
                         initial={false}
                         transition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
                       >
@@ -2343,7 +2357,7 @@ export function TransactionsTable({
               return (
                 <motion.div
                   key={block.item.id}
-                  layout
+                  layout="position"
                   initial={false}
                   transition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
                 >
@@ -2395,9 +2409,10 @@ export function TransactionsTable({
       <Table
         className={cn(
           ensureMinGaps ? "table-auto w-full min-w-full" : "table-fixed w-full",
+          "border-separate border-spacing-0",
           // Spend-wise: fill viewport like statement view — w-max (max-content) was stretching rows/headers
           // when linked groups + narration had wide intrinsic width. Colgroup + table-fixed keep columns aligned.
-          hasSpendWiseGroups && "border-separate border-spacing-0 w-full min-w-0 table-fixed",
+          hasSpendWiseGroups && "w-full min-w-0 table-fixed",
           "border-b-2 border-border"
         )}
         scrollContainer={false}
@@ -2410,7 +2425,7 @@ export function TransactionsTable({
           </colgroup>
         )}
         <TableHeader>
-        <TableRow className="border-b-4 border-black hover:bg-transparent">
+        <TableRow className="border-b-2 border-black hover:bg-transparent [&>th]:border-b-2 [&>th]:border-black">
           {showCol("syncStatus") && renderHeaderWithFilter("syncStatus", "Sync", false, ensureMinGaps ? 78 : undefined)}
           {showCol("date") && (dateSystem === "Both" ? (
             <>
@@ -2633,7 +2648,7 @@ export function TransactionsTable({
                             style={{ verticalAlign: "top" }}
                           >
                             <motion.div
-                              layout={!ledgerDateFilterActive}
+                              layout={!ledgerDateFilterActive ? "position" : false}
                               initial={false}
                               exit={{ transition: { duration: 0 } }}
                               transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}

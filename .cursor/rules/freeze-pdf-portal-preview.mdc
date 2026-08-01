@@ -1,0 +1,30 @@
+---
+description: Keep stabilized PDF attachment portal preview behavior unchanged unless explicitly requested.
+globs:
+  - "src/components/vouchers/AttachmentHoverPortal.tsx"
+  - "src/components/vouchers/attachmentHoverPreviewBody.tsx"
+  - "src/hooks/useAttachmentThumbDisplayUrl.ts"
+  - "src/lib/attachmentHoverBlobCache.ts"
+  - "src/lib/pdfToImage.ts"
+alwaysApply: false
+---
+
+# Freeze: PDF Portal Preview
+
+PDF attachment portal preview is stabilized. Do not casually change this flow.
+
+Preserve:
+- PDF portal opens with the full-quality first-page raster, not the low-resolution row thumbnail.
+- `::cell-thumb` remains only for small table/list thumbnails.
+- full-quality PDF portal raster uses a separate cache key.
+- cached `blob:` URLs are not revoked while still stored in hover preview cache.
+- first click, close, and second click all show the file without blank/collapsed portal.
+- fit-window remains stable on first open and repeated opens.
+
+Do not:
+- replace the portal with browser/PDF iframe rendering
+- mix row thumbnail and portal raster cache keys
+- revoke cached object URLs without removing the matching cache entry
+- change fit/zoom logic for PDF portal unless the human explicitly asks
+
+If a change is explicitly requested, keep it minimal and verify repeat open behavior.

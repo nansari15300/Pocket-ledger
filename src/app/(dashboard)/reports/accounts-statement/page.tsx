@@ -1607,7 +1607,7 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
     return (
       <motion.div
         key={item.id}
-        layout
+        layout="position"
         initial={false}
         exit={{ transition: { duration: 0 } }}
         transition={{

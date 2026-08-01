@@ -45,7 +45,7 @@ export function useMasterListRowMotion(options?: { enabled?: boolean }) {
       };
 
   const rowMotionProps = {
-    layout: layoutActive ? true : false,
+    layout: layoutActive ? ("position" as const) : false,
     initial: false as const,
     exit: { transition: { duration: 0 } },
     transition: rowTransition,

@@ -11,6 +11,11 @@ import {
 import { useCompany } from "@/hooks/useCompany";
 import { isWebBrowserAttachmentLazyLoad } from "@/lib/webAttachmentLazyLoadPolicy";
 import { isOnlineCompanyFilesUiAllowed } from "@/lib/onlineCompanySelectorSyncPolicy";
+import {
+  FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT,
+  type FirebaseLedgerCompanySyncPrefsChangedDetail,
+} from "@/lib/firebaseLedgerCompanySyncPrefs";
+import { queueAttachmentUrlsWarm, requestAttachmentUiRefresh } from "@/lib/attachmentLoadReady";
 
 type Props = {
   urls: readonly string[];
@@ -18,6 +23,8 @@ type Props = {
   size?: "sm" | "md";
   displayMode?: "preview" | "tick";
   companyId?: string;
+  voucherId?: string;
+  clientFileUrls?: readonly string[] | null;
   "aria-label"?: string;
 };
 
@@ -28,12 +35,22 @@ export function VoucherAttachmentFileIndicator({
   size = "md",
   displayMode = "preview",
   companyId: companyIdProp,
+  voucherId,
+  clientFileUrls,
   "aria-label": ariaLabel = "Attachment",
 }: Props) {
   const { company, companyId: shellCid } = useCompany();
   const companyId = companyIdProp ?? shellCid;
-  const filesNetworkAllowed =
-    !companyId || isOnlineCompanyFilesUiAllowed(String(companyId), company);
+  const [syncPrefsTick, setSyncPrefsTick] = React.useState(0);
+  const urlsKey = urls.map((url) => String(url || "").trim()).filter(Boolean).join("\u0001");
+  const clientFileUrlsKey = (clientFileUrls || [])
+    .map((url) => String(url || "").trim())
+    .filter(Boolean)
+    .join("\u0001");
+  const filesNetworkAllowed = React.useMemo(
+    () => !companyId || isOnlineCompanyFilesUiAllowed(String(companyId), company),
+    [companyId, company, syncPrefsTick]
+  );
   const primaryUrl = React.useMemo(
     () => urls.map((u) => String(u || "").trim()).find(Boolean),
     [urls]
@@ -43,16 +60,48 @@ export function VoucherAttachmentFileIndicator({
   React.useEffect(() => {
     setThumbRetryKey(0);
   }, [primaryUrl, displayMode]);
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPrefsChanged = (event: Event) => {
+      const detail = (event as CustomEvent<FirebaseLedgerCompanySyncPrefsChangedDetail>).detail;
+      const changedIds = Array.isArray(detail?.companyIds) ? detail.companyIds.map(String) : [];
+      if (changedIds.length > 0 && companyId && !changedIds.includes(String(companyId))) return;
+      setThumbRetryKey(0);
+      setSyncPrefsTick((n) => n + 1);
+      requestAttachmentUiRefresh();
+    };
+    window.addEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, onPrefsChanged);
+    return () => {
+      window.removeEventListener(FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT, onPrefsChanged);
+    };
+  }, [companyId]);
+  React.useEffect(() => {
+    if (syncPrefsTick <= 0 || !filesNetworkAllowed) return;
+    const currentUrls = urlsKey ? urlsKey.split("\u0001") : [];
+    const currentClientUrls = clientFileUrlsKey ? clientFileUrlsKey.split("\u0001") : currentUrls;
+    for (const url of currentUrls) invalidateAttachmentThumbDisplayUrl(url);
+    queueAttachmentUrlsWarm(
+      currentUrls,
+      companyId ? String(companyId) : undefined,
+      currentClientUrls
+    );
+    requestAttachmentUiRefresh();
+  }, [clientFileUrlsKey, companyId, filesNetworkAllowed, syncPrefsTick, urlsKey]);
   const wantsPreview = displayMode === "preview";
   // Network blocked inside cache when Files off + companyId; local cache still returns.
   const allowThumbLoad =
     wantsPreview &&
-    (readyState === "ready" || isWebBrowserAttachmentLazyLoad() || !filesNetworkAllowed);
+    (readyState === "ready" || (filesNetworkAllowed && isWebBrowserAttachmentLazyLoad()));
   const thumbUrl = useAttachmentThumbDisplayUrl(
     primaryUrl,
     allowThumbLoad,
     companyId,
-    thumbRetryKey
+    thumbRetryKey,
+    {
+      voucherId,
+      clientFileUrls,
+      filesNetworkAllowed,
+    }
   );
   const fileCount = urls.map((u) => String(u || "").trim()).filter(Boolean).length;
   if (fileCount === 0) return null;
@@ -75,7 +124,7 @@ export function VoucherAttachmentFileIndicator({
     const canShowThumb =
       !!thumbUrl &&
       thumbRetryKey < 4 &&
-      (isReady || isWebBrowserAttachmentLazyLoad() || !filesNetworkAllowed);
+      (isReady || (filesNetworkAllowed && isWebBrowserAttachmentLazyLoad()));
     if (canShowThumb) {
       return (
         <span
