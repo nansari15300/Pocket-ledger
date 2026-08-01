@@ -111,6 +111,7 @@ import {
   mergePlServerSharedCompaniesIntoRegistry,
   PL_SERVER_ACCESS_CONTEXT_EVENT,
 } from "@/lib/plServerAccessContext";
+import { plGateTrace } from "@/lib/plGateTrace";
 import { activateGate } from "@/lib/gates/gateRuntime";
 import { normalizeServerUrl, writeActiveGateId } from "@/lib/gates/gateStore";
 import type { GateRecord } from "@/lib/gates/gateTypes";
@@ -131,11 +132,19 @@ function isCompanyVisibleInSelector(c: CompanyData): boolean {
   return c.isDeleted !== true && (c as CompanyData & { movedToAdminRecycleAt?: unknown }).movedToAdminRecycleAt == null;
 }
 
+function companySelectorStorageKey(c: CompanyData): string {
+  const id = String(c?.id ?? "").trim();
+  if (!id) return "";
+  if (isServerSelectorCompanyRow(c)) return `server:${id}`;
+  if (isLocalSelectorCompanyRow(c)) return `local:${id}`;
+  return `online:${id}`;
+}
+
 function companySelectorListSig(rows: CompanyData[]): string {
   return rows
     .map((c) => {
       const co = c as CompanyData & { storageOption?: string };
-      return `${c.id}\0${c.name ?? ""}\0${String(co.storageOption ?? "")}\0${Boolean((c as CompanyData & { isOwned?: boolean }).isOwned)}`;
+      return `${companySelectorStorageKey(c)}\0${c.name ?? ""}\0${String(co.storageOption ?? "")}\0${Boolean((c as CompanyData & { isOwned?: boolean }).isOwned)}`;
     })
     .join("|");
 }
@@ -248,6 +257,21 @@ function handleRememberUsernameCheckboxChange(
   const typed = typedUsername.trim();
   if (checked && typed) {
     saveRememberedSharedUnlockUsername(firebaseUid, companyId, typed, userEmail);
+  }
+}
+
+async function withShowCompaniesTimeout<T>(work: Promise<T>, gateId: string, source: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      plGateTrace("show_companies_timeout", { gateId, source, timeoutMs: 45_000 });
+      reject(new Error("Show companies timed out after 45s. Check PL server sharing/firewall, then try again."));
+    }, 45_000);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -513,11 +537,21 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   const unlockTabPinnedRef = useRef(false);
   const unlockDialogCompanyIdRef = useRef<string | null>(null);
   const remoteAutoUnlockAttemptedRef = useRef(false);
+  const [serverGateStatus, setServerGateStatus] = useState<string>("");
 
   const syncServerGateToCompanySelector = useCallback(
     async (gate: GateRecord) => {
-      const result = await syncPlServerGateToLocalSqlite(gate, { pullFullLedger: true });
+      plGateTrace("show_companies_sync_start", { gateId: gate.id, serverUrl: gate.serverUrl, source: "company_page" });
+      setServerGateStatus("Loading company list...");
+      const result = await withShowCompaniesTimeout(
+        syncPlServerGateToLocalSqlite(gate, { pullFullLedger: false }),
+        gate.id,
+        "company_page"
+      );
+      plGateTrace("show_companies_sync_done", { gateId: gate.id, source: "company_page", result });
+      setServerGateStatus(result.error ? `Error: ${result.error}` : `Loaded ${result.synced} server companies.`);
       await reloadLocalCompanyRegistry();
+      plGateTrace("show_companies_registry_reloaded", { gateId: gate.id, source: "company_page" });
       return result;
     },
     [reloadLocalCompanyRegistry]
@@ -540,7 +574,6 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         serverUrl,
         accessToken: "",
       });
-      setActiveGateId(gate.id);
       const test = await testLocalServerGate(gate.id);
       if (!test.ok) {
         toast({
@@ -550,13 +583,9 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         });
         return;
       }
-      const synced = await syncServerGateToCompanySelector(gate);
       toast({
-        title: "Server connected",
-        description:
-          synced.synced > 0
-            ? `${synced.synced} companies loaded from server.`
-            : test.message,
+        title: "Gate saved",
+        description: "Server ping OK. Click Show companies to load the company list.",
       });
       setServerGateLabel("");
       setServerHost("");
@@ -575,8 +604,6 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     serverGateLabel,
     serverHost,
     serverPort,
-    setActiveGateId,
-    syncServerGateToCompanySelector,
     testLocalServerGate,
   ]);
 
@@ -584,9 +611,13 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     async (gate: GateRecord, openRemotePage: boolean) => {
       setServerGateBusyId(gate.id);
       try {
+        plGateTrace("show_companies_clicked", { gateId: gate.id, serverUrl: gate.serverUrl, source: "company_page", openRemotePage });
+        setServerGateStatus(openRemotePage ? "Opening server..." : "Testing server...");
         setActiveGateId(gate.id);
         const test = await testLocalServerGate(gate.id);
+        plGateTrace("show_companies_ping_done", { gateId: gate.id, source: "company_page", test });
         if (!test.ok) {
+          setServerGateStatus(`Offline: ${test.message}`);
           toast({
             variant: "destructive",
             title: "Cannot connect",
@@ -599,6 +630,14 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
           return;
         }
         const synced = await syncServerGateToCompanySelector(gate);
+        if (synced.error) {
+          toast({
+            variant: "destructive",
+            title: "Server sync failed",
+            description: synced.error,
+          });
+          return;
+        }
         toast({
           title: "Server synced",
           description:
@@ -608,6 +647,12 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         });
         setListTab("server");
       } catch (e) {
+        plGateTrace("show_companies_failed", {
+          gateId: gate.id,
+          source: "company_page",
+          error: e instanceof Error ? e.message : String(e),
+        });
+        setServerGateStatus(e instanceof Error ? `Error: ${e.message}` : "Error: Could not connect server.");
         toast({
           variant: "destructive",
           title: "Server gate",
@@ -659,7 +704,9 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     const mergeIntoMap = (map: Map<string, CompanyData>, rows: CompanyData[]) => {
       rows.forEach((c) => {
         if (!isCompanyVisibleInSelector(c)) return;
-        map.set(c.id, {
+        const key = companySelectorStorageKey(c);
+        if (!key) return;
+        map.set(key, {
           ...c,
           isOwned: resolveOwned(c),
         });
@@ -690,13 +737,17 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
           id: c.id,
           name: typeof c.name === "string" ? c.name : c.id,
         });
-        map.set(c.id, {
+        const key = companySelectorStorageKey(normalized as CompanyData);
+        if (!key) return;
+        map.set(key, {
           ...normalized,
           isOwned: driveSharedJoin ? false : resolveOwned(c),
         });
         return;
       }
-      map.set(c.id, {
+      const key = companySelectorStorageKey(c);
+      if (!key) return;
+      map.set(key, {
         ...c,
         isOwned: resolveOwned(c),
       });
@@ -719,11 +770,15 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
       const resolveOwned = (c: CompanyData) =>
         user?.uid ? resolveCompanyIsOwnedForUser(c, shareUser) : Boolean(c.isOwned);
       setCompanies((prev) => {
-        const map = new Map(prev.map((c) => [c.id, c]));
+        const map = new Map<string, CompanyData>();
+        for (const c of prev) {
+          const key = companySelectorStorageKey(c);
+          if (key) map.set(key, c);
+        }
         for (const row of rows) {
           if (localCompanyRowIsDeleted(row)) continue;
           if (user && !isLocalCompanyVisibleToAppAccount(row, user)) {
-            map.delete(row.id);
+            map.delete(`local:${row.id}`);
             continue;
           }
           if (!isLocalSelectorCompanyRow(row as CompanyData)) continue;
@@ -738,7 +793,9 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
             isOwned: driveSharedJoin ? false : resolveOwned(row as CompanyData),
           };
           if (!isCompanyVisibleInSelector(forSelector)) continue;
-          map.set(row.id, forSelector);
+          const key = companySelectorStorageKey(forSelector);
+          if (!key) continue;
+          map.set(key, forSelector);
         }
         const next = Array.from(map.values());
         const nextSig = companySelectorListSig(next);
@@ -1501,12 +1558,17 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                       ) : (
                         <PlusCircle className="mr-2 h-4 w-4" />
                       )}
-                      Add gate & connect
+                      Add gate
                     </Button>
                   </div>
                   {localServerGates.length > 0 ? (
                     <div className="space-y-2 border-t pt-3">
                       <p className="text-xs font-medium text-muted-foreground">Saved server gates</p>
+                      {serverGateStatus ? (
+                        <p className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-xs text-blue-900">
+                          Server filter: {serverGateStatus}
+                        </p>
+                      ) : null}
                       {localServerGates.map((gate) => (
                         <div key={gate.id} className="rounded-md border bg-background p-2">
                           <div className="min-w-0">
@@ -1526,7 +1588,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                               ) : (
                                 <Wifi className="mr-2 h-4 w-4" />
                               )}
-                              Sync here
+                              Show companies
                             </Button>
                             <Button
                               type="button"
@@ -1923,12 +1985,22 @@ export function CompanyActions({
   const [unlockListTab, setUnlockListTab] = useState<CompanyListTab>("local");
   const unlockTabPinnedRefHeader = useRef(false);
   const unlockDialogCompanyIdRefHeader = useRef<string | null>(null);
+  const [serverGateStatus, setServerGateStatus] = useState<string>("");
   const uploadLocked = useRestoreCloudUploadLock();
 
   const syncServerGateToHeaderSelector = useCallback(
     async (gate: GateRecord) => {
-      const result = await syncPlServerGateToLocalSqlite(gate, { pullFullLedger: true });
+      plGateTrace("show_companies_sync_start", { gateId: gate.id, serverUrl: gate.serverUrl, source: "header" });
+      setServerGateStatus("Loading company list...");
+      const result = await withShowCompaniesTimeout(
+        syncPlServerGateToLocalSqlite(gate, { pullFullLedger: false }),
+        gate.id,
+        "header"
+      );
+      plGateTrace("show_companies_sync_done", { gateId: gate.id, source: "header", result });
+      setServerGateStatus(result.error ? `Error: ${result.error}` : `Loaded ${result.synced} server companies.`);
       await reloadLocalCompanyRegistry();
+      plGateTrace("show_companies_registry_reloaded", { gateId: gate.id, source: "header" });
       return result;
     },
     [reloadLocalCompanyRegistry]
@@ -1951,7 +2023,6 @@ export function CompanyActions({
         serverUrl,
         accessToken: "",
       });
-      setActiveGateId(gate.id);
       const test = await testLocalServerGate(gate.id);
       if (!test.ok) {
         toast({
@@ -1961,13 +2032,9 @@ export function CompanyActions({
         });
         return;
       }
-      const synced = await syncServerGateToHeaderSelector(gate);
       toast({
-        title: "Server connected",
-        description:
-          synced.synced > 0
-            ? `${synced.synced} companies loaded from server.`
-            : test.message,
+        title: "Gate saved",
+        description: "Server ping OK. Click Show companies to load the company list.",
       });
       setServerGateLabel("");
       setServerHost("");
@@ -1986,8 +2053,6 @@ export function CompanyActions({
     serverGateLabel,
     serverHost,
     serverPort,
-    setActiveGateId,
-    syncServerGateToHeaderSelector,
     testLocalServerGate,
   ]);
 
@@ -1995,9 +2060,13 @@ export function CompanyActions({
     async (gate: GateRecord, openRemotePage: boolean) => {
       setServerGateBusyId(gate.id);
       try {
+        plGateTrace("show_companies_clicked", { gateId: gate.id, serverUrl: gate.serverUrl, source: "header", openRemotePage });
+        setServerGateStatus(openRemotePage ? "Opening server..." : "Testing server...");
         setActiveGateId(gate.id);
         const test = await testLocalServerGate(gate.id);
+        plGateTrace("show_companies_ping_done", { gateId: gate.id, source: "header", test });
         if (!test.ok) {
+          setServerGateStatus(`Offline: ${test.message}`);
           toast({
             variant: "destructive",
             title: "Cannot connect",
@@ -2010,6 +2079,14 @@ export function CompanyActions({
           return;
         }
         const synced = await syncServerGateToHeaderSelector(gate);
+        if (synced.error) {
+          toast({
+            variant: "destructive",
+            title: "Server sync failed",
+            description: synced.error,
+          });
+          return;
+        }
         toast({
           title: "Server synced",
           description:
@@ -2019,6 +2096,12 @@ export function CompanyActions({
         });
         setListTab("server");
       } catch (e) {
+        plGateTrace("show_companies_failed", {
+          gateId: gate.id,
+          source: "header",
+          error: e instanceof Error ? e.message : String(e),
+        });
+        setServerGateStatus(e instanceof Error ? `Error: ${e.message}` : "Error: Could not connect server.");
         toast({
           variant: "destructive",
           title: "Server gate",
@@ -2731,10 +2814,15 @@ export function CompanyActions({
                       ) : (
                         <PlusCircle className="mr-2 h-3.5 w-3.5" />
                       )}
-                      Add gate & connect
+                      Add gate
                     </Button>
                     {localServerGates.length > 0 ? (
                       <div className="space-y-1 border-t pt-2">
+                        {serverGateStatus ? (
+                          <p className="rounded border border-blue-200 bg-blue-50 px-1.5 py-1 text-[10px] text-blue-900">
+                            Server filter: {serverGateStatus}
+                          </p>
+                        ) : null}
                         {localServerGates.map((gate) => (
                           <div key={gate.id} className="rounded border bg-background p-1.5">
                             <p className="truncate text-xs font-medium">{gate.label}</p>
@@ -2748,7 +2836,7 @@ export function CompanyActions({
                                 disabled={serverGateBusyId === gate.id}
                                 onClick={() => void handleUseServerGateFromHeader(gate, false)}
                               >
-                                Sync
+                                Show
                               </Button>
                               <Button
                                 type="button"

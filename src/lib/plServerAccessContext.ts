@@ -451,7 +451,11 @@ async function refreshPlServerAccessContextInner(): Promise<PlServerAccessContex
   if (isPlServerGateClientActive()) {
     const fromGate = await fetchAccessContextFromActiveGate();
     if (fromGate) return fromGate;
-    return fetchSameOriginPlServerAccessContext(gateIdForContext);
+    // Hub app UI (localhost:3000) does not expose PL server context; only sharing-origin tabs do.
+    if (isPlSharingServerPortOrigin()) {
+      return fetchSameOriginPlServerAccessContext(gateIdForContext);
+    }
+    return null;
   }
 
   /** Web/APK client + local_server gate: remote server se context — localhost `/__pl_access_context` mat (unrestricted wipe). */

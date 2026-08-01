@@ -14,6 +14,7 @@ const APP_HUB_ORIGIN_PERSIST_KEY = "pl_app_hub_origin_v1";
 const GATE_ID_QUERY = "pl_gate_id";
 const GATE_LABEL_QUERY = "pl_gate_label";
 const GATE_SERVER_URL_QUERY = "pl_gate_server_url";
+const DEFAULT_LOCAL_APP_HUB_ORIGIN = "http://localhost:3000";
 
 /** App UI origin (`:3000`, EXE localhost bundle) — PL server gate sirf "Open gate" link. */
 export function isAppUiOrigin(): boolean {
@@ -98,7 +99,14 @@ export function describePlGateTestFailure(message: string): string {
 export function rememberAppHubOrigin(origin?: string): void {
   if (typeof window === "undefined") return;
   try {
-    const o = (origin || window.location.origin || "").trim();
+    const raw = (origin || window.location.origin || "").trim();
+    let o = raw;
+    try {
+      const u = new URL(raw);
+      if (isLoopbackHostname(u.hostname)) o = DEFAULT_LOCAL_APP_HUB_ORIGIN;
+    } catch {
+      /* keep raw */
+    }
     if (!o) return;
     sessionStorage.setItem(APP_HUB_ORIGIN_KEY, o);
     localStorage.setItem(APP_HUB_ORIGIN_PERSIST_KEY, o);
@@ -113,7 +121,15 @@ export function resolveAppHubOrigin(): string {
     const stored =
       sessionStorage.getItem(APP_HUB_ORIGIN_KEY)?.trim() ||
       localStorage.getItem(APP_HUB_ORIGIN_PERSIST_KEY)?.trim();
-    if (stored) return stored;
+    if (stored) {
+      try {
+        const u = new URL(stored);
+        if (isLoopbackHostname(u.hostname)) return DEFAULT_LOCAL_APP_HUB_ORIGIN;
+      } catch {
+        /* keep stored */
+      }
+      return stored;
+    }
   } catch {
     /* ignore */
   }
@@ -121,7 +137,7 @@ export function resolveAppHubOrigin(): string {
     const { hostname, protocol } = window.location;
     const host = hostname.toLowerCase();
     if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") {
-      return `${protocol}//127.0.0.1:3000`;
+      return protocol === "https:" ? "https://localhost:3000" : DEFAULT_LOCAL_APP_HUB_ORIGIN;
     }
   } catch {
     /* ignore */

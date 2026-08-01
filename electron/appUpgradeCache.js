@@ -11,6 +11,7 @@ const DISK_CACHE_DIR_NAMES = [
   "DawnGraphiteCache",
   "DawnWebGPUCache",
   "Service Worker",
+  "blob_storage",
 ];
 
 function clearPackagedDiskCacheDirs(userDataPath) {
@@ -23,25 +24,57 @@ function clearPackagedDiskCacheDirs(userDataPath) {
   }
 }
 
+function statFingerprintPart(p) {
+  try {
+    const st = fs.statSync(p);
+    return `${path.basename(p)}:${st.size}:${Math.trunc(st.mtimeMs)}`;
+  } catch (_) {
+    return "";
+  }
+}
+
+function packagedBuildFingerprint(app) {
+  const parts = [];
+  try {
+    const appPath = typeof app?.getAppPath === "function" ? app.getAppPath() : "";
+    if (appPath) {
+      parts.push(statFingerprintPart(appPath));
+      parts.push(statFingerprintPart(path.join(appPath, "package.json")));
+      parts.push(statFingerprintPart(path.join(appPath, "main.js")));
+      parts.push(statFingerprintPart(path.join(appPath, "out", "_next")));
+      parts.push(statFingerprintPart(path.join(appPath, "out", "index.html")));
+    }
+  } catch (_) {}
+  try {
+    const exePath = typeof app?.getPath === "function" ? app.getPath("exe") : "";
+    if (exePath) parts.push(statFingerprintPart(exePath));
+  } catch (_) {}
+  return parts.filter(Boolean).join("|") || "unknown-build";
+}
+
 /**
- * Packaged EXE version change: HTTP/code/shader caches reset (login cookies/IndexedDB safe).
- * @returns {{ upgraded: boolean, version: string, previousVersion: string }}
+ * Packaged EXE build change: HTTP/code/SW caches reset (login cookies/IndexedDB/SQLite safe).
+ * Version may stay same during local builds, so compare a packaged build fingerprint too.
+ * @returns {{ upgraded: boolean, version: string, previousVersion: string, buildFingerprint: string }}
  */
 async function runPackagedUpgradeCacheRefresh({ app, session, userDataPath }) {
   const version = typeof app?.getVersion === "function" ? app.getVersion() : "unknown";
+  const buildFingerprint = packagedBuildFingerprint(app);
   if (!app?.isPackaged || !session) {
-    return { upgraded: false, version, previousVersion: version };
+    return { upgraded: false, version, previousVersion: version, buildFingerprint };
   }
 
   const markerPath = path.join(userDataPath, VERSION_MARKER);
   let previous = "";
+  let previousBuildFingerprint = "";
   try {
     const parsed = JSON.parse(fs.readFileSync(markerPath, "utf8"));
     previous = String(parsed?.version || "");
+    previousBuildFingerprint = String(parsed?.buildFingerprint || "");
   } catch (_) {}
 
-  if (previous === version) {
-    return { upgraded: false, version, previousVersion: previous || version };
+  if (previous === version && previousBuildFingerprint === buildFingerprint) {
+    return { upgraded: false, version, previousVersion: previous || version, buildFingerprint };
   }
 
   try {
@@ -68,12 +101,22 @@ async function runPackagedUpgradeCacheRefresh({ app, session, userDataPath }) {
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
     fs.writeFileSync(
       markerPath,
-      JSON.stringify({ version, previousVersion: previous || null, refreshedAt: new Date().toISOString() }, null, 2),
+      JSON.stringify(
+        {
+          version,
+          buildFingerprint,
+          previousVersion: previous || null,
+          previousBuildFingerprint: previousBuildFingerprint || null,
+          refreshedAt: new Date().toISOString(),
+        },
+        null,
+        2
+      ),
       "utf8"
     );
   } catch (_) {}
 
-  return { upgraded: true, version, previousVersion: previous || "" };
+  return { upgraded: true, version, previousVersion: previous || "", buildFingerprint };
 }
 
 module.exports = { runPackagedUpgradeCacheRefresh };

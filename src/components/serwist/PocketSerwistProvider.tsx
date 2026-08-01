@@ -12,6 +12,16 @@ import type { ReactNode } from "react";
 import { useEffect, useSyncExternalStore } from "react";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 
+function isPocketLedgerSwCacheName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return (
+    lower.includes("serwist") ||
+    lower.includes("workbox") ||
+    lower.includes("precache") ||
+    lower.includes("pl-navigate-shell")
+  );
+}
+
 function useDisableSerwistForLocalBrowsing(): boolean {
   const disabledInDev = process.env.NODE_ENV === "development";
   /** EXE: packaged app me SW claim race (`InvalidStateError`) + React shell churn — offline shell zaroori nahi. */
@@ -38,15 +48,21 @@ export function PocketSerwistProvider({ children }: { children: ReactNode }) {
 
   // Pehle install SW localhost / Electron par bhi intercept karta — disable=true par hata do.
   useEffect(() => {
-    if (!disable || typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+    if (!disable || typeof window === "undefined") return;
     let cancelled = false;
-    void navigator.serviceWorker
-      .getRegistrations()
-      .then((regs) => {
+    const cleanup = async () => {
+      if ("serviceWorker" in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
         if (cancelled) return;
-        return Promise.all(regs.map((r) => r.unregister()));
-      })
-      .catch(() => {});
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+      if ("caches" in window) {
+        const names = await window.caches.keys();
+        if (cancelled) return;
+        await Promise.all(names.filter(isPocketLedgerSwCacheName).map((name) => window.caches.delete(name)));
+      }
+    };
+    void cleanup().catch(() => {});
     return () => {
       cancelled = true;
     };

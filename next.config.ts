@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import withSerwistInit from "@serwist/next";
 
 const isStaticBuild = process.env.STATIC_BUILD === "1";
+const isDevBuild = process.env.NODE_ENV !== "production";
 
 /** `/~offline` precache busting — git nahi ho to UUID (Firebase CI safe). */
 function serwistOfflineRevision(): string {
@@ -69,7 +70,7 @@ const baseConfig: NextConfig = {
 const withSerwist = withSerwistInit({
   swSrc: "src/app/sw.ts",
   swDest: "public/sw.js",
-  disable: isStaticBuild,
+  disable: isDevBuild || isStaticBuild,
   additionalPrecacheEntries: [
     { url: "/~offline", revision: serwistOfflineRevision() },
     ...(isStaticBuild ? [{ url: "/~offline/", revision: serwistOfflineRevision() }] : []),

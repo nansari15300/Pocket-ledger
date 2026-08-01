@@ -56,7 +56,7 @@ export default function RootLayout({
         {/* localhost static test (serve out): purana SW Firestore Listen/Write tod deta — React se pehle hatao */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var h=location.hostname;if(h!=="localhost"&&h!=="127.0.0.1")return;if(!("serviceWorker"in navigator))return;navigator.serviceWorker.getRegistrations().then(function(r){r.forEach(function(x){x.unregister();});});}catch(e){}})();`,
+            __html: `(function(){try{var h=location.hostname;if(h!=="localhost"&&h!=="127.0.0.1")return;if("serviceWorker"in navigator){navigator.serviceWorker.getRegistrations().then(function(r){r.forEach(function(x){x.unregister();});});}if("caches"in window){caches.keys().then(function(names){names.forEach(function(n){var l=String(n).toLowerCase();if(l.indexOf("serwist")>-1||l.indexOf("workbox")>-1||l.indexOf("precache")>-1||l.indexOf("pl-navigate-shell")>-1)caches.delete(n);});});}}catch(e){}})();`,
           }}
         />
         <PocketSerwistProvider>

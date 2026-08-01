@@ -24,12 +24,19 @@ function currentOriginPort(): string {
   }
 }
 
+function currentOriginIsLoopback(): boolean {
+  if (typeof window === "undefined") return false;
+  const host = String(window.location.hostname || "").trim().toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+}
+
 function isDirectPlServerOrigin(): boolean {
   if (typeof window === "undefined") return false;
   const port = currentOriginPort();
   if (!port) return false;
   // Hub app UI (`localhost:3000`) — sharing origin tab nahi jab tak remote client flag na ho.
   if (isCurrentPortAppUi() && !isPlRemoteServerClientMode()) return false;
+  if (currentOriginIsLoopback() && !PL_DEFAULT_SHARING_PORTS.has(port) && !isPlRemoteServerClientMode()) return false;
   if (isRegisteredPlSharingPort(port)) return true;
   return PL_DEFAULT_SHARING_PORTS.has(port);
 }

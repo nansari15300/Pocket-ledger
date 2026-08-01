@@ -172,9 +172,10 @@ export function AttachmentHoverPortal({
   const useTapMode = useTapInteractionMode();
   const forceClickPreview = clickOpensPreview && !effectiveDisabled;
   const globalClickMode = globalPreviewMode === "click" && !effectiveDisabled && openOnHover;
-  // `click`: desktop par click/tap modal; `hover`: pointer enter; touch hamesha click.
-  const clickOrTapOpenMode = useTapMode || forceClickPreview || globalClickMode;
   const [open, setOpen] = React.useState(false);
+  const [clickPinnedOpen, setClickPinnedOpen] = React.useState(false);
+  // `click`: desktop par click/tap modal; `hover`: pointer enter; touch hamesha click.
+  const clickOrTapOpenMode = useTapMode || globalClickMode || clickPinnedOpen;
   const [zoom, setZoom] = React.useState(1);
   /** Neeche Window / Width / Height — `window` default; `free` = +/- manual zoom */
   const [fitMode, setFitMode] = React.useState<FitMode>("window");
@@ -205,6 +206,7 @@ export function AttachmentHoverPortal({
     [normalizedGalleryUrls, galleryIndex]
   );
   const triggerRef = React.useRef<HTMLSpanElement>(null);
+  const panelRef = React.useRef<HTMLDivElement>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const panRef = React.useRef<PanSession>({
     active: false,
@@ -230,7 +232,13 @@ export function AttachmentHoverPortal({
 
   const scheduleClose = React.useCallback(() => {
     cancelClose();
-    closeTimer.current = setTimeout(() => setOpen(false), HOVER_CLOSE_MS);
+    closeTimer.current = setTimeout(() => {
+      closeTimer.current = null;
+      const triggerHovered = triggerRef.current?.matches(":hover") === true;
+      const panelHovered = panelRef.current?.matches(":hover") === true;
+      if (triggerHovered || panelHovered) return;
+      setOpen(false);
+    }, HOVER_CLOSE_MS);
   }, [cancelClose]);
 
   const updatePosition = React.useCallback(() => {
@@ -406,6 +414,7 @@ export function AttachmentHoverPortal({
   const handleOpen = React.useCallback((initialGalleryIndex?: number | null) => {
     if (effectiveDisabled) return;
     cancelClose();
+    setClickPinnedOpen(false);
     setStickOpen(false);
     if (galleryActive && initialGalleryIndex != null) {
       setGalleryIndex(clampGalleryIndex(initialGalleryIndex));
@@ -432,6 +441,7 @@ export function AttachmentHoverPortal({
     if (!open) {
       setZoom(1);
       setFitMode("window");
+      setClickPinnedOpen(false);
       setStickOpen(false);
       setGalleryIndex(0);
       setPanelWidth(null);
@@ -667,6 +677,7 @@ export function AttachmentHoverPortal({
   const closePanel = React.useCallback(() => {
     cancelClose();
     setOpen(false);
+    setClickPinnedOpen(false);
     setStickOpen(false);
   }, [cancelClose]);
 
@@ -805,9 +816,11 @@ export function AttachmentHoverPortal({
     const targetIndex = galleryIndexFromPointerTarget(e.target);
     setOpen((prev) => {
       if (prev) {
+        setClickPinnedOpen(false);
         setStickOpen(false);
         return false;
       }
+      setClickPinnedOpen(true);
       setStickOpen(false);
       if (galleryActive && targetIndex != null) {
         setGalleryIndex(clampGalleryIndex(targetIndex));
@@ -856,6 +869,7 @@ export function AttachmentHoverPortal({
           />
         ) : null}
         <div
+          ref={panelRef}
           className={cn(
             "pointer-events-auto fixed flex max-h-[min(88vh,calc(100dvh-16px))] flex-col overflow-hidden",
             // reference-other-app (pic 2): mota blue border + barah round + zoom bar same frame

@@ -249,10 +249,19 @@ export type SelectorCompanyBuckets = {
   serverTabCompanies: Company[];
 };
 
+function companySelectorDedupeKey(c: Company): string {
+  const id = String(c?.id ?? "").trim();
+  if (!id) return "";
+  if (isServerSelectorCompanyRow(c)) return `server:${id}`;
+  if (isLocalSelectorCompanyRow(c)) return `local:${id}`;
+  return `online:${id}`;
+}
+
 function dedupeCompaniesById(companies: Company[]): Company[] {
   const map = new Map<string, Company>();
   for (const c of companies) {
-    if (c?.id) map.set(c.id, c);
+    const key = companySelectorDedupeKey(c);
+    if (key) map.set(key, c);
   }
   return Array.from(map.values());
 }

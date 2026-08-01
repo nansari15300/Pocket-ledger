@@ -1835,6 +1835,7 @@ function serverHostLabel(serverUrl: string): string {
 
 function PlServerCompanyConnectionStatus() {
   const { company } = useCompany();
+  const isMobile = useIsMobile();
   const serverUrl = String(
     (company as (Company & { plServerGateServerUrl?: string }) | null | undefined)?.plServerGateServerUrl || ""
   ).trim().replace(/\/$/, "");
@@ -1842,6 +1843,7 @@ function PlServerCompanyConnectionStatus() {
   const hostLabel = serverHostLabel(serverUrl);
   const [pingMs, setPingMs] = useState<number | null>(null);
   const lastPingMsRef = useRef<number | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   useEffect(() => {
     if (!show) return;
@@ -1878,17 +1880,54 @@ function PlServerCompanyConnectionStatus() {
   }, [company?.id, show, serverUrl]);
 
   if (!show) return null;
+  const pingLabel = pingMs != null ? formatServerPing(pingMs) : "Offline";
   return (
-    <div
-      className="flex h-9 min-w-0 shrink items-center gap-2 rounded-md border bg-background px-2"
-      title={`PLServer: ${hostLabel}`}
-    >
-      <Server className="h-4 w-4 shrink-0" aria-hidden />
-      <span className="max-w-44 truncate text-xs text-muted-foreground">{hostLabel}</span>
-      <span className={cn("shrink-0 text-xs tabular-nums", pingMs != null ? "text-emerald-600" : "text-destructive")}>
-        {pingMs != null ? formatServerPing(pingMs) : "Offline"}
-      </span>
-    </div>
+    <>
+      <button
+        type="button"
+        className={cn(
+          "flex h-9 min-w-0 shrink items-center gap-2 rounded-md border bg-background px-2 text-left",
+          "hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          isMobile ? "max-w-[58px] justify-center" : "max-w-[240px]"
+        )}
+        title={`PLServer: ${serverUrl}`}
+        onClick={() => setDetailsOpen(true)}
+      >
+        {isMobile ? null : <Server className="h-4 w-4 shrink-0" aria-hidden />}
+        {isMobile ? null : <span className="max-w-44 truncate text-xs text-muted-foreground">{hostLabel}</span>}
+        <span className={cn("shrink-0 text-xs tabular-nums", pingMs != null ? "text-emerald-600" : "text-destructive")}>
+          {pingLabel}
+        </span>
+      </button>
+      {detailsOpen
+        ? createPortal(
+            <div className="fixed inset-0 z-[1000] flex items-start justify-end bg-black/20 p-2 pt-14" onClick={() => setDetailsOpen(false)}>
+              <div
+                className="w-[min(92vw,360px)] rounded-md border border-blue-300 bg-white p-3 text-xs shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="font-semibold text-slate-900">PL server ping</span>
+                  <button type="button" className="rounded px-2 py-1 text-slate-600 hover:bg-slate-100" onClick={() => setDetailsOpen(false)}>
+                    Close
+                  </button>
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-slate-500">Ping</span>
+                    <span className={cn("font-semibold tabular-nums", pingMs != null ? "text-emerald-600" : "text-destructive")}>{pingLabel}</span>
+                  </div>
+                  <div>
+                    <div className="mb-0.5 text-slate-500">URL</div>
+                    <div className="break-all rounded border bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-800">{serverUrl}</div>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+    </>
   );
 }
 

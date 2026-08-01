@@ -632,6 +632,12 @@ export const VoucherProvider = ({
 
   const [vouchers, setVouchersRaw] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const loadingRef = useRef(loading);
+  const setLoadingIfChanged = useCallback((next: boolean) => {
+    if (loadingRef.current === next) return;
+    loadingRef.current = next;
+    setLoading(next);
+  }, []);
   const voucherForensicPrevRef = useRef<{ companyId: string; rows: any[] }>({ companyId: "", rows: [] });
   const stableLiveVoucherListenerRef = useRef<{
     key: string;
@@ -909,7 +915,7 @@ export const VoucherProvider = ({
     setJournalAccountNames({});
     setUserNames({});
     hasWarmLedgerDataRef.current = false;
-    setLoading(true);
+    setLoadingIfChanged(true);
     previousData.current = {
       vouchers: [],
       vouchersAll: [],
@@ -934,7 +940,7 @@ export const VoucherProvider = ({
       patchMasterEntity: () => {},
     };
     lastCompanyIdRef.current = companyId ?? null;
-  }, [companyId, setVouchers]);
+  }, [companyId, setVouchers, setLoadingIfChanged]);
 
   // Pre-fill current user name so transaction User column shows correctly (no fetch delay)
   useEffect(() => {
@@ -1032,7 +1038,7 @@ export const VoucherProvider = ({
     const skipWarmVoucherSqliteReload = keepWarmUi && lastCompanyIdRef.current === companyId;
 
     if (authLoading) {
-      if (!keepWarmUi) setLoading(true);
+      if (!keepWarmUi) setLoadingIfChanged(true);
       return;
     }
 
@@ -1042,18 +1048,36 @@ export const VoucherProvider = ({
       (!!companyId && isPlServerSharedCompanyRow({ id: companyId }, null));
 
     const resetAllStates = () => {
+      const alreadyEmpty =
+        vouchers.length === 0 &&
+        parties.length === 0 &&
+        staff.length === 0 &&
+        accounts.length === 0 &&
+        taxes.length === 0 &&
+        unprocessedExpenseAccounts.length === 0 &&
+        items.length === 0 &&
+        itemGroups.length === 0 &&
+        groups.length === 0 &&
+        accountGroups.length === 0 &&
+        staffGroups.length === 0 &&
+        taxGroups.length === 0 &&
+        expenseGroups.length === 0;
+      if (alreadyEmpty) return;
+      const clearIfNeeded = <T,>(setter: React.Dispatch<React.SetStateAction<T[]>>) => {
+        setter((prev) => (prev.length > 0 ? [] : prev));
+      };
       allowEmptyVoucherWipeRef.current = true;
-      setVouchers([]); setParties([]); setStaff([]); setAccounts([]);
-      setTaxes([]); setUnprocessedExpenseAccounts([]); setItems([]);
-      setItemGroups([]); setGroups([]); setAccountGroups([]);
-      setStaffGroups([]); setTaxGroups([]); setExpenseGroups([]);
+      clearIfNeeded(setVouchers); clearIfNeeded(setParties); clearIfNeeded(setStaff); clearIfNeeded(setAccounts);
+      clearIfNeeded(setTaxes); clearIfNeeded(setUnprocessedExpenseAccounts); clearIfNeeded(setItems);
+      clearIfNeeded(setItemGroups); clearIfNeeded(setGroups); clearIfNeeded(setAccountGroups);
+      clearIfNeeded(setStaffGroups); clearIfNeeded(setTaxGroups); clearIfNeeded(setExpenseGroups);
       allowEmptyVoucherWipeRef.current = false;
     };
 
     if (shouldSkipHeavyVoucherBootstrap(pathname)) {
       // Route-level hard stop: background listeners/pulls off on selection/admin/gate shells.
       resetAllStates();
-      setLoading(false);
+      setLoadingIfChanged(false);
       return;
     }
 
@@ -1086,7 +1110,7 @@ export const VoucherProvider = ({
       // ledger pe warm same-company mat mitao (pichhla broad keepWarm /gate pe bhi rok deta tha).
       if (!companyId || !keepWarmUi) {
         resetAllStates();
-        setLoading(false);
+        setLoadingIfChanged(false);
       } else {
         void import("@/lib/plServerLiveChangeTrace")
           .then(({ plServerVoucherForensicTrace }) =>
@@ -1168,7 +1192,7 @@ export const VoucherProvider = ({
     };
 
     if (isExplicitLocalRegistryRow) {
-    if (!keepWarmUi) setLoading(true);
+    if (!keepWarmUi) setLoadingIfChanged(true);
       // Tier-1: masters only — `vouchers` SQLite read (JSON parse) hazaar+ rows par EXE me 30–90s lagata; spinner tab tak band na ho.
       // Vouchers secondary chunk me: parties list pehle paint, totals snapshot/listeners ke baad refresh.
       const CRITICAL_SQLITE_PATHS = new Set(["parties", "groups", "bank_accounts", "expense_accounts"]);
@@ -1213,7 +1237,7 @@ export const VoucherProvider = ({
       void loadSqliteChunk(critical).finally(() => {
         if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) {
           hasWarmLedgerDataRef.current = true;
-          setLoading(false);
+          setLoadingIfChanged(false);
         }
       });
       void loadSqliteChunk(secondary);
@@ -1224,7 +1248,7 @@ export const VoucherProvider = ({
 
     // Local APK: har online / ambiguous row ke liye pehle SQLite, phir server doc check — purane SQLite me syncedFromCloud missing ho to bhi cloud data milega
     if (shouldUseLocalCompanyData) {
-    if (!keepWarmUi) setLoading(true);
+    if (!keepWarmUi) setLoadingIfChanged(true);
       // EXE/static: `vouchers` mirror = sabse bada table — ise critical me mat rakho warna Promise.all yahi pe minute leta hai.
       // Pehle parties/groups/staff/taxes/banks + expense_accounts; vouchers + items baaki secondary chunk (loading tab tak band).
       const CRITICAL_SQLITE_PATHS = new Set([
@@ -1277,7 +1301,7 @@ export const VoucherProvider = ({
         // Stale-first: show local SQLite immediately; Firestore listeners refresh in background.
         if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) {
           hasWarmLedgerDataRef.current = true;
-          setLoading(false);
+          setLoadingIfChanged(false);
         }
       });
       void loadSqliteChunk(secondary);
@@ -1302,7 +1326,7 @@ export const VoucherProvider = ({
      */
     if (!allowCollectionLiveListeners) {
       if (!shouldUseLocalCompanyData && !isExplicitLocalRegistryRow) {
-        if (!keepWarmUi) setLoading(true);
+        if (!keepWarmUi) setLoadingIfChanged(true);
         const CRITICAL_SQLITE_PATHS = new Set([
           "parties",
           "groups",
@@ -1329,13 +1353,13 @@ export const VoucherProvider = ({
         void loadSqliteChunk(critical).finally(() => {
           if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) {
             hasWarmLedgerDataRef.current = true;
-            setLoading(false);
+            setLoadingIfChanged(false);
           }
         });
         void loadSqliteChunk(secondary);
       } else if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) {
         hasWarmLedgerDataRef.current = true;
-        setLoading(false);
+        setLoadingIfChanged(false);
       }
 
       const online =
@@ -1438,7 +1462,7 @@ export const VoucherProvider = ({
           }
         })();
       }
-      if (!shouldUseLocalCompanyData && !embeddedLocalFirstBoot && vouchers.length === 0) setLoading(true);
+      if (!shouldUseLocalCompanyData && !embeddedLocalFirstBoot && vouchers.length === 0) setLoadingIfChanged(true);
 
       const attachListeners = () => {
         if (cancelled) return;
@@ -1666,13 +1690,13 @@ export const VoucherProvider = ({
         // SQLite / stale-first pehle paint — saari collection snapshots ka wait mat karo.
         if (!cancelled) {
           hasWarmLedgerDataRef.current = true;
-          setLoading(false);
+          setLoadingIfChanged(false);
         }
       } else {
         Promise.all(initialFetches).then(() => {
           if (!cancelled) {
             hasWarmLedgerDataRef.current = true;
-            setLoading(false);
+            setLoadingIfChanged(false);
           }
         });
       }
@@ -1698,7 +1722,7 @@ export const VoucherProvider = ({
       if (!cloudLedgerSyncAllowed) {
         if (!cancelled && loadEpoch === companyDataLoadEpochRef.current) {
           hasWarmLedgerDataRef.current = true;
-          setLoading(false);
+          setLoadingIfChanged(false);
         }
         return () => {
           cancelled = true;
@@ -1709,7 +1733,7 @@ export const VoucherProvider = ({
           if (cancelled) return;
           if (!snap.exists()) {
             console.log("Company doc not in Firestore yet... skipping listeners.");
-            setLoading(false);
+            setLoadingIfChanged(false);
             if (!shouldUseLocalCompanyData) {
               resetAllStates();
             }
@@ -1730,7 +1754,7 @@ export const VoucherProvider = ({
             console.log(
               "Company doc owner mismatch or not shared with user... skipping listeners."
             );
-            setLoading(false);
+            setLoadingIfChanged(false);
             if (!shouldUseLocalCompanyData) {
               resetAllStates();
             }
@@ -1769,7 +1793,7 @@ export const VoucherProvider = ({
             return;
           }
           // Non-network rejection: bind mat karo; spinner band
-          setLoading(false);
+          setLoadingIfChanged(false);
         });
     }
 
@@ -1780,7 +1804,7 @@ export const VoucherProvider = ({
       unsubRef.current.forEach(u => u());
       unsubRef.current = [];
     };
-  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch, ledgerSyncModeEpoch, onlineSyncPrefsEpoch, pathname, voucherFormMasterScope, sqliteLedgerRouteHint.usesSqlite, sqliteLedgerRouteHint.ownerMatchesUser, company?.storageOption, company?.syncPolicy, company?.syncedFromCloud, company?.ownerId]);
+  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch, ledgerSyncModeEpoch, onlineSyncPrefsEpoch, pathname, voucherFormMasterScope, sqliteLedgerRouteHint.usesSqlite, sqliteLedgerRouteHint.ownerMatchesUser, company?.storageOption, company?.syncPolicy, company?.syncedFromCloud, company?.ownerId, setLoadingIfChanged]);
 
   // Single-doc / write-path upsert ke baad merge (notify) — collections ke hisaab se state update.
   useEffect(() => {
