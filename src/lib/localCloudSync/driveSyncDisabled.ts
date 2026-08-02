@@ -1,5 +1,5 @@
-/** Temporary hard kill-switch: Google Drive sync UI stays visible, but no Drive calls should run. */
-export const LOCAL_GOOGLE_DRIVE_SYNC_DISABLED = true;
+/** Emergency kill-switch: keep false unless Drive sync must be stopped globally. */
+export const LOCAL_GOOGLE_DRIVE_SYNC_DISABLED = false;
 
 export const LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE =
   "Google Drive sync is temporarily disabled.";

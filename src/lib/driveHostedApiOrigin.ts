@@ -1,6 +1,6 @@
 "use client";
 
-import { POCKET_LEDGER_HOSTED_API_ORIGIN, getBillingApiUrl } from "@/lib/billingApiOrigin";
+import { getBillingApiUrl } from "@/lib/billingApiOrigin";
 
 function isLocalDevBrowserHost(): boolean {
   if (typeof window === "undefined") return false;
@@ -15,7 +15,7 @@ export function resolveDriveHostedApiUrl(apiPath: string): string {
   const path = String(apiPath || "").trim();
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   if (isLocalDevBrowserHost()) {
-    return `${POCKET_LEDGER_HOSTED_API_ORIGIN.replace(/\/+$/, "")}${normalizedPath}`;
+    return normalizedPath;
   }
   return getBillingApiUrl(normalizedPath);
 }

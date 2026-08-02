@@ -429,8 +429,8 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
       reloadLocalCompanyRegistry();
       if (enabled) {
         const freshDrive = await ensureFreshDriveSyncWhenDriveFolderMissing(companyId);
-        const n = await backfillLocalDocsToCloudSyncOutbox(companyId, freshDrive ? { force: true } : undefined);
-        if (n > 0 || freshDrive) void runLocalCloudSyncCycle(companyId, { force: true });
+        await backfillLocalDocsToCloudSyncOutbox(companyId, freshDrive ? { force: true } : undefined);
+        void runLocalCloudSyncCycle(companyId, { force: true });
       }
       toast({
         title: "Settings saved",

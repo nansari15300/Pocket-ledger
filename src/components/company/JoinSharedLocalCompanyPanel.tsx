@@ -74,6 +74,11 @@ export function JoinSharedLocalCompanyPanel({
   const [localRegistryRows, setLocalRegistryRows] = useState<LocalCompanyDoc[]>([]);
   const driveSyncDisabled = isLocalGoogleDriveSyncDisabled();
 
+  useEffect(() => {
+    if (driveSyncDisabled) return;
+    setError((prev) => (prev === LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE ? null : prev));
+  }, [driveSyncDisabled]);
+
   const refreshLocalJoinState = useCallback(async () => {
     setLocalRegistryRows(await listLocalCompanies({ includeDeleted: true }));
   }, []);
@@ -127,6 +132,8 @@ export function JoinSharedLocalCompanyPanel({
   }, [active, localRegistryRows]);
 
   const ownedInvites = useMemo(() => invites.filter((inv) => inv.isOwnedOnDrive), [invites]);
+  const visibleError =
+    !driveSyncDisabled && error === LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE ? null : error;
 
   const groupedBySharer = useMemo(() => {
     const map = new Map<string, DriveSharedCompanyInvite[]>();
@@ -401,7 +408,14 @@ export function JoinSharedLocalCompanyPanel({
         >
           Connect Google Drive
         </Button>
-        <Button type="button" variant="ghost" size="sm" disabled={loading || driveSyncDisabled} onClick={() => void loadInvites()}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="rounded-full border-blue-300 bg-blue-50 px-4 text-blue-700 hover:bg-blue-100 hover:text-blue-800 disabled:opacity-60 dark:border-blue-800 dark:bg-blue-950/35 dark:text-blue-200 dark:hover:bg-blue-900/45"
+          disabled={loading || driveSyncDisabled}
+          onClick={() => void loadInvites()}
+        >
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Refresh list"}
         </Button>
       </div>
@@ -412,11 +426,11 @@ export function JoinSharedLocalCompanyPanel({
         </p>
       ) : null}
 
-      {error ? (
+      {visibleError ? (
         <p className="text-sm text-destructive rounded-md border border-destructive/30 bg-destructive/5 p-3">
-          {error.includes("not connected") || error.includes("Sign in")
-            ? `${error} — use Connect Google Drive first.`
-            : error}
+          {visibleError.includes("not connected") || visibleError.includes("Sign in")
+            ? `${visibleError} — use Connect Google Drive first.`
+            : visibleError}
         </p>
       ) : null}
 
