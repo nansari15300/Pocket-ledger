@@ -161,13 +161,14 @@ export async function startCompanyBackupRun(input: StartCompanyBackupRunInput): 
 
   activeAbort?.abort();
   activeAbort = new AbortController();
+  const startedAt = Date.now();
 
   setState({
     status: "running",
     companyId: input.companyId,
     companyName: String(input.company.name || "").trim() || input.companyId,
     includeAttachments: input.includeAttachments,
-    startedAt: Date.now(),
+    startedAt,
     progress: { phase: "Starting", detail: "Preparing backup…" },
     resultWhere: null,
     error: null,
@@ -190,6 +191,13 @@ export async function startCompanyBackupRun(input: StartCompanyBackupRunInput): 
       resultWhere: result.where,
       error: null,
     });
+    void import("@/lib/autoBackupDriveAutoUpload").then(({ maybeTriggerAutoBackupDriveUploadAfterBackup }) =>
+      maybeTriggerAutoBackupDriveUploadAfterBackup({
+        companyId: input.companyId,
+        companyName: String(input.company.name || "").trim() || input.companyId,
+        startedAtMs: startedAt,
+      })
+    );
   } else {
     if (result.cancelled) {
       setState({

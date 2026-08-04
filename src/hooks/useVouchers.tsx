@@ -34,6 +34,7 @@ import {
   listVoucherSummaryProjectionFromBrowserDb,
   mirrorCollectionDocsToBrowserDbSilent,
   notifyBrowserDbCollectionUpdated,
+  upsertCompanyDocInBrowserDb,
   type BrowserDbCollectionBumpDetail,
 } from "@/lib/localCompanyDocMirror";
 import { getLocalAuthToken, getLocalAuthUser, LOCAL_AUTH_CHANGED_EVENT } from "@/lib/localApiClient";
@@ -55,7 +56,7 @@ import {
   VOUCHER_ATTACHMENT_SAVED_EVENT,
   voucherAttachmentUiFingerprint,
 } from "@/lib/voucherFormAttachmentSave";
-import { normalizeVoucherRowAttachmentsForUi, getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize";
+import { normalizeVoucherRowAttachmentsForUi, getVoucherAttachmentUrlsForUi, stripTransientVoucherAttachmentFields } from "@/lib/voucherAttachmentNormalize";
 import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { getBillWiseAllocatedToTarget, getPaymentStatus as getPaymentStatusResult, isSaleOrPurchaseBillVoucherType } from "@/lib/payment-allocation-utils";
@@ -68,6 +69,7 @@ import {
   companyRowUsesSqliteLedgerWrites,
   isPureLocalLedgerCompany,
   shouldReadLedgerFromSqliteOnly,
+  shouldStripTransientVoucherAttachmentUrls,
 } from "@/lib/companyStorageKind";
 import { isPlServerSharedCompanyRow } from "@/lib/plServerAccessContext";
 import { embeddedClientPrefersQuietBackgroundSync, embeddedSqliteBumpDebounceMs, sqliteBumpCollectionNeededOnLedgerRoute } from "@/lib/embeddedWarmBootstrapFlags";
@@ -161,6 +163,15 @@ function sortDocsByDateField(data: any[], orderByField: string): any[] {
   return copy;
 }
 
+/** VoucherProvider sets this — module helpers ko company context ke bina strip flag. */
+let voucherUiStripTransientAttachments = false;
+
+function voucherAttachmentUiNormalizeOptions():
+  | { stripTransientAttachments: boolean }
+  | undefined {
+  return voucherUiStripTransientAttachments ? { stripTransientAttachments: true } : undefined;
+}
+
 /** React/forms me SQLite-only mirror META leak na ho — runtime list state sirf strip. */
 function stripMirrorMetaForEntityListRow(row: any): any {
   if (!row || typeof row !== "object") return row;
@@ -169,7 +180,26 @@ function stripMirrorMetaForEntityListRow(row: any): any {
       ? "sync_due"
       : "synced";
   const stripped = stripLocalMirrorMetaForUiRow(row as Record<string, unknown>);
-  return normalizeVoucherRowAttachmentsForUi({ ...stripped, __plSyncStatus: syncStatus });
+  return normalizeVoucherRowAttachmentsForUi(
+    { ...stripped, __plSyncStatus: syncStatus },
+    voucherAttachmentUiNormalizeOptions()
+  );
+}
+
+function maybeQueueTransientAttachmentCleanup(
+  companyId: string,
+  rows: readonly Record<string, unknown>[]
+): void {
+  if (!voucherUiStripTransientAttachments || !companyId || !rows.length) return;
+  for (const row of rows) {
+    if (!row?.id) continue;
+    const { row: cleaned, changed } = stripTransientVoucherAttachmentFields(row);
+    if (!changed) continue;
+    void upsertCompanyDocInBrowserDb(companyId, "vouchers", String(row.id), cleaned, {
+      notify: false,
+      skipPlanMutationGate: true,
+    }).catch(() => {});
+  }
 }
 
 /** SQLite bootstrap / prefetch: Firestore-merge jaisi strip taaki META forms me na jaye. */
@@ -596,6 +626,19 @@ export const VoucherProvider = ({
       cancelled = true;
     };
   }, [companyId, company?.storageOption, company?.syncPolicy, company?.syncedFromCloud, company?.ownerId, user?.uid, commitSqliteLedgerRouteHint]);
+  useEffect(() => {
+    voucherUiStripTransientAttachments = shouldStripTransientVoucherAttachmentUrls(company);
+    return () => {
+      voucherUiStripTransientAttachments = false;
+    };
+  }, [
+    company,
+    company?.storageOption,
+    company?.syncPolicy,
+    company?.plServerShared,
+    company?.localOnly,
+    company?.firestoreSyncDisabled,
+  ]);
   const usesSqliteLedgerForSelectedCompany =
     isLocalCompanySelected || sqliteLedgerRouteHint.usesSqlite;
   /** Offline unlock same-tab: isCompanyReady / prefetch dubara (localStorage pehle listener ke baad update hota hai). */
@@ -1857,6 +1900,9 @@ export const VoucherProvider = ({
             return;
           }
           const aliveCached = (cached as any[]).filter(isAliveDoc);
+          if (coll === "vouchers" && companyId) {
+            maybeQueueTransientAttachmentCleanup(companyId, aliveCached);
+          }
           // Full company collection from SQLite = source of truth. Merge-with-prev cross-company mix karta hai
           // (A vouchers + B vouchers) jab stale bump company switch ke baad complete ho.
           const replaceRows = (rows: any[], orderByField?: string) => {
@@ -1867,7 +1913,14 @@ export const VoucherProvider = ({
             case "vouchers":
               if (opts?.remoteIncoming) allowEmptyVoucherWipeRef.current = true;
               try {
-                setVouchers(replaceRows(aliveCached.map(normalizeVoucherRowAttachmentsForUi), "date"));
+                setVouchers(
+                  replaceRows(
+                    aliveCached.map((r) =>
+                      normalizeVoucherRowAttachmentsForUi(r, voucherAttachmentUiNormalizeOptions())
+                    ),
+                    "date"
+                  )
+                );
               } finally {
                 if (opts?.remoteIncoming) allowEmptyVoucherWipeRef.current = false;
               }
@@ -2018,7 +2071,10 @@ export const VoucherProvider = ({
           if (!cached.length) return;
           const aliveCached = (cached as any[])
             .filter(isAliveDoc)
-            .map(normalizeVoucherRowAttachmentsForUi);
+            .map((r) => normalizeVoucherRowAttachmentsForUi(r, voucherAttachmentUiNormalizeOptions()));
+          if (voucherUiStripTransientAttachments) {
+            maybeQueueTransientAttachmentCleanup(restoreCompanyId, aliveCached);
+          }
           setVouchers(sortDocsByDateField(aliveCached, "date").map(stripMirrorMetaForEntityListRow));
         })
         .catch(() => {});
@@ -2456,13 +2512,13 @@ export const VoucherProvider = ({
             });
         }
 
-        // --- Journal Entries ---
-        if (v.type === "journal" && Array.isArray(v.entries)) {
+        // --- Journal & Adjustment Entries ---
+        if ((v.type === "journal" || v.type === "adjustment") && Array.isArray(v.entries)) {
             v.entries.forEach((entry: any) => {
                 const d = Number(entry.debit || 0);
                 const c = Number(entry.credit || 0);
                 if (entry.accountId) {
-                    if (v.subType !== 'add_salary') { // Corrected: only apply to non-salary journals
+                    if (v.type === "adjustment" || v.subType !== 'add_salary') { // add_salary staff handled above
                        addVal(staffMap, entry.accountId, 'debit', d); addVal(staffMap, entry.accountId, 'credit', c);
                     }
                     addVal(accountMap, entry.accountId, 'debit', d); addVal(accountMap, entry.accountId, 'credit', c);

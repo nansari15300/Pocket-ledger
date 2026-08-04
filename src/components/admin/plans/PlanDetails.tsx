@@ -53,6 +53,7 @@ const entitlementLabels: Partial<Record<EntitlementKey, string>> = {
     canAddFileImagePdf: "Can add file (image/PDF) on vouchers",
     maxInterCompanyPartners: "Max joined inter-company partners",
     shareForReconciliationEnabled: "Share for Reconciling (cross-user ledger match)",
+    maxReconciliationLedgers: "Max reconciliation ledgers per user",
     savedAccountSwitchEnabled: "Saved account switch (APK/EXE quick login)",
     attachmentBackupRestoreEnabled: "Attachment backup & restore (embed files in .plbp)",
     allowFirebaseOnlineCompanies: "Online company (Firebase / Firestore sync)",
@@ -256,7 +257,6 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
         "hasRoleBasedAccess",
         "allowCompanyAdminRecycleBin",
         "canAddAvatar",
-        "shareForReconciliationEnabled",
         "savedAccountSwitchEnabled",
         "attachmentBackupRestoreEnabled",
         "allowFirebaseOnlineCompanies",
@@ -568,6 +568,42 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                     </div>
 
                     {/* Attachment backup/restore + local→online MB — plan traffic control (0 = unlimited). */}
+                    <div className="flex items-center gap-2 p-3 border rounded-lg bg-muted/30 col-span-1 md:col-span-2 flex-wrap">
+                        <div className="flex items-center gap-2 flex-1">
+                            <Switch
+                                id={`${plan.id}-shareForReconciliationEnabled`}
+                                checked={!!editablePlan.entitlements.shareForReconciliationEnabled}
+                                onCheckedChange={(checked) => {
+                                    handleEntitlementChange("shareForReconciliationEnabled", checked);
+                                    if (!checked) handleEntitlementChange("maxReconciliationLedgers", 0);
+                                }}
+                            />
+                            <Label htmlFor={`${plan.id}-shareForReconciliationEnabled`} className="text-sm">
+                                {entitlementLabels.shareForReconciliationEnabled}
+                            </Label>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Label htmlFor={`${plan.id}-maxReconciliationLedgers`} className="text-sm whitespace-nowrap">
+                                {entitlementLabels.maxReconciliationLedgers}
+                            </Label>
+                            <Input
+                                id={`${plan.id}-maxReconciliationLedgers`}
+                                type="number"
+                                min={0}
+                                className="w-24 h-8"
+                                value={String(Number(editablePlan.entitlements.maxReconciliationLedgers ?? 0))}
+                                onChange={(e) =>
+                                    handleEntitlementChange(
+                                        "maxReconciliationLedgers",
+                                        Math.max(0, parseInt(e.target.value, 10) || 0)
+                                    )
+                                }
+                                placeholder="0 = unlimited"
+                                disabled={!editablePlan.entitlements.shareForReconciliationEnabled}
+                            />
+                        </div>
+                    </div>
+
                     <div className="md:col-span-2 lg:col-span-3 rounded-lg border bg-card/50 p-3 space-y-3">
                         <div className="text-sm font-medium">Attachment backup &amp; restore</div>
                         <p className="text-xs text-muted-foreground">

@@ -232,7 +232,7 @@ export const getTransactionAmounts = (
                 if (transaction.fromAccountId === entity.id) credit += amount;
             }
             
-            if (transaction.type === "journal" && Array.isArray(transaction.entries) && entity?.id) {
+            if (isJournalLikeVoucher(transaction) && entity?.id) {
                 const journalAmt = sumJournalAmountsForAccount(transaction.entries, entity.id);
                 debit += journalAmt.debit;
                 credit += journalAmt.credit;
@@ -243,7 +243,7 @@ export const getTransactionAmounts = (
             if (entity && entity.id === 'all') {
                 // Handle "All Journal Vouchers" view - show all journal vouchers with total debit/credit per voucher
                 const isJournalAllView = (entity as any).accountType === 'journal_view' || (entity as any).accountName?.includes('Journal');
-                if (isJournalAllView && transaction.type === 'journal' && transaction.subType !== 'add_salary') {
+                if (isJournalAllView && isRegularJournalLikeVoucher(transaction)) {
                     const journalAmounts = getJournalTransactionAmountsForAll(transaction);
                     debit += journalAmounts.debit;
                     credit += journalAmounts.credit;
@@ -273,7 +273,7 @@ export const getTransactionAmounts = (
                 const matchesFromAccount = hasFromAccount && ledgerIdEq(transaction.fromAccountId, accountId);
                 if (matchesToAccount) debit = amount;
                 if (matchesFromAccount) credit = amount;
-            } else if (transaction.type === "journal" && Array.isArray(transaction.entries)) {
+            } else if (isJournalLikeVoucher(transaction)) {
                 const journalAmt = sumJournalAmountsForAccount(transaction.entries, entity.id);
                 debit += journalAmt.debit;
                 credit += journalAmt.credit;
@@ -364,7 +364,7 @@ export const getTransactionAmounts = (
                 }
             }
             
-            if (transaction.type === "journal" && transaction.subType !== 'add_salary' && Array.isArray(transaction.entries)) {
+            if (isRegularJournalLikeVoucher(transaction)) {
                 const journalAmt = sumJournalAmountsForAccount(transaction.entries, entity.id);
                 debit += journalAmt.debit;
                 credit += journalAmt.credit;
@@ -482,7 +482,7 @@ export const getTransactionAmounts = (
                     });
                 } else {
                     // Generic Logic for Party and Bank/Cash Groups
-                    if (isJournalAllView && transaction.type === 'journal' && transaction.subType !== 'add_salary') {
+                    if (isJournalAllView && isRegularJournalLikeVoucher(transaction)) {
                         const journalAmounts = getJournalTransactionAmountsForAll(transaction);
                         debit = journalAmounts.debit;
                         credit = journalAmounts.credit;
@@ -527,7 +527,7 @@ export const getTransactionAmounts = (
             
             // Generic Journal Processing for Groups (non-all view) - exclude salary journals and staff groups as they are handled above
             // Staff groups handle add_salary journals via getStaffTransactionAmounts, so skip generic processing for them
-            if (!isJournalAllView && !isStaffGroup && transaction.type === 'journal' && transaction.subType !== 'add_salary') {
+            if (!isJournalAllView && !isStaffGroup && isRegularJournalLikeVoucher(transaction)) {
                 // For specific account groups, only process entries matching accounts in the group
                 transaction.entries.forEach((e: any) => {
                     if(memberIdsInGroup.has(e.accountId)) {
@@ -663,7 +663,7 @@ export const getTransactionAmounts = (
 export const getJournalTransactionAmountsForAll = (transaction: any) => {
     let debit = 0;
     let credit = 0;
-    if (transaction.type === 'journal' && Array.isArray(transaction.entries)) {
+    if (isJournalLikeVoucher(transaction)) {
         debit = transaction.entries.reduce((sum: number, e: any) => sum + Number(e.debit || 0), 0);
         credit = transaction.entries.reduce((sum: number, e: any) => sum + Number(e.credit || 0), 0);
     }
@@ -752,8 +752,11 @@ export const getStaffTransactionAmounts = (transaction: any, staffIds: string[],
          taxRate = relevantTax?.rate || 0;
          debit = 0;
       }
-  } else if (transaction.type === 'journal' && transaction.subType !== 'add_salary') {
-      // For non-add_salary journals, only process staff entries, exclude tax entries
+  } else if (
+    (transaction.type === "journal" || transaction.type === "adjustment") &&
+    transaction.subType !== "add_salary"
+  ) {
+      // For non-add_salary journals/adjustments, only process staff entries, exclude tax entries
       transaction.entries.forEach((e: any) => {
         const isStaff = staffIds.includes(e.accountId);
         const isNotTax = !processedTaxes.some(pt => pt.id === e.accountId);
@@ -922,7 +925,7 @@ export function useTransactions(
             if (isJournalAllView) {
                 // For "All Journal Vouchers" view, show all journal transactions (excluding add_salary)
                 entityTransactions = transactionsToProcess.filter((v: any) => 
-                    v.type === 'journal' && v.subType !== 'add_salary'
+                    isRegularJournalLikeVoucher(v)
                 );
             } else {
                 const memberIds = new Set((entity as any).items?.map((i: any) => i.id));
@@ -1008,7 +1011,7 @@ export function useTransactions(
                     String((entity as any).accountName || "").includes("All Contra");
                 if (isJournalAllView) {
                     entityTransactions = transactionsToProcess.filter(
-                        (v: any) => v.type === "journal" && v.subType !== "add_salary"
+                        (v: any) => isRegularJournalLikeVoucher(v)
                     );
                 } else if (isContraAllView) {
                     entityTransactions = transactionsToProcess.filter((v: any) => v.type === "contra");
@@ -1382,14 +1385,14 @@ export function useTransactions(
                 if ((v as any)?.type === 'inter_company' && interCompanyVoucherTouchesEntity(v, currentId, 'party')) return true;
                 if ((v as any)?.type === 'contra' && ((v as any).fromAccountId === currentId || (v as any).toAccountId === currentId))
                   return true;
-                if ((v as any)?.type === 'journal' && Array.isArray((v as any)?.entries))
+                if (isJournalLikeVoucher(v as any))
                     return (v as any).entries.some((e: any) => String(e?.accountId ?? '') === currentId);
                 return false;
             }
             if (context === 'staff') {
                 if (String((v as any)?.staffId ?? '') === currentId) return true;
                 if ((v as any)?.type === 'inter_company' && interCompanyVoucherTouchesEntity(v, currentId, 'staff')) return true;
-                if ((v as any)?.type === 'journal' && Array.isArray((v as any)?.entries))
+                if (isJournalLikeVoucher(v as any))
                     return (v as any).entries.some((e: any) => String(e?.accountId ?? '') === currentId);
                 return false;
             }
@@ -1400,7 +1403,7 @@ export function useTransactions(
                     String((v as any)?.fromAccountId ?? '') === currentId ||
                     String((v as any)?.toAccountId ?? '') === currentId ||
                     String((v as any)?.bankAccountId ?? '') === currentId ||
-                    ((v as any)?.type === 'journal' && Array.isArray((v as any)?.entries) &&
+                    (isJournalLikeVoucher(v as any) &&
                         (v as any).entries.some((e: any) => String(e?.accountId ?? '') === currentId))
                 );
             }
@@ -1438,7 +1441,7 @@ export function useTransactions(
         const isStaffSalaryBillWiseSource = (v: any) =>
           v?.type === "payment_out" ||
           v?.type === "direct_expense" ||
-          (v?.type === "journal" && v?.subType !== "add_salary");
+          isRegularJournalLikeVoucher(v);
 
         const getStaffAddSalaryNetAllocated = (salaryVoucherId: string) =>
           (allocEdgesByTargetId.get(String(salaryVoucherId)) ?? []).reduce((sum, { src, alloc }) => {
@@ -1468,7 +1471,7 @@ export function useTransactions(
                     if (!keepIcPlaceholder) return null;
                 }
                 
-                if (isJournalAllView && t.type === 'journal') {
+                if (isJournalAllView && (t.type === 'journal' || t.type === 'adjustment')) {
                     // For journal transactions in "all" view, running balance should remain at opening balance
                     // Since journals balance (debit = credit), debit - credit = 0, so balance doesn't change
                     runningBalance += amounts.debit - amounts.credit; // This will be 0 for balanced journal entries
@@ -2095,4 +2098,11 @@ export function useTransactions(
   }, [entity, context, vouchers, dateRange, stockView, entityList, transactionContext, filters, voucherTypes, formatDate, formatDateBS, journalAccountNames, userNames, formatCurrency, daybookUserIdFilter]);
 
   return result;
+}
+function isJournalLikeVoucher(transaction: any): boolean {
+    return (transaction?.type === "journal" || transaction?.type === "adjustment") && Array.isArray(transaction?.entries);
+}
+
+function isRegularJournalLikeVoucher(transaction: any): boolean {
+    return isJournalLikeVoucher(transaction) && transaction?.subType !== "add_salary";
 }

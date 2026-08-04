@@ -33,7 +33,7 @@ import { isDeviceLocalCompany, isServerGateCompany, isStrictLocalOnlyCompany } f
 import { isLocalBackupRestoredCompanyRow } from "@/lib/localBackupRestoreCompany";
 import { isProtectedDriveLocalRegistryRow } from "@/lib/driveRestoredLocalCompany";
 import { pullSharedOnlineCompaniesFromFirestore } from "@/lib/sharedCompaniesFirestorePull";
-import { sharedCompanyQuerySpecs } from "@/lib/sharedWithEmailsQuery";
+import { ownerEmailQueryVariants, sharedCompanyQuerySpecs } from "@/lib/sharedWithEmailsQuery";
 import { isListedPlServerSharedCompany } from "@/lib/plServerAccessContext";
 
 export type MirrorOnlineUser = {
@@ -218,17 +218,23 @@ async function mirrorOnlineCompaniesFromFirestoreImpl(
   const ownedQueries = ownerIdCandidates
     .filter(Boolean)
     .map((ownerId) => query(collection(firestore, "companies"), where("ownerId", "==", ownerId)));
-  const ownedByEmailQ = user.email
-    ? query(collection(firestore, "companies"), where("ownerEmail", "==", user.email))
-    : null;
+  const ownedByEmailVariants = ownerEmailQueryVariants(user.email);
+  const ownedByEmailQueries = ownedByEmailVariants.map((emailVariant) =>
+    query(collection(firestore, "companies"), where("ownerEmail", "==", emailVariant))
+  );
 
   const ownedSnaps = await Promise.all(ownedQueries.map((q) => pullQueryWithRetries(q)));
-  const ownedByEmailSnap = ownedByEmailQ ? await pullQueryWithRetries(ownedByEmailQ) : { docs: [] };
+  const ownedByEmailSnaps =
+    ownedByEmailQueries.length > 0
+      ? await Promise.all(ownedByEmailQueries.map((q) => pullQueryWithRetries(q)))
+      : [{ docs: [] }];
 
   for (const snap of ownedSnaps) {
     for (const d of snap.docs) ownedIds.add(d.id);
   }
-  for (const d of ownedByEmailSnap.docs) ownedIds.add(d.id);
+  for (const snap of ownedByEmailSnaps) {
+    for (const d of snap.docs) ownedIds.add(d.id);
+  }
 
   // Shared: query variants + dedicated pull (union) — web listener jaisa poora set.
   const sharedSpecs = sharedCompanyQuerySpecs(user.email);
@@ -269,10 +275,12 @@ async function mirrorOnlineCompaniesFromFirestoreImpl(
       byId.set(d.id, { id: d.id, data, isOwned: true });
     }
   }
-  for (const d of ownedByEmailSnap.docs) {
-    const data = (d.data() ?? {}) as Record<string, unknown>;
-    if (data.isDeleted === true || data.movedToAdminRecycleAt != null) continue;
-    byId.set(d.id, { id: d.id, data, isOwned: true });
+  for (const snap of ownedByEmailSnaps) {
+    for (const d of snap.docs) {
+      const data = (d.data() ?? {}) as Record<string, unknown>;
+      if (data.isDeleted === true || data.movedToAdminRecycleAt != null) continue;
+      byId.set(d.id, { id: d.id, data, isOwned: true });
+    }
   }
 
   const cloudAllowedIds = new Set(byId.keys());

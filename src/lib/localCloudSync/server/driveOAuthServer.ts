@@ -85,3 +85,23 @@ export async function saveGoogleDriveTokensForUser(
     { merge: true }
   );
 }
+
+/** UI — Drive OAuth token shard present? */
+export async function getGoogleDriveConnectionStatus(
+  uid: string
+): Promise<{ connected: boolean; email: string | null }> {
+  const { getAdminDb, isFirebaseAdminConfigured } = await import("@/lib/firebaseAdmin");
+  if (!isFirebaseAdminConfigured()) {
+    return { connected: false, email: null };
+  }
+  const id = String(uid || "").trim();
+  if (!id) return { connected: false, email: null };
+  const db = getAdminDb();
+  const snap = await db.collection("user_tokens").doc(id).collection("google").doc("drive").get();
+  if (!snap.exists) return { connected: false, email: null };
+  const d = snap.data() as Record<string, unknown>;
+  const accessToken = String(d.accessToken || "").trim();
+  if (!accessToken) return { connected: false, email: null };
+  const email = String(d.connectedEmail || "").trim() || null;
+  return { connected: true, email };
+}

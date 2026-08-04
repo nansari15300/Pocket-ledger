@@ -3,7 +3,7 @@
 import { listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { COLLECTIONS_TO_BACKUP } from "@/lib/companyBackupCollections";
 import { fetchAttachmentRefBlob } from "@/lib/attachmentRefBlobFetch";
-import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
+import { getLocalCompanyById, removeLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { getBrowserDbForCompanyId } from "@/lib/localSqlite";
 import { logLocalCloudSync } from "@/lib/localCloudSync/logger";
 import { isCloudSyncTrackableFileRef } from "@/lib/localCloudSync/syncSummaryAttachments";
@@ -14,7 +14,7 @@ import { setCloudSyncCursor } from "@/lib/localCloudSync/queue";
 import type { CloudSyncManifest } from "@/lib/localCloudSync/types";
 import { readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConfig";
 import { postDriveJsonViaClient } from "@/lib/localCloudSync/driveApiClient";
-import { hasRealFirebaseAuthSession } from "@/lib/firebaseAuthForApi";
+import { getFirebaseAuthUserForApi, hasRealFirebaseAuthSession } from "@/lib/firebaseAuthForApi";
 import { warnLocalCloudSync } from "@/lib/localCloudSync/logger";
 import type { LocalCompanyDoc } from "@/lib/localCompanyStore";
 
@@ -25,6 +25,20 @@ export type DriveFullReuploadPrepResult = {
   requeuedLocalFiles: number;
   reuploadedDriveRefs: number;
 };
+
+async function isOwnerDeviceForDriveRepair(row: LocalCompanyDoc | null | undefined): Promise<boolean> {
+  if (!row) return false;
+  if ((row as { driveSharedJoin?: unknown }).driveSharedJoin === true) return false;
+  const ownerEmail = String(row.ownerEmail || "").trim().toLowerCase();
+  if (!ownerEmail) return true;
+  try {
+    const user = await getFirebaseAuthUserForApi();
+    const email = String(user.email || "").trim().toLowerCase();
+    return !email || email === ownerEmail;
+  } catch {
+    return false;
+  }
+}
 
 function isAliveDoc(row: Record<string, unknown>): boolean {
   return row.isDeleted !== true;
@@ -46,60 +60,13 @@ export function shouldPrepareDriveFullReuploadFromLocal(input: {
 }
 
 /**
- * Drive folder hard-delete (sync off ke dauran) ke baad sync dubara ON —
- * stale folder id hatao, cursor/outbox reset, agla upload naya Pocket Ledger folder banayega.
+ * @deprecated Prefer `processDriveFolderRepairGate` — repair ab 2 min delay + owner confirm ke saath hota hai.
+ * Returns true jab repair apply ho chuka ho (fresh upload queue).
  */
 export async function ensureFreshDriveSyncWhenDriveFolderMissing(companyId: string): Promise<boolean> {
-  const cid = String(companyId || "").trim();
-  if (!cid) return false;
-  if (!hasRealFirebaseAuthSession()) return false;
-
-  const reg = await getLocalCompanyById(cid, { includeDeleted: true });
-  if (!reg) return false;
-
-  const cfg = readCloudSyncConfigFromCompany(reg);
-  if (!cfg.cloudSyncEnabled || cfg.cloudSyncProvider !== "google_drive") return false;
-
-  const folderId = String(reg.cloudSyncDriveFolderId ?? "").trim();
-  try {
-    const res = await postDriveJsonViaClient<{ accessible?: boolean }>(
-      "/api/local-cloud-sync/drive/folder-accessible",
-      {
-        companyId: cid,
-        companyName: typeof reg.name === "string" ? reg.name : undefined,
-        driveFolderId: folderId || undefined,
-      }
-    );
-    if (res.accessible === true) return false;
-
-    await unsyncCloudSyncOutboxForCompany(cid);
-    await clearCloudSyncHistoricalBackfillDone(cid);
-    await setCloudSyncCursor(cid, { lastSyncedOp: 0, lastSyncAt: null, lastError: null, syncStatus: "idle" });
-
-    const next: LocalCompanyDoc = {
-      ...reg,
-      cloudSyncDriveFolderId: null,
-      updatedAt: Date.now(),
-    };
-    if ((reg as { driveSharedJoin?: unknown }).driveSharedJoin === true) {
-      (next as LocalCompanyDoc & { driveSharedJoin?: boolean }).driveSharedJoin = false;
-    }
-    await upsertLocalCompany(next);
-
-    const { requeuedLocalFiles, reuploadedDriveRefs } = await rehydrateLocalAttachmentRefsForDrive(cid);
-    logLocalCloudSync("fresh Drive sync — prior folder missing, new folder on next upload", {
-      companyId: cid,
-      requeuedLocalFiles,
-      reuploadedDriveRefs,
-    });
-    return true;
-  } catch (e) {
-    warnLocalCloudSync("drive folder check skipped (fresh sync prep)", {
-      companyId: cid,
-      msg: e instanceof Error ? e.message : String(e),
-    });
-    return false;
-  }
+  const { processDriveFolderRepairGate } = await import("@/lib/localCloudSync/driveFolderRepair");
+  const gate = await processDriveFolderRepairGate(companyId);
+  return gate.action === "applied";
 }
 
 export async function unsyncCloudSyncOutboxForCompany(companyId: string): Promise<number> {
@@ -222,7 +189,10 @@ async function patchDocFieldRef(
 }
 
 /** `local:` pending queue + cached `drive:` bytes dubara upload (Drive folder wipe ke baad). */
-export async function rehydrateLocalAttachmentRefsForDrive(companyId: string): Promise<{
+export async function rehydrateLocalAttachmentRefsForDrive(
+  companyId: string,
+  options?: { forceUploadDriveRefs?: boolean }
+): Promise<{
   requeuedLocalFiles: number;
   reuploadedDriveRefs: number;
 }> {
@@ -230,6 +200,14 @@ export async function rehydrateLocalAttachmentRefsForDrive(companyId: string): P
   if (!cid) return { requeuedLocalFiles: 0, reuploadedDriveRefs: 0 };
 
   const reg = await getLocalCompanyById(cid, { includeDeleted: true });
+  const canRepairDriveRefs = await isOwnerDeviceForDriveRepair(reg);
+  if (!canRepairDriveRefs) {
+    logLocalCloudSync("Drive attachment repair skipped: owner device required", {
+      companyId: cid,
+      ownerEmail: reg?.ownerEmail || null,
+    });
+    return { requeuedLocalFiles: 0, reuploadedDriveRefs: 0 };
+  }
   const pending = await getPendingFiles();
   const pendingIds = new Set(pending.map((p) => p.id));
   let requeuedLocalFiles = 0;
@@ -270,11 +248,13 @@ export async function rehydrateLocalAttachmentRefsForDrive(companyId: string): P
         }
 
         if (isDriveFileRef(ref)) {
-          const { downloadDriveAttachmentBlob } = await import("@/lib/localCloudSync/driveCloudSyncClient");
-          const onDrive = await downloadDriveAttachmentBlob(ref, cid);
-          if (onDrive && onDrive.size > 0) continue;
+          if (options?.forceUploadDriveRefs !== true) {
+            const { downloadDriveAttachmentBlob } = await import("@/lib/localCloudSync/driveCloudSyncClient");
+            const onDrive = await downloadDriveAttachmentBlob(ref, cid);
+            if (onDrive && onDrive.size > 0) continue;
+          }
 
-    const blob = await resolveLocalBytesForDriveReupload(ref, cid);
+          const blob = await resolveLocalBytesForDriveReupload(ref, cid);
           if (!blob || blob.size <= 0) continue;
           const driveRef = await uploadPendingAttachmentPayloadToDrive({
             companyId: cid,
@@ -326,12 +306,23 @@ export async function prepareDriveFullReuploadFromLocal(
   const cid = String(companyId || "").trim();
   if (!cid) return empty;
   if (!shouldPrepareDriveFullReuploadFromLocal(input)) return empty;
+  const reg = await getLocalCompanyById(cid, { includeDeleted: true });
+  if (!(await isOwnerDeviceForDriveRepair(reg))) {
+    logLocalCloudSync("drive full reupload skipped: owner device required", {
+      companyId: cid,
+      ownerEmail: reg?.ownerEmail || null,
+      force: input.force === true,
+    });
+    return empty;
+  }
 
   const unsyncedOps = await unsyncCloudSyncOutboxForCompany(cid);
   await clearCloudSyncHistoricalBackfillDone(cid);
   await setCloudSyncCursor(cid, { lastSyncedOp: 0, lastError: null, syncStatus: "idle" });
 
-  const { requeuedLocalFiles, reuploadedDriveRefs } = await rehydrateLocalAttachmentRefsForDrive(cid);
+  const { requeuedLocalFiles, reuploadedDriveRefs } = await rehydrateLocalAttachmentRefsForDrive(cid, {
+    forceUploadDriveRefs: input.force === true || input.remoteOpCount === 0,
+  });
 
   logLocalCloudSync("drive full reupload prepared", {
     companyId: cid,
@@ -348,4 +339,61 @@ export async function prepareDriveFullReuploadFromLocal(
     requeuedLocalFiles,
     reuploadedDriveRefs,
   };
+}
+
+/** Manual — saari `drive:` refs scan; missing files local bytes se dubara upload. */
+export async function runManualDriveAttachmentRehydrate(companyId: string): Promise<{
+  ok: boolean;
+  requeuedLocalFiles: number;
+  reuploadedDriveRefs: number;
+  uploadedPendingFiles: number;
+  error?: string;
+}> {
+  const empty = {
+    ok: false,
+    requeuedLocalFiles: 0,
+    reuploadedDriveRefs: 0,
+    uploadedPendingFiles: 0,
+  };
+  const cid = String(companyId || "").trim();
+  if (!cid) return { ...empty, error: "missing companyId" };
+
+  const { shouldUseLocalCloudSync } = await import("@/lib/localCloudSync/companyConfig");
+  if (!(await shouldUseLocalCloudSync(cid))) {
+    return { ...empty, error: "cloud sync disabled" };
+  }
+
+  if (!hasRealFirebaseAuthSession()) {
+    return { ...empty, error: "Sign in to Google Drive first" };
+  }
+
+  const { processDriveFolderRepairGate } = await import("@/lib/localCloudSync/driveFolderRepair");
+  const repairGate = await processDriveFolderRepairGate(cid);
+  if (repairGate.action === "blocked") {
+    return { ...empty, error: repairGate.message };
+  }
+
+  const reg = await getLocalCompanyById(cid, { includeDeleted: true });
+  if (!reg) return { ...empty, error: "company not found" };
+  if (!(await isOwnerDeviceForDriveRepair(reg))) {
+    return { ...empty, error: "Use the owner account on this device to repair Drive attachments" };
+  }
+
+  const rehyd = await rehydrateLocalAttachmentRefsForDrive(cid);
+  await upsertLocalCompany({
+    ...reg,
+    cloudSyncLastAttachmentRehydrateAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+
+  const { syncPendingFilesForCompany, listPendingFilesForCompany } = await import("@/lib/localPendingFiles");
+  let uploadedPendingFiles = 0;
+  for (let round = 0; round < 24; round++) {
+    const result = await syncPendingFilesForCompany(cid, {});
+    uploadedPendingFiles += result.uploaded;
+    if ((await listPendingFilesForCompany(cid)).length === 0) break;
+  }
+
+  logLocalCloudSync("manual attachment rehydrate", { companyId: cid, ...rehyd, uploadedPendingFiles });
+  return { ok: true, ...rehyd, uploadedPendingFiles };
 }

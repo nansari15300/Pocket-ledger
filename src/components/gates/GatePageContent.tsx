@@ -1321,7 +1321,10 @@ export function GatePageContent() {
                       clearSelectedCompanyId: setCompanyId,
                       firebaseUid: user?.uid ?? null,
                     });
-                    await purgeOrphanPlServerMirrorCompanies({ firebaseUid: user?.uid ?? null });
+                    await purgeOrphanPlServerMirrorCompanies({
+                      firebaseUid: user?.uid ?? null,
+                      firebaseEmail: user?.email ?? null,
+                    });
                   }
                   if (editingGateId === deleteId) cancelEdit();
                   setSelectedGateIdForDetail(null);

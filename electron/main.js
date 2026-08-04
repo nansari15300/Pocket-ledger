@@ -3009,6 +3009,10 @@ if (gotSingleInstanceLock) {
       ) {
         return { ok: false, error: "invalid-path" };
       }
+      if (payload?.asBinary) {
+        const buf = fs.readFileSync(fullResolved);
+        return { ok: true, base64: buf.toString("base64") };
+      }
       const text = fs.readFileSync(fullResolved, "utf8");
       return { ok: true, text };
     } catch (e) {

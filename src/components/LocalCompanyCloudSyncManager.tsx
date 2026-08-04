@@ -13,7 +13,7 @@ import { MIN_CLOUD_SYNC_TICK_MS } from "@/lib/localCloudSync/types";
 import { hasRealFirebaseAuthSession, waitForFirebaseAuthReady } from "@/lib/firebaseAuthForApi";
 import { isLocalGoogleDriveSyncDisabled } from "@/lib/localCloudSync/driveSyncDisabled";
 
-const BACKGROUND_CLOUD_SYNC_TICK_MS = Math.max(MIN_CLOUD_SYNC_TICK_MS, 60_000);
+const MAX_BACKGROUND_CLOUD_SYNC_TICK_MS = 60_000;
 const DRIVE_PURGE_CHECK_MS = 10 * 60 * 1000;
 const FORCE_ACTIVE_EVENT_COOLDOWN_MS = 60_000;
 
@@ -22,6 +22,14 @@ function isCompanySyncDue(row: LocalCompanyDoc, now: number): boolean {
   const intervalMs = cfg.cloudSyncIntervalSec * 1000;
   const lastSyncAt = cfg.cloudSyncLastSyncAt ?? 0;
   return now - lastSyncAt >= intervalMs;
+}
+
+function nextCompanySyncDelayMs(row: LocalCompanyDoc, now: number): number | null {
+  const cfg = readCloudSyncConfigFromCompany(row);
+  if (!cfg.cloudSyncEnabled || !cfg.cloudSyncProvider) return null;
+  const intervalMs = cfg.cloudSyncIntervalSec * 1000;
+  const lastSyncAt = cfg.cloudSyncLastSyncAt ?? 0;
+  return Math.max(0, lastSyncAt + intervalMs - now);
 }
 
 async function runScheduledDriveSyncForCompany(
@@ -61,18 +69,56 @@ export function LocalCompanyCloudSyncManager() {
     if (typeof window === "undefined") return;
     if (isLocalGoogleDriveSyncDisabled()) return;
 
+    let timerId: number | null = null;
+    let cancelled = false;
+
+    const computeNextDelay = async (): Promise<number> => {
+      try {
+        const companies = await listLocalCompanies();
+        const now = Date.now();
+        let best = MAX_BACKGROUND_CLOUD_SYNC_TICK_MS;
+        for (const c of companies) {
+          if (!(await shouldUseLocalCloudSync(c.id))) continue;
+          const delay = nextCompanySyncDelayMs(c, now);
+          if (delay == null) continue;
+          best = Math.min(best, delay);
+        }
+        return Math.max(MIN_CLOUD_SYNC_TICK_MS, Math.min(best, MAX_BACKGROUND_CLOUD_SYNC_TICK_MS));
+      } catch {
+        return MAX_BACKGROUND_CLOUD_SYNC_TICK_MS;
+      }
+    };
+
+    const scheduleNext = async () => {
+      if (cancelled) return;
+      const delay = await computeNextDelay();
+      if (cancelled) return;
+      if (timerId != null) window.clearTimeout(timerId);
+      timerId = window.setTimeout(() => void tick(), delay);
+    };
+
     const tick = async (options?: { forceActive?: boolean }) => {
-      if (runningRef.current) return;
-      if (typeof navigator !== "undefined" && !navigator.onLine) return;
+      if (runningRef.current) {
+        await scheduleNext();
+        return;
+      }
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        await scheduleNext();
+        return;
+      }
       if (
         typeof document !== "undefined" &&
         document.visibilityState !== "visible" &&
         options?.forceActive !== true
       ) {
+        await scheduleNext();
         return;
       }
       await waitForFirebaseAuthReady();
-      if (!hasRealFirebaseAuthSession()) return;
+      if (!hasRealFirebaseAuthSession()) {
+        await scheduleNext();
+        return;
+      }
 
       runningRef.current = true;
       try {
@@ -113,11 +159,11 @@ export function LocalCompanyCloudSyncManager() {
         logLocalCloudSync("background tick error", e);
       } finally {
         runningRef.current = false;
+        await scheduleNext();
       }
     };
 
-    const initialTick = window.setTimeout(() => void tick(), 10_000);
-    const intervalId = window.setInterval(() => void tick(), BACKGROUND_CLOUD_SYNC_TICK_MS);
+    timerId = window.setTimeout(() => void tick(), 10_000);
 
     const requestForceActiveTick = () => {
       const now = Date.now();
@@ -136,8 +182,8 @@ export function LocalCompanyCloudSyncManager() {
     window.addEventListener("online", onOnline);
 
     return () => {
-      window.clearTimeout(initialTick);
-      window.clearInterval(intervalId);
+      cancelled = true;
+      if (timerId != null) window.clearTimeout(timerId);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("online", onOnline);

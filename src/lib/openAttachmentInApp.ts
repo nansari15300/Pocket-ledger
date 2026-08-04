@@ -362,6 +362,17 @@ export async function openAttachmentInApp(
     return;
   }
 
+  const openFetchCompanyId =
+    gateCid || String(opts?.serverFallback?.companyId || "").trim() || undefined;
+  if (openFetchCompanyId) {
+    const { grantExplicitAttachmentNetworkFetch } = await import("@/lib/attachmentNetworkGate");
+    grantExplicitAttachmentNetworkFetch(u, openFetchCompanyId);
+  }
+  const explicitOpenFetch = {
+    companyId: openFetchCompanyId,
+    explicitUserRequest: true as const,
+  };
+
   if (await openInMemoryUrlAttachment(u, { title: opts?.title, kind: opts?.kind })) {
     return;
   }
@@ -546,6 +557,7 @@ export async function openAttachmentInApp(
       (await tryOfflineCachedAttachmentBlobMultiKey(normalizedStoragePath)) ||
       (await getRemoteAttachmentBlobPreferOfflineCache(normalizedStoragePath, undefined, {
         galleryUrls: g?.urls,
+        ...explicitOpenFetch,
       }));
     if (blob && blob.size > 0) {
       const bUrl = URL.createObjectURL(blob);
@@ -605,7 +617,10 @@ export async function openAttachmentInApp(
   if (embeddedInstantHttps) {
     if (kind === "image" || isDataImage || pathLooksImage(pathOnly)) {
       showInAppImagePreview(u, () => {}, { title: opts?.title ?? "Image" });
-      void getRemoteAttachmentBlobPreferOfflineCache(u, undefined, { awaitDiskWrite: false });
+      void getRemoteAttachmentBlobPreferOfflineCache(u, undefined, {
+        awaitDiskWrite: false,
+        ...explicitOpenFetch,
+      });
       return;
     }
     if (kind === "pdf" || isDataPdf || pathLooksPdf(pathOnly)) {
@@ -618,11 +633,17 @@ export async function openAttachmentInApp(
             });
           }
         });
-        void getRemoteAttachmentBlobPreferOfflineCache(u, undefined, { awaitDiskWrite: false });
+        void getRemoteAttachmentBlobPreferOfflineCache(u, undefined, {
+          awaitDiskWrite: false,
+          ...explicitOpenFetch,
+        });
         return;
       }
       await openHttpPdfInExternalBrowser(u);
-      void getRemoteAttachmentBlobPreferOfflineCache(u, undefined, { awaitDiskWrite: false });
+      void getRemoteAttachmentBlobPreferOfflineCache(u, undefined, {
+        awaitDiskWrite: false,
+        ...explicitOpenFetch,
+      });
       return;
     }
   }
@@ -656,26 +677,30 @@ export async function openAttachmentInApp(
         return;
       }
     }
-    // Web browser: pehle local warm cache (IndexedDB), phir network.
+    // Web browser: pehle local warm cache (IndexedDB), phir gated network.
     if (!isDataImage && isRemoteCacheableAttachmentSource(u)) {
       try {
         const cached =
           (await tryOfflineCachedAttachmentBlobMultiKey(u)) ||
-          (await getRemoteAttachmentBlobPreferOfflineCache(u));
+          (await getRemoteAttachmentBlobPreferOfflineCache(u, undefined, explicitOpenFetch));
         if (cached && cached.size > 0) {
           const bUrl = URL.createObjectURL(cached);
           showInAppImagePreview(bUrl, () => URL.revokeObjectURL(bUrl), { title: opts?.title ?? "Image" });
           return;
         }
       } catch {
-        /* fall through remote URL */
+        /* fall through */
       }
     }
-    showInAppImagePreview(u, () => {}, { title: opts?.title ?? "Image" });
-    // Raw HTTPS open — background me IndexedDB likho (Files untick ke baad local open).
-    if (!isDataImage && isRemoteCacheableAttachmentSource(u)) {
-      void getRemoteAttachmentBlobPreferOfflineCache(u, undefined, { awaitDiskWrite: false });
+    if (usesEmbeddedNativeAttachmentStorage() && isHttp && online) {
+      showInAppImagePreview(u, () => {}, { title: opts?.title ?? "Image" });
+      void getRemoteAttachmentBlobPreferOfflineCache(u, undefined, {
+        awaitDiskWrite: false,
+        ...explicitOpenFetch,
+      });
+      return;
     }
+    showInAppPdfOpenError(u);
     return;
   }
 
@@ -724,16 +749,19 @@ export async function openAttachmentInApp(
         return;
       }
     }
-    await openPdfFromUrl(u, opts?.title);
+    await openPdfFromUrl(u, opts?.title, explicitOpenFetch);
     return;
   }
 
   try {
-    let blob: Blob | null = await tryGetBlobFromFirebaseStorageDownloadUrl(u);
+    let blob: Blob | null = await tryGetBlobFromFirebaseStorageDownloadUrl(u, undefined, explicitOpenFetch);
     if (!blob) {
-      const res = await fetch(u, { mode: "cors", credentials: "omit" });
-      if (!res.ok) throw new Error(String(res.status));
-      blob = await res.blob();
+      const { isRemoteAttachmentNetworkFetchAllowed } = await import("@/lib/attachmentNetworkGate");
+      if (isRemoteAttachmentNetworkFetchAllowed(u, explicitOpenFetch)) {
+        const res = await fetch(u, { mode: "cors", credentials: "omit" });
+        if (!res.ok) throw new Error(String(res.status));
+        blob = await res.blob();
+      }
     }
     const mime = (blob.type || "").toLowerCase();
     const bUrl = URL.createObjectURL(blob);
@@ -777,9 +805,17 @@ export async function openAttachmentInApp(
   }
 }
 
-async function openPdfFromUrl(u: string, title?: string): Promise<void> {
+async function openPdfFromUrl(
+  u: string,
+  title?: string,
+  fetchOpts?: { companyId?: string; explicitUserRequest?: boolean }
+): Promise<void> {
   const fileName = title ? `${title.replace(/[/\\?%*:|"<>]/g, "_")}.pdf` : "document.pdf";
   const isHttp = /^https?:\/\//i.test(u);
+  const explicitFetch = {
+    companyId: fetchOpts?.companyId,
+    explicitUserRequest: fetchOpts?.explicitUserRequest ?? true,
+  };
 
   if (isHttp) {
     const online = typeof navigator !== "undefined" && navigator.onLine;
@@ -793,7 +829,10 @@ async function openPdfFromUrl(u: string, title?: string): Promise<void> {
           void showInAppPdfPreview(u, () => {}, { title: title ?? "PDF", fileName: "document.pdf" });
         }
       });
-      void getRemoteAttachmentBlobPreferOfflineCache(u, undefined, { awaitDiskWrite: false });
+      void getRemoteAttachmentBlobPreferOfflineCache(u, undefined, {
+        awaitDiskWrite: false,
+        ...explicitFetch,
+      });
       return;
     }
     try {
@@ -846,14 +885,17 @@ async function openPdfFromUrl(u: string, title?: string): Promise<void> {
   try {
     let blob: Blob | null =
       (await tryOfflineCachedAttachmentBlobMultiKey(u)) ||
-      (await tryGetBlobFromFirebaseStorageDownloadUrl(u));
+      (await tryGetBlobFromFirebaseStorageDownloadUrl(u, undefined, explicitFetch));
     if (!blob) {
-      blob = await getRemoteAttachmentBlobPreferOfflineCache(u);
+      blob = await getRemoteAttachmentBlobPreferOfflineCache(u, undefined, explicitFetch);
     }
     if (!blob) {
-      const res = await fetch(u, { mode: "cors", credentials: "omit" });
-      if (!res.ok) throw new Error(String(res.status));
-      blob = await res.blob();
+      const { isRemoteAttachmentNetworkFetchAllowed } = await import("@/lib/attachmentNetworkGate");
+      if (isRemoteAttachmentNetworkFetchAllowed(u, explicitFetch)) {
+        const res = await fetch(u, { mode: "cors", credentials: "omit" });
+        if (!res.ok) throw new Error(String(res.status));
+        blob = await res.blob();
+      }
     }
     if (shouldOpenPdfInExternalViewer()) {
       const openedAsImage = await openPdfBlobAsImagePreview(blob, title ?? "PDF");

@@ -313,6 +313,11 @@ export async function rewriteRemoteVoucherAttachmentsForOfflineCompany(
   if (!cid) return;
   const reg = await getLocalCompanyById(cid);
   if (!reg || !isOfflineCompanyStorage(reg as { storageOption?: string })) return;
+  const { shouldUseLocalCloudSync } = await import("@/lib/localCloudSync/companyConfig");
+  if (await shouldUseLocalCloudSync(cid)) {
+    // Google Drive sync: `local:` stage + background upload; `drive:` refs save par mat rewrite karo.
+    return;
+  }
 
   const storageFolder = String(data.type || "journal").trim() || "journal";
   const rawUrls = Array.isArray(data.fileUrls) ? data.fileUrls : [];

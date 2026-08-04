@@ -1414,6 +1414,21 @@ export function PartyDetails({
                   <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
                     {formatCurrency(headerClosingBalance, { showDrCr: true })}
                   </div>
+                  {party.id !== "all" && !(party as any).isSystemAccount ? (
+                    <AddVoucherDialog
+                      defaultTab="adjustment"
+                      allowedTabs={["adjustment"]}
+                      defaultVoucherData={{
+                        defaultTab: "adjustment",
+                        adjustmentTarget: { id: party.id, entityType: "party", name: party.name },
+                      }}
+                    >
+                      <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
+                        <Wand2 className="mr-2 h-3.5 w-3.5" />
+                        Adjust Balance
+                      </Button>
+                    </AddVoucherDialog>
+                  ) : null}
                   {/* Linked reconciliation — balance ke baad, related account compare */}
                   {party.id !== "all" && !(party as any).isSystemAccount ? (
                     <ReconciliationAccountButton accountId={party.id} />

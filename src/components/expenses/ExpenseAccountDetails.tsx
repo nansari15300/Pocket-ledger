@@ -28,6 +28,7 @@ import {
   Lock,
   Columns3,
   ChevronDown,
+  Wand2,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
@@ -733,6 +734,21 @@ export function ExpenseAccountDetails({
                   <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
                     {formatCurrency(closingBalance, { showDrCr: true })}
                   </div>
+                  {account.id !== "all" && account.id !== "sales_account" && account.id !== "purchase_account" ? (
+                    <AddVoucherDialog
+                      defaultTab="adjustment"
+                      allowedTabs={["adjustment"]}
+                      defaultVoucherData={{
+                        defaultTab: "adjustment",
+                        adjustmentTarget: { id: account.id, entityType: "expense", name: account.name },
+                      }}
+                    >
+                      <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
+                        <Wand2 className="mr-2 h-3.5 w-3.5" />
+                        Adjust Balance
+                      </Button>
+                    </AddVoucherDialog>
+                  ) : null}
                 </div>
               </div>
             </div>

@@ -3,6 +3,7 @@
 import type { Company } from "@/hooks/useCompany";
 import type { PlServerSharedCompanySummary } from "@/lib/localServerShareableCompanies";
 import { isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
+import { isServerSelectorCompanyRow } from "@/lib/companyStorageKind";
 import {
   isPlServerGateClientActive,
   isPlSharingServerPortOrigin,
@@ -1033,6 +1034,47 @@ export function listCompaniesForVoucherCopyTo(companies: Company[]): CompanyWith
   return mergePlServerSharedCompaniesIntoRegistry(visible);
 }
 
+function findServerRegistryRowIndexForShare(
+  out: CompanyWithPlServerShared[],
+  row: PlServerSharedCompanySummary,
+  contextGateId: string
+): number {
+  return out.findIndex((c) => {
+    if (!isServerSelectorCompanyRow(c)) return false;
+    const id = String(c.id || "").trim();
+    const hostId = String((c as Record<string, unknown>).plServerHostCompanyId || "").trim();
+    const gateId = String(c.plServerGateId || "").trim();
+    if (contextGateId && gateId && gateId !== contextGateId) return false;
+    if (id === row.id || hostId === row.id) return true;
+    return Boolean(matchPlServerSharedCompanyForLocalId(id, [row]));
+  });
+}
+
+function buildPlServerSharedRegistryRow(
+  row: PlServerSharedCompanySummary,
+  contextGateId: string,
+  contextGateServerUrl: string,
+  existing?: CompanyWithPlServerShared | null
+): CompanyWithPlServerShared {
+  return {
+    ...(existing ?? {}),
+    id: row.id,
+    name: isRealPlServerCompanyName(row.name, row.id) ? row.name : (existing?.name ?? row.name),
+    storageOption: "local",
+    ownerEmail: row.ownerEmail ?? existing?.ownerEmail,
+    isOwned: existing?.isOwned ?? false,
+    syncedFromCloud: false,
+    syncPolicy: "offline",
+    plServerShared: true,
+    ...(contextGateId ? { plServerGateId: contextGateId } : {}),
+    ...(contextGateServerUrl ? { plServerGateServerUrl: contextGateServerUrl } : {}),
+    ...(row.planId != null ? { planId: row.planId } : {}),
+    ...(typeof row.planExpiryMs === "number" ? { planExpiryMs: row.planExpiryMs } : {}),
+    ...(typeof row.requiresLogin === "boolean" ? { requiresLogin: row.requiresLogin } : {}),
+    ...(row.usernameHint != null ? { usernameHint: row.usernameHint } : {}),
+  } as CompanyWithPlServerShared;
+}
+
 export function mergePlServerSharedCompaniesIntoRegistry(companies: Company[]): CompanyWithPlServerShared[] {
   companies = compactCompanyList(companies);
   const shared = getPlServerSharedCompanies();
@@ -1042,74 +1084,22 @@ export function mergePlServerSharedCompaniesIntoRegistry(companies: Company[]): 
     contextGateId && activeGate.type === "local_server" && activeGate.id === contextGateId
       ? normalizeServerUrl(activeGate.serverUrl || "")
       : "";
-  const byId = new Map<string, CompanyWithPlServerShared>(
-    companies.map((c) => [String(c.id || "").trim(), c as CompanyWithPlServerShared])
-  );
+  // Har input row alag rakho — Online/Local/Server same id par collapse mat karo.
+  const out: CompanyWithPlServerShared[] = companies.map((c) => ({ ...c }) as CompanyWithPlServerShared);
   const authoritativeShareList = hasPlServerAuthoritativeShareList(contextGateId);
   for (const row of shared) {
-    const direct = byId.get(row.id);
-    const matched = direct
-      ? { key: row.id, company: direct }
-      : [...byId.entries()]
-          .map(([key, company]) => ({ key, company }))
-          .find(({ key, company }) => {
-            const hostId = String((company as Record<string, unknown>).plServerHostCompanyId || "").trim();
-            return hostId === row.id || Boolean(matchPlServerSharedCompanyForLocalId(key, [row]));
-          }) ?? null;
-    const existing = matched?.company ?? null;
-    // Online company ko Server-shared mat banao — Online tab alignment ke liye.
-    if (existing && isCloudLinkedCompanyStorage(existing)) {
-      continue;
-    }
-    if (existing) {
-      const existingOwnedLocal =
-        existing.isOwned === true &&
-        String(existing.storageOption ?? "").toLowerCase() === "local" &&
-        existing.syncedFromCloud !== true &&
-        !String((existing as { plServerHostCompanyId?: string }).plServerHostCompanyId ?? "").trim();
-      const matchedKey = matched?.key || row.id;
-      if (
-        existingOwnedLocal &&
-        matchedKey !== row.id &&
-        !matchPlServerSharedCompanyForLocalId(matchedKey, [row])
-      ) {
-        continue;
-      }
-      byId.set(matchedKey, {
-        ...existing,
-        ...((matched?.key || row.id) !== row.id ? { plServerHostCompanyId: row.id } : {}),
-        name: isRealPlServerCompanyName(row.name, row.id) ? row.name : existing.name,
-        ownerEmail: row.ownerEmail ?? existing.ownerEmail,
-        storageOption: "local",
-        syncedFromCloud: false,
-        syncPolicy: "offline",
-        plServerShared: true,
-        ...(contextGateId ? { plServerGateId: contextGateId } : {}),
-        ...(contextGateServerUrl ? { plServerGateServerUrl: contextGateServerUrl } : {}),
-        ...(row.planId != null ? { planId: row.planId } : {}),
-        ...(typeof row.planExpiryMs === "number" ? { planExpiryMs: row.planExpiryMs } : {}),
-        ...(typeof row.requiresLogin === "boolean" ? { requiresLogin: row.requiresLogin } : {}),
-        ...(row.usernameHint != null ? { usernameHint: row.usernameHint } : {}),
-      } as CompanyWithPlServerShared);
-      continue;
-    }
-    byId.set(row.id, {
-      id: row.id,
-      name: row.name,
-      storageOption: "local",
-      ownerEmail: row.ownerEmail ?? undefined,
-      isOwned: false,
-      plServerShared: true,
-      ...(contextGateId ? { plServerGateId: contextGateId } : {}),
-      ...(contextGateServerUrl ? { plServerGateServerUrl: contextGateServerUrl } : {}),
-      ...(row.planId != null ? { planId: row.planId } : {}),
-      ...(typeof row.planExpiryMs === "number" ? { planExpiryMs: row.planExpiryMs } : {}),
-      ...(typeof row.requiresLogin === "boolean" ? { requiresLogin: row.requiresLogin } : {}),
-      ...(row.usernameHint != null ? { usernameHint: row.usernameHint } : {}),
-    } as CompanyWithPlServerShared);
+    const idx = findServerRegistryRowIndexForShare(out, row, contextGateId);
+    const payload = buildPlServerSharedRegistryRow(
+      row,
+      contextGateId,
+      contextGateServerUrl,
+      idx >= 0 ? out[idx] : null
+    );
+    if (idx >= 0) out[idx] = payload;
+    else out.push(payload);
   }
-  if (!authoritativeShareList) return [...byId.values()];
-  return [...byId.values()].filter((c) => {
+  if (!authoritativeShareList) return out;
+  return out.filter((c) => {
     if ((c as { plServerShared?: boolean }).plServerShared !== true) return true;
     return isListedPlServerSharedCompany(c, contextGateId);
   });

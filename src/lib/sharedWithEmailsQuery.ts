@@ -25,17 +25,17 @@ export function toSharedWithEmailsLower(email: string): string {
 
 
 export function sharedWithEmailQueryVariants(email: string | null | undefined): string[] {
-
   const raw = String(email || "").trim();
-
   if (!raw) return [];
-
   const lower = raw.toLowerCase();
-
   if (lower === raw) return [lower];
-
   return [lower, raw];
+}
 
+/** Owned-company `ownerEmail` query — Firestore equality case-sensitive; auth + stored casing dono try karo. */
+export function ownerEmailQueryVariants(email: string | null | undefined): string[] {
+  const authEmail = resolveFirestoreAuthEmail(email);
+  return sharedWithEmailQueryVariants(authEmail);
 }
 
 

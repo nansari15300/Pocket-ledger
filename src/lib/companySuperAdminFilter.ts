@@ -18,7 +18,7 @@ function isOwnedByUser<
 
 /**
  * Main app (not `/admin/*`): SuperAdmin sees only owned companies — no shared-with list.
- * Static/APK/EXE: web jaisa shared bhi dikhao (SuperAdmin ko bhi shared-with list).
+ * `/company` picker + EXE/APK: poori Firestore registry (shared + legacy ownerId owned rows).
  */
 export function filterSharedOnlyCompaniesForSuperAdminInMainApp<
   T extends { ownerId?: string; ownerEmail?: string; isOwned?: boolean },
@@ -29,7 +29,9 @@ export function filterSharedOnlyCompaniesForSuperAdminInMainApp<
   pathname: string | null
 ): T[] {
   if (!isSuperAdmin || !user) return companies;
-  if (normalizePath(pathname ?? "").startsWith("/admin")) return companies;
+  const path = normalizePath(pathname ?? "");
+  if (path.startsWith("/admin")) return companies;
+  if (path === "/company") return companies;
   if (isEmbeddedOfflinePreloadClient()) return companies;
-  return companies.filter((c) => isOwnedByUser(c, user));
+  return companies.filter((c) => c.isOwned === true || isOwnedByUser(c, user));
 }

@@ -956,6 +956,9 @@ export type RemoteAttachmentBlobPreferCacheOptions = {
   awaitDiskWrite?: boolean;
   /** Local company gallery: cache miss par Firebase/network mat chalao. */
   localOnly?: boolean;
+  /** Edit / open / hover — visible-page list bypass. */
+  explicitUserRequest?: boolean;
+  bypassVisiblePageCheck?: boolean;
 };
 
 export async function getRemoteAttachmentBlobPreferOfflineCache(
@@ -1026,13 +1029,13 @@ export async function getRemoteAttachmentBlobPreferOfflineCache(
     return null;
   }
 
-  // Cloud data sync off / local company gallery: Firebase Storage network fetch mat karo — sirf local cache / `local:` / `drive:`.
+  // Cloud data sync off / Files tick off / visible-page gate: Firebase Storage network fetch mat karo.
   const attachmentSyncCompanyId = String(preferCacheOptions?.companyId || "").trim();
-  if (
+  const filesTickBlocks =
     isFirebaseLedgerDataSyncDisabled() ||
     preferCacheOptions?.localOnly === true ||
-    (attachmentSyncCompanyId && !isFirebaseLedgerCompanyAttachmentSyncEnabled(attachmentSyncCompanyId))
-  ) {
+    (attachmentSyncCompanyId && !isFirebaseLedgerCompanyAttachmentSyncEnabled(attachmentSyncCompanyId));
+  if (filesTickBlocks) {
     const isDeviceRef = isLocalFileRef(trimmed) || isDriveFileRef(trimmed);
     if (!isDeviceRef) {
       if (offlineAttachmentForensicEnabled()) {
@@ -1043,6 +1046,21 @@ export async function getRemoteAttachmentBlobPreferOfflineCache(
           finalBlobSource: null,
         });
       }
+      return null;
+    }
+  } else if (!isLocalFileRef(trimmed) && !isDriveFileRef(trimmed)) {
+    try {
+      const { isRemoteAttachmentNetworkFetchAllowed } = await import("@/lib/attachmentNetworkGate");
+      if (
+        !isRemoteAttachmentNetworkFetchAllowed(trimmed, {
+          companyId: attachmentSyncCompanyId || null,
+          explicitUserRequest: preferCacheOptions?.explicitUserRequest,
+          bypassVisiblePageCheck: preferCacheOptions?.bypassVisiblePageCheck,
+        })
+      ) {
+        return null;
+      }
+    } catch {
       return null;
     }
   }

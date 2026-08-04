@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -70,6 +70,11 @@ export function AttachmentHoldPasteSurface({
   const { isHoldPayloadVisible } = useCrossCompanyAttachmentAccess();
   const tapMode = useTapInteractionMode();
   const [mobilePasteRevealed, setMobilePasteRevealed] = useState(false);
+  /** Reuse dialog Use / close ke baad click-through se file picker mat kholo. */
+  const suppressFilePickerUntilRef = useRef(0);
+  const markReuseDialogDismissed = useCallback(() => {
+    suppressFilePickerUntilRef.current = Date.now() + 500;
+  }, []);
 
   /** EXE multi-tab: Tab A copy → Tab B me Paste chip dikhao (storage event). */
   useEffect(() => {
@@ -188,6 +193,7 @@ export function AttachmentHoldPasteSurface({
       onAddUrls={(urls) => voucherAttachmentReuse.setFiles((prev) => [...prev, ...urls])}
       disabled={!enabled}
       className={VOUCHER_ATTACHMENT_REUSE_TILE_CLASS}
+      onDialogDismissed={markReuseDialogDismissed}
     />
   ) : null;
 
@@ -210,6 +216,7 @@ export function AttachmentHoldPasteSurface({
         if (!enabled) return;
         if ((e.target as HTMLElement).closest("[data-attachment-paste-chip]")) return;
         if ((e.target as HTMLElement).closest("[data-attachment-reuse-action]")) return;
+        if (Date.now() < suppressFilePickerUntilRef.current) return;
         onShortActivate();
       }}
       onContextMenu={(e) => e.preventDefault()}
@@ -227,6 +234,7 @@ export function AttachmentHoldPasteSurface({
         }
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
+          if (Date.now() < suppressFilePickerUntilRef.current) return;
           onShortActivate();
         }
       }}

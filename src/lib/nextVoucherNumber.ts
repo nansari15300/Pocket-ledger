@@ -20,6 +20,7 @@ export const DEFAULT_VOUCHER_PREFIX_LABELS: Record<string, string> = {
   direct_expense: "DEXP-",
   contra: "CNTR-",
   journal: "JRNL-",
+  adjustment: "ADJ-",
   note: "NOTE-",
   add_salary: "ADD-SAL-",
   pay_salary: "PAY-SAL-",

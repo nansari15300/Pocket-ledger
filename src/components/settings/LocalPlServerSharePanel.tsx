@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { CloudSyncHelpPopover } from "@/components/company/CloudSyncHelpPopover";
 import { Crown, Eye, EyeOff, Loader2, Pencil, PlusCircle, RotateCcw, Trash2 } from "lucide-react";
 import {
   inviteUserToPlServerShare,
@@ -48,13 +49,17 @@ import { LOCAL_COMPANY_APP_ROLES, localCompanyAppRoleLabel, normalizeLocalCompan
 import { cn } from "@/lib/utils";
 import { clientRandomUUID } from "@/lib/clientRandomUUID";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
-import { parseLocalCompanyUserRows, upsertUserInList, type LocalCompanyUserRecord } from "@/lib/localCompanyUsers";
+import {
+  parseLocalCompanyUserRows,
+  removeDriveShareUserFromLocalCompanyUsers,
+  upsertUserInList,
+  type LocalCompanyUserRecord,
+} from "@/lib/localCompanyUsers";
+import { assertCanAddPlServerShareUser } from "@/lib/localShareRouteGuards";
+import { readCloudSyncDriveShareUsers, shareUsersToEmailList } from "@/lib/localCloudSync/companyConfig";
+import { revokeDriveFolderShare } from "@/lib/localCloudSync/driveCloudSyncClient";
 import { bumpLocalCompanyRegistry } from "@/lib/applyStripePlanToLocalCompany";
 import { flushPendingBrowserDbSave } from "@/lib/localSqlite";
-import {
-  companyProfileGreenZone,
-  cloudSyncShareTableClass,
-} from "@/lib/companyProfileChrome";
 import {
   COMPANY_CLIENT_DATA_DELETE_DELAYS,
   createCompanyClientDataDeleteCommand,
@@ -226,6 +231,8 @@ type Props = {
   onUsersChanged?: () => void;
 };
 
+type ShareRouteTab = "server" | "drive";
+
 export function LocalPlServerSharePanel({
   companyId,
   companyName,
@@ -275,6 +282,9 @@ export function LocalPlServerSharePanel({
   const [removeUserDeleteData, setRemoveUserDeleteData] = useState(false);
   const [removeUserDeleteDelay, setRemoveUserDeleteDelay] = useState<CompanyClientDataDeleteDelay>("now");
   const [roleBusyTokenId, setRoleBusyTokenId] = useState<string | null>(null);
+  const [routeConflictOpen, setRouteConflictOpen] = useState(false);
+  const [routeConflictBusy, setRouteConflictBusy] = useState(false);
+  const [routeTab, setRouteTab] = useState<ShareRouteTab>("server");
   const hostShareableCompanyIdRef = useRef<string | null>(null);
   const profileByEmailRef = useRef(new Map<string, AppUserProfile>());
   const backfilledShareMetaRef = useRef(new Set<string>());
@@ -296,6 +306,38 @@ export function LocalPlServerSharePanel({
         name: c.name || c.id,
       })),
     [shareableCompanies, sharedLocalCompanyIds]
+  );
+
+  const activeLocalCompanyForRoutes = useMemo(
+    () =>
+      shareableCompanies.find((c) => c.id === effectiveCompanyId) ||
+      allCompaniesRegistry.find((c) => c.id === effectiveCompanyId) ||
+      activeCompany ||
+      null,
+    [shareableCompanies, allCompaniesRegistry, activeCompany, effectiveCompanyId]
+  );
+
+  const driveRouteRows = useMemo(() => {
+    const row = activeLocalCompanyForRoutes as Record<string, unknown> | null;
+    const ownerEmail = normalizeEmail(String(row?.ownerEmail || user?.email || ""));
+    const out: Array<{ email: string; name: string; role: string; route: string }> = [];
+    for (const u of readCloudSyncDriveShareUsers(row)) {
+      const email = normalizeEmail(u.email);
+      if (!email.includes("@") || email === ownerEmail) continue;
+      const profile = appUsers.find((p) => normalizeEmail(p.email) === email) || profileByEmailRef.current.get(email);
+      out.push({
+        email,
+        name: profile?.displayName || email.split("@")[0] || email,
+        role: localCompanyAppRoleLabel(normalizeLocalCompanyAppRole(u.appRole)),
+        route: "Google Drive",
+      });
+    }
+    return out;
+  }, [activeLocalCompanyForRoutes, appUsers, user?.displayName, user?.email]);
+
+  const driveRouteEmailSet = useMemo(
+    () => new Set(driveRouteRows.map((row) => normalizeEmail(row.email)).filter(Boolean)),
+    [driveRouteRows]
   );
 
   useEffect(() => {
@@ -353,7 +395,14 @@ export function LocalPlServerSharePanel({
     void refreshUserRows({ silent: true });
   }, [refreshUserRows, localCompanyRegistryEpoch]);
 
-  const displayedUserRows = userRows;
+  const displayedUserRows = useMemo(
+    () =>
+      userRows.filter((row) => {
+        const email = normalizeEmail(row.shareEmail || row.email);
+        return !email || !driveRouteEmailSet.has(email);
+      }),
+    [driveRouteEmailSet, userRows]
+  );
 
   useEffect(() => {
     const emailSet = new Set<string>();
@@ -475,7 +524,7 @@ export function LocalPlServerSharePanel({
 
   const selectedCompanyIds = scopedCompanyIds;
 
-  const handleShare = async () => {
+  const handleShare = async (options?: { skipRouteGuard?: boolean }) => {
     const email = shareEmail.trim().toLowerCase();
     if (!email.includes("@")) {
       toast({ variant: "destructive", title: "Valid Gmail required" });
@@ -500,6 +549,12 @@ export function LocalPlServerSharePanel({
 
     setBusy(true);
     try {
+      if (options?.skipRouteGuard !== true) {
+        for (const companyId of selectedCompanyIds) {
+          const doc = await getLocalCompanyById(companyId, { includeDeleted: true });
+          assertCanAddPlServerShareUser(doc as Record<string, unknown> | null, email);
+        }
+      }
       let serverUrls = serverStatus?.urls ?? [];
       let serverPort = resolveLocalAppServerSharingPort(serverStatus) ?? undefined;
       let publicHost = "";
@@ -563,8 +618,53 @@ export function LocalPlServerSharePanel({
       setAddOpen(false);
       await refreshUserRows();
       onUsersChanged?.();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("another sharing method") || msg.includes("Google Drive")) {
+        setRouteConflictOpen(true);
+      } else {
+        toast({ variant: "destructive", title: "Share failed", description: msg });
+      }
     } finally {
       setBusy(false);
+    }
+  };
+
+  const changeMethodToPlServer = async () => {
+    const email = normalizeEmail(shareEmail);
+    if (!email) return;
+    setRouteConflictBusy(true);
+    try {
+      for (const companyId of selectedCompanyIds) {
+        const doc = await getLocalCompanyById(companyId, { includeDeleted: true });
+        if (!doc) continue;
+        try {
+          await revokeDriveFolderShare({
+            companyId,
+            companyName: typeof doc.name === "string" ? doc.name : undefined,
+            email,
+          });
+        } catch {
+          /* local list conversion still proceeds */
+        }
+        const nextDriveUsers = readCloudSyncDriveShareUsers(doc as Record<string, unknown>).filter(
+          (u) => normalizeEmail(u.email) !== email
+        );
+        let localCompanyUsers = parseLocalCompanyUserRows((doc as { localCompanyUsers?: unknown }).localCompanyUsers);
+        localCompanyUsers = removeDriveShareUserFromLocalCompanyUsers(localCompanyUsers, email);
+        await upsertLocalCompany({
+          ...(doc as LocalCompanyDoc),
+          id: companyId,
+          cloudSyncDriveShareUsers: nextDriveUsers,
+          cloudSyncSharedEmails: shareUsersToEmailList(nextDriveUsers),
+          localCompanyUsers,
+          updatedAt: Date.now(),
+        });
+      }
+      setRouteConflictOpen(false);
+      await handleShare({ skipRouteGuard: true });
+    } finally {
+      setRouteConflictBusy(false);
     }
   };
 
@@ -823,6 +923,62 @@ export function LocalPlServerSharePanel({
 
   const isManageShare = variant === "manageShare";
   const panelLoading = loading || companiesLoading;
+  const routeTitle = routeTab === "server" ? "Share company on PL Server" : "Shared users on Google Drive";
+  const routeHelp =
+    routeTab === "server"
+      ? "These users can open this local company through PL Server. Google Drive sharing is managed separately."
+      : "These users are shared through Google Drive for this local company. PL Server sharing is separate.";
+  const bluePillClass =
+    "rounded-full border border-blue-300 bg-blue-50/90 text-blue-900 hover:bg-blue-100 hover:text-blue-950 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-100 dark:hover:bg-blue-900/50";
+  const activeBluePillClass =
+    "rounded-full !border-emerald-300 !bg-emerald-100/90 !text-emerald-950 hover:!bg-emerald-200/80 dark:!border-emerald-700 dark:!bg-emerald-950/45 dark:!text-emerald-100 dark:hover:!bg-emerald-900/55";
+  const softBluePillClass =
+    "inline-flex h-8 items-center rounded-full border border-blue-300 bg-blue-50/90 px-3 text-xs font-medium text-blue-900 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-100";
+  const activeTabStyle = {
+    backgroundColor: "#d1fae5",
+    borderColor: "#6ee7b7",
+    color: "#064e3b",
+  };
+  const sharePanelClass =
+    "pl-backup-soft-box pl-backup-soft-box-sky rounded-lg border border-sky-200/70 bg-sky-50/30";
+  const shareTableClass =
+    "[&_thead_tr]:!border-b-[1px] [&_thead_tr]:!border-sky-200/70 [&_th]:bg-sky-100/80 [&_th]:font-medium [&_th]:text-sky-950 [&_tbody_tr]:!border-b-[1px] [&_tbody_tr]:!border-sky-200/60 [&_tbody_tr:last-child]:border-b-0 [&_tbody_tr:hover]:bg-sky-50/40";
+  const ownerCount = ownerEmail ? 1 : 0;
+  const driveUserCount = driveRouteRows.length + ownerCount;
+  const serverUserCount = displayedUserRows.length + ownerCount;
+  const totalUserCount = new Set(
+    [
+      ...(ownerEmail ? [normalizeEmail(ownerEmail)] : []),
+      ...driveRouteRows.map((row) => normalizeEmail(row.email)),
+      ...displayedUserRows.map((row) => normalizeEmail(row.shareEmail || row.email)),
+    ].filter(Boolean)
+  ).size;
+  const renderCompanyPill = () =>
+    onCompanySelect && companySelectOptions.length > 0 ? (
+      <Select
+        value={effectiveCompanyId || undefined}
+        onValueChange={onCompanySelect}
+        disabled={disabled || busy || panelLoading}
+      >
+        <SelectTrigger
+          className={cn(
+            softBluePillClass,
+            "h-8 w-auto min-w-[11rem] max-w-[18rem] justify-between rounded-full bg-blue-50/90 px-3 py-0 text-xs"
+          )}
+        >
+          <SelectValue placeholder="Select company" />
+        </SelectTrigger>
+        <SelectContent>
+          {companySelectOptions.map((c) => (
+            <SelectItem key={c.id} value={c.id}>
+              {c.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    ) : (
+      <span className={softBluePillClass}>{effectiveCompanyName}</span>
+    );
 
   if (!hostShareable && !companiesLoading) {
     return (
@@ -839,41 +995,55 @@ export function LocalPlServerSharePanel({
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 hidden md:block">
           {isManageShare ? (
-            <p className="text-sm font-medium">Shared users (local server)</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="inline-flex items-center gap-1.5 text-sm font-medium">
+                {routeTitle}
+                <CloudSyncHelpPopover label={routeTitle} description={<p>{routeHelp}</p>} />
+              </p>
+              {renderCompanyPill()}
+            </div>
           ) : (
-            <p className="text-xs text-muted-foreground">
-              Company: <strong>{effectiveCompanyName}</strong>
-            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 text-sm font-medium">
+                {routeTitle}
+                <CloudSyncHelpPopover label={routeTitle} description={<p>{routeHelp}</p>} />
+              </span>
+              {renderCompanyPill()}
+            </div>
           )}
         </div>
         <div className="flex w-full min-w-0 items-center gap-2 md:ml-auto md:w-auto">
-          {!isManageShare && onCompanySelect && companySelectOptions.length > 0 ? (
-            <Select
-              value={effectiveCompanyId || undefined}
-              onValueChange={onCompanySelect}
-              disabled={disabled || busy || panelLoading}
-            >
-              <SelectTrigger className="h-9 min-w-0 flex-1 text-sm md:hidden">
-                <SelectValue placeholder="Select company" />
-              </SelectTrigger>
-              <SelectContent>
-                {companySelectOptions.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : null}
+          <div className="min-w-0 flex-1 md:hidden">{renderCompanyPill()}</div>
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className="shrink-0"
-            disabled={disabled || busy || panelLoading || selectedCompanyIds.length === 0}
+            className={cn("h-8 px-3", routeTab === "server" ? activeBluePillClass : bluePillClass)}
+            style={routeTab === "server" ? activeTabStyle : undefined}
+            onClick={() => setRouteTab("server")}
+          >
+            Server User {serverUserCount}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className={cn("h-8 px-3", routeTab === "drive" ? activeBluePillClass : bluePillClass)}
+            style={routeTab === "drive" ? activeTabStyle : undefined}
+            onClick={() => setRouteTab("drive")}
+          >
+            Drive User {driveUserCount}
+          </Button>
+          <span className={softBluePillClass}>Total User {totalUserCount}</span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className={cn("h-8 shrink-0 px-2.5 text-xs", bluePillClass)}
+            disabled={disabled || busy || panelLoading || selectedCompanyIds.length === 0 || routeTab !== "server"}
             onClick={() => setAddOpen(true)}
           >
-            <PlusCircle className="mr-1.5 h-4 w-4" />
+            <PlusCircle className="mr-1 h-3.5 w-3.5" />
             Add Person
           </Button>
         </div>
@@ -882,9 +1052,7 @@ export function LocalPlServerSharePanel({
       <div
         className={cn(
           "overflow-x-auto rounded-md",
-          isManageShare
-            ? cn(companyProfileGreenZone, "rounded-md")
-            : "pl-backup-soft-box pl-backup-soft-box-sky rounded-lg border border-sky-200/70 bg-sky-50/30"
+          isManageShare ? cn(sharePanelClass, "rounded-md") : sharePanelClass
         )}
       >
         {panelLoading ? (
@@ -894,11 +1062,7 @@ export function LocalPlServerSharePanel({
         ) : (
           <Table
             scrollContainer={false}
-            className={cn(
-              isManageShare
-                ? cloudSyncShareTableClass
-                : "[&_thead_tr]:!border-b-[1px] [&_thead_tr]:!border-sky-200/70 [&_th]:bg-sky-100/80 [&_th]:font-medium [&_th]:text-sky-950 [&_tbody_tr]:!border-b-[1px] [&_tbody_tr]:!border-sky-200/60 [&_tbody_tr:last-child]:border-b-0 [&_tbody_tr:hover]:bg-sky-50/40"
-            )}
+            className={shareTableClass}
           >
             <TableHeader>
               <TableRow>
@@ -947,7 +1111,27 @@ export function LocalPlServerSharePanel({
                   <TableCell className="text-right text-xs text-muted-foreground">—</TableCell>
                 </TableRow>
               ) : null}
-              {displayedUserRows.map((row) => {
+              {routeTab === "drive"
+                ? driveRouteRows.map((row) => (
+                    <TableRow key={`drive:${row.email}`}>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <UserAvatarWithPresence
+                            seed={row.email}
+                            photoURL={profileByEmailRef.current.get(normalizeEmail(row.email))?.photoURL}
+                            isOnline={isUserOnline(profileByEmailRef.current.get(normalizeEmail(row.email)))}
+                            fallbackInitials={initials(row.name || row.email)}
+                          />
+                          <span className="text-sm truncate">{row.email}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-sm">{row.name}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground max-w-[140px] truncate">{row.route}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{row.role}</TableCell>
+                      <TableCell className="text-right text-xs text-muted-foreground">Drive</TableCell>
+                    </TableRow>
+                  ))
+                : displayedUserRows.map((row) => {
                 const profile = resolveAppUserForRow(row, appUsers, profileByEmailRef.current);
                 const name = profile?.displayName || row.name;
                 const displayContact =
@@ -1034,7 +1218,14 @@ export function LocalPlServerSharePanel({
                   </TableRow>
                 );
               })}
-              {!displayedUserRows.length && !ownerEmail ? (
+              {routeTab === "drive" && driveRouteRows.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-6">
+                    No Drive shared users for this company.
+                  </TableCell>
+                </TableRow>
+              ) : null}
+              {routeTab === "server" && !displayedUserRows.length && !ownerEmail ? (
                 <TableRow>
                   <TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-6">
                     No users yet. Click Add Person to create a local login.
@@ -1109,6 +1300,36 @@ export function LocalPlServerSharePanel({
             >
               {busyEmail ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Remove user
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={routeConflictOpen} onOpenChange={setRouteConflictOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>User already shared on Google Drive</DialogTitle>
+            <DialogDescription>
+              This user is already shared through Google Drive for this company. A user can be shared through either
+              Google Drive or PL Server, but not both.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            Change method to PL Server will remove this user from the Drive share list on this company, then add PL
+            Server access.
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={routeConflictBusy}
+              onClick={() => setRouteConflictOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="button" disabled={routeConflictBusy} onClick={() => void changeMethodToPlServer()}>
+              {routeConflictBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Change method to PL Server
             </Button>
           </DialogFooter>
         </DialogContent>

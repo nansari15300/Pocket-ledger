@@ -8,6 +8,8 @@ export type Permission =
   | "edit_all_records"
   | "delete_records"
   | "approve_transactions"
+  | "add_adjustment_voucher"
+  | "edit_adjustment_voucher"
   | "edit_approved_voucher"
   | "delete_approved_voucher"
   | "view_history"
@@ -208,6 +210,13 @@ export const PermissionGroups: PermissionGroup[] = [
                 description:
                     "On the Reconciling compare page, allows copying a transaction from the other side into a new voucher on your ledger when your row is blank (Sync transaction link on selected rows).",
             },
+        ],
+    },
+    {
+        title: "Adjustment Voucher",
+        permissions: [
+            { key: "add_adjustment_voucher", label: "Add Adjustment Voucher" },
+            { key: "edit_adjustment_voucher", label: "Edit Adjustment Voucher" },
         ],
     },
 ];

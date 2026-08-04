@@ -49,6 +49,7 @@ import {
   upsertUserInList,
 } from "@/lib/localCompanyUsers";
 import { AddLocalCompanyUserDialog } from "@/components/company/AddLocalCompanyUserDialog";
+import { CloudSyncHelpPopover } from "@/components/company/CloudSyncHelpPopover";
 import { runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
 import type { Company } from "@/hooks/useCompany";
 import { cn } from "@/lib/utils";
@@ -58,15 +59,14 @@ import {
 } from "@/lib/batchFetchUserDisplayNames";
 import {
   companyProfileGreenZone,
-  cloudSyncSharePanelCard,
-  cloudSyncShareTableClass,
-  cloudSyncShareTableShell,
 } from "@/lib/companyProfileChrome";
 
 type Props = {
   companyId: string;
   companyName?: string;
   company: Record<string, unknown>;
+  companyOptions?: Array<{ id: string; name?: string }>;
+  onCompanySelect?: (companyId: string) => void;
   /** Cloud sync right column — thoda compact table */
   variant?: "panel" | "full";
   disabled?: boolean;
@@ -81,6 +81,8 @@ type ShareRow = {
   loginUsername?: string;
   photoURL?: string;
 };
+
+type RouteTab = "drive" | "server";
 
 type AppUserProfile = {
   email?: string;
@@ -215,6 +217,8 @@ export function LocalDriveShareManagePanel({
   companyId,
   companyName,
   company,
+  companyOptions,
+  onCompanySelect,
   variant = "panel",
   disabled,
   onUsersChanged,
@@ -234,6 +238,7 @@ export function LocalDriveShareManagePanel({
   const [passwordRow, setPasswordRow] = useState<ShareRow | null>(null);
   const [newPassword, setNewPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [routeTab, setRouteTab] = useState<RouteTab>("drive");
   const [tick, setTick] = useState(0);
   const [localCompany, setLocalCompany] = useState<Record<string, unknown>>(company);
   const profileCacheRef = useRef<Map<string, AppUserProfile>>(new Map());
@@ -432,6 +437,52 @@ export function LocalDriveShareManagePanel({
     return out;
   }, [localCompany, tick, appUsers, firebaseUser, sharedWithRows]);
 
+  const serverRows = useMemo((): ShareRow[] => {
+    const ownerEmail = normalizeEmail(String(localCompany.ownerEmail || ""));
+    const driveEmails = new Set(readCloudSyncDriveShareUsers(localCompany).map((u) => normalizeEmail(u.email)));
+    const ownerProfile = ownerEmail
+      ? profileForEmail(ownerEmail, appUsers, firebaseUser, sharedWithRows, profileCacheRef.current)
+      : null;
+    const out: ShareRow[] = ownerEmail
+      ? [
+          {
+            email: ownerEmail,
+            name:
+              ownerProfile?.displayName ||
+              String(localCompany.ownerName || "").trim() ||
+              ownerEmail.split("@")[0] ||
+              "Owner",
+            role: "owner",
+            photoURL: ownerProfile?.photoURL,
+          },
+        ]
+      : [];
+    out.push(
+      ...parseLocalCompanyUserRows(localCompany.localCompanyUsers)
+      .filter((u) => {
+        const email = normalizeEmail(u.shareEmail || u.username);
+        if (!email.includes("@")) return false;
+        if (email === ownerEmail) return false;
+        return !driveEmails.has(email);
+      })
+      .map((u) => {
+        const email = normalizeEmail(u.shareEmail || u.username);
+        const profile = profileForEmail(email, appUsers, firebaseUser, sharedWithRows, profileCacheRef.current);
+        return {
+          email,
+          name: u.displayName || profile.displayName || email.split("@")[0] || email,
+          role: normalizeLocalCompanyAppRole(u.role),
+          localUserId: u.id,
+          loginUsername: u.username,
+          photoURL: profile.photoURL,
+        };
+      })
+    );
+    return out;
+  }, [localCompany, appUsers, firebaseUser, sharedWithRows]);
+
+  const activeRows = routeTab === "drive" ? rows : serverRows;
+
   const companyForDialog = useMemo(
     () =>
       ({
@@ -608,20 +659,66 @@ export function LocalDriveShareManagePanel({
 
   const sharedCount = rows.filter((r) => r.role !== "owner").length;
   const isFull = variant === "full";
+  const driveUserCount = rows.length;
+  const serverUserCount = serverRows.length;
+  const totalUserCount = new Set([...rows, ...serverRows].map((row) => normalizeEmail(row.email)).filter(Boolean)).size;
+  const routeTitle = routeTab === "drive" ? "Share company on Drive" : "Shared users on PL Server";
+  const routeHelp =
+    routeTab === "drive"
+      ? "Users receive writer access to the Google Drive folder. Their app role is controlled from this table."
+      : "These users are shared through PL Server. Drive sharing is separate for this company.";
+  const bluePillClass =
+    "rounded-full border border-blue-300 bg-blue-50/90 text-blue-900 hover:bg-blue-100 hover:text-blue-950 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-100 dark:hover:bg-blue-900/50";
+  const activeBluePillClass =
+    "rounded-full !border-emerald-300 !bg-emerald-100/90 !text-emerald-950 hover:!bg-emerald-200/80 dark:!border-emerald-700 dark:!bg-emerald-950/45 dark:!text-emerald-100 dark:hover:!bg-emerald-900/55";
+  const softBluePillClass =
+    "inline-flex h-8 items-center rounded-full border border-blue-300 bg-blue-50/90 px-3 text-xs font-medium text-blue-900 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-100";
+  const activeTabStyle = {
+    backgroundColor: "#d1fae5",
+    borderColor: "#6ee7b7",
+    color: "#064e3b",
+  };
+  const sharePanelClass =
+    "pl-backup-soft-box pl-backup-soft-box-sky rounded-lg border border-sky-200/70 bg-sky-50/30 p-3 space-y-3 h-full flex flex-col min-h-0";
+  const shareTableClass =
+    "[&_thead_tr]:!border-b-[1px] [&_thead_tr]:!border-sky-200/70 [&_th]:bg-sky-100/80 [&_th]:font-medium [&_th]:text-sky-950 [&_tbody_tr]:!border-b-[1px] [&_tbody_tr]:!border-sky-200/60 [&_tbody_tr:last-child]:border-b-0 [&_tbody_tr:hover]:bg-sky-50/40";
+  const companyLabel = companyName ?? String(company.name || "Company");
+  const renderCompanyPill = () =>
+    onCompanySelect && companyOptions?.length ? (
+      <Select value={companyId} onValueChange={onCompanySelect} disabled={disabled}>
+        <SelectTrigger
+          className={cn(
+            softBluePillClass,
+            "h-8 w-auto min-w-[11rem] max-w-[18rem] justify-between rounded-full bg-blue-50/90 px-3 py-0 text-xs"
+          )}
+        >
+          <SelectValue placeholder="Select company" />
+        </SelectTrigger>
+        <SelectContent>
+          {companyOptions.map((option) => (
+            <SelectItem key={option.id} value={option.id}>
+              {option.name || option.id}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    ) : (
+      <span className={softBluePillClass}>{companyLabel}</span>
+    );
 
   return (
     <div
       className={cn(
         "h-full flex flex-col dark:border-black",
-        isFull ? "border-0 bg-transparent" : cloudSyncSharePanelCard
+        isFull ? "border-0 bg-transparent" : sharePanelClass
       )}
     >
-      <div className={cn("flex flex-col gap-2", isFull ? "px-0" : "")}>
+      <div className={cn("flex flex-col gap-2 pb-2", isFull ? "px-0" : "")}>
         <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="min-w-0">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Label
               className={cn(
-                "font-semibold text-emerald-900 dark:text-emerald-100",
+                "inline-flex items-center gap-1.5 font-semibold text-sky-950 dark:text-sky-100",
                 isFull ? "text-base" : "text-sm"
               )}
             >
@@ -629,27 +726,49 @@ export function LocalDriveShareManagePanel({
                 <>
                   Manage Sharing{" "}
                   <span className="text-muted-foreground font-normal">----&gt;</span>{" "}
-                  {companyName ?? String(company.name || "Company")}
+                  {companyLabel}
                 </>
               ) : (
-                "Share company on Drive"
+                routeTitle
               )}
+              <CloudSyncHelpPopover
+                label={routeTitle}
+                description={<p>{routeHelp}</p>}
+              />
             </Label>
-            <p className="text-xs text-muted-foreground mt-1">
-              Drive folder par write access. App me role table se set hota hai.
-            </p>
+            {renderCompanyPill()}
           </div>
-          <div className="flex flex-col items-end gap-1 shrink-0">
-            <span className="text-xs text-emerald-800/80 dark:text-emerald-300/90">Users: {rows.length}</span>
+          <div className="flex flex-row flex-wrap items-center justify-end gap-2 shrink-0">
             <Button
               type="button"
               variant="outline"
               size="sm"
-              className="rounded-full border-emerald-400/80 bg-emerald-50/90 text-emerald-900 hover:bg-emerald-100 hover:text-emerald-950 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-100 dark:hover:bg-emerald-900/50"
-              disabled={disabled || !!busyEmail}
+              className={cn("h-8 px-3", routeTab === "drive" ? activeBluePillClass : bluePillClass)}
+              style={routeTab === "drive" ? activeTabStyle : undefined}
+              onClick={() => setRouteTab("drive")}
+            >
+              Drive User {driveUserCount}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={cn("h-8 px-3", routeTab === "server" ? activeBluePillClass : bluePillClass)}
+              style={routeTab === "server" ? activeTabStyle : undefined}
+              onClick={() => setRouteTab("server")}
+            >
+              Server User {serverUserCount}
+            </Button>
+            <span className={softBluePillClass}>Total User {totalUserCount}</span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={cn("h-8 px-2.5 text-xs", bluePillClass)}
+              disabled={disabled || !!busyEmail || routeTab !== "drive"}
               onClick={() => setAddOpen(true)}
             >
-              <PlusCircle className="h-4 w-4 mr-1.5" />
+              <PlusCircle className="h-3.5 w-3.5 mr-1" />
               Add Person
             </Button>
           </div>
@@ -657,19 +776,28 @@ export function LocalDriveShareManagePanel({
       </div>
 
       <div
-        className={cn(isFull ? companyProfileGreenZone : cloudSyncShareTableShell, isFull ? "overflow-x-auto" : "")}
+        className={cn(
+          "mt-3 min-h-0 flex-1 overflow-x-auto",
+          isFull ? companyProfileGreenZone : "rounded-sm",
+        )}
       >
-        <Table className={cloudSyncShareTableClass}>
-          <TableHeader>
-            <TableRow>
+        <Table
+          className={cn(
+            shareTableClass,
+            "[&_thead_tr]:shadow-none",
+          )}
+        >
+          <TableHeader className="bg-sky-100/80 dark:bg-sky-950/45">
+            <TableRow className="hover:bg-transparent">
               <TableHead className={isFull ? "w-2/5" : "min-w-[140px]"}>Email</TableHead>
+              <TableHead>Route</TableHead>
               <TableHead>Name</TableHead>
               <TableHead>Role</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((row) => (
+            {activeRows.map((row) => (
               <TableRow key={row.email}>
                 <TableCell className="font-medium">
                   <div className="flex items-center gap-2 min-w-0">
@@ -685,7 +813,12 @@ export function LocalDriveShareManagePanel({
                   </div>
                 </TableCell>
                 <TableCell>
-                  {row.role === "owner" ? (
+                  <span className="inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-900 ring-1 ring-blue-200/80 dark:bg-blue-950/40 dark:text-blue-100 dark:ring-blue-800/70">
+                    {routeTab === "server" ? "PL Server" : row.role === "owner" ? "Owner" : "Google Drive"}
+                  </span>
+                </TableCell>
+                <TableCell>
+                  {row.role === "owner" || routeTab === "server" ? (
                     <span className="text-sm">{row.name}</span>
                   ) : (
                     <Input
@@ -697,9 +830,10 @@ export function LocalDriveShareManagePanel({
                   )}
                 </TableCell>
                 <TableCell>
-                  {row.role === "owner" ? (
+                  {row.role === "owner" || routeTab === "server" ? (
                     <span className="inline-flex items-center text-sm text-emerald-800 dark:text-emerald-300">
-                      <Crown className="mr-1 h-3.5 w-3.5" /> Owner
+                      {row.role === "owner" ? <Crown className="mr-1 h-3.5 w-3.5" /> : null}
+                      {row.role === "owner" ? "Owner" : localCompanyAppRoleLabel(row.role)}
                     </span>
                   ) : (
                     <Select
@@ -721,8 +855,8 @@ export function LocalDriveShareManagePanel({
                   )}
                 </TableCell>
                 <TableCell className="text-right">
-                  {row.role === "owner" ? (
-                    <span className="text-xs text-muted-foreground">Owner</span>
+                  {row.role === "owner" || routeTab === "server" ? (
+                    <span className="text-xs text-muted-foreground">{row.role === "owner" ? "Owner" : "Server"}</span>
                   ) : (
                     <div className="flex justify-end gap-0.5">
                       <Button
@@ -775,9 +909,11 @@ export function LocalDriveShareManagePanel({
             ))}
           </TableBody>
         </Table>
-        {sharedCount === 0 ? (
+        {activeRows.length === 0 ? (
           <p className="text-center text-xs text-emerald-800/75 dark:text-emerald-300/80 p-4">
-            No shared users yet. Click Add Person to invite staff.
+            {routeTab === "drive"
+              ? "No Drive shared users yet. Click Add Person to invite staff."
+              : "No PL Server users for this company."}
           </p>
         ) : null}
       </div>
@@ -844,7 +980,7 @@ export function LocalDriveShareManagePanel({
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Local login + Drive decrypt key — sirf tab badlega jab naya password likho.
+                Local login and Drive decryption key. It changes only when you enter a new password.
               </p>
             </div>
           </div>
@@ -864,7 +1000,7 @@ export function LocalDriveShareManagePanel({
           <DialogHeader>
             <DialogTitle>Reset password — {passwordRow?.name}</DialogTitle>
             <DialogDescription>
-              Drive decrypt ke liye bhi yahi password use hota hai (encryption key).
+              This password is also used as the Drive decryption key when encryption is enabled.
             </DialogDescription>
           </DialogHeader>
           <div className="relative py-2">

@@ -26,7 +26,7 @@ export function resolveGoogleOAuthClientSecret(): string {
   const secret = String(process.env.GOOGLE_CLIENT_SECRET ?? "").trim();
   if (!secret) {
     throw new Error(
-      "Missing GOOGLE_CLIENT_SECRET — Firebase App Hosting → Environment secrets me is Web client ka secret set karo, phir redeploy."
+      "Missing GOOGLE_CLIENT_SECRET. Set this Web client secret in Firebase App Hosting → Environment secrets, then redeploy."
     );
   }
   return secret;

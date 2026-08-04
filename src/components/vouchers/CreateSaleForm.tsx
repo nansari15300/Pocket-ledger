@@ -1344,7 +1344,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           user.uid,
           finalData,
           idArgForFirestore,
-          approveAfterSave && isEditForApprove ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
+          approveAfterSave ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
           preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
         );
 

@@ -283,8 +283,8 @@ export function LocalCloudSyncSettingsPage() {
                 label="Online company selected"
                 description={
                   <p>
-                    App me abhi ye company online mode me dikh rahi hai. Device-local company choose karo, ya Drive
-                    se Restore dabao — sync settings wahi khulengi.
+                    This company is currently shown in online mode. Choose a device-local company, or restore it from
+                    Drive to open sync settings.
                   </p>
                 }
               />
@@ -295,7 +295,12 @@ export function LocalCloudSyncSettingsPage() {
 
       {isLocalCompany && syncCompanyId && syncCompany ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          <LocalCompanyCloudSyncSettings companyId={syncCompanyId} company={syncCompany} />
+          <LocalCompanyCloudSyncSettings
+            companyId={syncCompanyId}
+            company={syncCompany}
+            companyOptions={localCompanies}
+            onCompanySelect={(id) => void openSyncForLocalCompany(id)}
+          />
         </div>
       ) : null}
     </div>

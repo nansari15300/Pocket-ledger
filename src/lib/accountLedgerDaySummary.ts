@@ -148,7 +148,7 @@ export function getAccountLedgerTransactionAmounts(
     const matchesFromAccount = hasFromAccount && ledgerIdEq(transaction.fromAccountId, entityId);
     if (matchesToAccount) debit = amount;
     if (matchesFromAccount) credit = amount;
-  } else if (transaction.type === "journal" && Array.isArray(transaction.entries)) {
+  } else if ((transaction.type === "journal" || transaction.type === "adjustment") && Array.isArray(transaction.entries)) {
     const journalAmt = sumJournalAmountsForAccount(transaction.entries, entityId);
     debit += journalAmt.debit;
     credit += journalAmt.credit;

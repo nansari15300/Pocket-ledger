@@ -32,6 +32,7 @@ import {
   Columns3,
   ChevronDown,
   Search,
+  Wand2,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
@@ -1454,6 +1455,21 @@ export function StaffDetails({
                 <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", headerClosingBalance < 0 ? "text-red-600" : "text-green-600")}>
                   {formatCurrency(headerClosingBalance, { showDrCr: true })}
                 </div>
+                {!isAllVouchersView ? (
+                  <AddVoucherDialog
+                    defaultTab="adjustment"
+                    allowedTabs={["adjustment"]}
+                    defaultVoucherData={{
+                      defaultTab: "adjustment",
+                      adjustmentTarget: { id: staff.id, entityType: "staff", name: staff.name },
+                    }}
+                  >
+                    <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
+                      <Wand2 className="mr-2 h-3.5 w-3.5" />
+                      Adjust Balance
+                    </Button>
+                  </AddVoucherDialog>
+                ) : null}
                 <ReconciliationAccountButton accountId={staff.id} />
               </div>
             </div>

@@ -193,6 +193,15 @@ export async function ensureAttachmentUrlReadyOnDevice(
 
   const cid = await resolveAttachmentCompanyId(companyId);
 
+  if (!await isAttachmentUrlReadyOnDevice(u, cid, galleryUrls)) {
+    const { isOnlineCompanyAttachmentFilesTickEnabled } = await import("@/lib/attachmentNetworkGate");
+    if (cid && !isOnlineCompanyAttachmentFilesTickEnabled(cid)) {
+      statusByUrl.set(k, "loading");
+      publishAttachmentLoadStore();
+      return false;
+    }
+  }
+
   if (await isAttachmentUrlReadyOnDevice(u, cid, galleryUrls)) {
     markAttachmentUrlReady(u);
     return true;

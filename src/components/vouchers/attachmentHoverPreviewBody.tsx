@@ -3,7 +3,6 @@
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { FilePreview } from "@/components/vouchers/FilePreview";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { isOnlineCompanyAttachmentNetworkAllowed } from "@/lib/onlineCompanySelectorSyncPolicy";
 import { tryGetStoragePathFromFirebaseDownloadUrl, looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
@@ -37,6 +36,10 @@ import { readActiveAttachmentCompanyId } from "@/lib/firestorePermissionSuppress
 import { canFetchPlServerAttachmentForCompany } from "@/lib/plServerAttachmentFetch";
 import { requestAttachmentUiRefresh } from "@/lib/attachmentLoadReady";
 import {
+  grantExplicitAttachmentNetworkFetch,
+  isOnlineCompanyAttachmentFilesTickEnabled,
+} from "@/lib/attachmentNetworkGate";
+import {
   companyAttachmentMode,
   companyRequiresLocalAttachmentUrlsOnly,
   resolveStaticAttachmentDisplay,
@@ -54,6 +57,9 @@ export async function prewarmHoverPreviewHttpsUrls(
   const maxUrls = Math.max(1, Math.min(400, options?.maxUrls ?? 200));
   const { readActiveAttachmentCompanyId } = await import("@/lib/firestorePermissionSuppress");
   const companyId = options?.companyId ?? readActiveAttachmentCompanyId() ?? undefined;
+  if (companyId && !isOnlineCompanyAttachmentFilesTickEnabled(companyId)) {
+    return;
+  }
   const unique = [...new Set(urls.map((u) => String(u || "").trim()).filter((u) => {
     // Transaction table visible rows: HTTPS + raw Storage path + Drive/local refs warm.
     return (
@@ -160,7 +166,12 @@ function HoverPreviewHttpsAwareImage(props: {
     const fromLru = peekHoverCachedBlobUrl(u);
     if (fromLru) return fromLru;
     // Files untick / local-only: raw HTTPS mat — pehle IndexedDB/blob cache.
-    if (!localBytesOnly && typeof navigator !== "undefined" && navigator.onLine) {
+    if (
+      !localBytesOnly &&
+      filesNetworkAllowed &&
+      typeof navigator !== "undefined" &&
+      navigator.onLine
+    ) {
       return u;
     }
     return "";
@@ -171,6 +182,12 @@ function HoverPreviewHttpsAwareImage(props: {
   React.useEffect(() => {
     setReloadKey(0);
   }, [u]);
+
+  React.useEffect(() => {
+    if (filesNetworkAllowed && props.companyId && /^https?:\/\//i.test(u)) {
+      grantExplicitAttachmentNetworkFetch(u, props.companyId);
+    }
+  }, [u, filesNetworkAllowed, props.companyId]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -217,7 +234,13 @@ function HoverPreviewHttpsAwareImage(props: {
         setDisplaySrc(ou);
         return;
       }
-      if (!localBytesOnly && typeof navigator !== "undefined" && navigator.onLine && /^https?:\/\//i.test(u)) {
+      if (
+        !localBytesOnly &&
+        filesNetworkAllowed &&
+        typeof navigator !== "undefined" &&
+        navigator.onLine &&
+        /^https?:\/\//i.test(u)
+      ) {
         setLoadFailed(false);
         setDisplaySrc(u);
         // Web pe raw HTTPS dikha — IndexedDB me likho taaki Files untick ke baad local open chale.
@@ -226,6 +249,7 @@ function HoverPreviewHttpsAwareImage(props: {
             getRemoteAttachmentBlobPreferOfflineCache(u, ac.signal, {
               companyId: props.companyId,
               awaitDiskWrite: false,
+              explicitUserRequest: true,
             })
           )
           .then((cached) => {
@@ -286,7 +310,7 @@ function HoverPreviewHttpsAwareImage(props: {
 
     const isHttps = /^https?:\/\//i.test(u);
     const online = typeof navigator !== "undefined" && navigator.onLine;
-    const canInstantHttps = isHttps && online && !localBytesOnly;
+    const canInstantHttps = isHttps && online && !localBytesOnly && filesNetworkAllowed;
 
     // Local-only: purana raw HTTPS src mat rakho (Files untick ke baad network leak).
     if (!canInstantHttps) {
@@ -332,7 +356,7 @@ function HoverPreviewHttpsAwareImage(props: {
         }
       }
     };
-  }, [u, localBytesOnly, props.companyId, props.companyMode, reloadKey]);
+  }, [u, localBytesOnly, filesNetworkAllowed, props.companyId, props.companyMode, reloadKey]);
 
   if (!displaySrc) {
     if (loadFailed) {
@@ -401,18 +425,78 @@ function HoverPreviewHttpsAwareImage(props: {
 /** Multi-file row / local pending: gallery swipe App me */
 export type AttachmentPreviewGalleryOpts = { urls: readonly string[]; startIndex: number };
 
-/** Portal me nested FilePreview (blob:) PDF ko "FILE" icon dikha deta tha — seedha first-page raster. */
+/** Portal me nested FilePreview (800px box) PDF ko ek side dhakel deta tha — seedha first-page raster + data-pdf-portal-page. */
+function PdfPortalRasterImg({ src, onOpen }: { src: string; onOpen: () => void }) {
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- pdf.js first-page raster
+    <img
+      data-pdf-portal-page="1"
+      src={src}
+      alt=""
+      draggable={false}
+      className="block h-auto w-auto max-h-none max-w-none object-contain"
+      loading="eager"
+      onLoad={() => {
+        requestAnimationFrame(() => {
+          window.dispatchEvent(new Event("resize"));
+        });
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+    />
+  );
+}
+
+function HttpsPdfPortalHoverPreview({
+  url,
+  onOpen,
+  companyId,
+}: {
+  url: string;
+  onOpen: () => void;
+  companyId?: string | null;
+}) {
+  const effectiveUrl = React.useMemo(() => normalizeAttachmentUrlForDevicePreview(url), [url]);
+
+  React.useEffect(() => {
+    if (companyId) grantExplicitAttachmentNetworkFetch(effectiveUrl, companyId);
+  }, [effectiveUrl, companyId]);
+
+  const portalCached = peekHoverCachedBlobUrl(pdfPortalCacheKey(effectiveUrl));
+  const cellThumb = peekHoverCachedBlobUrl(`${effectiveUrl}::cell-thumb`);
+
+  if (portalCached) {
+    return <PdfPortalRasterImg src={portalCached} onOpen={onOpen} />;
+  }
+
+  return (
+    <LocalPdfBlobHoverPreview
+      sourceUrl={effectiveUrl}
+      onOpen={onOpen}
+      instantThumbUrl={cellThumb}
+      companyId={companyId}
+      portalCacheKey={effectiveUrl}
+    />
+  );
+}
+
 function LocalPdfBlobHoverPreview({
   sourceUrl,
   blob,
   onOpen,
   instantThumbUrl,
+  companyId,
+  portalCacheKey,
 }: {
   sourceUrl: string;
   blob?: Blob | null;
   onOpen: () => void;
   /** Cell/hover JPEG already warm — show immediately while pdf.js optional upgrade runs. */
   instantThumbUrl?: string | null;
+  companyId?: string | null;
+  portalCacheKey?: string;
 }) {
   const [thumbUrl, setThumbUrl] = React.useState<string | null>(() =>
     String(instantThumbUrl || "").trim() || null
@@ -429,14 +513,20 @@ function LocalPdfBlobHoverPreview({
 
   React.useEffect(() => {
     let cancelled = false;
-    let created: string | null = null;
     const ac = new AbortController();
     const timeoutId = window.setTimeout(() => ac.abort(), PDF_HOVER_RASTER_TIMEOUT_MS);
     void (async () => {
       try {
         if (!String(instantThumbUrl || "").trim()) setLoading(true);
         let pdfBlob = blob && blob.size > 0 ? blob : null;
-        if (!pdfBlob) {
+        const cacheKey = portalCacheKey || sourceUrl;
+        if (!pdfBlob?.size) {
+          pdfBlob = await getRemoteAttachmentBlobPreferOfflineCache(sourceUrl, ac.signal, {
+            companyId: companyId ?? undefined,
+            explicitUserRequest: true,
+          });
+        }
+        if (!pdfBlob?.size && (sourceUrl.startsWith("blob:") || sourceUrl.startsWith("data:"))) {
           pdfBlob = await fetch(sourceUrl, { signal: ac.signal }).then((r) => (r.ok ? r.blob() : null));
         }
         if (ac.signal.aborted || cancelled) return;
@@ -452,7 +542,8 @@ function LocalPdfBlobHoverPreview({
           URL.revokeObjectURL(result.thumbnailUrl);
           return;
         }
-        created = result.thumbnailUrl;
+        rememberHoverBlobUrl(pdfPortalCacheKey(cacheKey), result.thumbnailUrl);
+        void seedOfflineAttachmentCacheFromBlob(pdfPortalCacheKey(cacheKey), result.thumbnailBlob);
         setThumbUrl(result.thumbnailUrl);
       } catch {
         if (!cancelled && !String(instantThumbUrl || "").trim()) setThumbUrl(null);
@@ -464,15 +555,8 @@ function LocalPdfBlobHoverPreview({
       cancelled = true;
       window.clearTimeout(timeoutId);
       ac.abort();
-      if (created) {
-        try {
-          URL.revokeObjectURL(created);
-        } catch {
-          /* ignore */
-        }
-      }
     };
-  }, [sourceUrl, blob, instantThumbUrl]);
+  }, [sourceUrl, blob, instantThumbUrl, companyId, portalCacheKey]);
 
   if (loading && !thumbUrl) {
     return (
@@ -491,26 +575,7 @@ function LocalPdfBlobHoverPreview({
       </div>
     );
   }
-  return (
-    // eslint-disable-next-line @next/next/no-img-element -- pdf.js first-page raster
-    <img
-      data-pdf-portal-page="1"
-      src={thumbUrl}
-      alt=""
-      draggable={false}
-      className="block h-auto w-auto max-h-none max-w-none object-contain"
-      loading="eager"
-      onLoad={() => {
-        requestAnimationFrame(() => {
-          window.dispatchEvent(new Event("resize"));
-        });
-      }}
-      onDoubleClick={(e) => {
-        e.stopPropagation();
-        onOpen();
-      }}
-    />
-  );
+  return <PdfPortalRasterImg src={thumbUrl} onOpen={onOpen} />;
 }
 
 /** `local:` / `drive:` / `PL_ATTACH_V1` — PC hover preview: local/pending pehle, phir Drive (HTTPS image path alag). */
@@ -834,7 +899,9 @@ export function LocalFileRefTooltipPreview({
           sourceUrl={objectUrl}
           blob={state.status === "ready" ? state.blob : undefined}
           onOpen={openAttachment}
-          instantThumbUrl={null}
+          instantThumbUrl={cellThumbForPdf}
+          companyId={companyId}
+          portalCacheKey={effectiveUrl}
         />
       ) : (
         <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-muted-foreground">
@@ -972,12 +1039,7 @@ export function SingleAttachmentHoverPreviewBody({
             ? { companyId: company.id, voucherId: "" }
             : undefined,
     });
-  const storagePath = storagePathRaw ?? undefined;
   const caption = usesDeviceBlobPreview ? (isPdf ? "PDF" : fmt === "FILE" ? "" : fmt) : isPdf ? "PDF" : fmt;
-  const attachmentGallery =
-    galleryOpts && galleryOpts.urls.length > 1
-      ? { urls: [...galleryOpts.urls], startIndex: galleryOpts.startIndex }
-      : undefined;
 
   /** Bahar AttachmentHoverPortal — yahi markup FilePreview hoverPanel ke image branch jaisa (taaki zoom/width sahi) */
   return (
@@ -1003,27 +1065,18 @@ export function SingleAttachmentHoverPreviewBody({
             openAtt();
           }}
         />
+      ) : isPdf ? (
+        <HttpsPdfPortalHoverPreview
+          url={u}
+          onOpen={openAtt}
+          companyId={voucherAttachmentFb?.companyId ?? company?.id ?? companyIdProp ?? undefined}
+        />
       ) : (
-        <div
-          className="overflow-hidden rounded-lg border bg-background"
-          onDoubleClick={(e) => {
-            e.stopPropagation();
-            openAtt();
-          }}
-        >
-          <FilePreview
-            file={u}
-            storagePath={storagePath}
-            size={800}
-            disabled={false}
-            objectFit="contain"
-            enableHoverFullPreview={false}
-            showFormatBadge={false}
-            attachmentGallery={attachmentGallery}
-            attachmentCompanyId={voucherAttachmentFb?.companyId ?? company?.id ?? undefined}
-            holdAttachmentClipboard={false}
-            forceLocalAttachmentOnly={!filesNetworkAllowed}
-          />
+        <div className="flex min-h-[200px] flex-col items-center justify-center gap-3 px-4 py-6 text-center text-sm text-muted-foreground">
+          <span>Preview not available for this type</span>
+          <Button type="button" size="sm" variant="secondary" onClick={openAtt}>
+            Open file
+          </Button>
         </div>
       )}
       {caption ? (

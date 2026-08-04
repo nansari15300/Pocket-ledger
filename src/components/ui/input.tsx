@@ -1,6 +1,7 @@
 import * as React from "react"
 
 import { cn } from "@/lib/utils"
+import { shouldAutoCapitalizeTextField, shouldNormalizeOnTextChange, toFirstLetterCapitalWords } from "@/lib/textAutoCapitalize"
 
 export type InputProps = React.ComponentProps<"input"> & {
   /** Master–detail list search row — h-10 se ~30% kam (h-7) */
@@ -10,8 +11,22 @@ export type InputProps = React.ComponentProps<"input"> & {
 }
 
 const Input = React.forwardRef<HTMLInputElement, InputProps>(
-  ({ className, listChrome, listChromeSearch, type, ...props }, ref) => {
+  ({ className, listChrome, listChromeSearch, type, onChange, onBlur, ...props }, ref) => {
     const inputType = listChromeSearch && !type ? "search" : type;
+    const autoCapText = shouldAutoCapitalizeTextField({
+      type: inputType,
+      name: props.name,
+      placeholder: props.placeholder,
+      ariaLabel: props["aria-label"],
+      autoCapitalize: props.autoCapitalize,
+      disabled: props.disabled,
+      readOnly: props.readOnly,
+    });
+    const normalizeTarget = (target: HTMLInputElement) => {
+      if (!autoCapText) return;
+      const next = toFirstLetterCapitalWords(target.value);
+      if (next !== target.value) target.value = next;
+    };
     return (
       <input
         type={inputType}
@@ -27,6 +42,16 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
         )}
         ref={ref}
         {...props}
+        onChange={(event) => {
+          if (autoCapText && shouldNormalizeOnTextChange(event.currentTarget.value)) {
+            normalizeTarget(event.currentTarget);
+          }
+          onChange?.(event);
+        }}
+        onBlur={(event) => {
+          normalizeTarget(event.currentTarget);
+          onBlur?.(event);
+        }}
       />
     )
   }

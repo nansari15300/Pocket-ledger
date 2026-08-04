@@ -60,6 +60,7 @@ import { toast as sonnerToast } from "sonner";
 import { useCrossCompanyAttachmentAccess } from "@/hooks/useCrossCompanyAttachmentAccess";
 import { useCompany } from "@/hooks/useCompany";
 import { isOnlineCompanyAttachmentNetworkAllowed } from "@/lib/onlineCompanySelectorSyncPolicy";
+import { grantExplicitAttachmentNetworkFetchBatch } from "@/lib/attachmentNetworkGate";
 import {
   companyAttachmentMode,
   companyRequiresLocalAttachmentUrlsOnly,
@@ -171,11 +172,15 @@ async function resolveLocalRefToBlobUrlForPreview(
       if (remoteUrl && !isLocalFileRef(remoteUrl)) {
         let remoteBlob: Blob | null = null;
         if (looksLikeFirebaseStorageDownloadUrl(remoteUrl)) {
-          remoteBlob = await tryGetBlobFromFirebaseStorageDownloadUrl(remoteUrl);
+          remoteBlob = await tryGetBlobFromFirebaseStorageDownloadUrl(remoteUrl, undefined, {
+            companyId,
+            explicitUserRequest: staleRemoteFallback?.enabled,
+          });
         }
         if (!remoteBlob?.size) {
           remoteBlob = await getRemoteAttachmentBlobPreferOfflineCache(remoteUrl, undefined, {
             companyId,
+            explicitUserRequest: staleRemoteFallback?.enabled,
           });
         }
         if (remoteBlob && remoteBlob.size > 0) {
@@ -357,6 +362,8 @@ export async function prewarmPdfThumbnailsForGallery(
         }
         if (!pdfFileHttp || pdfFileHttp.size === 0) {
           if (localAttachmentOnly) continue;
+          const { isRemoteAttachmentNetworkFetchAllowed } = await import("@/lib/attachmentNetworkGate");
+          if (!isRemoteAttachmentNetworkFetchAllowed(u)) continue;
           const res = await fetch(u, { mode: "cors", signal });
           if (!res.ok) continue;
           pdfFileHttp = await res.blob();
@@ -570,6 +577,33 @@ export function FilePreview({
     Boolean(fileRef) &&
     !policyAllowsAttachmentView &&
     !offlineCacheReadable;
+
+  // Edit / gallery open: user ne file dekhi — is voucher ke HTTPS URLs ke liye network grant.
+  React.useEffect(() => {
+    if (localLedgerOnly) return;
+    const cid = String(pathCompanyId || "").trim();
+    if (!cid) return;
+    const grantUrls: string[] = [];
+    if (typeof file === "string") {
+      const trimmed = file.trim();
+      if (/^https?:\/\//i.test(trimmed)) grantUrls.push(trimmed);
+    }
+    for (const raw of attachmentClientFileUrls || []) {
+      const trimmed = String(raw || "").trim();
+      if (/^https?:\/\//i.test(trimmed)) grantUrls.push(trimmed);
+    }
+    for (const raw of attachmentGallery?.urls || []) {
+      const trimmed = String(raw || "").trim();
+      if (/^https?:\/\//i.test(trimmed)) grantUrls.push(trimmed);
+    }
+    if (grantUrls.length > 0) grantExplicitAttachmentNetworkFetchBatch(grantUrls, cid);
+  }, [
+    file,
+    pathCompanyId,
+    localLedgerOnly,
+    attachmentClientFileUrls,
+    attachmentGallery?.urls,
+  ]);
 
   // URL-only props (e.g. gallery vouchers) par Firebase SDK se blob — fetch/CORS fail hone par bhi thumb mile.
   // Local/`local:` restore: purana `files[].storagePath` Firebase disturb na kare.
@@ -1346,7 +1380,8 @@ export function FilePreview({
           } else if (
             typeof navigator !== "undefined" &&
             navigator.onLine &&
-            (!localLedgerOnly || usesEmbeddedNativeAttachmentStorage())
+            usesEmbeddedNativeAttachmentStorage() &&
+            !localLedgerOnly
           ) {
             resolvedUrl = file;
           } else {
@@ -1413,10 +1448,12 @@ export function FilePreview({
               // 2) Cache miss + online: network se hydrate karo (is call me putCachedBlob bhi hota hai); offline par fetch mat — hang/spinner.
               // Web: edit tile pe Firebase full hydrate mat — cache/local only; thumb click / open pe full load.
               const webLazyNoNetwork = isWebBrowserAttachmentLazyLoad();
+              const editExplicitFetch =
+                !localLedgerOnly && Boolean(pathCompanyId || voucherAttachmentFb?.voucherId);
               if (
                 (!probe || probe.size === 0) &&
                 !localLedgerOnly &&
-                !webLazyNoNetwork &&
+                (!webLazyNoNetwork || editExplicitFetch) &&
                 !controller.signal.aborted &&
                 typeof navigator !== "undefined" &&
                 (navigator.onLine || isCapacitorNativeApp())
@@ -1424,6 +1461,8 @@ export function FilePreview({
                 // Persist run ko component lifecycle se mat baandho; tile unmount ho tab bhi cache fill complete ho.
                 probe = await getRemoteAttachmentBlobPreferOfflineCache(file, undefined, {
                   localOnly: localLedgerOnly,
+                  companyId: pathCompanyId,
+                  explicitUserRequest: editExplicitFetch,
                 });
               }
               if (!probe || probe.size === 0 || controller.signal.aborted) return;
@@ -1865,13 +1904,17 @@ export function FilePreview({
               const navOn =
                 typeof navigator !== "undefined" &&
                 (navigator.onLine || isCapacitorNativeApp() || isElectronDesktopApp());
-              if ((!probe || probe.size === 0) && navOn && !controller.signal.aborted) {
+              if ((!probe || probe.size === 0) && navOn && !localLedgerOnly && !controller.signal.aborted) {
                 if (looksLikeFirebaseStorageDownloadUrl(openUrl)) {
-                  probe = await tryGetBlobFromFirebaseStorageDownloadUrl(openUrl, controller.signal);
+                  probe = await tryGetBlobFromFirebaseStorageDownloadUrl(openUrl, controller.signal, {
+                    companyId: voucherAttachmentFb.companyId,
+                    explicitUserRequest: true,
+                  });
                 }
                 if (!probe?.size) {
                   probe = await getRemoteAttachmentBlobPreferOfflineCache(openUrl, controller.signal, {
                     companyId: voucherAttachmentFb.companyId,
+                    explicitUserRequest: true,
                   });
                 }
               }
@@ -1884,20 +1927,6 @@ export function FilePreview({
                 if (kind === "pdf") resolvedType = "pdf";
                 else if (kind === "image") resolvedType = "image";
                 else resolvedType = "other";
-              } else if (navOn && /^https?:\/\//i.test(openUrl)) {
-                resolvedUrl = openUrl;
-                const lbl = getAttachmentFormatLabel(openUrl);
-                const cleanUrl = openUrl.split("?")[0].toLowerCase();
-                if (lbl === "PDF" || cleanUrl.endsWith(".pdf") || cleanUrl.includes(".pdf")) {
-                  resolvedType = "pdf";
-                } else if (
-                  ["JPG", "JPEG", "PNG", "GIF", "WEBP", "BMP", "SVG", "HEIC", "HEIF", "AVIF", "TIFF"].includes(lbl) ||
-                  cleanUrl.match(/\.(jpe?g|jfif|gif|png|webp|bmp|svg|heic|heif|avif|tiff?)(\?|$)/i)
-                ) {
-                  resolvedType = "image";
-                } else {
-                  resolvedType = "image";
-                }
               }
               try {
                 resolvedName = decodeURIComponent(openUrl.split("/").pop()?.split("?")[0] || "file");

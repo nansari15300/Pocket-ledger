@@ -88,8 +88,12 @@ import {
   prewarmVisibleAttachmentRefsForInstantOpen,
 } from "@/components/vouchers/attachmentHoverPreviewBody";
 import { updateAttachmentPrefetchPriorityFromVisibleRows } from "@/lib/attachmentPrefetchPriorityBuffer";
+import {
+  isOnlineCompanyAttachmentFilesTickEnabled,
+  setVisiblePageAttachmentUrls,
+} from "@/lib/attachmentNetworkGate";
 import { shouldSkipVisibleRowFullIdlePrewarmOnWeb } from "@/lib/webAttachmentLazyLoadPolicy";
-import { getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize";
+import { getVoucherAttachmentUrlsForUi, voucherAttachmentUiOptionsForCompany } from "@/lib/voucherAttachmentNormalize";
 import { statementCheckTxnId } from "@/lib/statementCheckModeStorage";
 import { stripSpendWiseSyntheticOpeningMaster } from "@/lib/ledgerPagePrint";
 import {
@@ -344,6 +348,7 @@ export function TransactionsTable({
   spendWiseGroupPrint,
 }: TransactionsTableProps) {
   const { company, companyId } = useCompany();
+  const voucherAttachmentUiOpts = useMemo(() => voucherAttachmentUiOptionsForCompany(company), [company]);
   const [syncingVoucherIds, setSyncingVoucherIds] = useState<Set<string>>(() => new Set());
   const [pendingOutboxVoucherIds, setPendingOutboxVoucherIds] = useState<Set<string>>(() => new Set());
   const [dataSyncEpoch, setDataSyncEpoch] = useState(0);
@@ -1250,7 +1255,7 @@ export function TransactionsTable({
     const urls: string[] = [];
     if (showFileBySelection && Array.isArray(tableTransactions)) {
       for (const row of tableTransactions as any[]) {
-        for (const url of getVoucherAttachmentUrlsForUi(row)) {
+        for (const url of getVoucherAttachmentUrlsForUi(row, voucherAttachmentUiOpts)) {
           if (url) urls.push(url);
         }
       }
@@ -1264,9 +1269,13 @@ export function TransactionsTable({
     return urls;
   }, [showFileBySelection, tableTransactions, openingBalanceAttachmentUrls]);
   useEffect(() => {
-    if (visibleAttachmentUrls.length === 0) return;
     if (typeof window === "undefined") return;
-    // Full-company prefetch queue ko bhi visible URLs pehle — `peekAttachmentPrefetchPrioritySnapshot` mirror run me use
+    const warmCompanyId = companyId?.trim() || undefined;
+    setVisiblePageAttachmentUrls(warmCompanyId, visibleAttachmentUrls);
+    if (visibleAttachmentUrls.length === 0) return;
+    if (warmCompanyId && !isOnlineCompanyAttachmentFilesTickEnabled(warmCompanyId)) {
+      return;
+    }
     updateAttachmentPrefetchPriorityFromVisibleRows(visibleAttachmentUrls);
     const browserWindow = window as Window & {
       requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
@@ -1276,16 +1285,12 @@ export function TransactionsTable({
     let idleHandle: number | null = null;
     let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
     const runWarm = () => {
-      const warmCompanyId = companyId?.trim() || undefined;
-      // Web: idle full-blob warm skip — Preview thumbs load visible rows; hover/click loads full.
       if (shouldSkipVisibleRowFullIdlePrewarmOnWeb()) return;
-      // Idle-time warm keeps row mount responsive while making first hover near-instant.
       void prewarmHoverPreviewHttpsUrls(visibleAttachmentUrls, {
         signal: ac.signal,
         maxUrls: 220,
         companyId: warmCompanyId,
       });
-      // Tick-click open ko production-jaisa banane ke liye visible row files pehle se instant-open cache me bhejo.
       void prewarmVisibleAttachmentRefsForInstantOpen(visibleAttachmentUrls, {
         signal: ac.signal,
         maxUrls: 220,
@@ -1295,16 +1300,12 @@ export function TransactionsTable({
     if (typeof browserWindow.requestIdleCallback === "function") {
       idleHandle = browserWindow.requestIdleCallback(runWarm, { timeout: 450 });
     } else {
-      // Browser-only timer fallback keeps TS/SSR-safe path explicit.
-      // Keep timeout handle separate from idle callback id to avoid Node-vs-browser timeout type mismatch.
       timeoutHandle = globalThis.setTimeout(runWarm, 80);
     }
     return () => {
       ac.abort();
-      if (idleHandle != null) {
-        if (typeof browserWindow.cancelIdleCallback === "function") {
-          browserWindow.cancelIdleCallback(idleHandle);
-        }
+      if (idleHandle != null && typeof browserWindow.cancelIdleCallback === "function") {
+        browserWindow.cancelIdleCallback(idleHandle);
       }
       if (timeoutHandle != null) globalThis.clearTimeout(timeoutHandle);
     };

@@ -98,9 +98,9 @@ import {
 } from "@/lib/plServerFirebaseHitTrace";
 import { companyRowMatchesSelectionId } from "@/lib/plServerHostCompanyId";
 import { PL_GATE_CHANGED_EVENT } from "@/lib/gates/gateTypes";
-import { sharedCompanyQueryKey, sharedCompanyQuerySpecs, resolveFirestoreAuthEmail } from "@/lib/sharedWithEmailsQuery";
+import { sharedCompanyQueryKey, sharedCompanyQuerySpecs, resolveFirestoreAuthEmail, ownerEmailQueryVariants } from "@/lib/sharedWithEmailsQuery";
 import {
-  mirrorOnlineCompaniesFromFirestore,
+  pullOnlineCompanyRegistryFromFirestore,
   purgeGhostOnlineCompanyDeltas,
   resolveMirrorUserEmail,
 } from "@/lib/mirrorOnlineCompaniesFromFirestore";
@@ -850,6 +850,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   /** Case variants: `array-contains` lowercase + legacy exact auth email. */
   const sharedSnapByVariantRef = useRef<Map<string, { docs: readonly unknown[] }>>(new Map());
   const ownedByEmailSnapRef = useRef<any>(null);
+  const ownedByEmailSnapByVariantRef = useRef<Map<string, { docs: readonly unknown[] }>>(new Map());
   /** Doc-snapshot async callback stale company switch na kare — `setCompany` se pehle match karo. */
   const companyIdLiveRef = useRef<string | null>(null);
   /** Deferred Firestore registry mirror cancel — company switch / unmount pe timer clear. */
@@ -1485,18 +1486,18 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         let ownedMirrorIds = new Set<string>();
         let sharedOnlyMirrorIds = new Set<string>();
         let cloudMirrorAllowedIds: Set<string> | null = null;
-        let mirroredRows: Awaited<ReturnType<typeof mirrorOnlineCompaniesFromFirestore>>["rows"] = [];
+        let mirroredRows: Awaited<ReturnType<typeof pullOnlineCompanyRegistryFromFirestore>>["rows"] = [];
 
         if (mirrorUser) {
           try {
             const ownerIdCandidates = resolveOwnerIdQueryCandidates(user!.uid, customUser?.userDocId);
-            const result = await mirrorOnlineCompaniesFromFirestore(mirrorUser, ownerIdCandidates);
+            const result = await pullOnlineCompanyRegistryFromFirestore(mirrorUser, ownerIdCandidates);
             mirroredRows = result.rows;
             ownedMirrorIds = result.ownedIds;
             sharedOnlyMirrorIds = result.sharedOnlyIds;
             cloudMirrorAllowedIds = result.cloudAllowedIds;
           } catch (e) {
-            console.warn("[useCompany] mirrorOnlineCompaniesFromFirestore failed", e);
+            console.warn("[useCompany] pullOnlineCompanyRegistryFromFirestore failed", e);
             cloudMirrorAllowedIds = null;
           }
         }
@@ -1638,6 +1639,18 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         const normalizedLocalCompanies = Array.from(companyById.values());
         await Promise.all(normalizedLocalCompanies.map((c) => upsertLocalCompany(c as any)));
         latestLocalNormalizedCompaniesRef.current = normalizedLocalCompanies;
+
+        // Web Firebase mode: live onSnapshot listeners authoritative — mirror sirf SQLite cache update kare.
+        if (isLiveFirestoreCompanyRegistry(isBrowserOnline)) {
+          plDbgCompanyRecovery("performLocalRegistryFirestoreMirror:sqliteCacheOnlyWeb", {
+            mode: opts.mode,
+            count: normalizedLocalCompanies.length,
+            idsSample: normalizedLocalCompanies.slice(0, 8).map((c) => c.id),
+          });
+          triggerRegistryUpdateRef.current?.();
+          return;
+        }
+
         const filteredLocals = filterSharedOnlyCompaniesForSuperAdminInMainApp(
           normalizedLocalCompanies,
           user,
@@ -1709,7 +1722,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         if (touchLoading) setLoading(false);
       }
     },
-    [user?.uid, user?.email, customUser?.userDocId, customUser?.email, normalizeLocalCompany, isSuperAdminUser, clearCompanyId, router]
+    [user?.uid, user?.email, customUser?.userDocId, customUser?.email, normalizeLocalCompany, isSuperAdminUser, clearCompanyId, router, isBrowserOnline]
   );
 
   useEffect(() => {
@@ -2616,6 +2629,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     ownedLegacySnapRef.current = null;
     sharedSnapRef.current = null;
     sharedSnapByVariantRef.current.clear();
+    ownedByEmailSnapByVariantRef.current.clear();
 
     const ownerIdCandidates = resolveOwnerIdQueryCandidates(user.uid, customUser?.userDocId);
     const ownedQuery = query(collection(firestore, "companies"), where("ownerId", "==", ownerIdCandidates[0] || user.uid));
@@ -2625,13 +2639,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         : null;
     const firestoreAuthEmail = resolveFirestoreAuthEmail(user.email);
     const sharedQuerySpecs = sharedCompanyQuerySpecs(firestoreAuthEmail);
-    // Email login — ownerEmail se owned companies (sirf SuperAdmin nahi, sab users)
-    const ownerEmailLower = firestoreAuthEmail.toLowerCase();
-    const ownedByEmailQuery = ownerEmailLower
-      ? query(collection(firestore, "companies"), where("ownerEmail", "==", ownerEmailLower))
-      : null;
+    const ownedByEmailVariants = ownerEmailQueryVariants(firestoreAuthEmail);
 
-    const needsOwnedByEmail = !!ownerEmailLower;
+    const needsOwnedByEmail = ownedByEmailVariants.length > 0;
     /** Offline / slow Firestore: dono snapshot refs null reh sakte — pehle `listLocalCompanies` se trigger bina iske company list + loading kabhi settle nahi hoti (online backup → local restore → refresh par blank). */
     const emptySnap = (): { docs: readonly unknown[] } => ({ docs: [] });
     /** Har snapshot par taaza SQLite — purana cache delete ke baad bhi company dikhata tha; recycle bin move ke baad live list */
@@ -2656,6 +2666,23 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         }
         await handleSnapshotUpdate(owned, shared, ownedByEmail, localRows);
       })();
+    };
+
+    const mergeOwnedByEmailSnapshots = () => {
+      const byId = new Map<string, unknown>();
+      for (const snap of ownedByEmailSnapByVariantRef.current.values()) {
+        for (const d of snap.docs) {
+          const doc = d as { id: string };
+          byId.set(doc.id, d);
+        }
+      }
+      ownedByEmailSnapRef.current = { docs: [...byId.values()] };
+    };
+
+    const markOwnedByEmailVariantFailed = (emailVariant: string) => {
+      ownedByEmailSnapByVariantRef.current.set(emailVariant, emptySnap());
+      mergeOwnedByEmailSnapshots();
+      triggerUpdate();
     };
 
     const unsubOwned = onSnapshot(ownedQuery, (snap) => {
@@ -2752,25 +2779,38 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       : () => {};
     if (!ownedLegacyQuery) ownedLegacySnapRef.current = null;
 
-    const unsubOwnedByEmail = ownedByEmailQuery
-      ? onSnapshot(ownedByEmailQuery, (snap) => {
-          ownedByEmailSnapRef.current = snap;
-          triggerUpdate();
-        }, (err: any) => {
-          if (String(err?.code || "") === "already-exists") {
-            // Firestore SDK watch target collision: listener chain ko clean retry do.
-            scheduleCompanyFirestoreListenerRetry("ownedByEmail");
-          }
-          if (err?.code === 'permission-denied' || err?.code === 'PERMISSION_DENIED') {
-            console.warn('[PERMISSION_DENIED TRACK] source=useCompany query=ownedByEmail — deploy firestore.rules (ownerEmail list)', { code: err?.code });
-            ownedByEmailSnapRef.current = emptySnap();
-            triggerUpdate();
-            return;
-          }
-          console.error("Owned by email companies listener error:", err);
-        })
-      : () => {};
-    if (!ownedByEmailQuery) ownedByEmailSnapRef.current = null;
+    const unsubOwnedByEmail =
+      ownedByEmailVariants.length > 0
+        ? ownedByEmailVariants.map((emailVariant) =>
+            onSnapshot(
+              query(collection(firestore, "companies"), where("ownerEmail", "==", emailVariant)),
+              (snap) => {
+                ownedByEmailSnapByVariantRef.current.set(emailVariant, snap);
+                mergeOwnedByEmailSnapshots();
+                triggerUpdate();
+              },
+              (err: any) => {
+                if (String(err?.code || "") === "already-exists") {
+                  scheduleCompanyFirestoreListenerRetry("ownedByEmail");
+                }
+                if (
+                  err?.code === "permission-denied" ||
+                  err?.code === "PERMISSION_DENIED" ||
+                  String(err?.message || "").includes("permission")
+                ) {
+                  console.warn(
+                    "[PERMISSION_DENIED TRACK] source=useCompany query=ownedByEmail — deploy firestore.rules (ownerEmail list)",
+                    { code: err?.code, emailVariant }
+                  );
+                } else {
+                  console.warn("Owned by email companies listener error:", err);
+                }
+                markOwnedByEmailVariantFailed(emailVariant);
+              }
+            )
+          )
+        : [];
+    if (!ownedByEmailVariants.length) ownedByEmailSnapRef.current = null;
 
     triggerUpdate();
     triggerRegistryUpdateRef.current = triggerUpdate;
@@ -2780,12 +2820,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         unsubOwned();
         unsubOwnedLegacy();
         unsubSharedList.forEach((u) => u());
-        unsubOwnedByEmail();
+        unsubOwnedByEmail.forEach((u) => u());
         ownedSnapRef.current = null;
         ownedLegacySnapRef.current = null;
         sharedSnapRef.current = null;
         sharedSnapByVariantRef.current.clear();
         ownedByEmailSnapRef.current = null;
+        ownedByEmailSnapByVariantRef.current.clear();
     }
 }, [user?.uid, user?.email, customUser?.userDocId, authLoading, isSuperAdmin, handleSnapshotUpdate, registryVersion, companyFirestoreListenerRetryEpoch, scheduleCompanyFirestoreListenerRetry, isBrowserOnline, gateEpoch, user, normalizeLocalCompany, isSuperAdminUser]);
 

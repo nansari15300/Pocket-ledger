@@ -30,6 +30,7 @@ import {
   Columns3,
   ChevronDown,
   Info,
+  Wand2,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
@@ -1721,6 +1722,21 @@ export function AccountDetails({
                       </>
                     )}
                   </div>
+                  {account.id !== "all" ? (
+                    <AddVoucherDialog
+                      defaultTab="adjustment"
+                      allowedTabs={["adjustment"]}
+                      defaultVoucherData={{
+                        defaultTab: "adjustment",
+                        adjustmentTarget: { id: account.id, entityType: "account", name: account.accountName },
+                      }}
+                    >
+                      <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
+                        <Wand2 className="mr-2 h-3.5 w-3.5" />
+                        Adjust Balance
+                      </Button>
+                    </AddVoucherDialog>
+                  ) : null}
                   <ReconciliationAccountButton accountId={account.id} />
                 </div>
               </div>

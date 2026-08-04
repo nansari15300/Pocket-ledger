@@ -2,6 +2,11 @@ import { format } from "date-fns";
 import { formatBsFromAD, adToBs } from "@/lib/bs-date";
 import type { BSFormatKey } from "@/lib/dateFormatOptions";
 import {
+  normalizeVoucherDateForBackdateCheck,
+  parseFirestoreDateFieldToJsDate,
+  parseLikelyBsVoucherDate,
+} from "@/lib/voucherDateNormalize";
+import {
   buildPocketLedgerDriveRelativePath,
   sanitizePocketLedgerDriveFileNamePart,
   POCKET_LEDGER_OPENING_SUB,
@@ -37,14 +42,22 @@ export function resolveAttachmentCategoryFolder(collection: unknown): string {
 }
 
 function parseVoucherDate(raw: unknown): Date {
-  if (raw instanceof Date && !isNaN(raw.getTime())) return raw;
+  const fromFirestore = parseFirestoreDateFieldToJsDate(raw);
+  if (fromFirestore) return normalizeVoucherDateForBackdateCheck(fromFirestore);
+
+  const fromBsString = parseLikelyBsVoucherDate(raw);
+  if (fromBsString) return fromBsString;
+
+  if (raw instanceof Date && !isNaN(raw.getTime())) {
+    return normalizeVoucherDateForBackdateCheck(raw);
+  }
   if (typeof raw === "number" && Number.isFinite(raw)) {
     const d = new Date(raw);
     if (!isNaN(d.getTime())) return d;
   }
   if (typeof raw === "string" && raw.trim()) {
     const d = new Date(raw);
-    if (!isNaN(d.getTime())) return d;
+    if (!isNaN(d.getTime())) return normalizeVoucherDateForBackdateCheck(d);
   }
   return new Date();
 }

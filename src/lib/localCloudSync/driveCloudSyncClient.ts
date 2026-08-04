@@ -14,6 +14,7 @@ import {
 import { postDriveJsonViaClient } from "@/lib/localCloudSync/driveApiClient";
 import { normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
 import { mergeDriveShareUsersIntoLocalCompanyUsers, parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
+import { assertCanAddDriveShareUser } from "@/lib/localShareRouteGuards";
 
 async function blobToBase64(blob: Blob): Promise<string> {
   const buf = await blob.arrayBuffer();
@@ -149,7 +150,7 @@ export async function uploadAttachmentBytesToDrive(input: {
       remotePath: storagePath,
       base64,
       contentType,
-      sha256Hex: input.sha256Hex,
+      sha256Hex,
     });
   }
   return toDriveFileRef(logicalPath);
@@ -298,8 +299,11 @@ export async function addDriveShareUserToLocalCompany(input: {
   companyId: string;
   companyName?: string;
   email: string;
+  loginUsername?: string;
+  password?: string;
   appRole?: string;
   displayName?: string;
+  replaceExistingPlServerUser?: boolean;
 }): Promise<void> {
   const cid = String(input.companyId || "").trim();
   const email = String(input.email || "")
@@ -308,8 +312,25 @@ export async function addDriveShareUserToLocalCompany(input: {
   if (!cid || !email.includes("@")) {
     throw new Error("Valid Gmail required to share on Google Drive.");
   }
-  const reg = await getLocalCompanyById(cid, { includeDeleted: true });
+  let reg = await getLocalCompanyById(cid, { includeDeleted: true });
   if (!reg) throw new Error("Local company not found.");
+  if (input.replaceExistingPlServerUser === true) {
+    const prevRows = parseLocalCompanyUserRows((reg as { localCompanyUsers?: unknown }).localCompanyUsers);
+    const nextRows = prevRows.filter((u) => {
+      const username = String(u.username || "").trim().toLowerCase();
+      const shareEmail = String(u.shareEmail || "").trim().toLowerCase();
+      return username !== email && shareEmail !== email;
+    });
+    if (nextRows.length !== prevRows.length) {
+      await upsertLocalCompany({
+        ...reg,
+        localCompanyUsers: nextRows,
+        updatedAt: Date.now(),
+      } as LocalCompanyDoc);
+      reg = (await getLocalCompanyById(cid, { includeDeleted: true })) ?? reg;
+    }
+  }
+  assertCanAddDriveShareUser(reg as Record<string, unknown>, email);
 
   const appRole = normalizeLocalCompanyAppRole(input.appRole ?? "manager");
   const prevUsers = readCloudSyncDriveShareUsers(reg as Record<string, unknown>);
@@ -334,15 +355,25 @@ export async function addDriveShareUserToLocalCompany(input: {
   await shareDriveFolderUser({ companyId: cid, companyName: input.companyName, user: { email, appRole } });
 
   let localCompanyUsers = parseLocalCompanyUserRows((reg as { localCompanyUsers?: unknown }).localCompanyUsers);
-  localCompanyUsers = mergeDriveShareUsersIntoLocalCompanyUsers(localCompanyUsers, shareUsers);
-  const gmailIdx = localCompanyUsers.findIndex((u) => u.username.toLowerCase() === email);
-  if (gmailIdx >= 0) {
-    localCompanyUsers[gmailIdx] = {
-      ...localCompanyUsers[gmailIdx],
+  const loginUsername = String(input.loginUsername || email).trim().toLowerCase() || email;
+  localCompanyUsers = localCompanyUsers.filter((u) => {
+    const username = String(u.username || "").trim().toLowerCase();
+    const shareEmail = String(u.shareEmail || "").trim().toLowerCase();
+    return username !== email && shareEmail !== email && username !== loginUsername;
+  });
+  localCompanyUsers = [
+    ...localCompanyUsers,
+    {
+      id: typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `lcu_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      username: loginUsername,
+      shareEmail: email,
       displayName,
       role: appRole,
-    };
-  }
+      password: String(input.password || ""),
+    },
+  ];
 
   const prevSharedWith = readSharedWithRows(reg);
   const nextSharedWith = prevSharedWith.filter((u) => String(u.email || "").trim().toLowerCase() !== email);

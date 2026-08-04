@@ -575,6 +575,8 @@ export type UpsertCompanyBrowserOptions = {
   skipPlanMutationGate?: boolean;
   /** Remote Google Drive apply — dubara cloud_sync_outbox mat banao */
   skipCloudSyncEnqueue?: boolean;
+  /** Background Drive purge/relocate repatch — infinite loop roko */
+  skipDriveAttachmentSideEffects?: boolean;
 };
 
 /** User-origin SQLite writes: JSON `lastEditedAt` / `updatedAt` bump — P2P export merge ke liye (column `updatedAt` kaafi nahi). */
@@ -858,26 +860,30 @@ async function commitCompanyDocOnRenderer(
 
   const { stampedData, existingParsed } = mutation;
 
-  if (existingParsed && shouldNotify && options?.skipCloudSyncEnqueue !== true) {
-    try {
-      const { purgeRemovedDriveAttachmentRefsForDocSave } = await import(
-        "@/lib/localCloudSync/driveAttachmentDelete"
-      );
-      await purgeRemovedDriveAttachmentRefsForDocSave({
+  const syncData = stampedData;
+
+  if (
+    existingParsed &&
+    shouldNotify &&
+    options?.skipCloudSyncEnqueue !== true &&
+    options?.skipDriveAttachmentSideEffects !== true
+  ) {
+    void import("@/lib/localCloudSync/driveAttachmentSaveSideEffects").then(({ scheduleDriveAttachmentSideEffectsAfterDocSave }) => {
+      scheduleDriveAttachmentSideEffectsAfterDocSave({
         companyId,
+        collectionName,
+        docId,
         before: existingParsed,
-        after: stampedData,
+        after: syncData,
       });
-    } catch (e) {
-      console.warn("[localCompanyDocMirror] Drive attachment purge skipped", e);
-    }
+    });
   }
 
   void enqueueCloudSyncDeltaAfterMirrorWrite({
     companyId,
     collectionName,
     docId,
-    data: stampedData,
+    data: syncData,
     skipCloudSyncEnqueue: options?.skipCloudSyncEnqueue,
   }).catch((e) => {
     console.warn("[localCompanyDocMirror] cloud sync enqueue skipped", e);
@@ -888,7 +894,7 @@ async function commitCompanyDocOnRenderer(
     collectionName,
     docId,
     before: existingParsed,
-    after: stampedData,
+    after: syncData,
     shouldNotify,
     skipCloudSyncEnqueue: options?.skipCloudSyncEnqueue,
   });
@@ -896,7 +902,7 @@ async function commitCompanyDocOnRenderer(
   if (shouldNotify) {
     if (!sideEffectOpts?.skipNotify) {
       notifyBrowserDbCollectionUpdated(companyId, collectionName, { immediate: true });
-      void maybeQueuePlServerDeltaAfterDocWrite(companyId, collectionName, docId, stampedData);
+      void maybeQueuePlServerDeltaAfterDocWrite(companyId, collectionName, docId, syncData);
       plPhase1bVerifyHook("onMirrorQueue");
     }
   }
@@ -911,10 +917,10 @@ async function commitCompanyDocOnRenderer(
 
   if (shouldNotify && sideEffectOpts?.skipNotify) {
     const { maybePublishHostDeltaAfterBridgeWrite } = await import("@/lib/plServerHostDeltaPublish");
-    void maybePublishHostDeltaAfterBridgeWrite(companyId, collectionName, docId, stampedData);
+    void maybePublishHostDeltaAfterBridgeWrite(companyId, collectionName, docId, syncData);
   }
 
-  return { written: true, persisted: true, stampedData };
+  return { written: true, persisted: true, stampedData: syncData };
 }
 
 function scheduleCompanyDocAuthoritativeDispatchAfterLocalCommit(

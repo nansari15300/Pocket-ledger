@@ -87,8 +87,8 @@ import {
 import { scheduleBrowserDbPersistAfterWrite } from "@/lib/localSqlite";
 import { parseAttachmentHoldClipboardText } from "@/lib/attachmentHoldClipboard";
 import { dispatchVoucherLivePatch, dispatchVoucherAttachmentSaved, materializeVoucherAttachmentsInSavePayload } from "@/lib/voucherFormAttachmentSave";
-import { normalizeFileUrlsField, dedupeVoucherAttachmentUrlList } from "@/lib/voucherAttachmentNormalize";
-import { isDeviceLocalCompany, isServerGateCompany } from "@/lib/companyStorageKind";
+import { normalizeFileUrlsField, dedupeVoucherAttachmentUrlList, withoutTransientVoucherAttachmentUrls, isTransientVoucherAttachmentUrl } from "@/lib/voucherAttachmentNormalize";
+import { isDeviceLocalCompany, isServerGateCompany, shouldStripTransientVoucherAttachmentUrls } from "@/lib/companyStorageKind";
 import { isLocalFileRef, getPendingPayloadForLocalRef, LOCAL_FILE_PREFIX } from "@/lib/localPendingFiles";
 import { isDriveFileRef } from "@/lib/legacyDriveFileRef";
 import { resolveAuthoritativeFirestoreCompanyId } from "@/lib/resolveAuthoritativeFirestoreCompanyId";
@@ -96,11 +96,7 @@ import { voucherDeleteDebugLog } from "@/lib/voucherDeletePreCheck";
 
 /** Edit save: transient `blob:` preview URLs ya khali `fileUrls` se `local:` / Drive refs mat hatao. */
 function persistableVoucherAttachmentUrls(raw: unknown): string[] {
-  return dedupeVoucherAttachmentUrlList(
-    normalizeFileUrlsField(raw).filter(
-      (s) => !s.startsWith("blob:") && !s.startsWith("data:")
-    )
-  );
+  return withoutTransientVoucherAttachmentUrls(normalizeFileUrlsField(raw));
 }
 
 /** SQLite/outbox edit merge — incoming me `fileUrls` key ho to explicit replace (khali `[]` = user ne hata diya). */
@@ -455,6 +451,7 @@ function deleteUndefinedTopLevelFields(data: Record<string, unknown>): void {
 function normalizePersistableAttachmentUrl(raw: unknown): string | null {
   const s = typeof raw === "string" ? raw.trim() : "";
   if (!s) return null;
+  if (isTransientVoucherAttachmentUrl(s)) return null;
   if (!s.startsWith("PL_ATTACH_V1:")) return s;
   // Hold-clipboard marker should not be persisted; use decoded `src` so sync pipeline can process local/drive/http refs.
   const payload = parseAttachmentHoldClipboardText(s);
@@ -764,6 +761,19 @@ export async function patchVoucherFields(
     }) as Record<string, unknown>;
     coerceVoucherDocumentDate(payload);
     await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId, payload);
+    if (isSoftDeleteLedgerPatch(partial)) {
+      try {
+        const { cancelDriveAttachmentSideEffectsForDoc } = await import(
+          "@/lib/localCloudSync/driveAttachmentSaveSideEffects"
+        );
+        cancelDriveAttachmentSideEffectsForDoc(companyId, "vouchers", voucherId);
+      } catch {
+        /* optional */
+      }
+      const { scheduleBrowserDbPersistAfterWrite, flushPendingBrowserDbSave } = await import("@/lib/localSqlite");
+      scheduleBrowserDbPersistAfterWrite();
+      await flushPendingBrowserDbSave().catch(() => undefined);
+    }
     await flushOrQueuePlServerVoucherAttachmentsAfterLocalSave(companyId, payload);
 
     // Ledger Firebase sync off — SQLite tombstone kaafi; Firestore/outbox mat chalao.
@@ -1185,6 +1195,7 @@ async function saveVoucherOfflineLocalCreate(
   voucherPath: string,
   /** Forms ne pehle se `local:` file refs + IndexedDB ke liye id banai ho to wahi use karo */
   preGeneratedVoucherId?: string | null,
+  approveAfterSave?: SaveVoucherApproveOption,
   options?: SaveVoucherOptions
 ): Promise<{ id: string }> {
   const { storageOption, entitlements: mergedEnt } = await resolveLocalPlanForImmediateVoucherSave(companyId);
@@ -1234,7 +1245,14 @@ async function saveVoucherOfflineLocalCreate(
     ...cleanVoucherData,
     companyId,
     userId,
-    isApproved: options?.forceUnapprovedCreate ? false : cleanVoucherData.isApproved === true,
+    isApproved: options?.forceUnapprovedCreate ? false : (approveAfterSave ? true : cleanVoucherData.isApproved === true),
+    ...(approveAfterSave
+      ? {
+          approvedByUserId: approveAfterSave.approvedByUserId,
+          approvedByUserName: approveAfterSave.approvedByName ?? approveAfterSave.approvedByUserId,
+          approvedAt: nowTs,
+        }
+      : {}),
     // Auto-generated path: explicit display name preserve karo.
     userDisplayName: options?.userDisplayNameOverride ?? creatorDisplayName,
     userEmail: creatorEmail,
@@ -1499,6 +1517,7 @@ export async function saveVoucher(
         cleanVoucherData,
         voucherPath,
         options?.preGeneratedVoucherId ?? null,
+        approveAfterSave,
         options
       );
     }
@@ -1639,7 +1658,16 @@ export async function saveVoucher(
       companyId,
       userId,
       // Recurring generator owner se create hone par bhi voucher unapproved hi rehna chahiye.
-      isApproved: options?.forceUnapprovedCreate ? false : (isOwnerCreator ? true : (cleanVoucherData.isApproved ?? false)),
+      isApproved: options?.forceUnapprovedCreate
+        ? false
+        : (approveAfterSave ? true : (isOwnerCreator ? true : (cleanVoucherData.isApproved ?? false))),
+      ...(approveAfterSave
+        ? {
+            approvedByUserId: approveAfterSave.approvedByUserId,
+            approvedByUserName: approveAfterSave.approvedByName ?? approveAfterSave.approvedByUserId,
+            approvedAt: nowTs,
+          }
+        : {}),
       userDisplayName: options?.userDisplayNameOverride ?? creatorDisplayName,
       userEmail: creatorEmail,
       lastEditedByUserName: creatorDisplayName || userId,
@@ -1724,6 +1752,7 @@ export async function saveVoucher(
         cleanVoucherData,
         voucherPath,
         options?.preGeneratedVoucherId ?? null,
+        approveAfterSave,
         options
       );
     }

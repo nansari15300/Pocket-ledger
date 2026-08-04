@@ -17,6 +17,16 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
@@ -30,20 +40,28 @@ import {
 } from "@/lib/driveAuthClient";
 import { markDriveOAuthReturnGrace } from "@/lib/driveOAuthReturnGrace";
 import { getLocalCloudSyncStatus, runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
+import { runManualDriveAttachmentRehydrate } from "@/lib/localCloudSync/driveFullReupload";
 import { backfillLocalDocsToCloudSyncOutbox } from "@/lib/localCloudSync/backfillOutbox";
 import { ensureFreshDriveSyncWhenDriveFolderMissing } from "@/lib/localCloudSync/driveFullReupload";
+import {
+  confirmDriveFolderRepairNow,
+  isDriveFolderRepairBlockedMessage,
+  readDriveFolderRepairState,
+} from "@/lib/localCloudSync/driveFolderRepair";
 import { setCloudSyncCursor } from "@/lib/localCloudSync/queue";
 import { ensureCloudSyncDriveEncryptionSalt } from "@/lib/localCloudSync/driveEncryption";
 import { patchLocalCompanyCloudSyncFields, readCloudSyncConfigFromCompany, isEligibleLocalDriveSyncCompanyRow, localRegistryFieldsForDriveSyncLedger } from "@/lib/localCloudSync/companyConfig";
 import type { CloudSyncIntervalSec } from "@/lib/localCloudSync/types";
-import { CLOUD_SYNC_INTERVAL_SEC_OPTIONS } from "@/lib/localCloudSync/types";
+import {
+  CLOUD_SYNC_INTERVAL_SEC_OPTIONS,
+  formatCloudSyncCountdownLabel,
+  formatCloudSyncIntervalLabel,
+} from "@/lib/localCloudSync/types";
 import {
   aggregateSyncSummaryForRange,
-  clearSyncSummaryHistoryInRange,
   CLOUD_SYNC_SUMMARY_RANGE_OPTIONS,
   CLOUD_SYNC_SUMMARY_RESET_OPTIONS,
   emptyCloudSyncLastSyncSummary,
-  lastSyncSummaryFromHistory,
   type CloudSyncSummaryRange,
   type CloudSyncSummaryResetRange,
 } from "@/lib/localCloudSync/syncSummaryHistory";
@@ -59,7 +77,7 @@ import {
 import { DriveShareUsersPanel } from "@/components/company/DriveShareUsersPanel";
 import { JoinSharedLocalCompanyDialog } from "@/components/company/JoinSharedLocalCompanyDialog";
 import { formatDistanceToNow } from "date-fns";
-import { Check, ChevronDown, Cloud, Loader2, RefreshCw, Save, Share2 } from "lucide-react";
+import { Check, ChevronDown, Cloud, FileSearch, Loader2, Pause, Play, RefreshCw, Save, Share2 } from "lucide-react";
 import { settingsViewHref } from "@/lib/appNavHref";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -77,6 +95,12 @@ import {
   isStoredDriveAuthError,
   waitForFirebaseAuthReady,
 } from "@/lib/firebaseAuthForApi";
+import {
+  PL_DRIVE_CLOUD_SYNC_STATUS_EVENT,
+  PL_DRIVE_FOLDER_REPAIR_EVENT,
+  type DriveCloudSyncStatusDetail,
+  type DriveFolderRepairNeededDetail,
+} from "@/lib/localCloudSync/driveCloudSyncUiEvents";
 import { readLocalFirebaseReconcileConfig } from "@/lib/localFirebaseReconcile";
 import {
   isLocalGoogleDriveSyncDisabled,
@@ -86,6 +110,8 @@ import {
 type Props = {
   companyId: string;
   company: LocalCompanyDoc | Record<string, unknown>;
+  companyOptions?: Array<{ id: string; name?: string }>;
+  onCompanySelect?: (companyId: string) => void;
 };
 
 /** Sync card error — encryption / auth / generic alag message. */
@@ -132,7 +158,7 @@ function renderCloudSyncStatusError(
 }
 
 /** Sirf device-local companies — Firestore companies par ye card hide. */
-export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
+export function LocalCompanyCloudSyncSettings({ companyId, company, companyOptions, onCompanySelect }: Props) {
   const { user } = useAuth();
   const { reloadLocalCompanyRegistry, triggerSync } = useCompany();
   const { toast } = useToast();
@@ -157,9 +183,12 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
   };
 
   const [busy, setBusy] = useState(false);
+  const [rehydrateBusy, setRehydrateBusy] = useState(false);
   const [summaryRange, setSummaryRange] = useState<CloudSyncSummaryRange>("last");
   const [status, setStatus] = useState({
     pending: 0,
+    pendingFiles: 0,
+    pendingVouchers: 0,
     lastSyncAt: null as number | null,
     status: "idle",
     lastError: null as string | null,
@@ -182,6 +211,20 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
     }>,
     syncSummaryResetAt: null as number | null,
   });
+  const [liveSyncProgress, setLiveSyncProgress] = useState({
+    uploadedFiles: 0,
+    uploadedVouchers: 0,
+    downloadedFiles: 0,
+    downloadedVouchers: 0,
+  });
+  const [repairBusy, setRepairBusy] = useState(false);
+  const [repairNowMs, setRepairNowMs] = useState(() => Date.now());
+  const [repairDialogOpen, setRepairDialogOpen] = useState(false);
+  const [driveFolderRepairLive, setDriveFolderRepairLive] = useState<{
+    detectedAt: number;
+    autoRepairAt: number;
+  } | null>(() => readDriveFolderRepairState(company));
+  const lastRepairPromptAtRef = useRef(0);
 
   const displayedSyncSummary = useMemo(
     () =>
@@ -189,13 +232,28 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
         summaryRange,
         status.syncSummaryHistory,
         status.lastSyncSummary,
-        status.syncSummaryResetAt
+        summaryRange === "last" ? status.syncSummaryResetAt : null
       ),
     [summaryRange, status.syncSummaryHistory, status.lastSyncSummary, status.syncSummaryResetAt]
   );
+  const displayedUploadedFiles = Math.max(displayedSyncSummary.uploadedFiles, liveSyncProgress.uploadedFiles);
+  const displayedUploadedVouchers = Math.max(displayedSyncSummary.uploadedVouchers, liveSyncProgress.uploadedVouchers);
+  const displayedDownloadedFiles = Math.max(displayedSyncSummary.downloadedFiles, liveSyncProgress.downloadedFiles);
+  const displayedDownloadedVouchers = Math.max(
+    displayedSyncSummary.downloadedVouchers,
+    liveSyncProgress.downloadedVouchers
+  );
 
   const cfg = readCloudSyncConfigFromCompany(company);
+  const driveFolderRepair = driveFolderRepairLive;
   const localFirebaseCfg = readLocalFirebaseReconcileConfig(company);
+
+  useEffect(() => {
+    if (!driveFolderRepair) return;
+    const id = window.setInterval(() => setRepairNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [driveFolderRepair]);
+
   const [enabled, setEnabled] = useState(cfg.cloudSyncEnabled);
   const [firebaseReconcileEnabled, setFirebaseReconcileEnabled] = useState(localFirebaseCfg.enabled);
   const [encryptDriveData, setEncryptDriveData] = useState(cfg.cloudSyncEncryptDriveData);
@@ -224,10 +282,46 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
     setFirebaseReconcileEnabled(localNext.enabled);
   }, [company]);
 
+  useEffect(() => {
+    setDriveFolderRepairLive(readDriveFolderRepairState(company));
+  }, [company]);
+
+  useEffect(() => {
+    if (!driveFolderRepairLive) return;
+    if (driveFolderRepairLive.detectedAt <= lastRepairPromptAtRef.current) return;
+    lastRepairPromptAtRef.current = driveFolderRepairLive.detectedAt;
+    setRepairDialogOpen(true);
+  }, [driveFolderRepairLive]);
+
+  useEffect(() => {
+    const onRepairNeeded = (event: Event) => {
+      const detail = (event as CustomEvent<DriveFolderRepairNeededDetail>).detail;
+      if (String(detail?.companyId || "") !== companyId) return;
+      const detectedAt = Number(detail.detectedAt);
+      const autoRepairAt = Number(detail.autoRepairAt);
+      if (!Number.isFinite(detectedAt) || detectedAt <= 0) return;
+      if (!Number.isFinite(autoRepairAt) || autoRepairAt <= 0) return;
+      setDriveFolderRepairLive({ detectedAt, autoRepairAt });
+      reloadLocalCompanyRegistry();
+      if (detectedAt > lastRepairPromptAtRef.current) {
+        lastRepairPromptAtRef.current = detectedAt;
+        setRepairDialogOpen(true);
+      }
+    };
+    window.addEventListener(PL_DRIVE_FOLDER_REPAIR_EVENT, onRepairNeeded);
+    return () => window.removeEventListener(PL_DRIVE_FOLDER_REPAIR_EVENT, onRepairNeeded);
+  }, [companyId, reloadLocalCompanyRegistry]);
+
   const refreshStatus = useCallback(async () => {
-    const s = await getLocalCloudSyncStatus(companyId);
+    const [s, reg] = await Promise.all([
+      getLocalCloudSyncStatus(companyId),
+      getLocalCompanyById(companyId, { includeDeleted: true }),
+    ]);
+    setDriveFolderRepairLive(readDriveFolderRepairState(reg));
     setStatus({
       pending: s.pending,
+      pendingFiles: s.pendingFiles,
+      pendingVouchers: s.pendingVouchers,
       lastSyncAt: s.lastSyncAt,
       status: s.status,
       lastError: s.lastError,
@@ -239,28 +333,24 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
 
   const resetSyncSummaryCounts = useCallback(
     async (range: CloudSyncSummaryResetRange) => {
-      const nextHistory = clearSyncSummaryHistoryInRange(status.syncSummaryHistory, range);
-      const nextLastSummary =
-        range === "all" ? emptyCloudSyncLastSyncSummary() : lastSyncSummaryFromHistory(nextHistory);
-      const resetAt = range === "all" ? Date.now() : status.syncSummaryResetAt;
+      const resetAt = Date.now();
+      const nextLastSummary = emptyCloudSyncLastSyncSummary();
       await patchLocalCompanyCloudSyncFields(companyId, {
-        cloudSyncSummaryHistory: range === "all" ? [] : nextHistory,
         cloudSyncLastSyncSummary: nextLastSummary,
-        ...(range === "all" ? { cloudSyncSummaryResetAt: resetAt } : {}),
+        cloudSyncSummaryResetAt: resetAt,
       });
       setStatus((prev) => ({
         ...prev,
-        syncSummaryHistory: range === "all" ? [] : nextHistory,
         lastSyncSummary: nextLastSummary,
-        ...(range === "all" ? { syncSummaryResetAt: resetAt } : {}),
+        syncSummaryResetAt: resetAt,
       }));
       const label = CLOUD_SYNC_SUMMARY_RESET_OPTIONS.find((o) => o.value === range)?.label ?? range;
       toast({
         title: "Sync counts reset",
-        description: `Cleared sync summary counts for ${label}.`,
+        description: `Summary display reset from now. History is kept for time-range review.`,
       });
     },
-    [companyId, status.syncSummaryHistory, status.syncSummaryResetAt, toast]
+    [companyId, toast]
   );
 
   const summaryRangeLabel =
@@ -297,6 +387,31 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
     const id = window.setInterval(() => void refreshStatus(), 5000);
     return () => window.clearInterval(id);
   }, [enabled, refreshStatus, driveSyncDisabled]);
+
+  useEffect(() => {
+    const onProgress = (event: Event) => {
+      const detail = (event as CustomEvent<DriveCloudSyncStatusDetail>).detail;
+      if (String(detail?.companyId || "") !== companyId) return;
+      if (detail.status !== "syncing") {
+        setLiveSyncProgress({
+          uploadedFiles: 0,
+          uploadedVouchers: 0,
+          downloadedFiles: 0,
+          downloadedVouchers: 0,
+        });
+        void refreshStatus();
+        return;
+      }
+      setLiveSyncProgress((prev) => ({
+        uploadedFiles: Math.max(prev.uploadedFiles, Number(detail.progress?.uploadedFiles) || 0),
+        uploadedVouchers: Math.max(prev.uploadedVouchers, Number(detail.progress?.uploadedVouchers) || 0),
+        downloadedFiles: Math.max(prev.downloadedFiles, Number(detail.progress?.downloadedFiles) || 0),
+        downloadedVouchers: Math.max(prev.downloadedVouchers, Number(detail.progress?.downloadedVouchers) || 0),
+      }));
+    };
+    window.addEventListener(PL_DRIVE_CLOUD_SYNC_STATUS_EVENT, onProgress);
+    return () => window.removeEventListener(PL_DRIVE_CLOUD_SYNC_STATUS_EVENT, onProgress);
+  }, [companyId, refreshStatus]);
 
   // Next sync target — last successful sync + interval; interval badle to ab se dubara count.
   useEffect(() => {
@@ -340,6 +455,44 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
     if (driveSyncDisabled) return;
     settingsDirtyRef.current = true;
     setEnabled(checked);
+  };
+
+  const toggleSyncPaused = async () => {
+    if (driveSyncDisabled || busy) return;
+    const nextEnabled = !enabled;
+    setBusy(true);
+    try {
+      await patchLocalCompanyCloudSyncFields(companyId, {
+        cloudSyncEnabled: nextEnabled,
+        cloudSyncProvider: nextEnabled ? "google_drive" : null,
+        cloudSyncStatus: "idle",
+        cloudSyncLastError: null,
+      });
+      await saveConfig({
+        cloudSyncEnabled: nextEnabled,
+        cloudSyncProvider: nextEnabled ? "google_drive" : null,
+        cloudSyncStatus: "idle",
+        cloudSyncLastError: null,
+      });
+      settingsDirtyRef.current = false;
+      setEnabled(nextEnabled);
+      await refreshStatus();
+      if (nextEnabled) void runLocalCloudSyncCycle(companyId, { force: true });
+      toast({
+        title: nextEnabled ? "Drive sync resumed" : "Drive sync paused",
+        description: nextEnabled
+          ? "Background Drive sync is active again."
+          : "Background Drive sync is paused for this company.",
+      });
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        title: nextEnabled ? "Resume failed" : "Pause failed",
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const onSyncIntervalChange = async (sec: CloudSyncIntervalSec) => {
@@ -512,6 +665,10 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
         const err = res.error ?? "Unknown error";
         if (isCloudSyncEncryptionKeyRequiredError(err)) {
           showEncryptionKeyRequiredToast();
+        } else if (isDriveFolderRepairBlockedMessage(err)) {
+          await refreshStatus();
+          reloadLocalCompanyRegistry();
+          setRepairDialogOpen(true);
         } else {
           toast({ variant: "destructive", title: "Sync failed", description: err });
         }
@@ -526,6 +683,33 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
       }
     } finally {
       setBusy(false);
+    }
+  };
+
+  const confirmDriveFolderRepair = async () => {
+    setRepairDialogOpen(false);
+    setDriveFolderRepairLive(null);
+    setRepairBusy(true);
+    try {
+      const ok = await confirmDriveFolderRepairNow(companyId);
+      reloadLocalCompanyRegistry();
+      await refreshStatus();
+      if (!ok) {
+        setRepairDialogOpen(true);
+        toast({
+          variant: "destructive",
+          title: "Repair failed",
+          description: "Could not prepare a new Drive folder. Use the owner account.",
+        });
+        return;
+      }
+      toast({
+        title: "New Drive folder queued",
+        description: "Uploading your local data to a fresh Pocket Ledger folder now.",
+      });
+      void runLocalCloudSyncCycle(companyId, { force: true });
+    } finally {
+      setRepairBusy(false);
     }
   };
 
@@ -555,6 +739,36 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
       }
     } finally {
       setBusy(false);
+    }
+  };
+
+  const checkDriveAttachments = async () => {
+    if (driveSyncDisabled) {
+      toast({ title: "Drive sync disabled", description: LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE });
+      return;
+    }
+    setRehydrateBusy(true);
+    try {
+      const res = await runManualDriveAttachmentRehydrate(companyId);
+      await refreshStatus();
+      if (!res.ok) {
+        toast({
+          variant: "destructive",
+          title: "Attachment check failed",
+          description: res.error ?? "Unknown error",
+        });
+        return;
+      }
+      const repaired = res.reuploadedDriveRefs + res.requeuedLocalFiles + res.uploadedPendingFiles;
+      toast({
+        title: repaired > 0 ? "Attachments repaired" : "No missing attachments",
+        description:
+          repaired > 0
+            ? `Re-uploaded ${res.reuploadedDriveRefs} file(s), re-queued ${res.requeuedLocalFiles}, uploaded ${res.uploadedPendingFiles} pending.`
+            : "All checked Drive attachment refs are present, or local copies are unavailable.",
+      });
+    } finally {
+      setRehydrateBusy(false);
     }
   };
 
@@ -613,7 +827,6 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
             {LOCAL_GOOGLE_DRIVE_SYNC_DISABLED_MESSAGE}
           </p>
         ) : null}
-        {enabled ? (
           <div className="grid min-h-0 grid-cols-1 lg:grid-cols-[minmax(0,7fr)_minmax(0,13fr)] gap-4 items-stretch">
             {/* Left 35% — sync, encrypt, folder options */}
             <div className="flex w-full min-w-0 flex-col space-y-4 order-2 lg:order-1 min-h-0">
@@ -631,17 +844,17 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                       description={
                         <>
                           <p>
-                            Jab Google Drive sync band ho aur yeh ON ho, to Firebase par sirf{" "}
-                            <strong>linked reconciliation</strong> wala account jayega — poori company nahi.
+                            When Google Drive sync is off and this is enabled, only the{" "}
+                            <strong>linked reconciliation</strong> account is sent to Firebase, not the full company.
                           </p>
                           <p>
-                            Us account se related vouchers bhi (ledger lines) — share ki date range ke andar ho to.
+                            Related voucher ledger lines are included only when they fall within the shared date range.
                           </p>
                           <p>
-                            <strong>Files / attachments Firebase par nahi</strong> — sirf data (amount, date,
-                            narration, etc.).
+                            <strong>Files and attachments are not sent to Firebase</strong>; only data such as amount,
+                            date, and narration is included.
                           </p>
-                          <p>Drive sync ON hone par yeh mode auto-pause rehta hai taake conflict na ho.</p>
+                          <p>This mode is automatically paused while Drive sync is active to avoid conflicts.</p>
                         </>
                       }
                     />
@@ -658,7 +871,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                 </div>
                 {driveConnected ? (
                   <p className="text-xs text-emerald-800 dark:text-emerald-300">
-                    Google Drive sync active hai — Firebase reconcile temporarily paused to avoid conflicts.
+                    Google Drive sync is active, so Firebase reconcile is temporarily paused to avoid conflicts.
                   </p>
                 ) : null}
               </div>
@@ -710,12 +923,47 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                 </div>
               </div>
 
+              {driveFolderRepair && enabled ? (
+                <div className="rounded-md border border-amber-400 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+                  <p className="font-medium">Drive folder not found</p>
+                  <p className="mt-1 text-xs sm:text-sm">
+                    The Pocket Ledger folder on Google Drive is missing or inaccessible. Sync is paused so duplicate
+                    folders are not created. Confirm to upload to a new folder now, or wait{" "}
+                    <strong>
+                      {Math.max(0, Math.ceil((driveFolderRepair.autoRepairAt - repairNowMs) / 1000))} sec
+                    </strong>{" "}
+                    for automatic repair.
+                  </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="mt-2 rounded-full"
+                    disabled={repairBusy || driveControlsDisabled}
+                    onClick={() => void confirmDriveFolderRepair()}
+                  >
+                    {repairBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create new folder now"}
+                  </Button>
+                </div>
+              ) : null}
+
               {/* Sync summary — compact grid table */}
               <div className={cloudSyncLastSyncSummaryCard}>
                 <div className="mb-1.5 flex items-center justify-between gap-2">
                   <p className="font-medium text-sm text-foreground shrink-0">Sync summary</p>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 shrink-0 gap-1 rounded-full border-sky-300 bg-sky-50 px-2.5 text-xs font-medium text-sky-800 hover:bg-sky-100 disabled:opacity-55"
+                      onClick={() => void toggleSyncPaused()}
+                      disabled={driveControlsDisabled}
+                    >
+                      {enabled ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+                      <span>{enabled ? "Pause" : "Resume"}</span>
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
                       <Button
                         type="button"
                         variant="outline"
@@ -724,8 +972,8 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                         <span className="truncate">{summaryRangeLabel}</span>
                         <ChevronDown className="size-3 shrink-0 opacity-50" />
                       </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="min-w-[8.5rem]">
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="min-w-[8.5rem]">
                       {CLOUD_SYNC_SUMMARY_RANGE_OPTIONS.map((opt) => (
                         <DropdownMenuItem
                           key={opt.value}
@@ -756,8 +1004,9 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                           ))}
                         </DropdownMenuSubContent>
                       </DropdownMenuSub>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 </div>
                 <div className="overflow-hidden rounded-md border border-black/25 bg-white/55 dark:border-emerald-900/55 dark:bg-emerald-950/25">
                   <table className="w-full table-fixed text-xs border-collapse">
@@ -782,13 +1031,13 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                     <tbody className="tabular-nums">
                       <tr>
                         <td className="border-b border-r border-black/25 py-1.5 px-2 font-medium capitalize text-muted-foreground dark:border-emerald-900/55">
-                          added
+                          queue
                         </td>
                         <td className="border-b border-r border-black/25 py-1.5 px-2 text-center dark:border-emerald-900/55">
-                          {displayedSyncSummary.addedFiles}
+                          {status.pendingFiles}
                         </td>
                         <td className="border-b border-black/25 py-1.5 px-2 text-center dark:border-emerald-900/55">
-                          {displayedSyncSummary.addedVouchers}
+                          {status.pendingVouchers}
                         </td>
                       </tr>
                       <tr>
@@ -796,10 +1045,10 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                           uploaded
                         </td>
                         <td className="border-b border-r border-black/25 py-1.5 px-2 text-center dark:border-emerald-900/55">
-                          {displayedSyncSummary.uploadedFiles}
+                          {displayedUploadedFiles}
                         </td>
                         <td className="border-b border-black/25 py-1.5 px-2 text-center dark:border-emerald-900/55">
-                          {displayedSyncSummary.uploadedVouchers}
+                          {displayedUploadedVouchers}
                         </td>
                       </tr>
                       <tr>
@@ -807,9 +1056,9 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                           downloaded
                         </td>
                         <td className="border-r border-black/25 py-1.5 px-2 text-center dark:border-emerald-900/55">
-                          {displayedSyncSummary.downloadedFiles}
+                          {displayedDownloadedFiles}
                         </td>
-                        <td className="py-1.5 px-2 text-center">{displayedSyncSummary.downloadedVouchers}</td>
+                        <td className="py-1.5 px-2 text-center">{displayedDownloadedVouchers}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -830,12 +1079,16 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                     Pending sync: <strong>{status.pending}</strong>
                   </p>
                   <p>
-                    Status: <strong>{status.status}</strong>
+                    Status: <strong>{enabled ? status.status : "paused"}</strong>
                   </p>
                   <p>
                     Next sync:{" "}
                     <strong>
-                      {status.status === "syncing" || busy ? "now" : `${nextSyncInSec} sec`}
+                      {!enabled
+                        ? "paused"
+                        : status.status === "syncing" || busy
+                          ? "now"
+                          : formatCloudSyncCountdownLabel(nextSyncInSec)}
                     </strong>
                   </p>
                 </div>
@@ -855,7 +1108,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                     <SelectContent>
                       {CLOUD_SYNC_INTERVAL_SEC_OPTIONS.map((sec) => (
                         <SelectItem key={sec} value={String(sec)}>
-                          {sec} sec
+                          {formatCloudSyncIntervalLabel(sec)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -870,17 +1123,13 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                   companyId={companyId}
                   companyName={typeof company.name === "string" ? company.name : undefined}
                   company={company}
+                  companyOptions={companyOptions}
+                  onCompanySelect={onCompanySelect}
                   disabled={driveControlsDisabled}
                   onUsersChanged={reloadLocalCompanyRegistry}
                 />
             </div>
           </div>
-        ) : (
-          <p className="py-2 text-sm text-muted-foreground">
-            Enable Drive sync above to configure Google Drive settings. After turning it off, click{" "}
-            <strong>Save</strong> below to apply.
-          </p>
-        )}
         </div>
 
         {/* Footer — sync actions; hamesha card ke niche fixed, content overlap nahi */}
@@ -933,6 +1182,21 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
               >
                 Re-download from Drive
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-full px-4"
+                disabled={driveControlsDisabled || rehydrateBusy}
+                onClick={() => void checkDriveAttachments()}
+              >
+                {rehydrateBusy ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                ) : (
+                  <FileSearch className="h-4 w-4 mr-1.5" />
+                )}
+                Check attachments
+              </Button>
               <CloudSyncHelpPopover
                 label="Sync status & actions"
                 hasError={!!status.lastError || localSyntheticAuth}
@@ -950,6 +1214,10 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
                     <p>
                       <strong>Re-download from Drive:</strong> reset sync cursor and pull all operations again (use when
                       another device has data but this one does not).
+                    </p>
+                    <p>
+                      <strong>Check attachments:</strong> scan all local attachment refs on Drive; re-upload any
+                      missing files (runs automatically every 6 hours; use this button anytime).
                     </p>
                     <hr className="border-border my-2" />
                     <p>
@@ -1005,6 +1273,47 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
           triggerSync();
         }}
       />
+
+      <AlertDialog open={repairDialogOpen} onOpenChange={setRepairDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Drive folder missing</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>
+                  The Pocket Ledger company folder on Google Drive was deleted or is inaccessible. Sync is paused so
+                  duplicate folders are not created.
+                </p>
+                {repairBusy ? (
+                  <p>Creating a new Drive folder and starting upload now…</p>
+                ) : driveFolderRepair ? (
+                  <p>
+                    Create a new folder now, or wait{" "}
+                    <strong>
+                      {Math.max(0, Math.ceil((driveFolderRepair.autoRepairAt - repairNowMs) / 1000))} sec
+                    </strong>{" "}
+                    for automatic repair.
+                  </p>
+                ) : (
+                  <p>Create a new folder now, or wait up to 2 minutes for automatic repair.</p>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={repairBusy}>Wait</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={repairBusy || driveControlsDisabled}
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmDriveFolderRepair();
+              }}
+            >
+              {repairBusy ? "Preparing…" : "Create new folder now"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

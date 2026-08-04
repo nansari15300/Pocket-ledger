@@ -42,9 +42,9 @@ export function useAttachmentUrlsReadyState(urls: readonly string[]): "loading" 
           markAttachmentUrlReady(trimmed);
           continue;
         }
-        // Web: URL present = tick “has file”; full Firebase bytes sirf cache miss + hover/click/thumb path.
         if (webLazy) {
-          markAttachmentUrlReady(trimmed);
+          // Web lazy: URL-only "ready" mat — sirf device/cache par green tick / thumb.
+          continue;
         }
       }
       if (!cancelled && !webLazy) queueAttachmentUrlsWarm(urls, cid, urls);

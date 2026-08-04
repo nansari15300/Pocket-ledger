@@ -788,11 +788,7 @@ export function LocalAppServerSettings() {
               />
 
               <Card className={cn("flex h-full min-w-0 flex-col overflow-hidden", serverCardToneSkyCn)}>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base">Shared users</CardTitle>
-                  <CardDescription>People who can open shared companies on this server.</CardDescription>
-                </CardHeader>
-                <CardContent className="min-w-0">
+                <CardContent className="min-w-0 p-3">
                   <LocalPlServerSharePanel
                     companyId={plServerUsersCompanyId}
                     companyName={plServerUsersCompanyName}

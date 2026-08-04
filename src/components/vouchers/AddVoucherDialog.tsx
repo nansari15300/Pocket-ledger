@@ -38,6 +38,7 @@ import { CreatePaymentInForm } from "./CreatePaymentInForm";
 import { CreatePaymentOutForm } from "./CreatePaymentOutForm";
 import { CreateContraForm } from "./CreateContraForm";
 import { CreateJournalForm } from "./CreateJournalForm";
+import { CreateAdjustmentForm } from "./CreateAdjustmentForm";
 import { CreateNoteForm } from "./CreateNoteForm";
 import { SalaryForm } from "./SalaryForm";
 import { CreateProductionForm } from "./CreateProductionForm";
@@ -226,11 +227,12 @@ function recurringCadencePayloadFromUi(
   return recurringRateCadencePayload(mode, cadence, month, day);
 }
 
-type VoucherType = "sale" | "purchase" | "payment_in" | "payment_out" | "inter_company" | "contra" | "direct_income" | "direct_expense" | "journal" | "note" | "add_salary" | "production";
+type VoucherType = "sale" | "purchase" | "payment_in" | "payment_out" | "inter_company" | "contra" | "direct_income" | "direct_expense" | "journal" | "adjustment" | "note" | "add_salary" | "production";
 
 /** Tab strip labels — inter_company ko readable title */
 const VOUCHER_TAB_LABELS: Partial<Record<VoucherType, string>> = {
   inter_company: "Inter Company",
+  adjustment: "Adjustment",
 };
 function voucherTabLabel(key: VoucherType): string {
   return VOUCHER_TAB_LABELS[key] ?? key.replace(/_/g, " ");
@@ -246,6 +248,7 @@ const formMap: Record<VoucherType, React.ComponentType<any>> = {
   direct_income: CreatePaymentInForm,
   direct_expense: CreatePaymentOutForm,
   journal: CreateJournalForm,
+  adjustment: CreateAdjustmentForm,
   note: CreateNoteForm,
   add_salary: SalaryForm,
   production: CreateProductionForm,
@@ -254,7 +257,7 @@ const formMap: Record<VoucherType, React.ComponentType<any>> = {
 // Tab order: Contra left of Journal
 const TAB_ORDER: VoucherType[] = [
   "sale", "purchase", "payment_in", "payment_out", "inter_company", "direct_income", "direct_expense",
-  "contra", "journal", "note", "add_salary", "production",
+  "contra", "journal", "adjustment", "note", "add_salary", "production",
 ];
 
 /** Payment In/Out + Direct Income/Expense — chaaron aapas me convert (APK strip / user request). */
@@ -1385,6 +1388,16 @@ export function AddVoucherDialog(props: any) {
     ledgerBooksOpeningBalanceSigned,
     ...rest
   } = props;
+  const isAdjustmentOnlyDialog = false;
+  const [internalOpen, setInternalOpen] = useState(false);
+  const dialogOpen = typeof isOpen === "boolean" ? isOpen : internalOpen;
+  const setDialogOpen = useCallback(
+    (open: boolean) => {
+      if (typeof isOpen !== "boolean") setInternalOpen(open);
+      onOpenChange?.(open);
+    },
+    [isOpen, onOpenChange]
+  );
   // Outer company context full reference: dialog-scope override provider build karne ke liye (forms ko target company dikhana hai
   // bina global app state badale).
   const outerCompanyContext = useCompany();
@@ -2313,6 +2326,58 @@ export function AddVoucherDialog(props: any) {
     if (!dateMs) return withUrls;
     return { ...withUrls, date: new Date(dateMs) };
   }, [effectiveVoucherBase]);
+  const [missingEditVoucherNumber, setMissingEditVoucherNumber] = useState<{
+    voucherId: string;
+    voucherNumber: string;
+  } | null>(null);
+  const [missingEditVoucherNumberVersion, setMissingEditVoucherNumberVersion] = useState(0);
+  const voucherNumberForEdit = String(
+    (effectiveVoucher as Record<string, unknown> | null)?.voucherNumber ??
+      (effectiveVoucher as Record<string, unknown> | null)?.voucherNo ??
+      ""
+  ).trim();
+  useEffect(() => {
+    const row = effectiveVoucher as Record<string, unknown> | null;
+    const voucherId = String(row?.id || "").trim();
+    if (!isOpen || !voucherId || voucherNumberForEdit) return;
+    if (missingEditVoucherNumber?.voucherId === voucherId && missingEditVoucherNumber.voucherNumber) return;
+    let cancelled = false;
+    (async () => {
+      const nextVoucherNumber = await getNextVoucherNumberForCompany({
+        companyId,
+        companyDoc: company as Record<string, unknown> | null,
+        voucherLike: {
+          type: String(row?.type || "sale"),
+          subType: typeof row?.subType === "string" ? row.subType : undefined,
+          lineItems: Array.isArray(row?.lineItems) ? (row.lineItems as Array<{ type?: string }>) : undefined,
+        },
+      });
+      if (cancelled || !String(nextVoucherNumber || "").trim()) return;
+      setMissingEditVoucherNumber({ voucherId, voucherNumber: nextVoucherNumber });
+      setMissingEditVoucherNumberVersion((v) => v + 1);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    company,
+    companyId,
+    effectiveVoucher,
+    isOpen,
+    missingEditVoucherNumber,
+    voucherNumberForEdit,
+  ]);
+  const effectiveVoucherForForm = useMemo(() => {
+    const row = effectiveVoucher as Record<string, unknown> | null;
+    if (!row?.id) return effectiveVoucher;
+    if (voucherNumberForEdit) return effectiveVoucher;
+    if (missingEditVoucherNumber?.voucherId !== String(row.id)) return effectiveVoucher;
+    return {
+      ...row,
+      voucherNumber: missingEditVoucherNumber.voucherNumber,
+      voucherNo: missingEditVoucherNumber.voucherNumber,
+    };
+  }, [effectiveVoucher, missingEditVoucherNumber, voucherNumberForEdit]);
   // Dialog chrome / link-locks sirf saved edit par: copied-draft session me null rakho (nahi to source voucher id se locks lag jate hain).
   const voucherForDialogChrome = postCopyNewFormSeed ? null : effectiveVoucher;
   // Bill-wise: voucher's own allocations/linked refs, OR (sale/purchase) any payment has allocations to this voucher
@@ -2518,7 +2583,7 @@ export function AddVoucherDialog(props: any) {
     if (!(isStaticAppBuild() && isMobile)) {
       props.onVoucherAction?.("saved");
     }
-    onOpenChange?.(false);
+    setDialogOpen(false);
     setIsApproving(false);
 
     void (async () => {
@@ -2993,8 +3058,8 @@ export function AddVoucherDialog(props: any) {
     const closeParent = recurringPickerCloseParentRef.current;
     recurringPickerCloseParentRef.current = false;
     setRecurringGeneratePicker(null);
-    if (closeParent) onOpenChange?.(false);
-  }, [onOpenChange]);
+    if (closeParent) setDialogOpen(false);
+  }, [setDialogOpen]);
 
   const handlePostSaveMissingRecurringSlots = useCallback(async (
     cid: string,
@@ -3504,7 +3569,7 @@ export function AddVoucherDialog(props: any) {
     }
   
     if (!keepDialogAsNew && !skipDialogCloseForSaveCopy && !suppressMainDialogCloseForRecurringPicker) {
-      onOpenChange?.(false);
+      setDialogOpen(false);
     }
 
     if (status === "saved" && (pathsToDeleteCopy.length > 0 || (unassignedFileId && cleanupCompanyId))) {
@@ -3900,7 +3965,7 @@ export function AddVoucherDialog(props: any) {
         if (res.ok) {
           toast.success(res.message);
           void refreshRecurringTemplateMeta(companyId, res.voucherId?.trim() || vid);
-          if (closeParentAfter) onOpenChange?.(false);
+          if (closeParentAfter) setDialogOpen(false);
         } else toast.warning(res.message);
       } else {
         const r = await generateRecurringVouchersForPeriodSlots(
@@ -3917,7 +3982,7 @@ export function AddVoucherDialog(props: any) {
         if (r.ok) {
           toast.success(r.message);
           void refreshRecurringTemplateMeta(companyId, r.lastVoucherId?.trim() || vid);
-          if (closeParentAfter) onOpenChange?.(false);
+          if (closeParentAfter) setDialogOpen(false);
         } else toast.warning(r.message);
       }
     } catch (e) {
@@ -4447,7 +4512,7 @@ export function AddVoucherDialog(props: any) {
           ledgerOpeningBalanceOutstanding={ledgerOpeningBalanceOutstanding}
           ledgerBooksOpeningBalanceSigned={ledgerBooksOpeningBalanceSigned}
           // Copy flow ke baad new form force: old voucher edit ke badle seeded new voucher open karo.
-          voucher={postCopyNewFormSeed ? undefined : effectiveVoucher}
+          voucher={postCopyNewFormSeed ? undefined : effectiveVoucherForForm}
           defaultVoucherData={postCopyNewFormSeed ?? defaultVoucherData}
           onVoucherAction={handleAction}
           onOpenHistory={
@@ -4468,7 +4533,7 @@ export function AddVoucherDialog(props: any) {
           targetCompanyId={targetCompanyId}
           targetCompanyOptions={copyToCompanies.map((c) => ({ id: c.id, name: c.name }))}
           onTargetCompanyChange={handleLedgerHeaderCompanyChange}
-          formInstanceKey={copyDraftSeedVersion}
+          formInstanceKey={`${copyDraftSeedVersion}-${missingEditVoucherNumberVersion}`}
           // Multi-company: create / edit / copy sab par header company dropdown.
           showHeaderCompanySelector={showLedgerHeaderCompanyDropdown}
           headerCompanyReadOnlyLabel={interCompanyRibbonCompanyReadOnly}
@@ -4526,24 +4591,32 @@ export function AddVoucherDialog(props: any) {
         });
         armDashboardRedirectGuard(router, { isMobile: ledgerModalGuardWide });
       }
-      onOpenChange?.(open);
+      setDialogOpen(open);
     },
-    [onOpenChange, router, ledgerModalGuardWide, suppressDashboardRedirectGuard]
+    [setDialogOpen, router, ledgerModalGuardWide, suppressDashboardRedirectGuard]
   );
 
   return (
-    <Dialog open={isOpen} onOpenChange={handleDialogOpenChange} modal={dialogRootModal}>
+    <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange} modal={dialogRootModal}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       {isDesktop ? (
         <DialogContent
           hideCloseButton
           onFocusOutside={(e) => e.preventDefault()}
-          className="flex flex-col p-0 md:!left-0 md:!top-0 md:!translate-x-0 md:!translate-y-0 md:w-full md:h-full md:max-w-none md:max-h-none md:border-0 md:bg-transparent md:shadow-none md:rounded-none"
+          className={cn(
+            "flex flex-col p-0",
+            isAdjustmentOnlyDialog
+              ? "left-1/2 top-1/2 h-auto max-h-[88vh] w-[min(760px,92vw)] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden"
+              : "md:!left-0 md:!top-0 md:!translate-x-0 md:!translate-y-0 md:w-full md:h-full md:max-w-none md:max-h-none md:border-0 md:bg-transparent md:shadow-none md:rounded-none"
+          )}
         >
           <div
             ref={dialogFrameRef}
-            className="flex flex-col rounded-lg border bg-background shadow-lg overflow-hidden flex-1 min-h-0"
-            style={{
+            className={cn(
+              "flex flex-col rounded-lg border bg-background shadow-lg overflow-hidden",
+              isAdjustmentOnlyDialog ? "max-h-[88vh] min-h-0" : "flex-1 min-h-0"
+            )}
+            style={isAdjustmentOnlyDialog ? undefined : {
               position: "fixed",
               left: dialogPosition.x,
               top: dialogPosition.y,
@@ -4559,54 +4632,54 @@ export function AddVoucherDialog(props: any) {
             </div>
             {/* z-10: ribbon/header z-20 — drag title bar wins over top resize hitbox. */}
             {/* Resize handle - top edge */}
-            <div
+            {!isAdjustmentOnlyDialog && <div
               className="absolute left-0 right-0 top-0 z-10 h-1.5 cursor-row-resize hover:bg-primary/20 transition-colors rounded-t"
               onMouseDown={(e) => handleResizeStart(e, "n")}
               aria-hidden
-            />
+            />}
             {/* Resize handle - top-left corner */}
-            <div
+            {!isAdjustmentOnlyDialog && <div
               className="absolute left-0 top-0 z-10 w-4 h-4 cursor-nw-resize hover:bg-primary/20 transition-colors rounded-tl"
               onMouseDown={(e) => handleResizeStart(e, "nw")}
               aria-hidden
-            />
+            />}
             {/* Resize handle - top-right corner */}
-            <div
+            {!isAdjustmentOnlyDialog && <div
               className="absolute right-0 top-0 z-10 w-4 h-4 cursor-ne-resize hover:bg-primary/20 transition-colors rounded-tr"
               onMouseDown={(e) => handleResizeStart(e, "ne")}
               aria-hidden
-            />
+            />}
             {/* Resize handle - left edge */}
-            <div
+            {!isAdjustmentOnlyDialog && <div
               className="absolute left-0 top-0 bottom-0 z-10 w-1.5 cursor-col-resize hover:bg-primary/20 transition-colors rounded-l"
               onMouseDown={(e) => handleResizeStart(e, "w")}
               aria-hidden
-            />
+            />}
             {/* Resize handle - right edge */}
-            <div
+            {!isAdjustmentOnlyDialog && <div
               className="absolute right-0 top-0 bottom-0 z-10 w-1.5 cursor-col-resize hover:bg-primary/20 transition-colors rounded-r"
               style={{ top: 0, bottom: 0 }}
               onMouseDown={(e) => handleResizeStart(e, "e")}
               aria-hidden
-            />
+            />}
             {/* Resize handle - bottom edge */}
-            <div
+            {!isAdjustmentOnlyDialog && <div
               className="absolute bottom-0 left-0 right-0 z-10 h-1.5 cursor-row-resize hover:bg-primary/20 transition-colors rounded-b"
               onMouseDown={(e) => handleResizeStart(e, "s")}
               aria-hidden
-            />
+            />}
             {/* Resize handle - bottom-left corner */}
-            <div
+            {!isAdjustmentOnlyDialog && <div
               className="absolute left-0 bottom-0 z-10 w-4 h-4 cursor-sw-resize hover:bg-primary/20 transition-colors rounded-bl"
               onMouseDown={(e) => handleResizeStart(e, "sw")}
               aria-hidden
-            />
+            />}
             {/* Resize handle - bottom-right corner */}
-            <div
+            {!isAdjustmentOnlyDialog && <div
               className="absolute right-0 bottom-0 z-10 w-4 h-4 cursor-se-resize hover:bg-primary/20 transition-colors rounded-br"
               onMouseDown={(e) => handleResizeStart(e, "se")}
               aria-hidden
-            />
+            />}
           </div>
         </DialogContent>
       ) : (

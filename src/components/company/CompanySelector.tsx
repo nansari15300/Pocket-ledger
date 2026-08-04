@@ -135,9 +135,11 @@ function isCompanyVisibleInSelector(c: CompanyData): boolean {
 function companySelectorStorageKey(c: CompanyData): string {
   const id = String(c?.id ?? "").trim();
   if (!id) return "";
-  if (isServerSelectorCompanyRow(c)) return `server:${id}`;
-  if (isLocalSelectorCompanyRow(c)) return `local:${id}`;
-  return `online:${id}`;
+  const gate = String(c.plServerGateId ?? "").trim();
+  const gateSuffix = gate ? `@${gate}` : "";
+  if (isServerSelectorCompanyRow(c)) return `server:${id}${gateSuffix}`;
+  if (isLocalSelectorCompanyRow(c)) return `local:${id}${gateSuffix}`;
+  return `online:${id}${gateSuffix}`;
 }
 
 function companySelectorListSig(rows: CompanyData[]): string {
@@ -1111,18 +1113,13 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   };
 
   const allCompanies = useMemo(() => {
-    const companyMap = new Map<string, CompanyData>();
     const shareUser = { uid: user?.uid || "", email: user?.email ?? null };
-    companies.forEach(c => {
-        if (c.isDeleted) return;
-        if (!companyMap.has(c.id)) {
-            companyMap.set(c.id, {
-              ...c,
-              isOwned: user?.uid ? resolveCompanyIsOwnedForUser(c, shareUser) : Boolean(c.isOwned),
-            });
-        }
-    });
-    const merged = Array.from(companyMap.values());
+    const merged = companies
+      .filter((c) => !c.isDeleted)
+      .map((c) => ({
+        ...c,
+        isOwned: user?.uid ? resolveCompanyIsOwnedForUser(c, shareUser) : Boolean(c.isOwned),
+      }));
     return filterSharedOnlyCompaniesForSuperAdminInMainApp(
       merged,
       user ? { uid: user.uid, email: user.email } : null,
@@ -1172,14 +1169,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     [onlineTabCompanies, companyId, selectorCompanies]
   );
   const serverList = useMemo(
-    () => {
-      const rows = ensureSelectedInTabList(serverTabCompanies, companyId, selectorCompanies, "server");
-      const byId = new Map(rows.map((c) => [c.id, c]));
-      for (const c of selectorCompanies) {
-        if (isServerGateCompany(c)) byId.set(c.id, c);
-      }
-      return Array.from(byId.values());
-    },
+    () => ensureSelectedInTabList(serverTabCompanies, companyId, selectorCompanies, "server"),
     [serverTabCompanies, companyId, selectorCompanies]
   );
   const myLocalDisplay = useMemo(() => localList.filter((c) => c.isOwned), [localList]);
@@ -1187,10 +1177,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     () => localList.filter((c) => isSharedLocalCompany(c)),
     [localList]
   );
-  const myServerDisplay = useMemo(
-    () => serverList.filter((c) => isMyServerCompany(c, user?.email)),
-    [serverList, user?.email]
-  );
+  const myServerDisplay = useMemo(() => serverList.filter((c) => isMyServerCompany(c, user?.email)), [serverList, user?.email]);
   const serverSharedDisplay = useMemo(
     () => serverList.filter((c) => !isMyServerCompany(c, user?.email)),
     [serverList, user?.email]
@@ -2517,14 +2504,7 @@ export function CompanyActions({
     [onlineTabCompanies, companyId, selectorCompanies]
   );
   const serverList = useMemo(
-    () => {
-      const rows = ensureSelectedInTabList(serverTabCompanies, companyId, selectorCompanies, "server");
-      const byId = new Map(rows.map((c) => [c.id, c]));
-      for (const c of selectorCompanies) {
-        if (isServerGateCompany(c)) byId.set(c.id, c);
-      }
-      return Array.from(byId.values());
-    },
+    () => ensureSelectedInTabList(serverTabCompanies, companyId, selectorCompanies, "server"),
     [serverTabCompanies, companyId, selectorCompanies]
   );
   const myLocalDisplay = useMemo(() => localList.filter((c) => c.isOwned), [localList]);
@@ -2532,10 +2512,7 @@ export function CompanyActions({
     () => localList.filter((c) => isSharedLocalCompany(c)),
     [localList]
   );
-  const myServerDisplay = useMemo(
-    () => serverList.filter((c) => isMyServerCompany(c, user?.email)),
-    [serverList, user?.email]
-  );
+  const myServerDisplay = useMemo(() => serverList.filter((c) => isMyServerCompany(c, user?.email)), [serverList, user?.email]);
   const serverSharedDisplay = useMemo(
     () => serverList.filter((c) => !isMyServerCompany(c, user?.email)),
     [serverList, user?.email]

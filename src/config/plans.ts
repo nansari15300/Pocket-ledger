@@ -93,6 +93,8 @@ export type EntitlementKey =
   | "savedAccountSwitchEnabled"
   /** Plan-wise: Share for Reconciliation (header + cross-user ledger match). */
   | "shareForReconciliationEnabled"
+  /** Max ledgers a user can join/share for reconciliation. 0 = unlimited. */
+  | "maxReconciliationLedgers"
   /** Backup/restore `.plbp` me attachment bytes embed + restore (Option A). Off = data-only URLs. */
   | "attachmentBackupRestoreEnabled"
   /** Per owner per calendar month — attachment wala backup count; 0 = unlimited. */
@@ -167,6 +169,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryLimit: 0,
       maxInterCompanyPartners: 1,
       shareForReconciliationEnabled: false,
+      maxReconciliationLedgers: 0,
       attachmentBackupRestoreEnabled: false,
       maxAttachmentBackupPerMonth: 0,
       maxAttachmentRestorePerMonth: 0,
@@ -221,6 +224,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryLimit: 10,
       maxInterCompanyPartners: 3,
       shareForReconciliationEnabled: false,
+      maxReconciliationLedgers: 0,
       attachmentBackupRestoreEnabled: true,
       maxAttachmentBackupPerMonth: 2,
       maxAttachmentRestorePerMonth: 2,
@@ -277,6 +281,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryLimit: 20,
       maxInterCompanyPartners: 10,
       shareForReconciliationEnabled: true,
+      maxReconciliationLedgers: 10,
       attachmentBackupRestoreEnabled: true,
       maxAttachmentBackupPerMonth: 5,
       maxAttachmentRestorePerMonth: 5,
@@ -332,6 +337,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryLimit: 50,
       maxInterCompanyPartners: 0,
       shareForReconciliationEnabled: true,
+      maxReconciliationLedgers: 0,
       attachmentBackupRestoreEnabled: true,
       maxAttachmentBackupPerMonth: 10,
       maxAttachmentRestorePerMonth: 10,
@@ -405,6 +411,7 @@ export function limitFor(
     | "maxDevicesLocal"
     | "voucherHistoryLimit"
     | "maxInterCompanyPartners"
+    | "maxReconciliationLedgers"
     | "maxAttachmentBackupPerMonth"
     | "maxAttachmentRestorePerMonth"
     | "maxLocalToOnlineAttachmentMB"

@@ -7,7 +7,7 @@ import { useCompany } from "@/hooks/useCompany";
 import usePermissions from "@/hooks/usePermissions";
 import { useLocationSearchParams } from "@/hooks/useLocationSearchParams";
 import { adToBs } from "@/lib/bs-date";
-import { generateDueRecurringVouchersOnAppOpen } from "@/lib/recurringVouchers";
+import { generateDueRecurringVouchersOnAppOpen, recurringAutoRunnerSkipsCloudIO } from "@/lib/recurringVouchers";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import type { Company } from "@/hooks/useCompany";
 
@@ -134,7 +134,12 @@ export function RecurringVoucherAutoRunner() {
       inFlightRef.current = true;
       void (async () => {
         try {
-          console.info("[RecurringVoucherAutoRunner] start", { companyId: cid, periodKey, currentPageOnly });
+          console.info("[RecurringVoucherAutoRunner] start", {
+            companyId: cid,
+            periodKey,
+            currentPageOnly,
+            skipCloudIO: recurringAutoRunnerSkipsCloudIO(liveCompany),
+          });
           const created = await generateDueRecurringVouchersOnAppOpen(
             cid,
             liveCompany,

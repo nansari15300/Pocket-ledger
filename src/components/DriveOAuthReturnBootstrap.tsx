@@ -8,6 +8,7 @@ import {
   decodeDriveOAuthStateParam,
   markDriveOAuthReturnGrace,
 } from "@/lib/driveOAuthReturnGrace";
+import { markDriveOAuthConnected } from "@/lib/driveOAuthConnectedMarker";
 
 /** Web/APK: Drive OAuth return par company restore + toast; URL query saaf karo. */
 export function DriveOAuthReturnBootstrap() {
@@ -33,10 +34,16 @@ export function DriveOAuthReturnBootstrap() {
     }
 
     if (success === "drive_connected") {
+      markDriveOAuthConnected(decoded?.email ?? null);
       toast({
         title: "Google Drive connected",
         description: "You can now sync local companies to Drive.",
       });
+      try {
+        window.dispatchEvent(new CustomEvent("pl-drive-connection-changed"));
+      } catch {
+        /* ignore */
+      }
       window.setTimeout(() => clearDriveOAuthReturnGrace(), 30_000);
     } else if (error) {
       const description =

@@ -64,13 +64,36 @@ async function fetchFirebaseBlobFallback(url: string, signal?: AbortSignal): Pro
   }
 }
 
+export type FirebaseStorageBlobFetchOpts = {
+  companyId?: string | null;
+  explicitUserRequest?: boolean;
+  bypassVisiblePageCheck?: boolean;
+};
+
 export async function tryGetBlobFromFirebaseStorageDownloadUrl(
   url: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  opts?: FirebaseStorageBlobFetchOpts
 ): Promise<Blob | null> {
   if (!url.startsWith("http://") && !url.startsWith("https://")) return null;
   if (!looksLikeFirebaseStorageDownloadUrl(url)) return null;
   if (signal?.aborted) return null;
+  try {
+    const { readActiveAttachmentCompanyId } = await import("@/lib/firestorePermissionSuppress");
+    const { isRemoteAttachmentNetworkFetchAllowed } = await import("@/lib/attachmentNetworkGate");
+    const companyId = opts?.companyId ?? readActiveAttachmentCompanyId() ?? null;
+    if (
+      !isRemoteAttachmentNetworkFetchAllowed(url, {
+        companyId,
+        explicitUserRequest: opts?.explicitUserRequest,
+        bypassVisiblePageCheck: opts?.bypassVisiblePageCheck,
+      })
+    ) {
+      return null;
+    }
+  } catch {
+    /* gate optional */
+  }
   try {
     const { blockFirebaseStorageHitOnPlServer } = await import("@/lib/plServerFirebaseHitTrace");
     if (blockFirebaseStorageHitOnPlServer("tryGetBlobFromFirebaseStorageDownloadUrl", url)) {

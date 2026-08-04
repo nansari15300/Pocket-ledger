@@ -11,15 +11,19 @@ import {
   clearPlServerAccessContext,
   plServerShareListAuthoritativeEmpty,
 } from "@/lib/plServerAccessContext";
-import type { Company } from "@/hooks/useCompany";
 import {
   listLocalCompanies,
   removeLocalCompanyById,
   type LocalCompanyDoc,
 } from "@/lib/localCompanyStore";
-import { isServerGateCompany, isPureLocalLedgerCompany } from "@/lib/companyStorageKind";
+import { isServerGateCompany, isStrictLocalOnlyCompany } from "@/lib/companyStorageKind";
 import { isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
 import { isCurrentUserOwnerOfCompanyRow } from "@/lib/companyOnlineIntegrity";
+import {
+  isLocalBackupRestoredCompanyRow,
+  isProtectedOwnerLocalBackupCompany,
+} from "@/lib/localBackupRestoreCompany";
+import { isProtectedDriveLocalRegistryRow } from "@/lib/driveRestoredLocalCompany";
 import type { PlServerSharedCompanySummary } from "@/lib/localServerShareableCompanies";
 import { matchPlServerSharedCompanyForLocalId } from "@/lib/plServerHostCompanyId";
 
@@ -173,6 +177,26 @@ async function clearPlServerMirrorFlagsOnLocalRow(
   void options;
 }
 
+function gateRemovalUser(options?: { firebaseUid?: string | null; firebaseEmail?: string | null }): {
+  uid: string;
+  email: string | null;
+} {
+  return { uid: String(options?.firebaseUid ?? "").trim(), email: options?.firebaseEmail ?? null };
+}
+
+/** Gate hataane par sirf asli device-local backup / localOnly row rakho — server mirror SQLite se hatao. */
+function shouldPreserveDeviceLocalAfterGateRemoval(
+  row: LocalCompanyDoc,
+  user: { uid: string; email: string | null }
+): boolean {
+  if (!isCurrentUserOwnerOfCompanyRow(row, user)) return false;
+  if (isProtectedOwnerLocalBackupCompany(row as Record<string, unknown>, user)) return true;
+  if (isProtectedDriveLocalRegistryRow(row as Record<string, unknown>, user)) return true;
+  if (isLocalBackupRestoredCompanyRow(row as Record<string, unknown>)) return true;
+  if (row.localOnly === true || isStrictLocalOnlyCompany(row)) return true;
+  return false;
+}
+
 async function clearRemovedPlServerCompanyCaches(companyId: string): Promise<void> {
   try {
     const { clearPlServerDisplayCacheCompany } = await import("@/lib/plServerDisplayCache");
@@ -203,6 +227,7 @@ export async function pruneLocalServerGateCompaniesToLatest(
   // Empty latest list: sirf tab purge karo jab gate Test/Connect ne explicitly `companies: []` save kiya ho.
   if (latestIds.size === 0 && !authoritativeEmpty) return { removedIds: [], skipped: true };
 
+  const user = gateRemovalUser(options);
   const rows = await listLocalCompanies({ includeDeleted: true });
   const removedIds: string[] = [];
   for (const row of rows) {
@@ -211,11 +236,10 @@ export async function pruneLocalServerGateCompaniesToLatest(
     if (rowIsInLatestServerList(row, latestRows)) continue;
     const id = String(row.id || "").trim();
     if (!id || removedIds.includes(id)) continue;
-    const ownedDeviceLocal = row.isOwned === true && isPureLocalLedgerCompany(row as Company);
     const onlineMirror =
       isCloudLinkedCompanyStorage(row as { storageOption?: string; syncedFromCloud?: boolean }) ||
       (row as { syncedFromCloud?: boolean }).syncedFromCloud === true;
-    if (ownedDeviceLocal || onlineMirror) {
+    if (shouldPreserveDeviceLocalAfterGateRemoval(row, user) || onlineMirror) {
       await clearPlServerMirrorFlagsOnLocalRow(row, options);
       removedIds.push(id);
       continue;
@@ -240,6 +264,7 @@ export async function removeLocalServerGateCompanies(
   options?: { firebaseUid?: string | null; firebaseEmail?: string | null }
 ): Promise<{ removedIds: string[] }> {
   if (!gate || gate.type !== "local_server") return { removedIds: [] };
+  const user = gateRemovalUser(options);
   const previewIds = collectPreviewCompanyIds(gate.id);
   const rows = await listLocalCompanies({ includeDeleted: true });
   const removedIds: string[] = [];
@@ -247,12 +272,9 @@ export async function removeLocalServerGateCompanies(
     if (!rowMatchesGateForRemoval(row, gate, previewIds)) continue;
     const id = String(row.id || "").trim();
     if (!id || removedIds.includes(id)) continue;
-    const isCurrentOwner = isCurrentUserOwnerOfCompanyRow(row, {
-      uid: options?.firebaseUid ?? "",
-      email: options?.firebaseEmail ?? null,
-    });
-    if (isCurrentOwner) {
+    if (shouldPreserveDeviceLocalAfterGateRemoval(row, user)) {
       await clearPlServerMirrorFlagsOnLocalRow(row, { firebaseUid: options?.firebaseUid ?? null });
+      removedIds.push(id);
       continue;
     }
     await removeLocalCompanyById(id, { firebaseUid: options?.firebaseUid ?? null });
@@ -311,17 +333,17 @@ export async function finalizeLocalServerGateRemoval(
 
 /** Saare server gates hata diye par SQLite me mirrored rows reh gayi hon — ek baar saaf karo. */
 export async function purgeOrphanPlServerMirrorCompanies(
-  options?: { firebaseUid?: string | null }
+  options?: { firebaseUid?: string | null; firebaseEmail?: string | null }
 ): Promise<{ removedIds: string[] }> {
   const serverGates = listGates().filter((gate) => gate.type === "local_server");
   if (serverGates.length > 0) return { removedIds: [] };
 
+  const user = gateRemovalUser(options);
   const rows = await listLocalCompanies({ includeDeleted: true });
   const removedIds: string[] = [];
   for (const row of rows) {
     const id = String(row.id || "").trim();
     if (!id || removedIds.includes(id)) continue;
-    if (row.isOwned === true && String(row.ownerId ?? "").trim()) continue;
 
     const rowServerUrl = normalizeServerUrl(
       rowString(row, "plServerGateServerUrl") ||
@@ -335,11 +357,14 @@ export async function purgeOrphanPlServerMirrorCompanies(
       Boolean(rowServerUrl);
 
     if (!hasServerMirrorMeta) continue;
-    if (isServerGateCompany(row) || (String(row.storageOption ?? "").toLowerCase() === "local" && row.isOwned !== true)) {
-      await removeLocalCompanyById(id, { firebaseUid: options?.firebaseUid ?? null });
-      await clearRemovedPlServerCompanyCaches(id);
+    if (shouldPreserveDeviceLocalAfterGateRemoval(row, user)) {
+      await clearPlServerMirrorFlagsOnLocalRow(row, { firebaseUid: options?.firebaseUid ?? null });
       removedIds.push(id);
+      continue;
     }
+    await removeLocalCompanyById(id, { firebaseUid: options?.firebaseUid ?? null });
+    await clearRemovedPlServerCompanyCaches(id);
+    removedIds.push(id);
   }
   if (removedIds.length > 0) {
     clearPlServerAccessContext();

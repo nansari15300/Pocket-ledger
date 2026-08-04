@@ -39,7 +39,7 @@ import { FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
 import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { companyRequiresLocalAttachmentUrlsOnly } from "@/lib/staticAttachmentDisplayUrl";
-import { getVoucherAttachmentUrlsForUi } from "@/lib/voucherAttachmentNormalize";
+import { getVoucherAttachmentUrlsForUi, voucherAttachmentUiOptionsForCompany } from "@/lib/voucherAttachmentNormalize";
 import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
 import {
@@ -239,7 +239,8 @@ export function MobileTransactionFilePreview({
   transaction?: { fileUrls?: unknown; unassignedFile?: unknown; id?: unknown } | null;
 }) {
   const { company } = useCompany();
-  const urls = getVoucherAttachmentUrlsForUi(transaction).map((u) => String(u)).filter((s) => s.length > 0);
+  const voucherAttachmentUiOpts = React.useMemo(() => voucherAttachmentUiOptionsForCompany(company), [company]);
+  const urls = getVoucherAttachmentUrlsForUi(transaction, voucherAttachmentUiOpts).map((u) => String(u)).filter((s) => s.length > 0);
   const firstUrl = urls[0];
   if (!firstUrl) return null;
   const previewUrls = [firstUrl];
@@ -1103,6 +1104,7 @@ export const TransactionRow = React.memo(
   }: any) => {
     const { company } = useCompany();
     const localLedgerOnly = companyRequiresLocalAttachmentUrlsOnly(company);
+    const voucherAttachmentUiOpts = React.useMemo(() => voucherAttachmentUiOptionsForCompany(company), [company]);
     /* Main + narration hover ek block — narration par mouse par bhi dono rows highlight (globals.css [data-pl-txn-hovered]) */
     const [pairHovered, setPairHovered] = React.useState(false);
     const mainRowRef = React.useRef<HTMLTableRowElement>(null);
@@ -1424,7 +1426,7 @@ export const TransactionRow = React.memo(
         {showFileColumn && (
           <TableCell className={cn("text-center", ensureMinGaps && "min-w-[44px] px-[5px]")} onClick={(e) => e.stopPropagation()}>
             {(() => {
-              const rowUrls = getVoucherAttachmentUrlsForUi(transaction);
+              const rowUrls = getVoucherAttachmentUrlsForUi(transaction, voucherAttachmentUiOpts);
               if (rowUrls.length === 0) return "-";
               const indicator =
                 fileShowAll && fileDisplayMode === "preview" ? (

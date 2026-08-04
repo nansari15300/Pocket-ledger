@@ -609,7 +609,7 @@ export function CreateNoteForm({
           user.uid,
           submissionData,
           voucher?.id,
-          approveAfterSave && isEdit ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
+          approveAfterSave ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
           preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
         );
 

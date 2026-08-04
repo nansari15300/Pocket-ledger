@@ -68,6 +68,7 @@ export function JoinSharedLocalCompanyPanel({
   const [loading, setLoading] = useState(false);
   const [joiningId, setJoiningId] = useState<string | null>(null);
   const [invites, setInvites] = useState<DriveSharedCompanyInvite[]>([]);
+  const [invitesEverLoaded, setInvitesEverLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Har Drive folder ka alag password — encrypt ON par kaunsi company clear rahe. */
   const [passwordByFolderId, setPasswordByFolderId] = useState<Record<string, string>>({});
@@ -100,6 +101,7 @@ export function JoinSharedLocalCompanyPanel({
       }
       const rows = await listDriveSharedLocalCompanyInvites();
       setInvites(rows);
+      setInvitesEverLoaded(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
@@ -109,16 +111,11 @@ export function JoinSharedLocalCompanyPanel({
     }
   }, [user?.uid, reloadLocalCompanyRegistry, refreshLocalJoinState, driveSyncDisabled]);
 
-  useEffect(() => {
-    if (!active || driveSyncDisabled) return;
-    void loadInvites();
-  }, [active, loadInvites, driveSyncDisabled]);
-
-  // Join ke baad "Connected" + company selector list — local registry dubara padho.
+  // Join list: manual Refresh only — auto load se Drive quota (list-shared-companies) mat kharch karo.
   useEffect(() => {
     if (!active) return;
     void refreshLocalJoinState();
-  }, [active, refreshLocalJoinState, invites, localCompanyRegistryEpoch, joiningId]);
+  }, [active, refreshLocalJoinState, localCompanyRegistryEpoch]);
 
   // Drive-shared local rows — Firestore registry listeners deny expected; dev overlay suppress.
   useEffect(() => {
@@ -438,6 +435,11 @@ export function JoinSharedLocalCompanyPanel({
         <div className="flex justify-center py-8">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
+      ) : !invitesEverLoaded ? (
+        <p className="text-sm text-muted-foreground py-2">
+          Click <strong>Refresh list</strong> to search Google Drive for shared Pocket Ledger companies. (Automatic scan
+          is off to save Drive API quota.)
+        </p>
       ) : !hasAnyInvites ? (
         <p className="text-sm text-muted-foreground py-2">
           No Pocket Ledger company folders found on Drive. Sync a local company first (Enable cloud sync → Force sync),

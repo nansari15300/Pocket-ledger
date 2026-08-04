@@ -103,6 +103,7 @@ import { RenewProrationPills } from "@/components/billing/RenewProrationPills";
 import { useDisplayCurrency } from "@/hooks/useDisplayCurrency";
 import { getCompanyPlanExpiryMsFromDoc } from "@/lib/companyPlanExpiryMs";
 import { HeaderAttachmentPrefetchStrip } from "@/components/layout/HeaderAttachmentPrefetchStrip";
+import { HeaderBackupActivityStrip } from "@/components/layout/HeaderBackupActivityStrip";
 import { gateHttpGet } from "@/lib/gates/gateServerFetch";
 
 /** Electron desktop: header quick-action buttons strip collapsed — `main.js` View menu se bhi toggle */
@@ -2172,6 +2173,7 @@ export function DesktopAppHeader() {
         )}
       </div>
       <HeaderAttachmentPrefetchStrip companyId={companyId} />
+      <HeaderBackupActivityStrip />
     </header>
   );
 }

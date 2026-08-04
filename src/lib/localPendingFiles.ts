@@ -40,7 +40,7 @@ import { isFirebaseLedgerCompanyAttachmentSyncEnabled } from "@/lib/firebaseLedg
 const STORE = "pendingFiles";
 const ATTACHMENT_HOLD_CLIPBOARD_PREFIX = "PL_ATTACH_V1:";
 
-/** Forensic: `NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG=1` — pending replace vs append + delete order proof. */
+/** Forensic: `NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG=1` â€” pending replace vs append + delete order proof. */
 function localPendingFilesForensicEnabled(): boolean {
   return typeof process !== "undefined" && process.env.NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG === "1";
 }
@@ -100,7 +100,45 @@ async function mirrorUploadedFileUrlToLocalSqlite(
   return verifyLocalMirrorHasFieldRef(companyId!, collection!, docId!, field, finalRef);
 }
 
-/** Upload ke baad SQLite mirror me HTTPS URL — verify hone ke baad hi local blob delete. */
+async function replaceExactAttachmentRefInLocalSqlite(
+  docPath: string,
+  field: string,
+  oldRef: string,
+  finalRef: string
+): Promise<boolean> {
+  const m = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(String(docPath || "").trim());
+  if (!m) return false;
+  const [, companyId, collection, docId] = m;
+  const existing = await getCompanyDocFromBrowserDb(companyId!, collection!, docId!, { includeDeleted: true });
+  if (!existing) return false;
+  const patch: Record<string, unknown> = {};
+  const cur = existing[field];
+  if (Array.isArray(cur)) {
+    const idx = cur.findIndex((v) => v === oldRef);
+    if (idx < 0) return false;
+    const arr = [...cur];
+    arr[idx] = finalRef;
+    patch[field] = arr;
+  } else if (cur === oldRef) {
+    patch[field] = finalRef;
+  } else {
+    return false;
+  }
+  const { upsertCompanyDocInBrowserDb, notifyBrowserDbCollectionUpdated } = await import(
+    "@/lib/localCompanyDocMirror"
+  );
+  await upsertCompanyDocInBrowserDb(
+    companyId!,
+    collection!,
+    docId!,
+    { ...existing, ...patch, id: docId },
+    { notify: true, force: true }
+  );
+  notifyBrowserDbCollectionUpdated(companyId!, collection!);
+  return verifyLocalMirrorHasFieldRef(companyId!, collection!, docId!, field, finalRef);
+}
+
+/** Upload ke baad SQLite mirror me HTTPS URL â€” verify hone ke baad hi local blob delete. */
 async function verifyLocalMirrorHasHttpsUrl(
   companyId: string,
   collection: string,
@@ -111,7 +149,7 @@ async function verifyLocalMirrorHasHttpsUrl(
   return verifyLocalMirrorHasFieldRef(companyId, collection, docId, field, httpsUrl);
 }
 
-/** Firestore pe HTTPS aa chuka ho lekin SQLite abhi `local:` — dubara upload ke bina mirror + delete. */
+/** Firestore pe HTTPS aa chuka ho lekin SQLite abhi `local:` â€” dubara upload ke bina mirror + delete. */
 function resolveHttpsUrlAfterPendingPatch(fieldValue: unknown, localId: string): string | null {
   const needle = `${LOCAL_FILE_PREFIX}${localId}`;
   const isHttps = (v: unknown): v is string => typeof v === "string" && /^https?:\/\//i.test(v);
@@ -135,7 +173,17 @@ function fieldStillHasLocalPendingRef(fieldValue: unknown, localId: string): boo
   return false;
 }
 
-/** SQLite mirror ready → tab hi pending bytes hatao (HTTPS load hone ke baad). */
+function firstDriveFileRef(fieldValue: unknown): string | null {
+  if (typeof fieldValue === "string" && isDriveFileRef(fieldValue)) return fieldValue;
+  if (Array.isArray(fieldValue)) {
+    for (const v of fieldValue) {
+      if (typeof v === "string" && isDriveFileRef(v)) return v;
+    }
+  }
+  return null;
+}
+
+/** SQLite mirror ready â†’ tab hi pending bytes hatao (HTTPS load hone ke baad). */
 async function removePendingFileAfterMirrorReady(
   localId: string,
   docPath: string,
@@ -144,7 +192,7 @@ async function removePendingFileAfterMirrorReady(
 ): Promise<boolean> {
   const mirrored = await mirrorUploadedFileUrlToLocalSqlite(docPath, field, localId, httpsUrl);
   if (!mirrored) {
-    console.warn("[localPendingFiles] kept local blob — SQLite HTTPS mirror not verified yet", {
+    console.warn("[localPendingFiles] kept local blob â€” SQLite HTTPS mirror not verified yet", {
       localId,
       docPath,
       field,
@@ -155,7 +203,7 @@ async function removePendingFileAfterMirrorReady(
   return true;
 }
 
-/** `companies/{cid}/{col}/{id}` par partial patch — direct `updateDoc` ki jagah write gateway. */
+/** `companies/{cid}/{col}/{id}` par partial patch â€” direct `updateDoc` ki jagah write gateway. */
 async function patchCompanyDocViaGateway(docRef: DocumentReference, patch: Record<string, unknown>): Promise<void> {
   const m = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(docRef.path);
   if (!m) throw new Error(`[localPendingFiles] invalid ref path: ${docRef.path}`);
@@ -169,7 +217,7 @@ async function patchCompanyDocViaGateway(docRef: DocumentReference, patch: Recor
   if (r.ok === false) throw new Error(r.error);
 }
 
-/** Pending file target doc — local company SQLite, online company Firestore. */
+/** Pending file target doc â€” local company SQLite, online company Firestore. */
 async function readCompanyDocForPendingSync(
   docPath: string,
   opts?: { includeDeleted?: boolean }
@@ -213,7 +261,7 @@ async function readCompanyDocForPendingSync(
 }
 
 /**
- * Pending patch se pehle target doc — recycle-bin (`isDeleted`) par bhi read;
+ * Pending patch se pehle target doc â€” recycle-bin (`isDeleted`) par bhi read;
  * doc bilkul nahi mila to queue row hatao taaki Drive sync "Document not found" par na atke.
  */
 async function resolvePendingTargetDocOrRemoveOrphan(
@@ -221,7 +269,7 @@ async function resolvePendingTargetDocOrRemoveOrphan(
   localId: string
 ): Promise<Record<string, unknown> | null> {
   if (!isValidPendingSubcollectionDocPath(docPath)) {
-    console.warn("[localPendingFiles] pending sync skipped — invalid docPath (blob kept for requeue)", {
+    console.warn("[localPendingFiles] pending sync skipped â€” invalid docPath (blob kept for requeue)", {
       docPath,
       localId,
     });
@@ -236,12 +284,12 @@ async function resolvePendingTargetDocOrRemoveOrphan(
     const { isLocalAttachmentRestoreHoldActive, readLocalBackupRestoreSelectionGrace } = await import(
       "@/lib/localBackupRestoreCompany"
     );
-    // Restore window: vouchers abhi likhe ja rahe hain — pending bytes delete mat karo.
+    // Restore window: vouchers abhi likhe ja rahe hain â€” pending bytes delete mat karo.
     if (
       (companyId && isLocalAttachmentRestoreHoldActive(companyId)) ||
       (companyId && readLocalBackupRestoreSelectionGrace(companyId, 180_000))
     ) {
-      console.warn("[localPendingFiles] orphan delete skipped — backup restore in progress", {
+      console.warn("[localPendingFiles] orphan delete skipped â€” backup restore in progress", {
         docPath,
         localId,
       });
@@ -252,7 +300,7 @@ async function resolvePendingTargetDocOrRemoveOrphan(
     } catch {
       /* ignore */
     }
-    console.warn("[localPendingFiles] orphan pending removed — target doc missing", { docPath, localId });
+    console.warn("[localPendingFiles] orphan pending removed â€” target doc missing", { docPath, localId });
     return null;
   }
   return data;
@@ -266,7 +314,7 @@ async function patchPendingFileTargetField(
   newValue: string
 ): Promise<void> {
   const data = await resolvePendingTargetDocOrRemoveOrphan(docPath, localId);
-  // Orphan cleanup ho chuka — Drive bytes upload ho chuki ho to bhi sync cycle aage badhe.
+  // Orphan cleanup ho chuka â€” Drive bytes upload ho chuki ho to bhi sync cycle aage badhe.
   if (!data) return;
   const current = data[field];
   const needle = `${LOCAL_FILE_PREFIX}${localId}`;
@@ -295,7 +343,7 @@ async function patchPendingFileTargetField(
     if (idx >= 0) {
       arr[idx] = newValue;
     } else if (arr.includes(newValue)) {
-      /* already patched — race se duplicate push mat karo */
+      /* already patched â€” race se duplicate push mat karo */
     } else {
       const orphanLocalIdx = arr.findIndex((v) => {
         if (typeof v !== "string") return false;
@@ -342,19 +390,19 @@ async function shouldKeepAttachmentsOffFirebase(companyId: string): Promise<bool
   return isPureLocalLedgerCompany(row as Parameters<typeof isPureLocalLedgerCompany>[0]);
 }
 
-/** @deprecated — use shouldKeepAttachmentsOffFirebase */
+/** @deprecated â€” use shouldKeepAttachmentsOffFirebase */
 async function isLocalOnlyPendingAttachmentCompany(companyId: string): Promise<boolean> {
   return shouldKeepAttachmentsOffFirebase(companyId);
 }
 
-/** Cloud sync removed — pending attachments always use Firebase Storage / native paths. */
+/** Cloud sync removed â€” pending attachments always use Firebase Storage / native paths. */
 export async function resolvePendingAttachmentCloudSyncProvider(
   companyId: string
 ): Promise<"google_drive" | null> {
   return (await isGoogleDriveCloudSyncCompany(companyId)) ? "google_drive" : null;
 }
 
-/** Pending item → device registry company id (Drive upload + SQLite patch). */
+/** Pending item â†’ device registry company id (Drive upload + SQLite patch). */
 export async function resolveRegistryCompanyIdForPendingItem(item: PendingFilePayload): Promise<string | null> {
   const fromPath = resolvePendingPayloadCompanyId(item);
   if (!fromPath) return null;
@@ -372,19 +420,33 @@ async function syncOnePendingFileToDrive(
   item: PendingFilePayload,
   preData: Record<string, unknown>,
   registryCompanyId: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; uploaded?: boolean; error?: string }> {
   try {
     if (!item.blob || item.blob.size <= 0) {
       throw new Error("Pending attachment bytes missing on this device.");
-    }
-    if (!fieldStillHasLocalPendingRef(preData[item.field], item.id)) {
-      await removePendingFile(item.id);
-      return { success: true };
     }
     const docMatch = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(String(item.docPath || "").trim());
     if (!docMatch) return { success: false, error: "invalid doc path" };
     const [, , collection, docId] = docMatch;
     const reg = await getLocalCompanyById(registryCompanyId, { includeDeleted: true });
+    const oldDriveRef = !fieldStillHasLocalPendingRef(preData[item.field], item.id)
+      ? firstDriveFileRef(preData[item.field])
+      : null;
+    if (oldDriveRef) {
+      try {
+        const { downloadDriveAttachmentBlob } = await import("@/lib/localCloudSync/driveCloudSyncClient");
+      const existingBlob = await downloadDriveAttachmentBlob(oldDriveRef, registryCompanyId);
+      if (existingBlob && existingBlob.size > 0) {
+        await removePendingFile(item.id);
+        return { success: true, uploaded: false };
+      }
+      } catch {
+        /* broken Drive ref: re-upload the pending local blob below */
+      }
+    } else if (!fieldStillHasLocalPendingRef(preData[item.field], item.id)) {
+      await removePendingFile(item.id);
+      return { success: true, uploaded: false };
+    }
     const driveRef = await uploadPendingAttachmentPayloadToDrive({
       companyId: registryCompanyId,
       companyName: typeof reg?.name === "string" ? reg.name : undefined,
@@ -396,15 +458,28 @@ async function syncOnePendingFileToDrive(
       contentType: item.contentType,
       fileName: item.fileName,
     });
+    if (oldDriveRef) {
+      const mirrored = await replaceExactAttachmentRefInLocalSqlite(item.docPath, item.field, oldDriveRef, driveRef);
+      if (!mirrored) {
+        return {
+          success: true,
+          uploaded: true,
+          error: "Uploaded to Drive; old Drive reference is kept until local mirror can be updated.",
+        };
+      }
+      await removePendingFile(item.id);
+      return { success: true, uploaded: true };
+    }
     await patchPendingFileTargetField(item.docPath, item.field, item.id, driveRef);
     const deleted = await removePendingFileAfterMirrorReady(item.id, item.docPath, item.field, driveRef);
     if (!deleted) {
       return {
         success: true,
+        uploaded: true,
         error: "Uploaded to Drive; local copy kept until this device finishes loading the file.",
       };
     }
-    return { success: true };
+    return { success: true, uploaded: true };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return { success: false, error: msg };
@@ -439,7 +514,7 @@ export function firestoreDocRefFromPath(docPath: string): DocumentReference {
   return doc(firestore, "companies", m[1], m[2], m[3]);
 }
 
-/** `@deprecated` — `firestoreDocRefFromPath` use karo; vouchers ke liye bhi wahi. */
+/** `@deprecated` â€” `firestoreDocRefFromPath` use karo; vouchers ke liye bhi wahi. */
 export function voucherDocRefFromPath(docPath: string): DocumentReference {
   return firestoreDocRefFromPath(docPath);
 }
@@ -458,7 +533,7 @@ export type PendingFilePayload = {
   storagePathPrefix: string;
   fileName?: string;
   createdAt?: number;
-  /** Backup restore: SQLite index missing ho to fail — silent skip mat karo. */
+  /** Backup restore: SQLite index missing ho to fail â€” silent skip mat karo. */
   requireSqliteIndex?: boolean;
 };
 
@@ -549,7 +624,7 @@ export async function primeLocalFileRefMetaRuntimeCache(): Promise<void> {
   }
 }
 
-/** Capacitor DataDirectory path — SQLite me isi string ka reference store hota hai (blob नहीं). */
+/** Capacitor DataDirectory path â€” SQLite me isi string ka reference store hota hai (blob à¤¨à¤¹à¥€à¤‚). */
 function pendingFileDataDirPath(id: string, fileName?: string): string {
   const extRaw = String(fileName || "").split(".").pop()?.trim().toLowerCase() || "bin";
   const ext = /^[a-z0-9]{1,10}$/.test(extRaw) ? extRaw : "bin";
@@ -689,7 +764,7 @@ type LocalFileReadOptions = {
   allowNativeRead?: boolean;
   /** Error diagnostics: kis context se read attempt aaya. */
   context?: string;
-  /** `drive:` cloud download — company registry se Drive resolve. */
+  /** `drive:` cloud download â€” company registry se Drive resolve. */
   companyId?: string;
 };
 
@@ -714,7 +789,7 @@ async function getPendingFileById(
       row.sha256Hex ?? undefined
     );
     if (!blob || blob.size <= 0) return null;
-    // Meta incomplete (restore race) — preview/open ke liye bytes phir bhi return karo.
+    // Meta incomplete (restore race) â€” preview/open ke liye bytes phir bhi return karo.
     return {
       id: localId,
       blob,
@@ -727,7 +802,7 @@ async function getPendingFileById(
       createdAt: meta?.createdAt,
     };
   }
-  // Direct `get(id)` — `getAll` se zyada reliable + race kam (flush/hydrate hot path).
+  // Direct `get(id)` â€” `getAll` se zyada reliable + race kam (flush/hydrate hot path).
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readonly");
@@ -768,7 +843,7 @@ async function getPendingFileById(
   });
 }
 
-/** Preview / open: `local:uuid` → blob (Capacitor: DataDirectory file, web/electron: IndexedDB). */
+/** Preview / open: `local:uuid` â†’ blob (Capacitor: DataDirectory file, web/electron: IndexedDB). */
 export async function getBlobFromLocalFileRef(
   url: string,
   options?: LocalFileReadOptions
@@ -788,7 +863,7 @@ export async function getBlobFromLocalFileRef(
   return item?.blob ?? null;
 }
 
-/** Gallery label + FilePreview `resolvedName` — puri pending row (fileName / contentType / blob) */
+/** Gallery label + FilePreview `resolvedName` â€” puri pending row (fileName / contentType / blob) */
 export async function getPendingPayloadForLocalRef(url: string): Promise<PendingFilePayload | null> {
   if (!isLocalFileRef(url)) return null;
   const localId = url.slice(LOCAL_FILE_PREFIX.length);
@@ -807,7 +882,7 @@ export async function uploadPendingLocalFileRef(
   const localId = localFileRef.slice(LOCAL_FILE_PREFIX.length);
   if (!localId) return localFileRef;
   const item = preloaded ?? (await getPendingFileById(localId));
-  // Missing/corrupt bytes — caller ko fail dikhao; silent `local:` return sync "success" jaisa dikhta tha.
+  // Missing/corrupt bytes â€” caller ko fail dikhao; silent `local:` return sync "success" jaisa dikhta tha.
   if (!item?.blob || item.blob.size <= 0) {
     throw new Error(
       "Pending attachment could not be read on this device. Re-open the file or re-attach, then save and sync again."
@@ -845,12 +920,12 @@ export async function uploadPendingLocalFileRef(
 }
 
 export type PutPendingFileOptions = {
-  /** Server receive path — remote `POST /__pl_attachment` must not re-enqueue upload. */
+  /** Server receive path â€” remote `POST /__pl_attachment` must not re-enqueue upload. */
   skipPlServerAttachmentUploadEnqueue?: boolean;
 };
 
 /**
- * PL staff / local: save ke turant baad FilePreview spinner → generic FILE avoid —
+ * PL staff / local: save ke turant baad FilePreview spinner â†’ generic FILE avoid â€”
  * blob URL + offline cache + hover LRU seed (host upload ke pehle hi).
  */
 async function seedPendingAttachmentPreviewUi(
@@ -983,7 +1058,7 @@ export async function putPendingFile(
     store.put(row);
     tx.oncomplete = () => {
       db.close();
-      // Web: blob URL seed — FilePreview `immediateLocalInfo` + hover LRU (IDB read race avoid).
+      // Web: blob URL seed â€” FilePreview `immediateLocalInfo` + hover LRU (IDB read race avoid).
       let displayUrl: string | undefined;
       if (typeof URL !== "undefined" && normalizedPayload.blob?.size) {
         try {
@@ -1024,10 +1099,10 @@ export async function putPendingFile(
 
 /**
  * Backup restore: har file ek-ek karke pl-attachments (EXE/APK) ya IDB me likho,
- * phir SQLite index turant flush — agla file / reload se pehle bytes safe rahein.
+ * phir SQLite index turant flush â€” agla file / reload se pehle bytes safe rahein.
  */
 export async function saveRestoredAttachmentFile(payload: PendingFilePayload): Promise<string> {
-  // Restore ke dauran PL/Firebase upload queue mat chalao — orphan sync bytes delete kar deta tha.
+  // Restore ke dauran PL/Firebase upload queue mat chalao â€” orphan sync bytes delete kar deta tha.
   await putPendingFile(
     { ...payload, requireSqliteIndex: true },
     { skipPlServerAttachmentUploadEnqueue: true }
@@ -1142,42 +1217,44 @@ export async function removePendingFile(id: string): Promise<void> {
  */
 export async function syncOnePendingFile(
   item: PendingFilePayload
-): Promise<{ success: boolean; error?: string }> {
-  if (isFirebaseLedgerDataSyncDisabled()) {
-    return { success: false, error: "Cloud data sync is off — attachment upload skipped." };
-  }
+): Promise<{ success: boolean; uploaded?: boolean; error?: string }> {
   try {
     const preData = await resolvePendingTargetDocOrRemoveOrphan(item.docPath, item.id);
     if (!preData) {
-      return { success: true };
+      return { success: true, uploaded: false };
     }
 
     const pendingCompanyId = resolvePendingPayloadCompanyId(item);
     const registryCompanyId =
       (pendingCompanyId ? await resolveRegistryCompanyIdForPendingItem(item) : null) ?? pendingCompanyId;
+    const driveSync = registryCompanyId
+      ? (await resolvePendingAttachmentCloudSyncProvider(registryCompanyId)) === "google_drive"
+      : false;
+    if (!driveSync && isFirebaseLedgerDataSyncDisabled()) {
+      return { success: false, uploaded: false, error: "Cloud data sync is off: attachment upload skipped." };
+    }
     const keepOffFirebase = registryCompanyId
       ? await shouldKeepAttachmentsOffFirebase(registryCompanyId)
       : false;
     if (keepOffFirebase && registryCompanyId) {
-      const driveSync =
-        (await resolvePendingAttachmentCloudSyncProvider(registryCompanyId)) === "google_drive";
       if (driveSync) {
         return syncOnePendingFileToDrive(item, preData, registryCompanyId);
       }
-      if (!fieldStillHasLocalPendingRef(preData[item.field], item.id)) {
-        await removePendingFile(item.id);
-      }
-      return { success: true };
+      return {
+        success: false,
+        uploaded: false,
+        error: "Attachment kept pending because Drive sync is not active for this local company.",
+      };
     }
 
     const existingHttps = resolveHttpsUrlAfterPendingPatch(preData[item.field], item.id);
     if (existingHttps) {
       await removePendingFileAfterMirrorReady(item.id, item.docPath, item.field, existingHttps);
-      return { success: true };
+      return { success: true, uploaded: false };
     }
 
     if (!fieldStillHasLocalPendingRef(preData[item.field], item.id)) {
-      return { success: true };
+      return { success: true, uploaded: false };
     }
 
     const storagePath = `${item.storagePathPrefix}/${Date.now()}_${item.fileName || "file"}`;
@@ -1187,7 +1264,7 @@ export async function syncOnePendingFile(
 
     const data = await resolvePendingTargetDocOrRemoveOrphan(item.docPath, item.id);
     if (!data) {
-      return { success: true };
+      return { success: true, uploaded: true };
     }
     const current = data[item.field];
 
@@ -1233,6 +1310,7 @@ export async function syncOnePendingFile(
     if (!deleted) {
       return {
         success: true,
+        uploaded: true,
         error: "Uploaded to cloud; local copy kept until this device finishes loading the HTTPS link.",
       };
     }
@@ -1246,7 +1324,7 @@ export async function syncOnePendingFile(
         success: true,
       });
     }
-    return { success: true };
+    return { success: true, uploaded: true };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     if (localPendingFilesForensicEnabled()) {
@@ -1266,31 +1344,36 @@ export async function syncOnePendingFile(
  */
 export async function syncPendingFiles(): Promise<{
   synced: number;
+  uploaded: number;
   failed: number;
-  /** Pehla failure reason — mobile sync status UI me generic count ke saath detail. */
+  /** Pehla failure reason â€” mobile sync status UI me generic count ke saath detail. */
   lastError?: string;
 }> {
   if (isFirebaseLedgerDataSyncDisabled()) {
-    return { synced: 0, failed: 0 };
+    return { synced: 0, uploaded: 0, failed: 0 };
   }
   const pending = await getPendingFiles();
   let synced = 0;
+  let uploaded = 0;
   let failed = 0;
   let lastError: string | undefined;
   for (const item of pending) {
     const itemCompanyId = resolvePendingPayloadCompanyId(item);
     if (itemCompanyId && !isFirebaseLedgerCompanyAttachmentSyncEnabled(itemCompanyId)) continue;
     const result = await syncOnePendingFile(item);
-    if (result.success) synced++;
+    if (result.success) {
+      synced++;
+      if (result.uploaded) uploaded++;
+    }
     else {
       failed++;
       if (!lastError && result.error) lastError = result.error;
     }
   }
-  return { synced, failed, lastError };
+  return { synced, uploaded, failed, lastError };
 }
 
-/** Drive sync cycle — sirf is company ke pending attachments/avatars upload karo. */
+/** Drive sync cycle â€” sirf is company ke pending attachments/avatars upload karo. */
 async function resolveCompanyTargetAliases(companyId: string): Promise<Set<string>> {
   const cid = String(companyId || "").trim();
   const targetAliases = new Set<string>();
@@ -1340,32 +1423,38 @@ export async function syncPendingFilesForCompany(
   options?: { onProgress?: (done: number, total: number, fileName?: string) => void }
 ): Promise<{
   synced: number;
+  uploaded: number;
   failed: number;
   lastError?: string;
 }> {
   const cid = String(companyId || "").trim();
-  if (!cid) return { synced: 0, failed: 0 };
-  if (isFirebaseLedgerDataSyncDisabled()) {
-    return { synced: 0, failed: 0 };
+  if (!cid) return { synced: 0, uploaded: 0, failed: 0 };
+  const driveSync = (await resolvePendingAttachmentCloudSyncProvider(cid)) === "google_drive";
+  if (!driveSync && isFirebaseLedgerDataSyncDisabled()) {
+    return { synced: 0, uploaded: 0, failed: 0 };
   }
-  if (!isFirebaseLedgerCompanyAttachmentSyncEnabled(cid)) {
-    return { synced: 0, failed: 0 };
+  if (!driveSync && !isFirebaseLedgerCompanyAttachmentSyncEnabled(cid)) {
+    return { synced: 0, uploaded: 0, failed: 0 };
   }
   const items = await listPendingFilesForCompany(cid);
   const total = items.length;
   let synced = 0;
+  let uploaded = 0;
   let failed = 0;
   let lastError: string | undefined;
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!;
-    options?.onProgress?.(i, total, item.fileName);
+    options?.onProgress?.(uploaded, total, item.fileName);
     const result = await syncOnePendingFile(item);
-    if (result.success) synced++;
+    if (result.success) {
+      synced++;
+      if (result.uploaded) uploaded++;
+    }
     else {
       failed++;
       if (!lastError && result.error) lastError = result.error;
     }
-    options?.onProgress?.(i + 1, total, item.fileName);
+    options?.onProgress?.(uploaded, total, item.fileName);
   }
-  return { synced, failed, lastError };
+  return { synced, uploaded, failed, lastError };
 }

@@ -38,6 +38,8 @@ type DriveTokens = {
   expiryDate: number | null;
 };
 
+const ensureFolderLocks = new Map<string, Promise<string>>();
+
 function isDriveDuplicateShareError(e: unknown): boolean {
   const err = e as { code?: number; message?: string; errors?: Array<{ reason?: string }> };
   if (err?.errors?.some((x) => x.reason === "duplicate")) return true;
@@ -106,9 +108,27 @@ async function findChildFolder(
   name: string
 ): Promise<string | null> {
   const q = `'${parentId}' in parents and name = '${name.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
-  const res = await drive.files.list({ q, fields: "files(id,name)", pageSize: 1 });
-  const id = res.data.files?.[0]?.id;
-  return id ?? null;
+  const res = await drive.files.list({
+    q,
+    fields: "files(id,name,createdTime)",
+    pageSize: 100,
+    orderBy: "createdTime",
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+  const files = res.data.files ?? [];
+  if (files.length === 0) return null;
+  if (files.length === 1) return files[0]?.id ?? null;
+
+  // Duplicate folders (race / parallel ensure) — canonical: pehla jisme manifest ho (data), warna sabse purana.
+  if (name === POCKET_LEDGER_DRIVE_BRANCH.data) {
+    for (const f of files) {
+      if (!f.id) continue;
+      const manifest = await readJsonFileByName(drive, f.id, "manifest.json");
+      if (manifest) return f.id;
+    }
+  }
+  return files[0]?.id ?? null;
 }
 
 async function ensureFolder(
@@ -116,17 +136,44 @@ async function ensureFolder(
   parentId: string,
   name: string
 ): Promise<string> {
-  const existing = await findChildFolder(drive, parentId, name);
-  if (existing) return existing;
-  const created = await drive.files.create({
-    requestBody: {
-      name,
-      mimeType: "application/vnd.google-apps.folder",
-      parents: [parentId],
-    },
-    fields: "id",
-  });
-  return created.data.id!;
+  const lockKey = `${parentId}\n${name}`;
+  const existingLock = ensureFolderLocks.get(lockKey);
+  if (existingLock) return existingLock;
+  const run = (async () => {
+    let existing = await findChildFolder(drive, parentId, name);
+    if (existing) return existing;
+
+    try {
+      await drive.files.create({
+        requestBody: {
+          name,
+          mimeType: "application/vnd.google-apps.folder",
+          parents: [parentId],
+        },
+        fields: "id",
+        supportsAllDrives: true,
+      });
+    } catch {
+      /* concurrent create — canonical folder neeche resolve */
+    }
+
+    // Drive list eventual consistency + parallel create: dubara dhoondho, naya mat banao.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 120 * attempt));
+      }
+      existing = await findChildFolder(drive, parentId, name);
+      if (existing) return existing;
+    }
+
+    throw new Error(`Failed to ensure Drive folder "${name}" under ${parentId}`);
+  })();
+  ensureFolderLocks.set(lockKey, run);
+  try {
+    return await run;
+  } finally {
+    ensureFolderLocks.delete(lockKey);
+  }
 }
 
 /** `Pocket Ledger/` root — naya unified layout. */
@@ -480,6 +527,109 @@ export async function driveUploadBackupFile(
   // Latest pointer — restore UI baad me isi se pick kar sake.
   await upsertBinaryFileInFolder(drive, backupFolderId, "latest.plbp", buf, "application/octet-stream");
   return { remotePath: buildPocketLedgerDriveRelativePath(ref, "backup", safeName) };
+}
+
+function sanitizeAutoBackupDriveFolderSegment(raw: string): string {
+  return String(raw || "")
+    .trim()
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
+    .replace(/\s+/g, " ")
+    .slice(0, 80) || "company";
+}
+
+type DrivePlbpEntry = { id: string; modifiedTime: string; name: string };
+
+async function collectPlbpFilesInFolder(
+  drive: ReturnType<typeof google.drive>,
+  folderId: string,
+  out: DrivePlbpEntry[]
+): Promise<void> {
+  let pageToken: string | undefined;
+  do {
+    const res = await drive.files.list({
+      q: `'${folderId}' in parents and trashed = false`,
+      fields: "nextPageToken, files(id,name,mimeType,modifiedTime)",
+      pageSize: 200,
+      pageToken,
+    });
+    for (const f of res.data.files ?? []) {
+      const name = String(f.name || "");
+      const mime = String(f.mimeType || "");
+      if (mime === "application/vnd.google-apps.folder") {
+        if (f.id) await collectPlbpFilesInFolder(drive, f.id, out);
+        continue;
+      }
+      if (!name.toLowerCase().endsWith(".plbp") || !f.id) continue;
+      out.push({
+        id: f.id,
+        name,
+        modifiedTime: String(f.modifiedTime || ""),
+      });
+    }
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+}
+
+async function pruneAutoBackupPlbpFiles(
+  drive: ReturnType<typeof google.drive>,
+  companyFolderId: string,
+  keep: number
+): Promise<number> {
+  const keepN = Math.max(1, Math.min(500, Math.floor(keep) || 1));
+  const files: DrivePlbpEntry[] = [];
+  await collectPlbpFilesInFolder(drive, companyFolderId, files);
+  files.sort((a, b) => b.modifiedTime.localeCompare(a.modifiedTime));
+  let pruned = 0;
+  for (const f of files.slice(keepN)) {
+    try {
+      await drive.files.delete({ fileId: f.id });
+      pruned++;
+    } catch {
+      /* skip */
+    }
+  }
+  return pruned;
+}
+
+/** Auto backup `.plbp` → custom Drive root folder (company sync alag). */
+export async function driveUploadAutoBackupFile(
+  uid: string,
+  input: {
+    mainFolderName: string;
+    companyFolderName: string;
+    relativeDir: string;
+    fileName: string;
+    base64: string;
+    keepPerCompany: number;
+  }
+): Promise<{ remotePath: string; pruned: number }> {
+  const mainFolder = sanitizeAutoBackupDriveFolderSegment(input.mainFolderName);
+  const companyFolder = sanitizeAutoBackupDriveFolderSegment(input.companyFolderName);
+  const fileName = String(input.fileName || "").trim() || "backup.plbp";
+  const relDir = String(input.relativeDir || "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((s) => sanitizeAutoBackupDriveFolderSegment(s))
+    .filter(Boolean);
+
+  const tokens = await loadDriveTokens(uid);
+  const auth = oauthClient(tokens);
+  const drive = google.drive({ version: "v3", auth });
+
+  let parentId = await ensureFolder(drive, "root", mainFolder);
+  parentId = await ensureFolder(drive, parentId, companyFolder);
+  for (const seg of relDir) {
+    parentId = await ensureFolder(drive, parentId, seg);
+  }
+
+  const buf = Buffer.from(input.base64, "base64");
+  await upsertBinaryFileInFolder(drive, parentId, fileName, buf, "application/octet-stream");
+
+  const companyRootId = await findChildFolder(drive, await ensureFolder(drive, "root", mainFolder), companyFolder);
+  const pruned = companyRootId ? await pruneAutoBackupPlbpFiles(drive, companyRootId, input.keepPerCompany) : 0;
+
+  const remotePath = [mainFolder, companyFolder, ...relDir, fileName].filter(Boolean).join("/");
+  return { remotePath, pruned };
 }
 
 export async function driveUploadBinaryAtRemotePath(

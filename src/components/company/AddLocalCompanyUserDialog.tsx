@@ -26,6 +26,7 @@ import type { Company } from "@/hooks/useCompany";
 import { addDriveShareUserToLocalCompany } from "@/lib/localCloudSync/driveCloudSyncClient";
 import { runLocalCloudSyncCycle } from "@/lib/localCloudSync/engine";
 import { LOCAL_COMPANY_APP_ROLES, normalizeLocalCompanyAppRole } from "@/lib/localCompanyAppRoles";
+import { LOCAL_SHARE_ROUTE_CONFLICT_MESSAGE } from "@/lib/localShareRouteGuards";
 import {
   cloudSyncDialogContent,
   cloudSyncDialogOutlineButton,
@@ -61,6 +62,10 @@ export function AddLocalCompanyUserDialog({
   const [role, setRole] = useState("manager");
   const [loading, setLoading] = useState(false);
   const [showPw, setShowPw] = useState(false);
+  const [displayNameTouched, setDisplayNameTouched] = useState(false);
+  const [loginUsernameTouched, setLoginUsernameTouched] = useState(false);
+  const [routeConflictOpen, setRouteConflictOpen] = useState(false);
+  const [routeConflictBusy, setRouteConflictBusy] = useState(false);
 
   useEffect(() => {
     if (!open) {
@@ -70,8 +75,43 @@ export function AddLocalCompanyUserDialog({
       setPassword("");
       setRole("manager");
       setShowPw(false);
+      setDisplayNameTouched(false);
+      setLoginUsernameTouched(false);
+      setRouteConflictOpen(false);
+      setRouteConflictBusy(false);
     }
   }, [open]);
+
+  const handleDriveGmailChange = (value: string) => {
+    setShareGmail(value);
+    if (!isDriveShare) return;
+    const atIndex = value.indexOf("@");
+    if (atIndex <= 0) return;
+    const prefix = value.slice(0, atIndex).trim();
+    if (!prefix) return;
+    if (!displayNameTouched) setDisplayName(prefix);
+    if (!loginUsernameTouched) setLoginUsername(prefix);
+  };
+
+  const saveDriveShare = async (options?: { changeMethodToDrive?: boolean }) => {
+    if (!company?.id) return;
+    const n = displayName.trim();
+    const u = loginUsername.trim();
+    const p = password.trim();
+    const gmail = shareGmail.trim().toLowerCase();
+    const appRole = normalizeLocalCompanyAppRole(role);
+    await addDriveShareUserToLocalCompany({
+      companyId: company.id,
+      companyName: companyName ?? company.name,
+      email: gmail,
+      loginUsername: u,
+      password: p,
+      appRole,
+      displayName: n,
+      replaceExistingPlServerUser: options?.changeMethodToDrive === true,
+    });
+    void runLocalCloudSyncCycle(company.id, { force: true });
+  };
 
   const handleSubmit = async () => {
     if (!company?.id) return;
@@ -100,7 +140,9 @@ export function AddLocalCompanyUserDialog({
 
     setLoading(true);
     try {
-      if (isLocalOnlyMode()) {
+      if (isDriveShare) {
+        await saveDriveShare();
+      } else if (isLocalOnlyMode()) {
         const doc = await getLocalCompanyById(company.id, { includeDeleted: true });
         const rows = parseLocalCompanyUserRows((doc as { localCompanyUsers?: unknown })?.localCompanyUsers);
         const next = upsertUserInList(rows, {
@@ -124,17 +166,6 @@ export function AddLocalCompanyUserDialog({
         });
       }
 
-      if (isDriveShare) {
-        await addDriveShareUserToLocalCompany({
-          companyId: company.id,
-          companyName: companyName ?? company.name,
-          email: gmail,
-          appRole,
-          displayName: n,
-        });
-        void runLocalCloudSyncCycle(company.id, { force: true });
-      }
-
       toast({
         title: isDriveShare ? "Person added & shared" : "User added",
         description: isDriveShare
@@ -144,17 +175,45 @@ export function AddLocalCompanyUserDialog({
       onUserAdded?.();
       onOpenChange(false);
     } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (isDriveShare && (msg === LOCAL_SHARE_ROUTE_CONFLICT_MESSAGE || msg.includes("Username already exists"))) {
+        setRouteConflictOpen(true);
+        return;
+      }
       toast({
         variant: "destructive",
         title: isDriveShare ? "Could not add or share" : "Could not add user",
-        description: e instanceof Error ? e.message : "Try again.",
+        description: msg || "Try again.",
       });
     } finally {
       setLoading(false);
     }
   };
 
+  const changeMethodToDrive = async () => {
+    setRouteConflictBusy(true);
+    try {
+      await saveDriveShare({ changeMethodToDrive: true });
+      toast({
+        title: "Sharing method changed",
+        description: `${shareGmail.trim().toLowerCase()} is now shared through Google Drive.`,
+      });
+      setRouteConflictOpen(false);
+      onUserAdded?.();
+      onOpenChange(false);
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        title: "Could not change method",
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setRouteConflictBusy(false);
+    }
+  };
+
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={cn(isDriveShare && cloudSyncDialogContent)}>
         <DialogHeader>
@@ -172,14 +231,6 @@ export function AddLocalCompanyUserDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-2">
-          <div className="space-y-1">
-            <Label>Display name</Label>
-            <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-          </div>
-          <div className="space-y-1">
-            <Label>Login username</Label>
-            <Input value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} autoComplete="username" />
-          </div>
           {isDriveShare ? (
             <div className="space-y-1">
               <Label htmlFor="drive-share-gmail">Share on Google Drive (Gmail)</Label>
@@ -190,14 +241,34 @@ export function AddLocalCompanyUserDialog({
                 autoComplete="email"
                 placeholder="staff@gmail.com"
                 value={shareGmail}
-                onChange={(e) => setShareGmail(e.target.value)}
+                onChange={(e) => handleDriveGmailChange(e.target.value)}
               />
               <p className="text-xs text-emerald-800/80 dark:text-emerald-300/90">
-                Is Gmail par company folder write access milega — Settings → Join shared local company se connect kar
-                sakte hain.
+                This Gmail gets Drive folder write access and can join from Settings &gt; Join shared local company.
               </p>
             </div>
           ) : null}
+          <div className="space-y-1">
+            <Label>Display name</Label>
+            <Input
+              value={displayName}
+              onChange={(e) => {
+                setDisplayNameTouched(true);
+                setDisplayName(e.target.value);
+              }}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label>Login username</Label>
+            <Input
+              value={loginUsername}
+              onChange={(e) => {
+                setLoginUsernameTouched(true);
+                setLoginUsername(e.target.value);
+              }}
+              autoComplete="username"
+            />
+          </div>
           <div className="space-y-1">
             <Label>Password</Label>
             <div className="relative">
@@ -260,6 +331,42 @@ export function AddLocalCompanyUserDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <Dialog open={routeConflictOpen} onOpenChange={setRouteConflictOpen}>
+      <DialogContent className={cn(cloudSyncDialogContent, "sm:max-w-md")}>
+        <DialogHeader>
+          <DialogTitle className={cloudSyncDialogTitleClass}>User already shared on PL Server</DialogTitle>
+          <DialogDescription>
+            This user is already shared through PL Server for this company. A user can be shared through either PL
+            Server or Google Drive, but not both.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/35 dark:text-amber-100">
+          Change method to Drive will remove this user's PL Server share entry on this company, then add Google Drive
+          sharing.
+        </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            className={cloudSyncDialogOutlineButton}
+            disabled={routeConflictBusy}
+            onClick={() => setRouteConflictOpen(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            className={cloudSyncDialogPrimaryButton}
+            disabled={routeConflictBusy}
+            onClick={() => void changeMethodToDrive()}
+          >
+            {routeConflictBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Change method to Drive
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
 

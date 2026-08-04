@@ -27,6 +27,7 @@ import {
   looksLikeFirebaseStorageDownloadUrl,
   tryGetBlobFromFirebaseStorageDownloadUrl,
 } from "@/lib/storageGetBlobFromDownloadUrl";
+import { isRemoteHttpsAttachmentUrl } from "@/lib/attachmentNetworkGate";
 
 function thumbCacheKey(url: string): string {
   return `${url}::cell-thumb`;
@@ -166,6 +167,7 @@ export function useAttachmentThumbDisplayUrl(
       if (refreshKey <= 0) return;
     }
     if (!ready) return;
+    const networkAllowed = resolveFallback?.filesNetworkAllowed !== false;
 
     let cancelled = false;
     void (async () => {
@@ -187,7 +189,7 @@ export function useAttachmentThumbDisplayUrl(
           isLocalFileRef(url) &&
           companyId &&
           resolveFallback?.voucherId &&
-          resolveFallback.filesNetworkAllowed !== false
+          networkAllowed
         ) {
           try {
             const { tryResolveRemoteUrlForStaleLocalAttachment } = await import(
@@ -201,7 +203,9 @@ export function useAttachmentThumbDisplayUrl(
             );
             if (remoteUrl && !isLocalFileRef(remoteUrl)) {
               if (looksLikeFirebaseStorageDownloadUrl(remoteUrl)) {
-                blob = await tryGetBlobFromFirebaseStorageDownloadUrl(remoteUrl);
+                blob = await tryGetBlobFromFirebaseStorageDownloadUrl(remoteUrl, undefined, {
+                  companyId,
+                });
               }
               if (!blob?.size) {
                 blob = await getRemoteAttachmentBlobPreferOfflineCache(remoteUrl, undefined, {
@@ -221,8 +225,13 @@ export function useAttachmentThumbDisplayUrl(
           const { resolvePlServerStaffAttachmentPreviewBlob } = await import("@/lib/plServerAttachmentFetch");
           blob = await resolvePlServerStaffAttachmentPreviewBlob(url, { companyId });
         }
+        if (!networkAllowed && isRemoteHttpsAttachmentUrl(url)) {
+          return;
+        }
         if (!blob?.size && looksLikeFirebaseStorageDownloadUrl(url)) {
-          blob = await tryGetBlobFromFirebaseStorageDownloadUrl(url);
+          blob = await tryGetBlobFromFirebaseStorageDownloadUrl(url, undefined, {
+            companyId: companyId ?? undefined,
+          });
         }
         if (!blob?.size) {
           blob = await getRemoteAttachmentBlobPreferOfflineCache(url, undefined, {

@@ -15,7 +15,7 @@ import {
   FIREBASE_LEDGER_COMPANY_SYNC_PREFS_CHANGED_EVENT,
   type FirebaseLedgerCompanySyncPrefsChangedDetail,
 } from "@/lib/firebaseLedgerCompanySyncPrefs";
-import { queueAttachmentUrlsWarm, requestAttachmentUiRefresh } from "@/lib/attachmentLoadReady";
+import { requestAttachmentUiRefresh } from "@/lib/attachmentLoadReady";
 
 type Props = {
   urls: readonly string[];
@@ -78,20 +78,15 @@ export function VoucherAttachmentFileIndicator({
   React.useEffect(() => {
     if (syncPrefsTick <= 0 || !filesNetworkAllowed) return;
     const currentUrls = urlsKey ? urlsKey.split("\u0001") : [];
-    const currentClientUrls = clientFileUrlsKey ? clientFileUrlsKey.split("\u0001") : currentUrls;
     for (const url of currentUrls) invalidateAttachmentThumbDisplayUrl(url);
-    queueAttachmentUrlsWarm(
-      currentUrls,
-      companyId ? String(companyId) : undefined,
-      currentClientUrls
-    );
     requestAttachmentUiRefresh();
   }, [clientFileUrlsKey, companyId, filesNetworkAllowed, syncPrefsTick, urlsKey]);
   const wantsPreview = displayMode === "preview";
-  // Network blocked inside cache when Files off + companyId; local cache still returns.
+  // Files OFF: sirf device cache se thumb; network kabhi nahi. Files ON: visible page + lazy load.
   const allowThumbLoad =
     wantsPreview &&
-    (readyState === "ready" || (filesNetworkAllowed && isWebBrowserAttachmentLazyLoad()));
+    filesNetworkAllowed &&
+    (readyState === "ready" || isWebBrowserAttachmentLazyLoad());
   const thumbUrl = useAttachmentThumbDisplayUrl(
     primaryUrl,
     allowThumbLoad,
@@ -105,7 +100,12 @@ export function VoucherAttachmentFileIndicator({
   );
   const fileCount = urls.map((u) => String(u || "").trim()).filter(Boolean).length;
   if (fileCount === 0) return null;
-  const isReady = readyState === "ready";
+  const isReady =
+    displayMode === "tick"
+      ? filesNetworkAllowed
+        ? readyState === "ready"
+        : fileCount > 0
+      : readyState === "ready";
   const iconClass = size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4";
   const thumbClass = size === "sm" ? "h-7 w-7" : "h-8 w-8";
   const countBadgeClass =
@@ -124,7 +124,9 @@ export function VoucherAttachmentFileIndicator({
     const canShowThumb =
       !!thumbUrl &&
       thumbRetryKey < 4 &&
-      (isReady || (filesNetworkAllowed && isWebBrowserAttachmentLazyLoad()));
+      (filesNetworkAllowed
+        ? isReady || isWebBrowserAttachmentLazyLoad()
+        : true);
     if (canShowThumb) {
       return (
         <span

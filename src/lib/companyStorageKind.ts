@@ -210,6 +210,13 @@ export function isStructuralSqliteOnlyLedgerCompany(
   return isPureLocalLedgerCompany(c);
 }
 
+/** Local / PL Server ledger — browser `blob:` / `data:` preview URLs persist ya UI me na dikhein. */
+export function shouldStripTransientVoucherAttachmentUrls(
+  c: (CompanyStorageRow & { plServerShared?: boolean }) | null | undefined
+): boolean {
+  return isStructuralSqliteOnlyLedgerCompany(c);
+}
+
 /**
  * Cross-company voucher copy: masters SQLite se padho (local / PL server / restore / cloud-sync off).
  * Registry row galat `syncedFromCloud` ho to bhi device ledger read ho.
@@ -249,21 +256,8 @@ export type SelectorCompanyBuckets = {
   serverTabCompanies: Company[];
 };
 
-function companySelectorDedupeKey(c: Company): string {
-  const id = String(c?.id ?? "").trim();
-  if (!id) return "";
-  if (isServerSelectorCompanyRow(c)) return `server:${id}`;
-  if (isLocalSelectorCompanyRow(c)) return `local:${id}`;
-  return `online:${id}`;
-}
-
 function dedupeCompaniesById(companies: Company[]): Company[] {
-  const map = new Map<string, Company>();
-  for (const c of companies) {
-    const key = companySelectorDedupeKey(c);
-    if (key) map.set(key, c);
-  }
-  return Array.from(map.values());
+  return companies.filter((c): c is Company => c != null && Boolean(String(c?.id ?? "").trim()));
 }
 
 /**

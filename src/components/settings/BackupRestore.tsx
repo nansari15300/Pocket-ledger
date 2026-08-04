@@ -4,7 +4,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Download, Upload, Loader2, FileWarning, ShieldCheck, ShieldOff, Eye, EyeOff, Folder, Info, Settings, Plus, X } from "lucide-react";
+import { Download, Upload, Loader2, FileWarning, ShieldCheck, ShieldOff, Eye, EyeOff, Folder, Info, Settings, Plus, X, Cloud } from "lucide-react";
 import { useCompany } from "@/hooks/useCompany";
 import type { Company } from "@/hooks/useCompany";
 import {
@@ -112,6 +112,7 @@ import {
   type AutoBackupScheduleMode,
 } from "@/lib/autoBackupPrefs";
 import { runAutoBackupQueue, loadAutoBackupCompanyPickerRows, companyHasAutoBackupPassword, syncAutoBackupCompanyIdsWithEligible } from "@/lib/autoBackupRunner";
+import { AutoBackupDriveUploadDialog } from "@/components/settings/AutoBackupDriveUploadDialog";
 import { buildAutoBackupRelativeDir } from "@/lib/autoBackupPath";
 import { isDeviceLocalCompany, partitionCompaniesForSelector, type CompanyListTab } from "@/lib/companyStorageKind";
 import {
@@ -701,6 +702,13 @@ export function BackupRestore() {
   );
   const [autoBackupPrefs, setAutoBackupPrefs] = useState<AutoBackupPrefs>(() => readAutoBackupPrefs());
   const [autoBackupDraft, setAutoBackupDraft] = useState<AutoBackupPrefs>(() => readAutoBackupPrefs());
+  const driveUploadCompanies = useMemo(() => {
+    const pool =
+      autoBackupCompanyRows.length > 0
+        ? autoBackupCompanyRows.filter((c) => c.isOwned !== false)
+        : allCompanies.filter((c) => c.isOwned !== false);
+    return pool.map((c) => ({ id: String(c.id), name: String(c.name || c.id) }));
+  }, [autoBackupCompanyRows, allCompanies]);
   const [backupLocationLabel, setBackupLocationLabel] = useState("Not set");
   const backupLocationHint = useMemo(() => readBackupLocationDisplayHint(), [backupLocationLabel]);
   const autoBackupPathPreview = useMemo(
@@ -755,6 +763,7 @@ export function BackupRestore() {
   const [autoBackupSettingsDraft, setAutoBackupSettingsDraft] = useState<AutoBackupCompanySettings>(() =>
     defaultAutoBackupCompanySettings(staticBackupClient)
   );
+  const [driveUploadDialogOpen, setDriveUploadDialogOpen] = useState(false);
   const [restoreGmailInput, setRestoreGmailInput] = useState("");
   /** Backup confirm: data-only vs attachment embed (Option A). */
   const [backupIncludeAttachments, setBackupIncludeAttachments] = useState(false);
@@ -3111,15 +3120,27 @@ export function BackupRestore() {
               </p>
             ) : null}
             <div className="flex min-w-0 flex-col gap-2 pt-1 sm:flex-row sm:items-center sm:justify-between">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handleSaveAutoBackupSettings}
-                className={backupCardActionBtnCn}
-              >
-                Save
-              </Button>
+              <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleSaveAutoBackupSettings}
+                  className={backupCardActionBtnCn}
+                >
+                  Save
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setDriveUploadDialogOpen(true)}
+                  className={backupCardActionBtnCn}
+                >
+                  <Cloud className="mr-2 h-4 w-4" />
+                  Drive upload
+                </Button>
+              </div>
               <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
                 <Button
                   type="button"
@@ -3147,6 +3168,12 @@ export function BackupRestore() {
             </div>
           </CardContent>
         </Card>
+
+        <AutoBackupDriveUploadDialog
+          open={driveUploadDialogOpen}
+          onOpenChange={setDriveUploadDialogOpen}
+          companies={driveUploadCompanies}
+        />
 
         <Card className={cn("order-4 flex min-w-0 flex-col overflow-hidden", backupCardToneSkyCn)}>
           <CardHeader>

@@ -96,6 +96,8 @@ type Props = {
   currentUrls: string[];
   maxFiles: number;
   onAddUrls: (urls: string[]) => void;
+  /** Dialog band hone ke turant baad Add File tile file picker na khule — click-through guard. */
+  onDialogDismissed?: () => void;
 };
 
 export function CompanyAttachmentReuseDialog({
@@ -104,6 +106,7 @@ export function CompanyAttachmentReuseDialog({
   currentUrls,
   maxFiles,
   onAddUrls,
+  onDialogDismissed,
 }: Props) {
   const { companyId, allCompaniesRegistry } = useCompany();
   const { toast } = useToast();
@@ -173,6 +176,13 @@ export function CompanyAttachmentReuseDialog({
 
   const catalogCapped = catalog.length >= COMPANY_ATTACHMENT_CATALOG_MAX;
 
+  const dismissDialog = () => {
+    // Click cycle khatam hone do — warna overlay hat te hi neeche Add File tile file picker khol deta hai.
+    window.setTimeout(() => {
+      onOpenChange(false);
+    }, 0);
+  };
+
   const pick = async (url: string) => {
     if (remaining <= 0) {
       toast({ variant: "destructive", title: "Attachment limit reached" });
@@ -200,7 +210,7 @@ export function CompanyAttachmentReuseDialog({
           ? `Copied from ${selectedCompanyName} into ${currentCompanyName}.`
           : `Reused existing ${kind} - no new upload.`,
       });
-      onOpenChange(false);
+      dismissDialog();
     } catch (e) {
       toast({
         variant: "destructive",
@@ -212,7 +222,13 @@ export function CompanyAttachmentReuseDialog({
     }
   };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onDialogDismissed?.();
+        onOpenChange(next);
+      }}
+    >
       <DialogContent
         className={cn(
           "flex h-[90vh] max-h-[90vh] min-h-0 w-[min(100vw-0.75rem,42rem)] max-w-2xl flex-col gap-2 overflow-hidden sm:gap-3",
@@ -365,9 +381,18 @@ export function CompanyAttachmentReuseDialog({
                       type="button"
                       size="sm"
                       variant="secondary"
+                      data-pl-reuse-use-action
                       className="h-7 shrink-0 px-2.5 text-[11px] sm:text-xs"
                       disabled={remaining <= 0 || linking === entry.url}
-                      onClick={() => void pick(entry.url)}
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void pick(entry.url);
+                      }}
                     >
                       {linking === entry.url ? "…" : "Use"}
                     </Button>
@@ -388,6 +413,7 @@ type ButtonProps = {
   onAddUrls: (urls: string[]) => void;
   disabled?: boolean;
   className?: string;
+  onDialogDismissed?: () => void;
 };
 
 export function CompanyAttachmentReuseButton({
@@ -396,6 +422,7 @@ export function CompanyAttachmentReuseButton({
   onAddUrls,
   disabled,
   className,
+  onDialogDismissed,
 }: ButtonProps) {
   const [open, setOpen] = useState(false);
   const currentUrls = currentFiles.filter((f): f is string => typeof f === "string");
@@ -425,6 +452,7 @@ export function CompanyAttachmentReuseButton({
         currentUrls={currentUrls}
         maxFiles={maxFiles}
         onAddUrls={onAddUrls}
+        onDialogDismissed={onDialogDismissed}
       />
     </>
   );

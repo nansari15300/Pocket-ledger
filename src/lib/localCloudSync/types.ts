@@ -47,10 +47,31 @@ export type CloudSyncLastSyncSummary = {
 };
 
 /** Background auto-sync interval (seconds) — UI + LocalCompanyCloudSyncManager. */
-export const CLOUD_SYNC_INTERVAL_SEC_OPTIONS = [2, 5, 10, 15, 20, 30, 40, 60] as const;
+export const CLOUD_SYNC_INTERVAL_SEC_OPTIONS = [
+  2, 5, 10, 15, 20, 30, 40, 60, 120, 300, 600, 1200, 1800, 3600,
+] as const;
 export type CloudSyncIntervalSec = (typeof CLOUD_SYNC_INTERVAL_SEC_OPTIONS)[number];
 export const DEFAULT_CLOUD_SYNC_INTERVAL_SEC: CloudSyncIntervalSec = 30;
+
+/** Dropdown label — `60` = sec; `120+` divisible by 60 = min. */
+export function formatCloudSyncIntervalLabel(sec: number): string {
+  if (sec >= 120 && sec % 60 === 0) return `${sec / 60} min`;
+  return `${sec} sec`;
+}
+
+/** Next-sync countdown — long intervals readable. */
+export function formatCloudSyncCountdownLabel(sec: number): string {
+  const n = Math.max(0, Math.floor(sec));
+  if (n >= 60) {
+    const m = Math.floor(n / 60);
+    const s = n % 60;
+    return s > 0 ? `${m} min ${s} sec` : `${m} min`;
+  }
+  return `${n} sec`;
+}
 export const MIN_CLOUD_SYNC_TICK_MS = 2_000;
+/** Background attachment rehydrate — full `drive:` ref scan (manual button bypasses). */
+export const CLOUD_SYNC_AUTO_REHYDRATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 /** Drive folder share row — Drive par hamesha writer; appRole company permissions ke liye. */
 export type CloudSyncDriveShareUser = {

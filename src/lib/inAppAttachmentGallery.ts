@@ -120,11 +120,16 @@ async function resolveSlide(
   const isDataPdf =
     u.startsWith("data:application/pdf") || u.toLowerCase().startsWith("data:application%2fpdf");
 
-  // Full-screen viewer: HTTPS ko seedha `src` mat — pehle IndexedDB / warm fetch taaki gallery tiles offline bhi hit karein
+  // Full-screen viewer: HTTPS ko seedha `src` mat — pehle IndexedDB / gated fetch
   if (/^https?:\/\//i.test(u)) {
+    const fetchOpts = {
+      companyId: options?.companyId,
+      explicitUserRequest: !options?.localLedgerOnly,
+    };
     let hb = await getOfflineCachedAttachmentBlob(u);
     if ((!hb || hb.size === 0) && typeof navigator !== "undefined" && navigator.onLine) {
-      hb = (await getRemoteAttachmentBlobPreferOfflineCache(u)) ?? null;
+      hb =
+        (await getRemoteAttachmentBlobPreferOfflineCache(u, undefined, fetchOpts)) ?? null;
     }
     if (hb && hb.size > 0) {
       const objectUrl = URL.createObjectURL(hb);
@@ -163,15 +168,22 @@ async function resolveSlide(
       };
       return { kind: "image", src: objectUrl, revoke };
     }
-    return { kind: "image", src: u, revoke: noop };
+    return { kind: "other", href: u, revoke: noop };
   }
 
   if (kindHint === "pdf" || isDataPdf || pathLooksPdf(pathOnly)) {
+    const fetchOpts = {
+      companyId: options?.companyId,
+      explicitUserRequest: !options?.localLedgerOnly,
+    };
     try {
-      let blob: Blob | null = await tryGetBlobFromFirebaseStorageDownloadUrl(u);
+      let blob: Blob | null = await tryGetBlobFromFirebaseStorageDownloadUrl(u, undefined, fetchOpts);
       if (!blob) {
-        const res = await fetch(u, { mode: "cors", credentials: "omit" });
-        if (res.ok) blob = await res.blob();
+        const { isRemoteAttachmentNetworkFetchAllowed } = await import("@/lib/attachmentNetworkGate");
+        if (isRemoteAttachmentNetworkFetchAllowed(u, fetchOpts)) {
+          const res = await fetch(u, { mode: "cors", credentials: "omit" });
+          if (res.ok) blob = await res.blob();
+        }
       }
       if (blob) {
         const objectUrl = URL.createObjectURL(blob);
@@ -190,14 +202,21 @@ async function resolveSlide(
     } catch {
       /* direct URL iframe */
     }
-    return { kind: "pdf", src: u, revoke: noop };
+    return { kind: "other", href: u, revoke: noop };
   }
 
+  const fetchOpts = {
+    companyId: options?.companyId,
+    explicitUserRequest: !options?.localLedgerOnly,
+  };
   try {
-    let blob: Blob | null = await tryGetBlobFromFirebaseStorageDownloadUrl(u);
+    let blob: Blob | null = await tryGetBlobFromFirebaseStorageDownloadUrl(u, undefined, fetchOpts);
     if (!blob) {
-      const res = await fetch(u, { mode: "cors", credentials: "omit" });
-      if (res.ok) blob = await res.blob();
+      const { isRemoteAttachmentNetworkFetchAllowed } = await import("@/lib/attachmentNetworkGate");
+      if (isRemoteAttachmentNetworkFetchAllowed(u, fetchOpts)) {
+        const res = await fetch(u, { mode: "cors", credentials: "omit" });
+        if (res.ok) blob = await res.blob();
+      }
     }
     if (blob) {
       const mime = (blob.type || "").toLowerCase();
@@ -269,6 +288,11 @@ export function openAttachmentGalleryInApp(
 
   const list = urls.map((u) => String(u).trim()).filter((s) => s.length > 0);
   if (list.length === 0) return;
+  if (opts?.companyId && !opts?.localLedgerOnly) {
+    void import("@/lib/attachmentNetworkGate").then(({ grantExplicitAttachmentNetworkFetchBatch }) => {
+      grantExplicitAttachmentNetworkFetchBatch(list, opts.companyId);
+    });
+  }
   if (list.length === 1) {
     void import("@/lib/openAttachmentInApp").then(({ openAttachmentInApp }) =>
       openAttachmentInApp(list[0]!, {
