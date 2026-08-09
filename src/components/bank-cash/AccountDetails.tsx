@@ -30,6 +30,7 @@ import {
   Columns3,
   ChevronDown,
   Info,
+  Pencil,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
@@ -83,9 +84,17 @@ import { ScrollArea } from "../ui/scroll-area";
 import { EditAccountDialog } from "../bank-cash/EditAccountDialog";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_RIBBON_WRAP_CN,
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_PEN_CN,
+  LEDGER_HEADER_NAME_CARD_CN,
+  LEDGER_HEADER_BALANCE_CARD_CN,
+  LEDGER_HEADER_BALANCE_STACK_CN,
+  LEDGER_HEADER_BALANCE_LABEL_CN,
   LEDGER_HEADER_TITLE_CN,
+  LEDGER_HEADER_BALANCE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
@@ -105,6 +114,7 @@ import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
+import { AdjustBalancePillLabel } from "@/components/vouchers/AdjustBalancePillLabel";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
@@ -1520,7 +1530,7 @@ export function AccountDetails({
         <div className="flex items-stretch gap-2">
           {allAccounts && allAccounts.length > 0 && (
             <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
-              {/* Mobile master: 80vw dropdown, naam ek line, green trigger; scroll ≠ select (combobox). */}
+              {/* Mobile master: 80vw dropdown, naam ek line, green trigger; scroll ? select (combobox). */}
               <Combobox
                 options={allAccounts.map((p) => ({ value: p.id, label: p.accountName }))}
                 value={account?.id || ""}
@@ -1616,6 +1626,22 @@ export function AccountDetails({
             closingBalance={showMaskedBalance ? undefined : displayMobilePageLedgerStats.closingForPage}
             isBalanceMasked={showMaskedBalance}
             scrollOnlyTransactions
+            closingBalanceActions={
+              account.id !== "all" ? (
+                <AddVoucherDialog
+                  defaultTab="adjustment"
+                  allowedTabs={["adjustment"]}
+                  defaultVoucherData={{
+                    defaultTab: "adjustment",
+                    adjustmentTarget: { id: account.id, entityType: "account", name: account.accountName },
+                  }}
+                >
+                  <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
+                      <AdjustBalancePillLabel />
+                    </Button>
+                </AddVoucherDialog>
+              ) : null
+            }
             blinkMode={spendWiseBlinkMode}
             spendWiseGroupPrint={spendWiseGroupPrint}
           />
@@ -1635,7 +1661,7 @@ export function AccountDetails({
       />
       
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
-          {/* Mobile footer: ek button — Statement ↔ Spend wise toggle */}
+          {/* Mobile footer: ek button — Statement ? Spend wise toggle */}
           <LedgerViewModeToggleButton
             value={spendWiseView ? "spend_wise" : "statement"}
             onChange={(v) => setSpendWiseView(v === "spend_wise")}
@@ -1747,65 +1773,63 @@ export function AccountDetails({
     return (
      <div className="h-full flex flex-col">
         {/* Header: identity + pills — Party-style single row */}
-        <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
-              <EntityFileAttachmentHover fileUrl={accountHeaderAttachmentUrl} triggerClassName="inline-flex shrink-0 rounded-full">
-                <ResolvedEntityAvatar
-                  className="h-12 w-12 text-lg flex-shrink-0 border"
-                  src={accountHeaderAttachmentUrl ?? undefined}
-                  alt={account.accountName}
-                  fallbackSlot={
-                    account.isSpecial ? (
-                      <Crown className="h-6 w-6 text-amber-500" />
-                    ) : (
-                      <Landmark className="h-6 w-6 text-muted-foreground" />
-                    )
-                  }
-                />
-              </EntityFileAttachmentHover>
-              <h2 className={LEDGER_HEADER_TITLE_CN} title={account.accountName}>{account.accountName}</h2>
-              {account.id !== 'all' && (!account.isSpecial || can('manage_special_bank_accounts')) && (
-                <EditAccountDialog
-                  account={account}
-                  allAccounts={allAccounts}
-                  onAccountUpdated={handleAccountUpdated}
-                  onAccountDeleted={onAccountDeleted}
-                  hasTransactions={processedTransactions.length > 0}
+              <div className={LEDGER_HEADER_AVATAR_CN}>
+                <EntityFileAttachmentHover
+                  fileUrl={accountHeaderAttachmentUrl}
+                  triggerClassName="inline-flex rounded-full"
                 >
-                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </EditAccountDialog>
-              )}
-              <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0 flex justify-center items-baseline gap-px", displayHeaderClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                {showMaskedBalance ? (
-                  "*****"
-                ) : displayHeaderClosingBalance === 0 ? (
-                  "Settled"
-                ) : (
-                  <>
-                    <span>{formatCurrency(Math.abs(displayHeaderClosingBalance), { showDrCr: false })}</span>
-                    <span className="text-sm">{displayHeaderClosingBalance >= 0 ? "Dr" : "Cr"}</span>
-                  </>
+                  <ResolvedEntityAvatar
+                    className="h-12 w-12 text-lg flex-shrink-0 border"
+                    src={accountHeaderAttachmentUrl ?? undefined}
+                    alt={account.accountName}
+                    fallbackSlot={
+                      account.isSpecial ? (
+                        <Crown className="h-6 w-6 text-amber-500" />
+                      ) : (
+                        <Landmark className="h-6 w-6 text-muted-foreground" />
+                      )
+                    }
+                  />
+                </EntityFileAttachmentHover>
+                {account.id !== 'all' && (!account.isSpecial || can('manage_special_bank_accounts')) && (
+                  <EditAccountDialog
+                    account={account}
+                    allAccounts={allAccounts}
+                    onAccountUpdated={handleAccountUpdated}
+                    onAccountDeleted={onAccountDeleted}
+                    hasTransactions={processedTransactions.length > 0}
+                  >
+                    <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  </EditAccountDialog>
                 )}
+              </div>
+              <div className={LEDGER_HEADER_NAME_CARD_CN}>
+                <h2 className={LEDGER_HEADER_TITLE_CN} title={account.accountName}>{account.accountName}</h2>
+              </div>
+              <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
+                <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                  <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
+                  <div className={cn(LEDGER_HEADER_BALANCE_CN, "flex justify-center items-baseline gap-px", displayHeaderClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                    {showMaskedBalance ? (
+                      "*****"
+                    ) : displayHeaderClosingBalance === 0 ? (
+                      "Settled"
+                    ) : (
+                      <>
+                        <span>{formatCurrency(Math.abs(displayHeaderClosingBalance), { showDrCr: false })}</span>
+                        <span className="text-sm">{displayHeaderClosingBalance >= 0 ? "Dr" : "Cr"}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
-              {account.id !== "all" ? (
-                <AddVoucherDialog
-                  defaultTab="adjustment"
-                  allowedTabs={["adjustment"]}
-                  defaultVoucherData={{
-                    defaultTab: "adjustment",
-                    adjustmentTarget: { id: account.id, entityType: "account", name: account.accountName },
-                  }}
-                >
-                  <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
-                    Adjust Balance
-                  </Button>
-                </AddVoucherDialog>
-              ) : null}
               <ReconciliationAccountButton accountId={account.id} />
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === "BS" || dateSystem === "Both") && (
@@ -1953,6 +1977,22 @@ export function AccountDetails({
               closingBalance={showMaskedBalance ? undefined : displayDesktopPageLedgerStats.closingForPage}
               isBalanceMasked={showMaskedBalance}
               scrollOnlyTransactions
+              closingBalanceActions={
+                account.id !== "all" ? (
+                  <AddVoucherDialog
+                    defaultTab="adjustment"
+                    allowedTabs={["adjustment"]}
+                    defaultVoucherData={{
+                      defaultTab: "adjustment",
+                      adjustmentTarget: { id: account.id, entityType: "account", name: account.accountName },
+                    }}
+                  >
+                    <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
+                      <AdjustBalancePillLabel />
+                    </Button>
+                  </AddVoucherDialog>
+                ) : null
+              }
               blinkMode={spendWiseBlinkMode}
               spendWiseGroupPrint={spendWiseGroupPrint}
             />

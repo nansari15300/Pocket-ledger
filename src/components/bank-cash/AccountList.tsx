@@ -194,7 +194,7 @@ export function AccountList({
                   <p
                     data-pl-list-balance={displayBalance >= 0 ? "dr" : "cr"}
                     className={cn(
-                      "pl-master-list-row-amount ml-2",
+                      "ml-2 shrink-0 pl-master-list-row-amount",
                       masterDetailBalanceToneClass(displayBalance),
                       isSelected &&
                         (displayBalance >= 0 ? "text-green-700" : "text-red-700")

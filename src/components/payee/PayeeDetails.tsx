@@ -37,6 +37,7 @@ import {
   Wallet,
   Columns3,
   ChevronDown,
+  Pencil,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
@@ -56,9 +57,17 @@ import { useDate } from "@/hooks/useDate";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_RIBBON_WRAP_CN,
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_PEN_CN,
+  LEDGER_HEADER_NAME_CARD_CN,
+  LEDGER_HEADER_BALANCE_CARD_CN,
+  LEDGER_HEADER_BALANCE_STACK_CN,
+  LEDGER_HEADER_BALANCE_LABEL_CN,
   LEDGER_HEADER_TITLE_CN,
+  LEDGER_HEADER_BALANCE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
@@ -434,40 +443,49 @@ export function PayeeDetails({
     <>
       <div className="h-full flex flex-col overflow-hidden">
         {/* Header: identity + pills — Party-style single row */}
-        <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
               {isMobile && onBack && (
-                <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
+                <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0 self-center">
                   <ArrowLeft className="h-5 w-5" />
                 </Button>
               )}
-              <EntityFileAttachmentHover
-                fileUrl={trimEntityFileUrlForPreview(party.fileUrl)}
-                triggerClassName="inline-flex shrink-0 rounded-full"
-              >
-                <ResolvedEntityAvatar
-                  className="h-12 w-12 text-lg flex-shrink-0"
-                  src={trimEntityFileUrlForPreview(party.fileUrl) ?? undefined}
-                  alt={party.name}
-                  fallbackSlot={<span className="text-muted-foreground">{getEntityIcon(party.type)}</span>}
-                />
-              </EntityFileAttachmentHover>
-              <h2 className={LEDGER_HEADER_TITLE_CN} title={party.name}>{party.name}</h2>
-              {party.type === 'Party' && party.id !== 'all' && (
-                <EditPartyDialog
-                  party={party}
-                  onPartyUpdated={onPartyUpdated}
-                  onPartyDeleted={() => onPartyDeleted(party.id)}
-                  hasTransactions={processedTransactions.length > 0}
+              <div className={LEDGER_HEADER_AVATAR_CN}>
+                <EntityFileAttachmentHover
+                  fileUrl={trimEntityFileUrlForPreview(party.fileUrl)}
+                  triggerClassName="inline-flex rounded-full"
                 >
-                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </EditPartyDialog>
-              )}
-              <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                {formatCurrency(closingBalance, { showDrCr: true })}
+                  <ResolvedEntityAvatar
+                    className="h-12 w-12 text-lg flex-shrink-0"
+                    src={trimEntityFileUrlForPreview(party.fileUrl) ?? undefined}
+                    alt={party.name}
+                    fallbackSlot={<span className="text-muted-foreground">{getEntityIcon(party.type)}</span>}
+                  />
+                </EntityFileAttachmentHover>
+                {party.type === 'Party' && party.id !== 'all' && (
+                  <EditPartyDialog
+                    party={party}
+                    onPartyUpdated={onPartyUpdated}
+                    onPartyDeleted={() => onPartyDeleted(party.id)}
+                    hasTransactions={processedTransactions.length > 0}
+                  >
+                    <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  </EditPartyDialog>
+                )}
+              </div>
+              <div className={LEDGER_HEADER_NAME_CARD_CN}>
+                <h2 className={LEDGER_HEADER_TITLE_CN} title={party.name}>{party.name}</h2>
+              </div>
+              <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
+                <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                  <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
+                  <div className={cn(LEDGER_HEADER_BALANCE_CN, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                    {formatCurrency(closingBalance, { showDrCr: true })}
+                  </div>
+                </div>
               </div>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>

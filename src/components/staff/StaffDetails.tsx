@@ -32,6 +32,7 @@ import {
   Columns3,
   ChevronDown,
   Search,
+  Pencil,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
@@ -78,9 +79,17 @@ import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachm
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_RIBBON_WRAP_CN,
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_PEN_CN,
+  LEDGER_HEADER_NAME_CARD_CN,
+  LEDGER_HEADER_BALANCE_CARD_CN,
+  LEDGER_HEADER_BALANCE_STACK_CN,
+  LEDGER_HEADER_BALANCE_LABEL_CN,
   LEDGER_HEADER_TITLE_CN,
+  LEDGER_HEADER_BALANCE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
@@ -92,6 +101,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
+import { AdjustBalancePillLabel } from "@/components/vouchers/AdjustBalancePillLabel";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { HistoryDialog } from "../vouchers/HistoryDialog";
 import { LinkAdvancesToVoucherDialog } from "../vouchers/LinkAdvancesToVoucherDialog";
@@ -1146,6 +1156,22 @@ export function StaffDetails({
           debitColumnHeaderLabel={taxDetailsMode ? "Tax" : undefined}
           creditColumnHeaderLabel={taxDetailsMode ? "Salary" : undefined}
           scrollOnlyTransactions
+          closingBalanceActions={
+            !isAllVouchersView ? (
+              <AddVoucherDialog
+                defaultTab="adjustment"
+                allowedTabs={["adjustment"]}
+                defaultVoucherData={{
+                  defaultTab: "adjustment",
+                  adjustmentTarget: { id: staff.id, entityType: "staff", name: staff.name },
+                }}
+              >
+                <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
+                      <AdjustBalancePillLabel />
+                    </Button>
+              </AddVoucherDialog>
+            ) : null
+          }
           {...statementCheck.tableProps}
         />
         )}
@@ -1285,7 +1311,7 @@ export function StaffDetails({
           <Printer className="mr-1 h-3.5 w-3.5" />
           Print
         </Button>
-        {/* Mobile: ek button — Statement ↔ Bill wise toggle (Party ledger jaisa). */}
+        {/* Mobile: ek button — Statement ? Bill wise toggle (Party ledger jaisa). */}
         <Button
           type="button"
           className={cn(
@@ -1425,53 +1451,51 @@ export function StaffDetails({
   const renderDesktopView = () => (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header: identity + pills — Party-style single row */}
-      <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+      <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
         <div className={LEDGER_HEADER_OUTER_ROW_CN}>
           <div className={LEDGER_HEADER_IDENTITY_CN}>
             {isMobile && onBack && (
-              <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
+              <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0 self-center">
                 <ArrowLeft className="h-3 w-3" />
               </Button>
             )}
-            <EntityFileAttachmentHover fileUrl={staffHeaderAttachmentUrl} triggerClassName="inline-flex shrink-0 rounded-full">
-              <ResolvedEntityAvatar
-                className="h-12 w-12 text-lg flex-shrink-0"
-                src={staffHeaderAttachmentUrl ?? undefined}
-                alt={staff.name}
-                fallbackSlot={<Briefcase className="h-6 w-6 text-muted-foreground" />}
-              />
-            </EntityFileAttachmentHover>
-            <h2 className={LEDGER_HEADER_TITLE_CN} title={staff.name}>{staff.name}</h2>
-            <EditStaffDialog
-              staff={staff}
-              allGroups={allGroups}
-              onStaffUpdated={handleStaffUpdated}
-              onStaffDeleted={() => onStaffDeleted(staff.id)}
-            >
-              {/* All-vouchers mode safety: disable edit for aggregate view. */}
-              <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit" disabled={Boolean(isAllVouchersView)}>
-                <Edit className="h-4 w-4" />
-              </Button>
-            </EditStaffDialog>
-            <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", headerClosingBalance < 0 ? "text-red-600" : "text-green-600")}>
-              {formatCurrency(headerClosingBalance, { showDrCr: true })}
+            <div className={LEDGER_HEADER_AVATAR_CN}>
+              <EntityFileAttachmentHover
+                fileUrl={staffHeaderAttachmentUrl}
+                triggerClassName="inline-flex rounded-full"
+              >
+                <ResolvedEntityAvatar
+                  className="h-12 w-12 text-lg flex-shrink-0"
+                  src={staffHeaderAttachmentUrl ?? undefined}
+                  alt={staff.name}
+                  fallbackSlot={<Briefcase className="h-6 w-6 text-muted-foreground" />}
+                />
+              </EntityFileAttachmentHover>
+              <EditStaffDialog
+                staff={staff}
+                allGroups={allGroups}
+                onStaffUpdated={handleStaffUpdated}
+                onStaffDeleted={() => onStaffDeleted(staff.id)}
+              >
+                {/* All-vouchers mode safety: disable edit for aggregate view. */}
+                <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit" disabled={Boolean(isAllVouchersView)}>
+                  <Pencil className="h-3 w-3" />
+                </button>
+              </EditStaffDialog>
+            </div>
+            <div className={LEDGER_HEADER_NAME_CARD_CN}>
+              <h2 className={LEDGER_HEADER_TITLE_CN} title={staff.name}>{staff.name}</h2>
+            </div>
+            <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
+              <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
+                <div className={cn(LEDGER_HEADER_BALANCE_CN, headerClosingBalance < 0 ? "text-red-600" : "text-green-600")}>
+                  {formatCurrency(headerClosingBalance, { showDrCr: true })}
+                </div>
+              </div>
             </div>
           </div>
           <div className={LEDGER_HEADER_PILL_ROW_CN}>
-                {!isAllVouchersView ? (
-                  <AddVoucherDialog
-                    defaultTab="adjustment"
-                    allowedTabs={["adjustment"]}
-                    defaultVoucherData={{
-                      defaultTab: "adjustment",
-                      adjustmentTarget: { id: staff.id, entityType: "staff", name: staff.name },
-                    }}
-                  >
-                    <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
-                      Adjust Balance
-                    </Button>
-                  </AddVoucherDialog>
-                ) : null}
                 <ReconciliationAccountButton accountId={staff.id} />
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
             {(dateSystem === 'BS' || dateSystem === 'Both') && (
@@ -1653,6 +1677,22 @@ export function StaffDetails({
                   debitColumnHeaderLabel={taxDetailsMode ? "Tax" : undefined}
                   creditColumnHeaderLabel={taxDetailsMode ? "Salary" : undefined}
                   scrollOnlyTransactions
+                  closingBalanceActions={
+                    !isAllVouchersView ? (
+                      <AddVoucherDialog
+                        defaultTab="adjustment"
+                        allowedTabs={["adjustment"]}
+                        defaultVoucherData={{
+                          defaultTab: "adjustment",
+                          adjustmentTarget: { id: staff.id, entityType: "staff", name: staff.name },
+                        }}
+                      >
+                        <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
+                      <AdjustBalancePillLabel />
+                    </Button>
+                      </AddVoucherDialog>
+                    ) : null
+                  }
                   {...statementCheck.tableProps}
                 />
           {paginatedTransactions.length === 0 && (

@@ -37,6 +37,7 @@ import {
   Columns3,
   ChevronDown,
   File,
+  Pencil,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
@@ -75,9 +76,17 @@ import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { EditAccountDialog } from "../bank-cash/EditAccountDialog";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_RIBBON_WRAP_CN,
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_PEN_CN,
+  LEDGER_HEADER_NAME_CARD_CN,
+  LEDGER_HEADER_BALANCE_CARD_CN,
+  LEDGER_HEADER_BALANCE_STACK_CN,
+  LEDGER_HEADER_BALANCE_LABEL_CN,
   LEDGER_HEADER_TITLE_CN,
+  LEDGER_HEADER_BALANCE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
@@ -1044,38 +1053,47 @@ export function AccountDetails({
     return (
      <div className="h-full flex flex-col">
         {/* Header: identity + pills — Party-style single row */}
-        <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
-              <EntityFileAttachmentHover
-                fileUrl={trimEntityFileUrlForPreview(account.fileUrl)}
-                triggerClassName="inline-flex shrink-0 rounded-full"
-              >
-                <ResolvedEntityAvatar
-                  className="h-12 w-12 text-lg flex-shrink-0"
-                  src={trimEntityFileUrlForPreview(account.fileUrl) ?? undefined}
-                  alt={account.accountName}
-                  fallbackSlot={
-                    <Landmark className="h-6 w-6 text-muted-foreground" />
-                  }
-                />
-              </EntityFileAttachmentHover>
-              <h2 className={LEDGER_HEADER_TITLE_CN} title={account.accountName}>{account.accountName}</h2>
-              {account.id !== 'all' && (
-                <EditAccountDialog
-                  account={account}
-                  allAccounts={allAccounts}
-                  onAccountUpdated={onAccountUpdated}
-                  onAccountDeleted={onAccountDeleted}
-                  hasTransactions={processedTransactions.length > 0}
+              <div className={LEDGER_HEADER_AVATAR_CN}>
+                <EntityFileAttachmentHover
+                  fileUrl={trimEntityFileUrlForPreview(account.fileUrl)}
+                  triggerClassName="inline-flex rounded-full"
                 >
-                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </EditAccountDialog>
-              )}
-              <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                {formatCurrency(closingBalance, { showDrCr: true })}
+                  <ResolvedEntityAvatar
+                    className="h-12 w-12 text-lg flex-shrink-0"
+                    src={trimEntityFileUrlForPreview(account.fileUrl) ?? undefined}
+                    alt={account.accountName}
+                    fallbackSlot={
+                      <Landmark className="h-6 w-6 text-muted-foreground" />
+                    }
+                  />
+                </EntityFileAttachmentHover>
+                {account.id !== 'all' && (
+                  <EditAccountDialog
+                    account={account}
+                    allAccounts={allAccounts}
+                    onAccountUpdated={onAccountUpdated}
+                    onAccountDeleted={onAccountDeleted}
+                    hasTransactions={processedTransactions.length > 0}
+                  >
+                    <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  </EditAccountDialog>
+                )}
+              </div>
+              <div className={LEDGER_HEADER_NAME_CARD_CN}>
+                <h2 className={LEDGER_HEADER_TITLE_CN} title={account.accountName}>{account.accountName}</h2>
+              </div>
+              <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
+                <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                  <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
+                  <div className={cn(LEDGER_HEADER_BALANCE_CN, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                    {formatCurrency(closingBalance, { showDrCr: true })}
+                  </div>
+                </div>
               </div>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>

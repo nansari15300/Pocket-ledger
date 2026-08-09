@@ -1,4 +1,4 @@
-
+﻿
 "use client";
 
 import * as React from "react";
@@ -30,6 +30,7 @@ import {
   Columns3,
   ChevronDown,
   Search,
+  Pencil,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
@@ -59,9 +60,17 @@ import {
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_RIBBON_WRAP_CN,
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_PEN_CN,
+  LEDGER_HEADER_NAME_CARD_CN,
+  LEDGER_HEADER_BALANCE_CARD_CN,
+  LEDGER_HEADER_BALANCE_STACK_CN,
+  LEDGER_HEADER_BALANCE_LABEL_CN,
   LEDGER_HEADER_TITLE_CN,
+  LEDGER_HEADER_BALANCE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
@@ -75,6 +84,7 @@ import { Checkbox } from "../ui/checkbox";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
+import { AdjustBalancePillLabel } from "@/components/vouchers/AdjustBalancePillLabel";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { EditTaxDialog } from "./EditTaxDialog";
@@ -728,7 +738,7 @@ export function TaxDetails({
                 </Button>
                 <div className="flex min-w-0 flex-1 items-center gap-1">
                   <h1 className="shrink-0 text-base font-bold text-muted-foreground">{reportStickyTitle}</h1>
-                  <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>·</span>
+                  <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>Â·</span>
                   <span
                     className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
                     title={tax.name}
@@ -747,7 +757,7 @@ export function TaxDetails({
               </div>
             </header>
           ) : null}
-          {/* Mobile: date/balance/search — footer chevron se collapse (group pages jaisa) */}
+          {/* Mobile: date/balance/search â€” footer chevron se collapse (group pages jaisa) */}
           <MobileDetailSummaryCollapsible>
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
             <span className="text-xs font-medium text-muted-foreground">
@@ -863,6 +873,20 @@ export function TaxDetails({
               closingBalance={desktopPaginationMeta.closingForPage}
               isTaxContext={isTaxContext ?? true}
               scrollOnlyTransactions
+              closingBalanceActions={
+                <AddVoucherDialog
+                  defaultTab="adjustment"
+                  allowedTabs={["adjustment"]}
+                  defaultVoucherData={{
+                    defaultTab: "adjustment",
+                    adjustmentTarget: { id: tax.id, entityType: "tax", name: tax.name },
+                  }}
+                >
+                  <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
+                      <AdjustBalancePillLabel />
+                    </Button>
+                </AddVoucherDialog>
+              }
               statusFilter={statusFilter}
               statusFilterAllChecked={statusFilterAllChecked}
               onStatusFilterAll={handleStatusFilterAll}
@@ -1133,38 +1157,50 @@ export function TaxDetails({
     <>
       <div className="h-full">
         <div className="h-full flex flex-col overflow-hidden">
-        {/* Header: identity + pills — Party-style single row */}
-        <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+        {/* Header: identity + pills â€” Party-style single row */}
+        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
               {onBack && (
-                <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
+                <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0 self-center">
                   <ArrowLeft className="h-5 w-5" />
                 </Button>
               )}
-              {/* Local `local:…` refs + HTTPS URLs — same as bank/party; hover = voucher preview frame */}
-              <EntityFileAttachmentHover fileUrl={taxHeaderAttachmentUrl} triggerClassName="inline-flex shrink-0 rounded-full">
-                <ResolvedEntityAvatar
-                  className="h-12 w-12 text-lg flex-shrink-0"
-                  src={taxHeaderAttachmentUrl ?? undefined}
-                  alt={tax.name}
-                  fallbackSlot={<Receipt className="h-6 w-6 text-muted-foreground" />}
-                />
-              </EntityFileAttachmentHover>
-              <h2 className={LEDGER_HEADER_TITLE_CN} title={tax.name}>{tax.name}</h2>
-              <EditTaxDialog
-                tax={tax}
-                allTaxes={allTaxes}
-                onTaxUpdated={handleTaxUpdated}
-                onTaxDeleted={() => onTaxDeleted(tax.id)}
-                hasTransactions={processedTransactions.length > 0}
-              >
-                <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                  <Edit className="h-4 w-4" />
-                </Button>
-              </EditTaxDialog>
-              <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                {formatCurrency(closingBalance, {showDrCr: true})}
+              {/* Local `local:â€¦` refs + HTTPS URLs â€” same as bank/party; hover = voucher preview frame */}
+              <div className={LEDGER_HEADER_AVATAR_CN}>
+                <EntityFileAttachmentHover
+                  fileUrl={taxHeaderAttachmentUrl}
+                  triggerClassName="inline-flex rounded-full"
+                >
+                  <ResolvedEntityAvatar
+                    className="h-12 w-12 text-lg flex-shrink-0"
+                    src={taxHeaderAttachmentUrl ?? undefined}
+                    alt={tax.name}
+                    fallbackSlot={<Receipt className="h-6 w-6 text-muted-foreground" />}
+                  />
+                </EntityFileAttachmentHover>
+                <EditTaxDialog
+                  tax={tax}
+                  allTaxes={allTaxes}
+                  onTaxUpdated={handleTaxUpdated}
+                  onTaxDeleted={() => onTaxDeleted(tax.id)}
+                  hasTransactions={processedTransactions.length > 0}
+                >
+                  <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                    <Pencil className="h-3 w-3" />
+                  </button>
+                </EditTaxDialog>
+              </div>
+              <div className={LEDGER_HEADER_NAME_CARD_CN}>
+                <h2 className={LEDGER_HEADER_TITLE_CN} title={tax.name}>{tax.name}</h2>
+              </div>
+              <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
+                <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                  <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
+                  <div className={cn(LEDGER_HEADER_BALANCE_CN, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                    {formatCurrency(closingBalance, {showDrCr: true})}
+                  </div>
+                </div>
               </div>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
@@ -1180,20 +1216,8 @@ export function TaxDetails({
                   placeholder="All accounts"
                   triggerClassName={cn(LEDGER_HEADER_PILL_CN, chromePillBtn(false), "!h-7 min-h-7")}
                 />
-              </div>
+                  </div>
             )}
-                  <AddVoucherDialog
-                    defaultTab="adjustment"
-                    allowedTabs={["adjustment"]}
-                    defaultVoucherData={{
-                      defaultTab: "adjustment",
-                      adjustmentTarget: { id: tax.id, entityType: "tax", name: tax.name },
-                    }}
-                  >
-                    <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
-                      Adjust Balance
-                    </Button>
-                  </AddVoucherDialog>
               <LedgerUnapprovedFilterButton active={unapprovedOnly} onClick={toggleUnapprovedOnly} />
               {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
@@ -1327,6 +1351,20 @@ export function TaxDetails({
                   setActiveFilter={setActiveFilter}
                   isTaxContext={isTaxContext ?? true}
                   scrollOnlyTransactions
+                  closingBalanceActions={
+                    <AddVoucherDialog
+                      defaultTab="adjustment"
+                      allowedTabs={["adjustment"]}
+                      defaultVoucherData={{
+                        defaultTab: "adjustment",
+                        adjustmentTarget: { id: tax.id, entityType: "tax", name: tax.name },
+                      }}
+                    >
+                      <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
+                      <AdjustBalancePillLabel />
+                    </Button>
+                    </AddVoucherDialog>
+                  }
                   highlightPendingApproval
                 />
             {paginatedTransactions.length === 0 && (
@@ -1334,7 +1372,7 @@ export function TaxDetails({
             )}
           </div>
         </div>
-        {/* Footer — global PC shell LedgerDesktopFooter */}
+        {/* Footer â€” global PC shell LedgerDesktopFooter */}
         <LedgerDesktopFooter
           left={
             <>

@@ -32,7 +32,7 @@ const FILTERS: Array<{ key: EntityListQuickFilter; label: string }> = [
 /** Account/entity list footer filters — horizontal scroll for mobile + desktop compact bar. */
 export function EntityListQuickFilterBar({ active, onChange, className }: Props) {
   return (
-    <div className={cn("border-t bg-muted/20 px-2 py-1.5", className)}>
+    <div className={cn("border-t border-blue-300/60 bg-blue-100/80 px-2 py-1.5", className)}>
       <div className="overflow-x-auto">
         <div className="flex w-max items-center gap-1">
           {FILTERS.map((f) => (

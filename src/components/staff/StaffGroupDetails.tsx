@@ -4,7 +4,7 @@ import * as React from "react";
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { Button } from "@/components/ui/button";
 import { LedgerViewModePills } from "@/components/ui/LedgerViewModePills";
-import { Edit, Printer, Calendar as CalendarIcon, FilePlus, XCircle, MoreVertical, ArrowLeft, ChevronDown, Columns3, Search } from "lucide-react";
+import { Edit, Printer, Calendar as CalendarIcon, FilePlus, XCircle, MoreVertical, ArrowLeft, ChevronDown, Columns3, Search, Pencil } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
@@ -48,9 +48,17 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_RIBBON_WRAP_CN,
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_PEN_CN,
+  LEDGER_HEADER_NAME_CARD_CN,
+  LEDGER_HEADER_BALANCE_CARD_CN,
+  LEDGER_HEADER_BALANCE_STACK_CN,
+  LEDGER_HEADER_BALANCE_LABEL_CN,
   LEDGER_HEADER_TITLE_CN,
+  LEDGER_HEADER_BALANCE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
@@ -903,37 +911,45 @@ export function StaffGroupDetails({
   return (
     <>
       <div className="h-full flex flex-col overflow-hidden">
-        <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
               {onBack && (
-                <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
+                <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0 self-center">
                   <ArrowLeft className="h-3 w-3" />
                 </Button>
               )}
-              <Avatar className="h-12 w-12 text-lg flex-shrink-0">
-                <AvatarFallback className="bg-muted text-muted-foreground">{getInitials(group.name)}</AvatarFallback>
-              </Avatar>
-              <h2 className={LEDGER_HEADER_TITLE_CN} title={group.name}>{group.name}</h2>
-              <EditStaffGroupDialog
-                group={group}
-                allGroups={allGroups}
-                onGroupUpdated={onGroupUpdated}
-                onGroupDeleted={onGroupDeleted}
-                hasAccounts={staffInGroup.length > 0 || childGroups.length > 0}
-              >
-                <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                  <Edit className="h-4 w-4" />
-                </Button>
-              </EditStaffGroupDialog>
-              <div
-                className={cn(
-                  "text-lg font-bold whitespace-nowrap flex-shrink-0 flex items-baseline justify-end gap-px",
-                  balanceColorClass
-                )}
-              >
-                <span>{formatCurrency(Math.abs(closingBalance), { showDrCr: false })}</span>
-                <span className="text-sm">{closingBalance >= 0 ? "Dr" : "Cr"}</span>
+              <div className={LEDGER_HEADER_AVATAR_CN}>
+                <Avatar className="h-12 w-12 text-lg">
+                  <AvatarFallback className="bg-muted text-muted-foreground">{getInitials(group.name)}</AvatarFallback>
+                </Avatar>
+                <EditStaffGroupDialog
+                  group={group}
+                  allGroups={allGroups}
+                  onGroupUpdated={onGroupUpdated}
+                  onGroupDeleted={onGroupDeleted}
+                  hasAccounts={staffInGroup.length > 0 || childGroups.length > 0}
+                >
+                  <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                    <Pencil className="h-3 w-3" />
+                  </button>
+                </EditStaffGroupDialog>
+              </div>
+              <div className={LEDGER_HEADER_NAME_CARD_CN}>
+                <h2 className={LEDGER_HEADER_TITLE_CN} title={group.name}>{group.name}</h2>
+              </div>
+              <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
+                <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                  <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
+                  <div
+                    className={cn(LEDGER_HEADER_BALANCE_CN, "flex items-baseline justify-end gap-px",
+                      balanceColorClass
+                    )}
+                  >
+                    <span>{formatCurrency(Math.abs(closingBalance), { showDrCr: false })}</span>
+                    <span className="text-sm">{closingBalance >= 0 ? "Dr" : "Cr"}</span>
+                  </div>
+                </div>
               </div>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>

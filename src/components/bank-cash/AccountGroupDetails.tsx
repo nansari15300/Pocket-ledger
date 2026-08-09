@@ -1,4 +1,4 @@
-﻿
+
 "use client";
 
 import * as React from "react";
@@ -6,7 +6,7 @@ import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import { Button } from "@/components/ui/button";
 import { LedgerViewModePills, LedgerViewModeToggleButton } from "@/components/ui/LedgerViewModePills";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Crown, Columns3, Search, Info } from "lucide-react";
+import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Crown, Columns3, Search, Info, Pencil } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode, useShowNotes } from "../vouchers/transactionColumnVisibility";
@@ -51,9 +51,17 @@ import { useDate } from "@/hooks/useDate";
 import { perfDebugLog, perfNow } from "@/lib/perfDebug";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_RIBBON_WRAP_CN,
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_PEN_CN,
+  LEDGER_HEADER_NAME_CARD_CN,
+  LEDGER_HEADER_BALANCE_CARD_CN,
+  LEDGER_HEADER_BALANCE_STACK_CN,
+  LEDGER_HEADER_BALANCE_LABEL_CN,
   LEDGER_HEADER_TITLE_CN,
+  LEDGER_HEADER_BALANCE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
@@ -228,7 +236,7 @@ export function AccountGroupDetails({
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isDesktopCalendarOpen, setIsDesktopCalendarOpen] = useState(false);
   const [tempDateRange, setTempDateRange] = useState<DateRange | undefined>(dateRange);
-  // dateRange object har render par naya ref ho sakta hai â€” effect deps me sirf primitive timestamps (infinite loop avoid).
+  // dateRange object har render par naya ref ho sakta hai — effect deps me sirf primitive timestamps (infinite loop avoid).
   const dateRangeFromMs = dateRange?.from?.getTime();
   const dateRangeToMs = dateRange?.to?.getTime();
   const [mobileSearchTerm, setMobileSearchTerm] = useState("");
@@ -241,7 +249,7 @@ export function AccountGroupDetails({
   const calendarMonths = useCalendarMonths();
   const openingModalRef = useRef(false);
 
-  // Radix Select: value list me na ho to ref/setState loop â€” sirf maujood option strings pass karo.
+  // Radix Select: value list me na ho to ref/setState loop — sirf maujood option strings pass karo.
   const ROWS_PER_PAGE_SELECT_OPTIONS = [10, 20, 30, 50] as const;
   const rowsPerPageSelectValue = useMemo(() => {
     if (rowsPerPage === 0) return "0";
@@ -280,7 +288,7 @@ export function AccountGroupDetails({
     });
   }, [dateRangeFromMs, dateRangeToMs, dateRange]);
 
-  // useTransactions ko har render par naya `{...group, items}` mat do â€” sirf group/accounts badle tab.
+  // useTransactions ko har render par naya `{...group, items}` mat do — sirf group/accounts badle tab.
   const groupTransactionEntity = useMemo(
     () => ({ ...group, items: accounts }),
     [group, accounts]
@@ -435,7 +443,7 @@ export function AccountGroupDetails({
         const linkedAmounts = po.linkedPaymentInAmounts && typeof po.linkedPaymentInAmounts === "object" ? po.linkedPaymentInAmounts : null;
         const linkedAmount = linkedAmounts?.[pi.id] != null ? Number(linkedAmounts[pi.id]) : fullAmount / (po.linkedPaymentInIds?.length || 1);
         linkedAmountByOutId.set(po.id, (linkedAmountByOutId.get(po.id) ?? 0) + linkedAmount);
-        // Linked row is always an outflow for this group: subtract from running balance (Dr âˆ’ Cr). Do not use outRow.debit/credit â€” byId row can have contra/other shape and give wrong sign.
+        // Linked row is always an outflow for this group: subtract from running balance (Dr − Cr). Do not use outRow.debit/credit — byId row can have contra/other shape and give wrong sign.
         const amountDelta = -linkedAmount;
         const nextRunning = typeof prevRunning === "number" ? prevRunning + amountDelta : prevRunning;
         const isLastOutInThisGroup = idx === linkedOuts.length - 1;
@@ -592,13 +600,13 @@ export function AccountGroupDetails({
     );
   }, [displayTransactions, filterByUnapprovedOnly, unapprovedOnly, spendWiseView, openingBalanceForPeriod, company]);
 
-  /** Statement: one row per block; spend-wise: blocks for search â€” pagination uses @/lib/spendWisePagination (data-line budget + split borders). */
+  /** Statement: one row per block; spend-wise: blocks for search — pagination uses @/lib/spendWisePagination (data-line budget + split borders). */
   const displayBlocks = useMemo(
     () => buildSpendWiseDisplayBlocks(sortedTransactions, spendWiseView),
     [sortedTransactions, spendWiseView]
   );
 
-  // Statement check mode + desktop tail paging â€” sirf statement view (spend-wise alag pager)
+  // Statement check mode + desktop tail paging — sirf statement view (spend-wise alag pager)
   const statementCheckPaging = useStatementLedgerCheckModePaging({
     companyId: companyId ?? undefined,
     context: "group",
@@ -1074,7 +1082,7 @@ export function AccountGroupDetails({
     const start = startB > 0 ? blocks.slice(0, startB).reduce((acc, b) => acc + b.length, 0) : 0;
     const pageRows = pageSlice.filter((t: any) => !(t as any)?._spendWiseSpacer);
     let openingForPage = openingBalanceForPeriod;
-    /* OB: statement mobile â€” non-spacer prev */
+    /* OB: statement mobile — non-spacer prev */
     let scanStmt = start - 1;
     while (scanStmt >= 0 && (list[scanStmt] as any)?._spendWiseSpacer) scanStmt--;
     const previousTx = scanStmt >= 0 ? (list[scanStmt] as any) : null;
@@ -1414,7 +1422,7 @@ export function AccountGroupDetails({
           </div>
         </div>
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
-          {/* Mobile footer: ek button — Statement ↔ Spend wise toggle */}
+          {/* Mobile footer: ek button — Statement ? Spend wise toggle */}
           <LedgerViewModeToggleButton
             value={spendWiseView ? "spend_wise" : "statement"}
             onChange={(v) => setSpendWiseView(v === "spend_wise")}
@@ -1599,43 +1607,52 @@ export function AccountGroupDetails({
     <>
       <div className="h-full flex flex-col overflow-hidden">
         {/* Header: identity + pills — Party-style single row */}
-        <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
               {onBack && (
-                <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
+                <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0 self-center">
                   <ArrowLeft className="h-3 w-3" />
                 </Button>
               )}
-              <Avatar className="h-12 w-12 text-lg flex-shrink-0">
-                <AvatarFallback className="bg-muted text-muted-foreground">
-                  {getInitials(group.name)}
-                </AvatarFallback>
-              </Avatar>
-              <h2 className={LEDGER_HEADER_TITLE_CN} title={group.name}>{group.name}</h2>
-              {containsSpecialAccount && <Crown className="h-5 w-5 text-amber-500 flex-shrink-0" />}
-              {group.id !== 'ungrouped' && (
-                <EditAccountGroupDialog
-                  group={group}
-                  allGroups={allGroups}
-                  onGroupUpdated={onGroupUpdated}
-                  onGroupDeleted={onGroupDeleted}
-                  hasAccounts={accountsInGroup.length > 0 || childGroups.length > 0}
-                >
-                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </EditAccountGroupDialog>
-              )}
-              <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0 flex items-baseline justify-end gap-px", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                {isBalanceMasked ? (
-                  "*****"
-                ) : (
-                  <>
-                    <span>{formatCurrency(Math.abs(closingBalance), { showDrCr: false })}</span>
-                    <span className="text-sm">{closingBalance >= 0 ? "Dr" : "Cr"}</span>
-                  </>
+              <div className={LEDGER_HEADER_AVATAR_CN}>
+                <Avatar className="h-12 w-12 text-lg">
+                  <AvatarFallback className="bg-muted text-muted-foreground">
+                    {getInitials(group.name)}
+                  </AvatarFallback>
+                </Avatar>
+                {group.id !== 'ungrouped' && (
+                  <EditAccountGroupDialog
+                    group={group}
+                    allGroups={allGroups}
+                    onGroupUpdated={onGroupUpdated}
+                    onGroupDeleted={onGroupDeleted}
+                    hasAccounts={accountsInGroup.length > 0 || childGroups.length > 0}
+                  >
+                    <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  </EditAccountGroupDialog>
                 )}
+              </div>
+              {containsSpecialAccount && <Crown className="h-5 w-5 text-amber-500 flex-shrink-0 self-center" />}
+              <div className={LEDGER_HEADER_NAME_CARD_CN}>
+                <h2 className={LEDGER_HEADER_TITLE_CN} title={group.name}>{group.name}</h2>
+              </div>
+              <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
+                <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                  <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
+                  <div className={cn(LEDGER_HEADER_BALANCE_CN, "flex items-baseline justify-end gap-px", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                    {isBalanceMasked ? (
+                      "*****"
+                    ) : (
+                      <>
+                        <span>{formatCurrency(Math.abs(closingBalance), { showDrCr: false })}</span>
+                        <span className="text-sm">{closingBalance >= 0 ? "Dr" : "Cr"}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>

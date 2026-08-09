@@ -98,6 +98,13 @@ import { shouldSkipVisibleRowFullIdlePrewarmOnWeb } from "@/lib/webAttachmentLaz
 import { getVoucherAttachmentUrlsForUi, voucherAttachmentUiOptionsForCompany } from "@/lib/voucherAttachmentNormalize";
 import { publishVoucherAttachmentListReuseIndex } from "@/lib/voucherAttachmentListReuseIndex";
 import { statementCheckTxnId } from "@/lib/statementCheckModeStorage";
+import {
+  type LedgerTxnTableTone,
+  readLedgerTxnTableTone,
+  writeLedgerTxnTableTone,
+  LEDGER_TXN_TABLE_TONE_CHANGED_EVENT,
+} from "@/lib/ledgerTxnTableTone";
+import { chromeProPillCn, chromePillActive } from "@/lib/chromePillButton";
 import { stripSpendWiseSyntheticOpeningMaster } from "@/lib/ledgerPagePrint";
 import {
   BOOK_OB_EPS as SHARED_BOOK_OB_EPS,
@@ -233,6 +240,8 @@ interface TransactionsTableProps {
   openingBalanceSearch?: React.ReactNode;
   /** Optional content to show to the left of the opening balance row (e.g. unit selector) */
   openingBalanceLeftContent?: React.ReactNode;
+  /** Closing Balance label ke left — e.g. Adjust Balance pill */
+  closingBalanceActions?: React.ReactNode;
   onDeleteVoucher?: (transaction: any) => void;
   onHistoryVoucher?: (transaction: any) => void;
   onAddLink?: (transaction: any) => void;
@@ -323,6 +332,7 @@ export function TransactionsTable({
   openingBalanceLabel = "Opening Balance",
   openingBalanceSearch,
   openingBalanceLeftContent,
+  closingBalanceActions,
   onDeleteVoucher,
   onHistoryVoucher,
   onAddLink,
@@ -511,6 +521,17 @@ export function TransactionsTable({
     () => readSavedFileColumnViewPrefs().displayMode
   );
   const [fileShowAll, setFileShowAll] = useState(() => readSavedFileColumnViewPrefs().showAll);
+  const [txnTableTone, setTxnTableTone] = useState<LedgerTxnTableTone>("default");
+  useEffect(() => {
+    setTxnTableTone(readLedgerTxnTableTone());
+    const onTone = () => setTxnTableTone(readLedgerTxnTableTone());
+    window.addEventListener(LEDGER_TXN_TABLE_TONE_CHANGED_EVENT, onTone);
+    return () => window.removeEventListener(LEDGER_TXN_TABLE_TONE_CHANGED_EVENT, onTone);
+  }, []);
+  const applyTxnTableTone = useCallback((next: LedgerTxnTableTone) => {
+    setTxnTableTone(next);
+    writeLedgerTxnTableTone(next);
+  }, []);
   /** File column filter popover — local open state so Save always closes even if parent filter state lags. */
   const [fileFilterPopoverOpen, setFileFilterPopoverOpen] = useState(false);
   const [internalActiveFilter, setInternalActiveFilter] = useState<string | null>(null);
@@ -2941,8 +2962,54 @@ export function TransactionsTable({
                 <TableCell className="w-10 p-0" />
             </TableRow>
             <TableRow className="border-t-2 border-black border-b-2 border-black font-bold text-base bg-muted/30">
-                <TableCell colSpan={totalColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol} className="text-right">
-                    Closing Balance
+                <TableCell
+                  colSpan={totalColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol}
+                  className="align-middle"
+                >
+                  <div className="flex w-full min-w-0 items-center justify-between gap-2">
+                    <div
+                      className="flex min-w-0 flex-wrap items-center gap-1"
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                    >
+                      {(
+                        [
+                          { id: "default", label: "Default" },
+                          { id: "green", label: "Green" },
+                          { id: "blue", label: "Blue" },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          className={cn(
+                            chromeProPillCn,
+                            "h-7 rounded-full px-2.5 text-[11px] font-semibold",
+                            txnTableTone === opt.id && chromePillActive
+                          )}
+                          aria-pressed={txnTableTone === opt.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            applyTxnTableTone(opt.id);
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex shrink-0 items-center">
+                      {closingBalanceActions ? (
+                        <div
+                          className="mr-[10ch] flex items-center font-normal"
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                        >
+                          {closingBalanceActions}
+                        </div>
+                      ) : null}
+                      <span className="shrink-0 text-right">Closing Balance</span>
+                    </div>
+                  </div>
                 </TableCell>
                 {showCol("runningBalance") && !hideBalanceColumn && <TableCell className={cn("text-right font-bold", closingBalance >= 0 ? "text-green-700" : "text-red-700", ensureMinGaps && "min-w-[115px] px-[5px]")}>
                      {formatFooterBalance(displayClosingBalance)}
@@ -2955,19 +3022,24 @@ export function TransactionsTable({
   );
 
   return (
-    <div
-      ref={tableContainerRef}
-      tabIndex={0}
-      role="grid"
-      aria-label="Transactions"
-      data-theme-table="transactions"
-      className={cn(
-        "w-full min-w-full overflow-x-auto scrollbar-slim-dim outline-none focus:outline-none border-b-2 border-border"
-      )}
-      onKeyDown={handleTableKeyDown}
-      onClick={() => tableContainerRef.current?.focus()}
-    >
-      {tableContent}
+    <div className="pl-ledger-detail-table-shell flex min-h-0 min-w-0 flex-1 flex-col">
+      <div
+        ref={tableContainerRef}
+        tabIndex={0}
+        role="grid"
+        aria-label="Transactions"
+        data-theme-table="transactions"
+        data-pl-txn-table-tone={txnTableTone}
+        className={cn(
+          "w-full min-w-full overflow-x-auto scrollbar-slim-dim outline-none focus:outline-none border-b-2 border-border"
+        )}
+        onKeyDown={handleTableKeyDown}
+        onClick={() => tableContainerRef.current?.focus()}
+      >
+        {tableContent}
+      </div>
+      {/* Details flex column leftover — Closing Balance ke neeche empty white fill */}
+      <div className="pl-ledger-detail-empty-fill min-h-0 flex-1" aria-hidden />
     </div>
   );
 }

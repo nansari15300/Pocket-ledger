@@ -1,4 +1,4 @@
-
+﻿
 
 "use client";
 
@@ -39,6 +39,7 @@ import {
   FileDigit,
   Columns3,
   ChevronDown,
+  Pencil,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
@@ -93,6 +94,7 @@ import { batchFetchUserDisplayNamesFromFirestore } from "@/lib/batchFetchUserDis
 import { firestore } from "@/lib/firebase";
 import { applyPaymentBillWiseLinkAllocations } from "@/lib/voucherActionsClient";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
+import { AdjustBalancePillLabel } from "@/components/vouchers/AdjustBalancePillLabel";
 import { HistoryDialog } from "@/components/vouchers/HistoryDialog";
 import { LinkAdvancesToVoucherDialog } from "@/components/vouchers/LinkAdvancesToVoucherDialog";
 import { EntityAlarmPopup } from "@/components/messages/EntityAlarmPopup";
@@ -156,11 +158,19 @@ import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetail
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
-// Shared header pill height — Party + sab ledger detail/report headers
+// Shared header pill height â€” Party + sab ledger detail/report headers
 import {
+  LEDGER_HEADER_RIBBON_WRAP_CN,
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_PEN_CN,
+  LEDGER_HEADER_NAME_CARD_CN,
+  LEDGER_HEADER_BALANCE_CARD_CN,
+  LEDGER_HEADER_BALANCE_STACK_CN,
+  LEDGER_HEADER_BALANCE_LABEL_CN,
   LEDGER_HEADER_TITLE_CN,
+  LEDGER_HEADER_BALANCE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
@@ -212,7 +222,7 @@ function filterByStatus(txns: any[], statusFilter: StatusFilter): any[] {
   return txns.filter((t) => {
     // Notes have no payment status; always show them regardless of status filter
     if (t.type === "note") return true;
-    // Journal/Adjustment/Contra/Inter Company — bill-wise status nahi; filter se hide na hon
+    // Journal/Adjustment/Contra/Inter Company â€” bill-wise status nahi; filter se hide na hon
     if (
       t.type === "journal" ||
       t.type === "adjustment" ||
@@ -244,7 +254,7 @@ export function PartyDetails({
   context,
   /** Jab PartyDetails kisi report ke andar ho: dropdown se party badle bina `/party` par na jao */
   onEmbeddedPartyChange,
-  /** Reports / dashboard txn-count: Print·Excel·Bill wise·Date·Chart footer (party page Receive/Pay hide). */
+  /** Reports / dashboard txn-count: PrintÂ·ExcelÂ·Bill wiseÂ·DateÂ·Chart footer (party page Receive/Pay hide). */
   mobileFooterVariant = "ledger",
   mobileReportStickyTitle,
 }: {
@@ -289,13 +299,13 @@ export function PartyDetails({
     return processedParties.find(p => p.id === initialParty.id) || initialParty;
   }, [processedParties, initialParty]);
 
-  /** Header avatar hover — `fileUrl: "null"` / khali par PDF spinner na kholo */
+  /** Header avatar hover â€” `fileUrl: "null"` / khali par PDF spinner na kholo */
   const partyHeaderAttachmentUrl = useMemo(
     () => trimEntityFileUrlForPreview(party.fileUrl),
     [party.fileUrl, party.id]
   );
 
-  /** Mobile AddVoucher — inline `{ partyId }` har render = naya object → dialog `initialVoucherData` + sale form date reset; stable deps */
+  /** Mobile AddVoucher â€” inline `{ partyId }` har render = naya object â†’ dialog `initialVoucherData` + sale form date reset; stable deps */
   const addVoucherDefaultPartyOnly = useMemo(() => ({ partyId: party.id }), [party.id]);
 
   const transactionDates = useMemo(() => {
@@ -390,7 +400,7 @@ export function PartyDetails({
 
   const openModalInUrl = useCallback(() => {
     if (!isMobile || !pathname) return;
-    // APK: modal khulte waqt merged query session me — approve ke baad hook/location empty ho to bhi `selected` restore
+    // APK: modal khulte waqt merged query session me â€” approve ke baad hook/location empty ho to bhi `selected` restore
     persistPlModalParentQuery(searchParams.toString());
     const params = new URLSearchParams(searchParamsStringForModalClose(searchParams.toString()));
     params.set("modal", "1");
@@ -403,7 +413,7 @@ export function PartyDetails({
     const raw = searchParamsStringAfterClosingModal(searchParams.toString());
     const params = new URLSearchParams(raw);
     params.delete("modal");
-    // Party ledger: merge fail hone par bhi isi party pe rehe — `/party` bare list pe jump na ho
+    // Party ledger: merge fail hone par bhi isi party pe rehe â€” `/party` bare list pe jump na ho
     patchMasterDetailUrlAfterModalClose(params, { entityId: party.id });
     const q = params.toString();
     const basePath = pathnameForModalRouterReplace(pathname);
@@ -490,7 +500,7 @@ export function PartyDetails({
     });
   }, [isLocalMode, companyId, company]);
   
-  // Merge: voucher-sourced naam (e.g. recurring "Auto") ko local Firestore fetch se upar — `{...prop,...local}` se overwrite ho raha tha
+  // Merge: voucher-sourced naam (e.g. recurring "Auto") ko local Firestore fetch se upar â€” `{...prop,...local}` se overwrite ho raha tha
   const mergedUserNames = useMemo(() => mergeLedgerUserDisplayNameMaps(userNames || {}, localFetchedUserNames), [userNames, localFetchedUserNames]);
 
   const mobileSearchNames = useMemo(
@@ -609,7 +619,7 @@ export function PartyDetails({
     [displayTransactions, statusFilter]
   );
 
-  // Sort state: footer dropdown — sirf current page par apply (paging hook); list chronological rahe
+  // Sort state: footer dropdown â€” sirf current page par apply (paging hook); list chronological rahe
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
@@ -691,7 +701,7 @@ export function PartyDetails({
     onRestoreVoucherDialog: isMobile ? openModalInUrl : undefined,
   });
 
-  /** Tail window: `before` = purane txn (kam index) abhi slice me nahi; `after` = naye (zyada index) hidden — MobileTransactionsPager ke count */
+  /** Tail window: `before` = purane txn (kam index) abhi slice me nahi; `after` = naye (zyada index) hidden â€” MobileTransactionsPager ke count */
   const mobilePagerEdgeCounts = useMemo(() => {
     const total = searchFilteredTransactions.length;
     if (rowsPerPage <= 0) return { before: 0, after: 0 };
@@ -894,7 +904,7 @@ export function PartyDetails({
   const balanceLabel = headerClosingBalance >= 0 ? "To Receive" : "To Pay";
   const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
   const masterPartyOpening = Number(party.openingBalance) || 0;
-  // Statement: full period opening in Balance. Bill-wise: same as print — remaining on OB, status + linked voucher nos.
+  // Statement: full period opening in Balance. Bill-wise: same as print â€” remaining on OB, status + linked voucher nos.
   const partyOpeningBalanceOutstandingForTable =
     balanceMode === "bill_wise" ? openingBalanceOutstanding : undefined;
 
@@ -941,7 +951,7 @@ export function PartyDetails({
   if (isMobile) {
     const isReportMobileChrome = mobileFooterVariant === "report";
     const hideReportPartyPicker = isReportMobileChrome && (isAllVouchersView || party.id === "all");
-    // All-vouchers report: sirf ek title upar — balance neeche summary row me rahe.
+    // All-vouchers report: sirf ek title upar â€” balance neeche summary row me rahe.
     const reportHeaderTitleOnly = isReportMobileChrome && (isAllVouchersView || party.id === "all");
 
     return (
@@ -960,7 +970,7 @@ export function PartyDetails({
                     <div className="flex min-w-0 flex-1 items-center gap-1">
                       <h1 className="shrink-0 text-base font-bold text-muted-foreground">{reportStickyTitle}</h1>
                       <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
-                        ·
+                        Â·
                       </span>
                       <span
                         className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(headerClosingBalance))}
@@ -992,7 +1002,7 @@ export function PartyDetails({
               </span>
             </div>
           ) : null}
-          {/* Mobile: date/balance/search — footer chevron se collapse */}
+          {/* Mobile: date/balance/search â€” footer chevron se collapse */}
           <MobileDetailSummaryCollapsible>
           {/* Row 2 (center): Date range - compact; no filter = "Last 10 Txns", else date range; cross to reset when filter is on */}
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
@@ -1059,7 +1069,7 @@ export function PartyDetails({
             </div>
           </div>
           </MobileDetailSummaryCollapsible>
-          {/* Transaction list — report: table + pager ek scroll (100/All par gap fix); ledger: pager bahar */}
+          {/* Transaction list â€” report: table + pager ek scroll (100/All par gap fix); ledger: pager bahar */}
           <div
             className={mobileTxnScrollBodyClass(isReportMobileChrome)}
             style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
@@ -1108,6 +1118,22 @@ export function PartyDetails({
               hideBalanceColumn={false}
               isDateChange={isDateChange}
               scrollOnlyTransactions
+              closingBalanceActions={
+                party.id !== "all" && !(party as any).isSystemAccount ? (
+                  <AddVoucherDialog
+                    defaultTab="adjustment"
+                    allowedTabs={["adjustment"]}
+                    defaultVoucherData={{
+                      defaultTab: "adjustment",
+                      adjustmentTarget: { id: party.id, entityType: "party", name: party.name },
+                    }}
+                  >
+                    <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
+                      <AdjustBalancePillLabel />
+                    </Button>
+                  </AddVoucherDialog>
+                ) : null
+              }
               highlightPendingApproval
               statusFilter={statusFilter}
               statusFilterAllChecked={statusFilterAllChecked}
@@ -1164,7 +1190,7 @@ export function PartyDetails({
           />
         ) : (
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
-          {/* Mobile footer: ek button — Statement ↔ Bill wise toggle */}
+          {/* Mobile footer: ek button â€” Statement â†” Bill wise toggle */}
           <LedgerViewModeToggleButton
             value={balanceMode}
             onChange={setBalanceMode}
@@ -1385,61 +1411,59 @@ export function PartyDetails({
       {party?.id && <EntityAlarmPopup context="Party" entityId={party.id} />}
       <div className="h-full min-h-full flex flex-col overflow-hidden">
         {/* Header: identity + pills ek hi gap (pill gap); Party name chhoti width pe max 2 line (avatar h-12), pattika height nahi badhe */}
-        <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
-            {/* Cluster: avatar + name + edit + balance */}
+            {/* Left 50%: fixed avatar + name card (H-scroll) + balance card */}
             <div className={LEDGER_HEADER_IDENTITY_CN}>
               {isMobile && onBack && (
-                <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
+                <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0 self-center">
                   <ArrowLeft className="h-5 w-5" />
                 </Button>
               )}
-              <EntityFileAttachmentHover fileUrl={partyHeaderAttachmentUrl} triggerClassName="inline-flex shrink-0 rounded-full">
-                <ResolvedEntityAvatar
-                  className="h-12 w-12 text-lg flex-shrink-0"
-                  src={partyHeaderAttachmentUrl ?? undefined}
-                  alt={party.name}
-                  fallbackText={getInitials(party.name)}
-                  fallbackSlot={
-                    (party as any).isSystemAccount ? <FileDigit className="h-6 w-6 text-muted-foreground" /> : undefined
-                  }
-                />
-              </EntityFileAttachmentHover>
-              <h2 className={LEDGER_HEADER_TITLE_CN} title={party.name}>
-                {party.name}
-              </h2>
-              {party.id !== 'all' && !(party as any).isSystemAccount && (
-                <EditPartyDialog
-                  party={party}
-                  onPartyUpdated={handlePartyUpdated}
-                  onPartyDeleted={() => onPartyDeleted(party.id)}
-                  hasTransactions={processedTransactions.length > 0}
+              <div className={LEDGER_HEADER_AVATAR_CN}>
+                <EntityFileAttachmentHover
+                  fileUrl={partyHeaderAttachmentUrl}
+                  triggerClassName="inline-flex rounded-full"
                 >
-                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </EditPartyDialog>
-              )}
-              <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                {formatCurrency(headerClosingBalance, { showDrCr: true })}
+                  <ResolvedEntityAvatar
+                    className="h-12 w-12 text-lg flex-shrink-0"
+                    src={partyHeaderAttachmentUrl ?? undefined}
+                    alt={party.name}
+                    fallbackText={getInitials(party.name)}
+                    fallbackSlot={
+                      (party as any).isSystemAccount ? <FileDigit className="h-6 w-6 text-muted-foreground" /> : undefined
+                    }
+                  />
+                </EntityFileAttachmentHover>
+                {party.id !== 'all' && !(party as any).isSystemAccount && (
+                  <EditPartyDialog
+                    party={party}
+                    onPartyUpdated={handlePartyUpdated}
+                    onPartyDeleted={() => onPartyDeleted(party.id)}
+                    hasTransactions={processedTransactions.length > 0}
+                  >
+                    <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  </EditPartyDialog>
+                )}
+              </div>
+              <div className={LEDGER_HEADER_NAME_CARD_CN}>
+                <h2 className={LEDGER_HEADER_TITLE_CN} title={party.name}>
+                  {party.name}
+                </h2>
+              </div>
+              <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
+                <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                  <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
+                  <div className={cn(LEDGER_HEADER_BALANCE_CN, headerClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                    {formatCurrency(headerClosingBalance, { showDrCr: true })}
+                  </div>
+                </div>
               </div>
             </div>
-            {/* Cluster: action pills — same gap-1.5 as identity cluster */}
+            {/* Cluster: action pills â€” same gap-1.5 as identity cluster */}
             <div className={LEDGER_HEADER_PILL_ROW_CN}>
-              {party.id !== "all" && !(party as any).isSystemAccount ? (
-                <AddVoucherDialog
-                  defaultTab="adjustment"
-                  allowedTabs={["adjustment"]}
-                  defaultVoucherData={{
-                    defaultTab: "adjustment",
-                    adjustmentTarget: { id: party.id, entityType: "party", name: party.name },
-                  }}
-                >
-                  <Button variant="outline" size="sm" className={LEDGER_HEADER_PILL_CN} title="Adjust Balance">
-                    Adjust Balance
-                  </Button>
-                </AddVoucherDialog>
-              ) : null}
               {party.id !== "all" && !(party as any).isSystemAccount ? (
                 <ReconciliationAccountButton accountId={party.id} />
               ) : null}
@@ -1560,7 +1584,7 @@ export function PartyDetails({
             </div>
           </div>
         </div>
-        {/* Party docs sirf table Opening row File column + Edit party dialog — yahan duplicate thumbnail strip nahi */}
+        {/* Party docs sirf table Opening row File column + Edit party dialog â€” yahan duplicate thumbnail strip nahi */}
         <div className={cn("flex-1 flex flex-col min-h-0", balanceMode === "bill_wise" ? "min-w-0" : "overflow-x-auto scrollbar-slim-dim")}>
           <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
             {/* Book/Dated opening table row pills; header books line removed */}
@@ -1614,6 +1638,22 @@ export function PartyDetails({
               hideBalanceColumn={false}
               isDateChange={isDateChange}
               scrollOnlyTransactions
+              closingBalanceActions={
+                party.id !== "all" && !(party as any).isSystemAccount ? (
+                  <AddVoucherDialog
+                    defaultTab="adjustment"
+                    allowedTabs={["adjustment"]}
+                    defaultVoucherData={{
+                      defaultTab: "adjustment",
+                      adjustmentTarget: { id: party.id, entityType: "party", name: party.name },
+                    }}
+                  >
+                    <Button variant="outline" size="sm" className={cn(LEDGER_HEADER_PILL_CN, "!h-7 min-h-7 text-xs")} title="Adjust Balance">
+                      <AdjustBalancePillLabel />
+                    </Button>
+                  </AddVoucherDialog>
+                ) : null
+              }
               highlightPendingApproval
               statusFilter={statusFilter}
               statusFilterAllChecked={statusFilterAllChecked}
@@ -1624,7 +1664,7 @@ export function PartyDetails({
             />
           </div>
         </div>
-        {/* Footer: global PC shell — LedgerDesktopFooter */}
+        {/* Footer: global PC shell â€” LedgerDesktopFooter */}
         <LedgerDesktopFooter
           left={
             <>

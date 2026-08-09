@@ -28,7 +28,7 @@ export function LedgerDesktopFooter({
   return (
     <div
       className={cn(
-        "border-t bg-background py-2 px-4 overflow-auto min-h-0 scrollbar-slim-dim flex-shrink-0 mt-auto",
+        "border-t border-blue-300/60 bg-blue-100/80 py-2 px-4 overflow-auto min-h-0 scrollbar-slim-dim flex-shrink-0 mt-auto",
         shellClassName
       )}
     >

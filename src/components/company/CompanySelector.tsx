@@ -2592,8 +2592,8 @@ export function CompanyActions({
               uploadLocked && "cursor-not-allowed opacity-60",
               // Mobile header: parent `flex-1` — icon left, label stays short.
               triggerLayout === "mobile" && "w-full max-w-none pl-1.5 pr-2",
-              // Desktop: icon flush left; short "Company" label frees space for quick actions.
-              triggerLayout === "desktop" && "w-auto max-w-[min(100%,160px)] shrink pl-1.5 pr-2.5"
+              // Desktop: show selected company name (truncate) so header shows which company is open.
+              triggerLayout === "desktop" && "w-auto max-w-[min(100%,280px)] shrink pl-1.5 pr-2.5"
             )}
             data-theme-header="company-selector"
             title={companyTriggerLabel}
@@ -2606,7 +2606,9 @@ export function CompanyActions({
               loading="eager"
               decoding="async"
             />
-            <span className="min-w-0 truncate text-left">Company</span>
+            <span className="min-w-0 truncate text-left font-medium text-blue-700">
+              {companyTriggerLabel}
+            </span>
             <PlServerOnlineStatusDot company={activeCompany} className="ml-0.5" />
           </Button>
         </DropdownMenuTrigger>

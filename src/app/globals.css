@@ -33,6 +33,225 @@ html[data-pl-app-ui-zoom-shell="android-zoom"] .min-h-dvh {
 
 /* Master–detail lists: grid → dayaan amount (auto width) poora, baayaan naam minmax(0,1fr) + truncate */
 @layer components {
+  /**
+   * Name title: left-50% me name card ki full width pe wrap; max 2 rows; …
+   */
+  .pl-ledger-header-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    max-height: 3rem; /* 2 × leading-6 */
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    white-space: normal;
+    text-overflow: ellipsis;
+  }
+  /** Amount line inside balance card — always full */
+  .pl-ledger-header-balance {
+    flex: 0 0 auto !important;
+    box-sizing: border-box;
+    width: max-content;
+    min-width: 7.5rem;
+    max-width: none;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+  }
+  .pl-ledger-header-balance-label {
+    font-size: 0.625rem;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: hsl(var(--muted-foreground));
+  }
+  .pl-ledger-header-balance-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 0.125rem;
+    min-width: 0;
+  }
+  /**
+   * Shared card chrome (name / pills).
+   * Scrollbar = footer-style slim-dim; hover pe thumb bold.
+   */
+  .pl-ledger-header-card {
+    box-sizing: border-box;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.375rem;
+    height: 3.75rem;
+    min-height: 3.75rem;
+    min-width: 0;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+    border: 1px solid rgb(147 197 253); /* blue-300 — same as Adjust Balance pill */
+    background: rgb(219 234 254); /* blue-100 — same as pill fill */
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.2) transparent;
+  }
+  .pl-ledger-header-card::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  .pl-ledger-header-card::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .pl-ledger-header-card::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.2);
+    border-radius: 2px;
+  }
+  .pl-ledger-header-card::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.45);
+  }
+  .pl-ledger-header-card:hover {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.45) transparent;
+  }
+  .pl-ledger-header-card > * {
+    flex-shrink: 0;
+  }
+  /** Profile — pill-blue circle fill (name card / Adjust Balance jaisa) */
+  .pl-ledger-header-avatar {
+    position: relative;
+    flex: 0 0 auto;
+    flex-shrink: 0;
+    align-self: center;
+    display: inline-flex;
+  }
+  /* Initials / icon fallback — gray muted ki jagah pill blue */
+  .pl-ledger-header-avatar .bg-muted {
+    background-color: rgb(219 234 254) !important; /* blue-100 */
+    color: rgb(30 58 138) !important; /* blue-900 */
+  }
+  /* Avatar root (Radix span) — Tailwind .relative class name select mat karo */
+  .pl-ledger-header-avatar > span:not([class*="avatar-pen"]) {
+    border: 1px solid rgb(147 197 253); /* blue-300 ring */
+    box-sizing: border-box;
+  }
+  /** Pen on profile — solid pill-blue circle + pen (Adjust Balance tone) */
+  .pl-ledger-header-avatar-pen {
+    position: absolute;
+    right: -0.2rem;
+    top: -0.2rem;
+    bottom: auto;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    min-width: 1.25rem;
+    min-height: 1.25rem;
+    padding: 0;
+    margin: 0;
+    border-radius: 9999px !important;
+    border: 1px solid rgb(147 197 253) !important; /* blue-300 */
+    background-color: rgb(219 234 254) !important; /* blue-100 — Adjust Balance */
+    background-image: none !important;
+    color: rgb(30 58 138) !important; /* blue-900 */
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.55),
+      0 1px 2px rgba(15, 23, 42, 0.08) !important;
+    cursor: pointer;
+    line-height: 0;
+    overflow: visible;
+  }
+  .pl-ledger-header-avatar-pen:hover {
+    background-color: rgb(191 219 254) !important; /* blue-200 */
+    border-color: rgb(96 165 250) !important;
+    color: rgb(30 58 138) !important;
+  }
+  .pl-ledger-header-avatar-pen:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .pl-ledger-header-avatar-pen svg {
+    width: 0.75rem;
+    height: 0.75rem;
+    flex-shrink: 0;
+    stroke: currentColor;
+  }
+  /**
+   * Name card: left 50% me avatar+balance ke baad jo bache — responsive fill.
+   * Floor 15ch; usse kam ribbon H-scroll.
+   */
+  .pl-ledger-header-name-card {
+    flex: 1 1 0;
+    width: 0;
+    min-width: 15ch;
+    max-width: none;
+    overflow: hidden;
+  }
+  .pl-ledger-header-name-card > .pl-ledger-header-title {
+    display: -webkit-box !important;
+    align-self: stretch;
+    flex: 1 1 100% !important;
+    flex-shrink: 1 !important;
+    min-width: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  /** Ribbon strip background — pill blue */
+  .pl-ledger-header-ribbon-wrap {
+    background-color: rgb(219 234 254); /* blue-100 — same as pill / cards */
+  }
+  /**
+   * Ribbon = 50% left (profile+name+balance) + 50% pills.
+   * Left floor (avatar+15ch+balance) > 50% → parent H-scroll; balance cut nahi.
+   */
+  .pl-ledger-header-outer-row {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    gap: 4px;
+  }
+  .pl-ledger-header-identity {
+    box-sizing: border-box;
+    flex: 0 0 calc(50% - 2px);
+    width: calc(50% - 2px);
+    max-width: calc(50% - 2px);
+    min-width: min-content;
+    overflow: visible;
+    gap: 4px;
+    justify-content: flex-start;
+  }
+  .pl-ledger-header-pill-row {
+    box-sizing: border-box;
+    flex: 0 0 calc(50% - 2px);
+    width: calc(50% - 2px);
+    min-width: calc(50% - 2px);
+    max-width: calc(50% - 2px);
+  }
+  /**
+   * Balance card — scroll ke bahar, always visible; edit + Balance label + amount.
+   */
+  .pl-ledger-header-balance-card {
+    box-sizing: border-box;
+    display: flex;
+    flex: 0 0 auto;
+    flex-shrink: 0;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.375rem;
+    height: 3.75rem;
+    min-height: 3.75rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+    border: 1px solid rgb(147 197 253); /* blue-300 — same as pill */
+    background: rgb(219 234 254); /* blue-100 — same as pill fill */
+    overflow: hidden;
+  }
   .pl-master-list-row {
     @apply grid w-full max-w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 overflow-hidden;
   }
@@ -3408,6 +3627,16 @@ body.theme-pro header .pl-chrome-tone-pink {
   background-color: #fdf2f8 !important;
   background-image: linear-gradient(92deg, rgba(253, 242, 248, 0.84) 0%, rgba(255, 255, 255, 0.96) 50%, rgba(253, 242, 248, 0.84) 100%) !important;
 }
+/* App header green — Auto recurring / dashboard emerald style; center white nahi — poora green tone */
+body.theme-pro header .pl-chrome-tone-emerald {
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(
+    90deg,
+    rgba(209, 250, 229, 0.98) 0%,
+    #ecfdf5 45%,
+    #d1fae5 100%
+  ) !important;
+}
 body.theme-pro [data-pl-main-sidebar] .pl-chrome-tone-emerald {
   background-color: #ecfdf5 !important;
   background-image: linear-gradient(92deg, rgba(236, 253, 245, 0.82) 0%, rgba(255, 255, 255, 0.96) 50%, rgba(236, 253, 245, 0.82) 100%) !important;
@@ -3631,31 +3860,57 @@ body.theme-colorfull main [data-pl-master-list-chrome] [data-pl-master-list-tabs
   }
 }
 
-/* Mobile list pages: Pro — dashboard rose/pink (details page green rehta hai); baaki themes green tab */
+/* Master list panel — soft mint behind cards (header rows apna card gradient rakhte hain) */
+body.theme-pro main [data-pl-master-list-chrome],
+body[class*="theme-"] main [data-pl-master-list-chrome] {
+  background-color: #ecfdf5 !important;
+  background-image: none !important;
+}
+body.theme-pro main [data-pl-master-list-chrome] .bg-background,
+body[class*="theme-"] main [data-pl-master-list-chrome] .bg-background {
+  background-color: transparent !important;
+}
+
+/* Master list header chrome — list card jaisa emerald → white (Party/Staff/Bank/Tax/Items/Incomes) */
+body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-page-header,
+body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-tabs-row,
+body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-search-row,
+body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-section-label-row,
+body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-action-row,
+body[class*="theme-"] main [data-pl-master-list-chrome] .pl-mlc-page-header,
+body[class*="theme-"] main [data-pl-master-list-chrome] .pl-mlc-tabs-row,
+body[class*="theme-"] main [data-pl-master-list-chrome] .pl-mlc-search-row,
+body[class*="theme-"] main [data-pl-master-list-chrome] .pl-mlc-section-label-row,
+body[class*="theme-"] main [data-pl-master-list-chrome] .pl-mlc-action-row {
+  background-color: #ecfdf5 !important;
+  background-image: linear-gradient(
+    90deg,
+    rgba(236, 253, 245, 0.98) 0%,
+    #ffffff 50%,
+    rgba(209, 250, 229, 0.92) 100%
+  ) !important;
+}
+
+/* Mobile list pages: Pro — shell soft; header rows card-green (details page alag); baaki themes green tab */
 @media (max-width: 767px) {
-  /* Pro mobile: poora list shell — `pl-dashboard-ribbon-rose` / header pink jaisa */
+  /* Pro mobile: poora list shell — soft mint (cards ke peeche) */
   body.theme-pro main [data-pl-master-list-chrome] {
-    background-color: #fff1f2 !important;
-    background-image: linear-gradient(
-      180deg,
-      rgba(255, 241, 242, 0.98) 0%,
-      rgba(255, 255, 255, 0.96) 14%,
-      #ffffff 100%
-    ) !important;
+    background-color: #ecfdf5 !important;
+    background-image: none !important;
   }
   body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-page-header,
   body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-tabs-row,
   body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-search-row,
   body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-section-label-row,
   body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-action-row {
-    background-color: #fdf2f8 !important;
+    background-color: #ecfdf5 !important;
     background-image: linear-gradient(
-      92deg,
-      rgba(253, 242, 248, 0.84) 0%,
-      rgba(255, 255, 255, 0.96) 50%,
-      rgba(253, 242, 248, 0.84) 100%
+      90deg,
+      rgba(236, 253, 245, 0.98) 0%,
+      #ffffff 50%,
+      rgba(209, 250, 229, 0.92) 100%
     ) !important;
-    border-color: #fbcfe8 !important;
+    border-color: rgba(167, 243, 208, 0.85) !important;
   }
   /* Pro blue tab rule hata ke dashboard pink pill — list chrome ke andar */
   body.theme-pro main [data-pl-master-list-chrome] [role="tablist"] {
@@ -3866,11 +4121,11 @@ body.theme-pro [data-theme-table="transactions"] table thead tr {
   background: hsl(var(--table-header-bg)) !important;
   color: hsl(var(--table-header-fg)) !important;
 }
-/* Pro: gray/white per transaction block (main + narration match) */
-body.theme-pro [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]):not([data-pl-recon-matched]):not([data-pl-recon-unmatched]) > td {
+/* Pro: gray/white per transaction block (main + narration match). Tone modes exclude — simple CSS uses. */
+body.theme-pro [data-theme-table="transactions"]:not([data-pl-txn-table-tone="green"]):not([data-pl-txn-table-tone="blue"]) tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]):not([data-pl-recon-matched]):not([data-pl-recon-unmatched]) > td {
   background: hsl(var(--row-odd-bg)) !important;
 }
-body.theme-pro [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]):not([data-pl-recon-matched]):not([data-pl-recon-unmatched]) > td {
+body.theme-pro [data-theme-table="transactions"]:not([data-pl-txn-table-tone="green"]):not([data-pl-txn-table-tone="blue"]) tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]):not([data-pl-recon-matched]):not([data-pl-recon-unmatched]) > td {
   background: hsl(var(--row-even-bg)) !important;
 }
 
@@ -4133,10 +4388,10 @@ body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] ta
   background: hsl(var(--muted)) !important;
 }
 /* Soft green etc.: transaction 0 = gray muted, 1 = white card — main+narration same data-txn-stripe */
-body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]):not([data-pl-recon-matched]):not([data-pl-recon-unmatched]) > td {
+body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"]:not([data-pl-txn-table-tone="green"]):not([data-pl-txn-table-tone="blue"]) tbody tr[data-txn-stripe="0"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]):not([data-pl-recon-matched]):not([data-pl-recon-unmatched]) > td {
   background: hsl(var(--muted) / 0.55) !important;
 }
-body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]):not([data-pl-recon-matched]):not([data-pl-recon-unmatched]) > td {
+body:not(.theme-pro):not(.theme-pure-white) [data-theme-table="transactions"]:not([data-pl-txn-table-tone="green"]):not([data-pl-txn-table-tone="blue"]) tbody tr[data-txn-stripe="1"]:not([data-pl-txn-selected]):not([data-pl-check-marked]):not([data-pl-pending-approval]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening]):not([data-pl-recon-matched]):not([data-pl-recon-unmatched]) > td {
   background: hsl(var(--card)) !important;
 }
 body:not(.theme-pro):not(.theme-pure-white) .app-chrome-top-ribbon::before,
@@ -5173,7 +5428,57 @@ body.theme-pro main [data-pl-backup-restore] button.pl-chrome-btn-drop[data-pl-a
   color: rgb(20 83 45) !important;
 }
 
-/* App chrome (header / sidebar / dashboard footer shell) — border card ke hue se match. */
+/* Ledger detail — empty fill + light table tones (keep selectors cheap for nav/HMR) */
+.pl-ledger-detail-empty-fill {
+  background-color: #ecfdf5;
+}
+.pl-ledger-detail-table-shell {
+  background-color: #ecfdf5;
+  padding-bottom: 0;
+}
+
+/* Green / Blue tone — short selectors; unapproved/selected never overwrite */
+[data-theme-table="transactions"][data-pl-txn-table-tone="green"] {
+  background-color: rgb(247 254 249);
+}
+[data-theme-table="transactions"][data-pl-txn-table-tone="green"] thead th,
+[data-theme-table="transactions"][data-pl-txn-table-tone="green"] tfoot td,
+[data-theme-table="transactions"][data-pl-txn-table-tone="green"] tbody tr[data-txn-stripe="0"]:not([data-pl-pending-approval]):not([data-pl-txn-selected]):not([data-pl-check-marked]) > td,
+[data-theme-table="transactions"][data-pl-txn-table-tone="green"] tbody tr:not([data-txn-stripe]):not([data-pl-pending-approval]):not([data-pl-txn-selected]):not([data-pl-check-marked]) > td {
+  background-color: rgb(240 252 246) !important;
+  background-image: none !important;
+}
+[data-theme-table="transactions"][data-pl-txn-table-tone="green"] tbody tr[data-txn-stripe="1"]:not([data-pl-pending-approval]):not([data-pl-txn-selected]):not([data-pl-check-marked]) > td {
+  background-color: rgb(236 253 245) !important;
+  background-image: none !important;
+}
+
+[data-theme-table="transactions"][data-pl-txn-table-tone="blue"] {
+  background-color: rgb(239 246 255);
+}
+[data-theme-table="transactions"][data-pl-txn-table-tone="blue"] thead th,
+[data-theme-table="transactions"][data-pl-txn-table-tone="blue"] tfoot td,
+[data-theme-table="transactions"][data-pl-txn-table-tone="blue"] tbody tr[data-txn-stripe="0"]:not([data-pl-pending-approval]):not([data-pl-txn-selected]):not([data-pl-check-marked]) > td,
+[data-theme-table="transactions"][data-pl-txn-table-tone="blue"] tbody tr:not([data-txn-stripe]):not([data-pl-pending-approval]):not([data-pl-txn-selected]):not([data-pl-check-marked]) > td,
+[data-theme-table="transactions"][data-pl-txn-table-tone="blue"] tbody tr.narration-row:not([data-pl-pending-approval]):not([data-pl-txn-selected]):not([data-pl-check-marked]) > td {
+  background-color: rgb(232 240 254) !important;
+  background-image: none !important;
+}
+[data-theme-table="transactions"][data-pl-txn-table-tone="blue"] tbody tr[data-txn-stripe="1"]:not([data-pl-pending-approval]):not([data-pl-txn-selected]):not([data-pl-check-marked]) > td {
+  background-color: rgb(219 234 254) !important;
+  background-image: none !important;
+}
+/* Tone modes pe unapproved pink must win (tone selectors zyada specific hain) */
+[data-theme-table="transactions"][data-pl-txn-table-tone="green"] tbody tr[data-pl-pending-approval] > td,
+[data-theme-table="transactions"][data-pl-txn-table-tone="blue"] tbody tr[data-pl-pending-approval] > td {
+  background-color: rgb(252 231 243) !important;
+  background-image: none !important;
+}
+[data-theme-table="transactions"][data-pl-txn-table-tone="green"] tbody tr[data-pl-pending-approval]:hover > td,
+[data-theme-table="transactions"][data-pl-txn-table-tone="blue"] tbody tr[data-pl-pending-approval]:hover > td {
+  background-color: rgb(251 207 232) !important;
+  background-image: none !important;
+}
 body[class*="theme-"] header .pl-chrome-card.pl-chrome-tone-emerald,
 body.theme-pro header .pl-chrome-card.pl-chrome-tone-emerald,
 body[class*="theme-"] [data-pl-main-sidebar] .pl-chrome-card.pl-chrome-tone-emerald,

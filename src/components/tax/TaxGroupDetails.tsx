@@ -7,7 +7,7 @@ import { applyLedgerPageToPrintPayload } from "@/lib/ledgerPagePrint";
 import type { Tax, TaxGroup } from "@/components/tax/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Edit, Printer, Users, Calendar as CalendarIcon, FilePlus, XCircle, MoreVertical, ArrowLeft, Receipt, ChevronDown, Columns3 } from "lucide-react";
+import { Edit, Printer, Users, Calendar as CalendarIcon, FilePlus, XCircle, MoreVertical, ArrowLeft, Receipt, ChevronDown, Columns3, Pencil } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { LedgerDesktopFooter } from "@/components/vouchers/LedgerDesktopFooter";
@@ -56,9 +56,17 @@ import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetail
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_RIBBON_WRAP_CN,
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_PEN_CN,
+  LEDGER_HEADER_NAME_CARD_CN,
+  LEDGER_HEADER_BALANCE_CARD_CN,
+  LEDGER_HEADER_BALANCE_STACK_CN,
+  LEDGER_HEADER_BALANCE_LABEL_CN,
   LEDGER_HEADER_TITLE_CN,
+  LEDGER_HEADER_BALANCE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
@@ -848,35 +856,44 @@ export function TaxGroupDetails({
       <div className="h-full">
         <div className="h-full flex flex-col overflow-hidden">
         {/* Header: identity + pills — Party-style single row */}
-        <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+        <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
           <div className={LEDGER_HEADER_OUTER_ROW_CN}>
             <div className={LEDGER_HEADER_IDENTITY_CN}>
               {onBack && (
-                <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
+                <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0 self-center">
                   <ArrowLeft className="h-5 w-5" />
                 </Button>
               )}
-              <Avatar className="h-12 w-12 text-lg flex-shrink-0">
-                <AvatarFallback className="bg-muted text-muted-foreground">
-                  {getInitials(group.name)}
-                </AvatarFallback>
-              </Avatar>
-              <h2 className={LEDGER_HEADER_TITLE_CN} title={group.name}>{group.name}</h2>
-              {group.id !== 'ungrouped' && (
-                <EditTaxGroupDialog
-                  group={group}
-                  allGroups={allGroups}
-                  onGroupUpdated={onGroupUpdated}
-                  onGroupDeleted={onGroupDeleted}
-                  hasAccounts={taxesInGroup.length > 0 || childGroups.length > 0}
-                >
-                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </EditTaxGroupDialog>
-              )}
-              <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                {formatCurrency(closingBalance, {showDrCr: true})}
+              <div className={LEDGER_HEADER_AVATAR_CN}>
+                <Avatar className="h-12 w-12 text-lg">
+                  <AvatarFallback className="bg-muted text-muted-foreground">
+                    {getInitials(group.name)}
+                  </AvatarFallback>
+                </Avatar>
+                {group.id !== 'ungrouped' && (
+                  <EditTaxGroupDialog
+                    group={group}
+                    allGroups={allGroups}
+                    onGroupUpdated={onGroupUpdated}
+                    onGroupDeleted={onGroupDeleted}
+                    hasAccounts={taxesInGroup.length > 0 || childGroups.length > 0}
+                  >
+                    <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  </EditTaxGroupDialog>
+                )}
+              </div>
+              <div className={LEDGER_HEADER_NAME_CARD_CN}>
+                <h2 className={LEDGER_HEADER_TITLE_CN} title={group.name}>{group.name}</h2>
+              </div>
+              <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
+                <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                  <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
+                  <div className={cn(LEDGER_HEADER_BALANCE_CN, closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                    {formatCurrency(closingBalance, {showDrCr: true})}
+                  </div>
+                </div>
               </div>
             </div>
             <div className={LEDGER_HEADER_PILL_ROW_CN}>

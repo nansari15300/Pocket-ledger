@@ -49,7 +49,7 @@ export function UnifiedPayeeList({
   );
 
   return (
-    <div className="flex flex-col h-full min-h-0 rounded-b-lg border-t-0 bg-background">
+    <div className="flex flex-col h-full min-h-0 rounded-b-lg border-t-0 bg-transparent">
       <ScrollArea listChrome className="flex-1 min-h-0">
         <ul className="pl-master-list-ul">
           {filteredPayees.map((payee) => {

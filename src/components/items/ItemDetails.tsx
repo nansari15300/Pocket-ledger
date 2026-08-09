@@ -55,7 +55,8 @@ import {
   FilePlus,
   Columns3,
   ChevronDown,
-  Edit
+  Edit,
+  Pencil,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MobileDetailSummaryCollapsible } from "@/components/layout/MobileDetailSummaryCollapsible";
@@ -72,9 +73,17 @@ import type { Item } from "./types";
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import {
+  LEDGER_HEADER_RIBBON_WRAP_CN,
   LEDGER_HEADER_OUTER_ROW_CN,
   LEDGER_HEADER_IDENTITY_CN,
+  LEDGER_HEADER_AVATAR_CN,
+  LEDGER_HEADER_AVATAR_PEN_CN,
+  LEDGER_HEADER_NAME_CARD_CN,
+  LEDGER_HEADER_BALANCE_CARD_CN,
+  LEDGER_HEADER_BALANCE_STACK_CN,
+  LEDGER_HEADER_BALANCE_LABEL_CN,
   LEDGER_HEADER_TITLE_CN,
+  LEDGER_HEADER_BALANCE_CN,
   LEDGER_HEADER_PILL_CN,
   LEDGER_HEADER_PILL_ICON_CN,
   LEDGER_HEADER_PILL_ICON_SIZE_CN,
@@ -1062,28 +1071,37 @@ export default function ItemDetails({
   const renderDesktopView = () => (
      <div className="h-full flex flex-col">
       {/* Header: identity + pills — Party-style single row */}
-      <div className="border-b p-3 overflow-x-auto min-h-0 scrollbar-slim-dim">
+      <div className={LEDGER_HEADER_RIBBON_WRAP_CN}>
         <div className={LEDGER_HEADER_OUTER_ROW_CN}>
           <div className={LEDGER_HEADER_IDENTITY_CN}>
-            <div className="p-3 bg-muted rounded-full flex-shrink-0">
-              <Package className="w-6 h-6 text-muted-foreground" />
+            <div className={LEDGER_HEADER_AVATAR_CN}>
+              <div className="p-3 bg-muted rounded-full">
+                <Package className="w-6 h-6 text-muted-foreground" />
+              </div>
+              {currentItem.id !== 'all' && (
+                <EditItemDialog
+                  item={currentItem}
+                  onItemUpdated={handleItemUpdated}
+                  onItemDeleted={() => onItemDeleted(currentItem.id)}
+                  hasTransactions={processedTransactions.length > 0}
+                >
+                  <button type="button" className={LEDGER_HEADER_AVATAR_PEN_CN} title="Edit">
+                    <Pencil className="h-3 w-3" />
+                  </button>
+                </EditItemDialog>
+              )}
             </div>
-            <h1 className={LEDGER_HEADER_TITLE_CN} title={currentItem.name}>{currentItem.name}</h1>
-            {currentItem.id !== 'all' && (
-              <EditItemDialog
-                item={currentItem}
-                onItemUpdated={handleItemUpdated}
-                onItemDeleted={() => onItemDeleted(currentItem.id)}
-                hasTransactions={processedTransactions.length > 0}
-              >
-                <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                  <FilePenLine className="w-4 h-4" />
-                </Button>
-              </EditItemDialog>
-            )}
-            <span className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", headerStockValue >= 0 ? "text-green-600" : "text-red-600")}>
-              {stockView === 'qty' ? formatQtyValue(headerStockValue) : formatMoney(Math.abs(headerStockValue), { noSuffix: true, noAnimation: true })}
-            </span>
+            <div className={LEDGER_HEADER_NAME_CARD_CN}>
+              <h1 className={LEDGER_HEADER_TITLE_CN} title={currentItem.name}>{currentItem.name}</h1>
+            </div>
+            <div className={LEDGER_HEADER_BALANCE_CARD_CN}>
+              <div className={LEDGER_HEADER_BALANCE_STACK_CN}>
+                <span className={LEDGER_HEADER_BALANCE_LABEL_CN}>Balance</span>
+                <span className={cn(LEDGER_HEADER_BALANCE_CN, headerStockValue >= 0 ? "text-green-600" : "text-red-600")}>
+                  {stockView === 'qty' ? formatQtyValue(headerStockValue) : formatMoney(Math.abs(headerStockValue), { noSuffix: true, noAnimation: true })}
+                </span>
+              </div>
+            </div>
             {stockView === 'qty' && unitOptions.length > 0 && setItemDisplayUnit && (
               <Select value={displayUnitSelectValue} onValueChange={handleUnitChange}>
                 <SelectTrigger className="h-8 px-2 w-fit gap-1 text-xs bg-muted/50 border border-transparent flex-shrink-0 focus:ring-1 focus:ring-inset focus:ring-ring focus:ring-offset-0">

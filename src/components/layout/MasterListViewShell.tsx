@@ -57,10 +57,11 @@ export function MasterListViewShell({
         {!isMobile ? sectionLabel : null}
         <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
         {!isMobile && showQuickFilter ? (
-          <div className="flex-shrink-0 border-t">
+          <div className="flex-shrink-0 border-t border-blue-300/60 bg-blue-100/80">
             <EntityListQuickFilterBar
               active={quickFilter}
               onChange={onQuickFilterChange}
+              className="border-t-0"
             />
           </div>
         ) : null}

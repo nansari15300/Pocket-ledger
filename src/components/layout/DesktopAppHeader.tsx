@@ -75,6 +75,7 @@ import { Badge } from "../ui/badge";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { planSyncFailureUserMessage } from "@/lib/companyPlanServerSync";
 import { cn } from "@/lib/utils";
+import { chromeProPillCn } from "@/lib/chromePillButton";
 import { DriveCloudSyncHeaderIndicator } from "@/components/layout/DriveCloudSyncHeaderIndicator";
 import { usePendingInterCompanySystemJoinCount } from "@/lib/interCompany/usePendingInterCompanySystemJoinCount";
 import { useMasterDetailHeaderIdSnapshot } from "@/hooks/useMasterDetailHeaderIdSnapshot";
@@ -1894,16 +1895,17 @@ function PlServerCompanyConnectionStatus() {
       <button
         type="button"
         className={cn(
-          "flex h-9 min-w-0 shrink items-center gap-2 rounded-md border bg-background px-2 text-left",
-          "hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          isMobile ? "max-w-[58px] justify-center" : "max-w-[240px]"
+          chromeProPillCn,
+          "flex h-9 min-w-0 shrink items-center gap-2 rounded-full px-3 text-left text-sm font-medium",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+          isMobile ? "max-w-[58px] justify-center px-2" : "max-w-[240px]"
         )}
         title={`PLServer: ${serverUrl}`}
         onClick={() => setDetailsOpen(true)}
       >
-        {isMobile ? null : <Server className="h-4 w-4 shrink-0" aria-hidden />}
-        {isMobile ? null : <span className="max-w-44 truncate text-xs text-muted-foreground">{hostLabel}</span>}
-        <span className={cn("shrink-0 text-xs tabular-nums", pingMs != null ? "text-emerald-600" : "text-destructive")}>
+        {isMobile ? null : <Server className="h-4 w-4 shrink-0 text-blue-900" aria-hidden />}
+        {isMobile ? null : <span className="max-w-44 truncate text-xs text-blue-900/80">{hostLabel}</span>}
+        <span className={cn("shrink-0 text-xs font-semibold tabular-nums", pingMs != null ? "text-emerald-600" : "text-destructive")}>
           {pingLabel}
         </span>
       </button>
@@ -2077,12 +2079,12 @@ export function DesktopAppHeader() {
     <header className="relative sticky top-0 z-30 border-b border-sidebar-border bg-background px-[2px] py-0.5">
       {/* Static/Electron: icon sirf sidebar green brand card me — yahan extra black strip nahi (tab strip + duplicate lagta tha). */}
       {/* User request: single header card, but control alignment purane header flow jaisa rakho */}
-      {/* User request: header container ko pink tone me dikhana */}
+      {/* User request: header container — Auto recurring card jaisa green (emerald) tone */}
       {/* User request: dono taraf ~2px — sidebar kinaare, avatar daen; beech me company truncate. */}
       {/* Mobile: yahan horizontal padding 0 — sirf outer header `px-[2px]` se sidebar kinaare 2px; desktop par andar +2px. */}
       <div
         className={cn(
-          "pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-pink w-full min-w-0 py-1",
+          "pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald w-full min-w-0 py-1",
           headerIsMobile ? "px-0" : "px-[2px]"
         )}
       >

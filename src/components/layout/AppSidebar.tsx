@@ -58,7 +58,6 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
 import { useCompany } from "@/hooks/useCompany";
@@ -74,8 +73,6 @@ import {
   masterDetailRouteKeyFromPath,
 } from "@/lib/masterDetailSidebarNav";
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
-import { CompanyActions } from "@/components/company/CompanySelector";
-import type { Company as CompanyData } from "@/hooks/useCompany";
 import { Badge } from "../ui/badge";
 import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
 import { useCachedFeatureConfig } from "@/hooks/useCachedFeatureConfig";
@@ -697,17 +694,18 @@ export function AppSidebar() {
   return (
     <Sidebar>
       <SidebarHeader className="shrink-0">
-        {/* User request: top brand card ko green tone me dikhana */}
-        <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald w-full flex items-center justify-center gap-2 p-2">
-          {/* Web + static desktop/APK: ek hi jagah bada icon — Electron tab strip ka chhota OS logo alag cheez hai. */}
-          <EntityFileAttachmentHover fileUrl="/app-icon.png" triggerClassName="inline-flex shrink-0 rounded-lg">
-            <div
-              className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted/30"
-              title="Pocket Ledger"
+        {/* Brand + Company link: icon flush left; Pocket Ledger above; Company = blue clickable → /company */}
+        {useEmbeddedClientNav ? (
+          <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald w-full flex items-center justify-start gap-2 py-2 pl-0 pr-2">
+            <button
+              type="button"
+              className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted/30 appearance-none p-0 cursor-pointer"
+              title="Select company"
+              onClick={() => navigateSidebarHref("/company")}
             >
               <img
                 src="/app-icon.png"
-                alt="Pocket Ledger"
+                alt=""
                 className="h-full w-full object-contain"
                 loading="eager"
                 decoding="async"
@@ -720,15 +718,76 @@ export function AppSidebar() {
               <span className="hidden h-full w-full items-center justify-center text-primary [&_svg]:size-6">
                 <Flame />
               </span>
-            </div>
-          </EntityFileAttachmentHover>
-          {isOpen && (
-            <h1 className="font-headline min-w-0 truncate text-center text-base font-semibold leading-tight sm:text-lg">
-              Pocket Ledger
-            </h1>
-          )}
-          {!isOpen && <span className="sr-only">Pocket Ledger</span>}
-        </div>
+            </button>
+            {isOpen ? (
+              <div className="min-w-0 flex flex-col items-start justify-center leading-tight">
+                <span className="font-headline w-full truncate text-left text-base font-semibold sm:text-lg">
+                  Pocket Ledger
+                </span>
+                <button
+                  type="button"
+                  className={cn(
+                    "mt-0.5 appearance-none bg-transparent p-0 border-0 cursor-pointer text-left text-sm font-medium text-blue-600 underline-offset-2 hover:underline hover:text-blue-700",
+                    pathname.startsWith("/company") && "underline text-blue-700"
+                  )}
+                  title="Select company"
+                  onClick={() => navigateSidebarHref("/company")}
+                >
+                  Company
+                </button>
+              </div>
+            ) : (
+              <span className="sr-only">Pocket Ledger — Company</span>
+            )}
+          </div>
+        ) : (
+          <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald w-full flex items-center justify-start gap-2 py-2 pl-0 pr-2">
+            <Link
+              prefetch={false}
+              href={appNavHref("/company")}
+              onClick={(e) => onNavLinkClick(e, "/company")}
+              className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted/30"
+              title="Select company"
+            >
+              <img
+                src="/app-icon.png"
+                alt=""
+                className="h-full w-full object-contain"
+                loading="eager"
+                decoding="async"
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                  const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+                  if (fallback) fallback.style.display = "flex";
+                }}
+              />
+              <span className="hidden h-full w-full items-center justify-center text-primary [&_svg]:size-6">
+                <Flame />
+              </span>
+            </Link>
+            {isOpen ? (
+              <div className="min-w-0 flex flex-col items-start justify-center leading-tight">
+                <span className="font-headline w-full truncate text-left text-base font-semibold sm:text-lg">
+                  Pocket Ledger
+                </span>
+                <Link
+                  prefetch={false}
+                  href={appNavHref("/company")}
+                  onClick={(e) => onNavLinkClick(e, "/company")}
+                  className={cn(
+                    "mt-0.5 text-sm font-medium text-blue-600 underline-offset-2 hover:underline hover:text-blue-700",
+                    pathname.startsWith("/company") && "underline text-blue-700"
+                  )}
+                  title="Select company"
+                >
+                  Company
+                </Link>
+              </div>
+            ) : (
+              <span className="sr-only">Pocket Ledger — Company</span>
+            )}
+          </div>
+        )}
       </SidebarHeader>
 
       {/* SidebarContent: flex-col + overflow-hidden — Account/Profile neeche pin; lambi nav upar scroll; default overflow-y-auto yahan suppressed */}
