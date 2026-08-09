@@ -11,11 +11,12 @@ export const LEDGER_HEADER_PILL_ROW_CN =
   "flex flex-shrink-0 flex-nowrap items-center justify-start gap-1.5 overflow-x-auto scrollbar-slim-dim";
 /** Outer header: identity cluster + pills — same gap as pills */
 export const LEDGER_HEADER_OUTER_ROW_CN = "flex flex-nowrap items-center gap-1.5 min-w-0";
-/** Avatar + title + edit + balance */
-export const LEDGER_HEADER_IDENTITY_CN = "flex min-w-0 flex-1 items-center gap-1.5";
 /**
- * Entity/group title: chhoti width pe max 2 line, avatar h-12 (leading-6×2) ke andar;
- * pattika height nahi badhe; uske baad clamp (never wrap beyond 2).
+ * Entity/group title: max 2 line (avatar h-12 / leading-6×2), pattika height nahi badhe.
+ * Mobile: shrink OK. PC/EXE: min width taaki wrap pe full name dikhe — ellipsis sirf jab 2 line me bhi na aaye.
  */
 export const LEDGER_HEADER_TITLE_CN =
-  "min-w-0 flex-1 text-xl font-semibold leading-6 line-clamp-2 break-words";
+  "min-w-0 flex-1 text-xl font-semibold leading-6 line-clamp-2 break-words md:min-w-[min(22rem,42vw)] md:max-w-[min(36rem,52vw)]";
+/** Avatar + title + edit + balance — PC pe naam squeeze mat karo; pills overflow-x scroll */
+export const LEDGER_HEADER_IDENTITY_CN =
+  "flex min-w-0 flex-1 items-center gap-1.5 md:min-w-[min(28rem,58vw)] md:shrink-0 md:grow";
