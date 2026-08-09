@@ -2588,21 +2588,26 @@ export function CompanyActions({
             variant="outline"
             disabled={uploadLocked}
             className={cn(
-              "flex h-9 min-w-0 justify-start gap-0 font-normal",
+              "flex h-9 min-w-0 items-center justify-start gap-2 font-normal",
               uploadLocked && "cursor-not-allowed opacity-60",
-              // Mobile header: parent `flex-1` — `w-full` + truncate lambi naam ke liye.
-              triggerLayout === "mobile" && "w-full max-w-none px-2",
-              // Desktop: baaki controls poori dikhein; company box hi shrink + truncate.
-              triggerLayout === "desktop" && "max-w-[min(100%,280px)] shrink px-3"
+              // Mobile header: parent `flex-1` — icon left, label stays short.
+              triggerLayout === "mobile" && "w-full max-w-none pl-1.5 pr-2",
+              // Desktop: icon flush left; short "Company" label frees space for quick actions.
+              triggerLayout === "desktop" && "w-auto max-w-[min(100%,160px)] shrink pl-1.5 pr-2.5"
             )}
             data-theme-header="company-selector"
             title={companyTriggerLabel}
             aria-label={`Company: ${companyTriggerLabel}`}
           >
-            <span className="min-w-0 flex-1 truncate text-left">
-              {activeCompany ? activeCompany.name : "No Company"}
-            </span>
-            <PlServerOnlineStatusDot company={activeCompany} className="ml-1.5" />
+            <img
+              src="/app-icon.png"
+              alt=""
+              className="h-6 w-6 shrink-0 rounded-sm object-contain"
+              loading="eager"
+              decoding="async"
+            />
+            <span className="min-w-0 truncate text-left">Company</span>
+            <PlServerOnlineStatusDot company={activeCompany} className="ml-0.5" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuPortal>
