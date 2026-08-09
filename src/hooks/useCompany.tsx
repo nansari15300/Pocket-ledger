@@ -1588,6 +1588,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           }
           // Heal: pehle cloud stamp se `syncedFromCloud:true` chipak gaya ho to bhi PL-share row ko local server-gate rakho.
           if (preferPlServerOverCloud(norm)) {
+            const existingCloud = companyById.get(norm.id);
+            // Same Firebase id pe Online row pehle se hai to PL demote mat karo (Server/Local mix).
+            if (existingCloud && isCloudLinkedCompanyStorage(existingCloud)) {
+              continue;
+            }
             companyById.set(norm.id, {
               ...norm,
               isOwned: false,

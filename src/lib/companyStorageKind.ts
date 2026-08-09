@@ -53,14 +53,15 @@ export function isStrictLocalOnlyCompany(c: CompanyStorageRow | null | undefined
  */
 export function isDeviceLocalCompany(c: CompanyStorageRow | null | undefined): boolean {
   if (!c) return false;
-  if (isStrictLocalOnlyCompany(c)) return true;
-  const so = String(c.storageOption ?? "").toLowerCase().trim();
-  if (so === "local") return true;
-  if (String(c.syncPolicy ?? "").toLowerCase() === "offline") return true;
-  if (so === "firebase" || so === "drive") return false;
+  // Cloud markers win over storageOption:"local" (demoted Online mirrors / PL mix).
   if (c.syncedFromCloud === true) return false;
+  const so = String(c.storageOption ?? "").toLowerCase().trim();
+  if (so === "firebase" || so === "drive") return false;
   if (String(c.syncPolicy ?? "").toLowerCase() === "online") return false;
   if (String((c as { authoritativeCompanyId?: string }).authoritativeCompanyId ?? "").trim()) return false;
+  if (isStrictLocalOnlyCompany(c)) return true;
+  if (so === "local") return true;
+  if (String(c.syncPolicy ?? "").toLowerCase() === "offline") return true;
   return true;
 }
 
@@ -106,8 +107,9 @@ export function isServerSelectorCompanyRow(
   gateId?: string | null
 ): boolean {
   if (!c) return false;
-  if (c.plServerShared === true && hasPlServerGateMarker(c)) return true;
+  // Firebase/Drive Online rows must never land in Server — even when PL markers pollute the registry row.
   if (isCloudLinkedCompanyStorage(c)) return false;
+  if (c.plServerShared === true && hasPlServerGateMarker(c)) return true;
   // Stamped PL share (`plServerShared`) — Local tab me kabhi mat dikhao (gate list id mismatch pe bhi).
   // Gate page already Server-only; company picker pehle `!gid` / share-list miss se Local me leak karta tha.
   if (isServerGateCompany(c)) return true;
@@ -119,8 +121,8 @@ export function isServerSelectorCompanyRow(
   if (!gid) return false;
   if (isServerTabCompanyRow(c, gid)) return true;
   if (isPlServerSharedCompanyRow(c, gid)) return true;
-  const hostCompanyId = String(c.plServerHostCompanyId ?? "").trim();
-  if (hostCompanyId) return true;
+  // Bare `plServerHostCompanyId` without shared stamp caused Online⇄Server flicker after hydrate.
+  if (c.plServerShared === true && String(c.plServerHostCompanyId ?? "").trim()) return true;
   return false;
 }
 
@@ -134,9 +136,9 @@ export function isLocalSelectorCompanyRow(
   }) | null | undefined
 ): boolean {
   if (!c) return false;
-  if (c.plServerShared === true || hasPlServerGateMarker(c)) return false;
-  // Firebase / Firestore mirror — kabhi Local tab me mat dikhao (cloud sync off hone par bhi).
+  // Firebase / Firestore mirror — kabhi Local tab me mat dikhao (cloud sync off / PL marker pollution pe bhi).
   if (isCloudLinkedCompanyStorage(c)) return false;
+  if (c.plServerShared === true || hasPlServerGateMarker(c)) return false;
   if (isServerGateCompany(c)) return false;
   if (isServerSelectorCompanyRow(c)) return false;
   if (isDeviceLocalCompany(c)) return true;
@@ -172,11 +174,12 @@ export function isServerGateCompany(
   c: (CompanyStorageRow & { plServerShared?: boolean }) | null | undefined
 ): boolean {
   if (c?.plServerShared !== true) return false;
-  if (hasPlServerGateMarker(c)) return true;
+  // Cloud-linked first: polluted PL markers must not reclassify Firebase companies as PL.
   if (c.syncedFromCloud === true) return false;
   const so = String(c.storageOption ?? "").toLowerCase().trim();
   if (so === "firebase" || so === "drive") return false;
   if (isCloudLinkedCompanyStorage(c)) return false;
+  if (hasPlServerGateMarker(c)) return true;
   return true;
 }
 

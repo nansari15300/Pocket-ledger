@@ -1,7 +1,7 @@
 "use client";
 
 import type { Company } from "@/hooks/useCompany";
-import { isDeviceLocalCompany, isPureLocalLedgerCompany, isServerGateCompany } from "@/lib/companyStorageKind";
+import { isPureLocalLedgerCompany, isServerGateCompany } from "@/lib/companyStorageKind";
 import { isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
 import type { LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { resolveHostPlanFieldsForPlShare } from "@/lib/plServerHostPlanSync";
@@ -17,11 +17,11 @@ type ShareableCompanyRow = Company | LocalCompanyDoc | { storageOption?: string 
  */
 export function isLocalServerShareableCompany(c: ShareableCompanyRow | null | undefined): boolean {
   if (!c) return false;
+  // Client/staff mirrored rows — host share list me nahi.
   if (isServerGateCompany(c as { plServerShared?: boolean })) return false;
-  if (
-    isCloudLinkedCompanyStorage(c as { storageOption?: string; syncedFromCloud?: boolean }) &&
-    !isDeviceLocalCompany(c as Company)
-  ) {
+  // Hard deny: Firebase/Drive Online companies must never appear in PL "Shared companies".
+  // (Previously `cloud && !deviceLocal` leaked demoted mirrors with storageOption:"local".)
+  if (isCloudLinkedCompanyStorage(c as { storageOption?: string; syncedFromCloud?: boolean })) {
     return false;
   }
   const syncPolicy = String((c as { syncPolicy?: string }).syncPolicy ?? "")
@@ -31,6 +31,7 @@ export function isLocalServerShareableCompany(c: ShareableCompanyRow | null | un
   if (String((c as { authoritativeCompanyId?: string }).authoritativeCompanyId ?? "").trim()) {
     return false;
   }
+  // Must be a pure local SQLite ledger (not Online demoted / half-hydrated).
   return isPureLocalLedgerCompany(c as Company);
 }
 

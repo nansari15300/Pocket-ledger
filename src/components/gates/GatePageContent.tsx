@@ -64,7 +64,7 @@ import { logoutFromCompanyOnThisDevice } from "@/lib/logoutFromCompany";
 import { appNavHref } from "@/lib/appNavHref";
 import type { GateRecord } from "@/lib/gates/gateTypes";
 import { getLocalAuthToken, setLocalAuthToken } from "@/lib/localApiClient";
-import { grantOpenLocalCompanySession } from "@/lib/companyUnlockGate";
+import { grantOpenLocalCompanySession, isCloudLinkedCompanyStorage } from "@/lib/companyUnlockGate";
 import {
   readAnyStoredOfflineUnlockSessionForCompany,
   readStoredOfflineUnlockSession,
@@ -303,7 +303,8 @@ export function GatePageContent() {
 
   const handleLogoutCompany = (id: string) => {
     logoutFromCompanyOnThisDevice(id, user);
-    if (companyId === id) clearCompanyId({ force: true });
+    // PL local_server gate: clearCompanyId without allowlisted `reason` is a no-op.
+    if (companyId === id) clearCompanyId({ force: true, reason: "user_clear" });
     toast.success("Logged out from company");
   };
   const isSuperAdminByEmail = useMemo(() => {
@@ -534,7 +535,10 @@ export function GatePageContent() {
       isSuperAdminUser,
       pathname
     );
-    return buildPlServerGatePreviewCompanyList(registryForGate, detailGate.id);
+    // Host share preview only — never surface client Online/Firebase rows here.
+    return buildPlServerGatePreviewCompanyList(registryForGate, detailGate.id).filter(
+      (c) => !isCloudLinkedCompanyStorage(c)
+    );
   }, [allCompaniesRegistry, detailGate, user, isSuperAdminUser, pathname, serverAccessEpoch]);
 
   const unlockPickerCompanies = useMemo(() => {

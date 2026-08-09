@@ -4,6 +4,7 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Building2, PlusCircle, Share2, UserPlus, ChevronDown, KeyRound, Eye, EyeOff, Loader2, Check, LogOut, Server, Wifi } from "lucide-react";
+import { PlServerOnlineStatusDot } from "@/components/pl/PlServerOnlineStatusDot";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -417,6 +418,7 @@ function CompanyItem({
       >
         <Building2 className="h-6 w-6 shrink-0 text-muted-foreground" />
         <span className="flex-1 text-lg font-medium">{companyDisplayName(company)}</span>
+        <PlServerOnlineStatusDot company={company} className="mr-1" />
         {isSelected ? <Check className="h-5 w-5 shrink-0 text-green-600" aria-label="Selected" /> : null}
       </button>
       <DropdownMenu>
@@ -509,7 +511,12 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
 
   const handleLogoutCompany = useCallback((id: string) => {
     logoutFromCompanyOnThisDevice(id, user);
-    if (companyId === id) clearCompanyId({ force: true });
+    // Close any unlock dialog — cancel must not leave a still-selected company after logout.
+    setCompanyToUnlock((cur) => (cur?.id === id ? null : cur));
+    setUsernameInput("");
+    setPasswordInput("");
+    // PL local_server gate: clearCompanyId without allowlisted `reason` is a no-op.
+    if (companyId === id) clearCompanyId({ force: true, reason: "user_clear" });
     toast({ title: "Logged out from company", description: "Saved company password was reset on this device." });
   }, [clearCompanyId, companyId, user]);
   const {
@@ -1678,8 +1685,8 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
           }
         }}
       >
-        <AlertDialogContent className="w-[calc(100%-8px)] max-w-md rounded-2xl">
-          <AlertDialogHeader>
+        <AlertDialogContent className="flex h-[90dvh] max-h-[90dvh] w-[calc(100%-8px)] max-w-md flex-col gap-4 overflow-hidden rounded-2xl supports-[not(height:1dvh)]:h-[90vh] supports-[not(height:1dvh)]:max-h-[90vh]">
+          <AlertDialogHeader className="shrink-0">
             <AlertDialogTitle>
               {companyToUnlock && isOfflineCompanyStorage(companyToUnlock)
                 ? "Enter your credentials"
@@ -1719,151 +1726,153 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {companyToUnlock ? (
-            <CompanyUnlockContextPickers
-              companies={unlockPickerCompanies}
-              company={companyToUnlock}
-              unlockTab={unlockListTab}
-              onUnlockTabChange={handleUnlockTabChange}
-              onCompanyChange={handleUnlockCompanyChange}
-              onOpenGatePage={closeUnlockDialog}
-            />
-          ) : null}
-          <div className="space-y-3">
-            {companyToUnlock && isOfflineCompanyStorage(companyToUnlock) ? (
-              <>
-                <div className="space-y-1.5">
-                  <Label htmlFor="cs-unlock-login-user">Login username</Label>
-                  <Input
-                    id="cs-unlock-login-user"
-                    autoComplete="username"
-                    placeholder="e.g. sales_user"
-                    value={usernameInput}
-                    onChange={(e) => setUsernameInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmit()}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="cs-unlock-user-pw">Password</Label>
-                  <div className="relative">
-                    <Input
-                      id="cs-unlock-user-pw"
-                      type={showPassword ? "text" : "password"}
-                      autoComplete="current-password"
-                      placeholder="Password"
-                      value={passwordInput}
-                      onChange={(e) => setPasswordInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmit()}
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
-                      onClick={() => setShowPassword(!showPassword)}
-                    >
-                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
-                  </div>
-                </div>
-                <RememberCompanyPasswordDurationSelect
-                  id="cs-remember-days"
-                  value={rememberUnlockDays}
-                  onChange={setRememberUnlockDays}
-                />
-              </>
-            ) : (
-              <>
-                {companyToUnlock &&
-                !isOfflineCompanyStorage(companyToUnlock) &&
-                !isServerGateCompany(companyToUnlock) ? (
-                  <FirebaseLedgerDataSyncInlineSwitch />
-                ) : null}
-                {companyToUnlock && showCompanyUserNameField(companyToUnlock, user?.email) && (
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-0.5 [-webkit-overflow-scrolling:touch]">
+            {companyToUnlock ? (
+              <CompanyUnlockContextPickers
+                companies={unlockPickerCompanies}
+                company={companyToUnlock}
+                unlockTab={unlockListTab}
+                onUnlockTabChange={handleUnlockTabChange}
+                onCompanyChange={handleUnlockCompanyChange}
+                onOpenGatePage={closeUnlockDialog}
+              />
+            ) : null}
+            <div className="space-y-3">
+              {companyToUnlock && isOfflineCompanyStorage(companyToUnlock) ? (
+                <>
                   <div className="space-y-1.5">
-                    <Label htmlFor="cs-unlock-username">Company username</Label>
+                    <Label htmlFor="cs-unlock-login-user">Login username</Label>
                     <Input
-                      id="cs-unlock-username"
-                      autoComplete="off"
-                      name="pl-company-unlock-username"
-                      placeholder={
-                        isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
-                        onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
-                          ? "Email, display name, or email prefix"
-                          : "Company Profile → Admin username"
-                      }
+                      id="cs-unlock-login-user"
+                      autoComplete="username"
+                      placeholder="e.g. sales_user"
                       value={usernameInput}
                       onChange={(e) => setUsernameInput(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmit()}
                     />
-                    {companyToUnlock &&
-                      canRememberCompanyUsername(companyToUnlock, user?.email) && (
-                        <div className="flex items-center space-x-2 pt-1">
-                          <Checkbox
-                            id="cs-remember-shared-username"
-                            checked={rememberSharedUsername}
-                            onCheckedChange={(v) =>
-                              handleRememberUsernameCheckboxChange(
-                                v === true,
-                                usernameInput,
-                                companyToUnlock.id,
-                                user?.uid,
-                                user?.email,
-                                setRememberSharedUsername
-                              )
-                            }
-                          />
-                          <Label htmlFor="cs-remember-shared-username" className="text-sm font-normal cursor-pointer">
-                            Remember username on this device
-                          </Label>
-                        </div>
-                      )}
                   </div>
-                )}
-                <div className="space-y-1.5">
-                  <Label htmlFor="cs-unlock-password">
-                    {companyToUnlock &&
-                    isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
-                    onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
-                      ? "Password (for your shared access)"
-                      : "Company password"}
-                  </Label>
-                  <div className="relative">
-                    <Input
-                      id="cs-unlock-password"
-                      type={showPassword ? "text" : "password"}
-                      autoComplete="current-password"
-                      placeholder={
-                        companyToUnlock &&
-                        isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
-                        onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
-                          ? "Enter the password set for your shared user"
-                          : "Enter company password"
-                      }
-                      value={passwordInput}
-                      onChange={(e) => setPasswordInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmit()}
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
-                      onClick={() => setShowPassword(!showPassword)}
-                    >
-                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="cs-unlock-user-pw">Password</Label>
+                    <div className="relative">
+                      <Input
+                        id="cs-unlock-user-pw"
+                        type={showPassword ? "text" : "password"}
+                        autoComplete="current-password"
+                        placeholder="Password"
+                        value={passwordInput}
+                        onChange={(e) => setPasswordInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmit()}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                        onClick={() => setShowPassword(!showPassword)}
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
                   </div>
-                </div>
-                <RememberCompanyPasswordDurationSelect
-                  id="cs-remember-cloud-pw"
-                  value={rememberUnlockDays}
-                  onChange={setRememberUnlockDays}
-                />
-              </>
-            )}
+                  <RememberCompanyPasswordDurationSelect
+                    id="cs-remember-days"
+                    value={rememberUnlockDays}
+                    onChange={setRememberUnlockDays}
+                  />
+                </>
+              ) : (
+                <>
+                  {companyToUnlock &&
+                  !isOfflineCompanyStorage(companyToUnlock) &&
+                  !isServerGateCompany(companyToUnlock) ? (
+                    <FirebaseLedgerDataSyncInlineSwitch />
+                  ) : null}
+                  {companyToUnlock && showCompanyUserNameField(companyToUnlock, user?.email) && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="cs-unlock-username">Company username</Label>
+                      <Input
+                        id="cs-unlock-username"
+                        autoComplete="off"
+                        name="pl-company-unlock-username"
+                        placeholder={
+                          isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
+                          onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
+                            ? "Email, display name, or email prefix"
+                            : "Company Profile → Admin username"
+                        }
+                        value={usernameInput}
+                        onChange={(e) => setUsernameInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmit()}
+                      />
+                      {companyToUnlock &&
+                        canRememberCompanyUsername(companyToUnlock, user?.email) && (
+                          <div className="flex items-center space-x-2 pt-1">
+                            <Checkbox
+                              id="cs-remember-shared-username"
+                              checked={rememberSharedUsername}
+                              onCheckedChange={(v) =>
+                                handleRememberUsernameCheckboxChange(
+                                  v === true,
+                                  usernameInput,
+                                  companyToUnlock.id,
+                                  user?.uid,
+                                  user?.email,
+                                  setRememberSharedUsername
+                                )
+                              }
+                            />
+                            <Label htmlFor="cs-remember-shared-username" className="text-sm font-normal cursor-pointer">
+                              Remember username on this device
+                            </Label>
+                          </div>
+                        )}
+                    </div>
+                  )}
+                  <div className="space-y-1.5">
+                    <Label htmlFor="cs-unlock-password">
+                      {companyToUnlock &&
+                      isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
+                      onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
+                        ? "Password (for your shared access)"
+                        : "Company password"}
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        id="cs-unlock-password"
+                        type={showPassword ? "text" : "password"}
+                        autoComplete="current-password"
+                        placeholder={
+                          companyToUnlock &&
+                          isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
+                          onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
+                            ? "Enter the password set for your shared user"
+                            : "Enter company password"
+                        }
+                        value={passwordInput}
+                        onChange={(e) => setPasswordInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmit()}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                        onClick={() => setShowPassword(!showPassword)}
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <RememberCompanyPasswordDurationSelect
+                    id="cs-remember-cloud-pw"
+                    value={rememberUnlockDays}
+                    onChange={setRememberUnlockDays}
+                  />
+                </>
+              )}
+            </div>
           </div>
-          <AlertDialogFooter className="flex-row items-center gap-2 sm:justify-end [&>*]:mt-0">
+          <AlertDialogFooter className="shrink-0 flex-row items-center gap-2 sm:justify-end [&>*]:mt-0">
             {/* Keep both actions on one row (mobile + desktop) with pill-style corners. */}
             {/* Color cue: cancel = blue, primary action = green (requested). */}
             <Button
@@ -1905,7 +1914,12 @@ export function CompanyActions({
   const { companyId, setCompanyId, clearCompanyId, triggerSync, reloadLocalCompanyRegistry, company: contextCompany, allCompaniesRegistry } = useCompany();
   const handleLogoutCompany = useCallback((id: string) => {
     logoutFromCompanyOnThisDevice(id, user);
-    if (companyId === id) clearCompanyId({ force: true });
+    setCompanyToUnlock((cur) => (cur?.id === id ? null : cur));
+    setUsernameInput("");
+    setPasswordInput("");
+    setMenuOpen(false);
+    // PL local_server gate: clearCompanyId without allowlisted `reason` is a no-op.
+    if (companyId === id) clearCompanyId({ force: true, reason: "user_clear" });
     toast({ title: "Logged out from company", description: "Saved company password was reset on this device." });
   }, [clearCompanyId, companyId, user]);
   const {
@@ -1952,6 +1966,8 @@ export function CompanyActions({
   const [unlockListTab, setUnlockListTab] = useState<CompanyListTab>("local");
   const unlockTabPinnedRefHeader = useRef(false);
   const unlockDialogCompanyIdRefHeader = useRef<string | null>(null);
+  /** Logout button sits inside company DropdownMenuItem — skip the row's select. */
+  const skipCompanySelectFromLogoutRef = useRef(false);
   const [serverGateStatus, setServerGateStatus] = useState<string>("");
   const uploadLocked = useRestoreCloudUploadLock();
 
@@ -2476,22 +2492,15 @@ export function CompanyActions({
 
   useEffect(() => {
     if (uploadLocked) return;
-    if (companyId) {
-      if (selectedCompanyIsVisible) return;
-      const hiddenServerSelection =
-        !usePlServerCompanyMerge &&
-        ((contextCompany?.id === companyId && isServerGateCompany(contextCompany)) ||
-          companies.some((c) => c.id === companyId && isServerGateCompany(c)));
-      if (!hiddenServerSelection) {
-        clearCompanyId({ force: true });
-        return;
-      }
-      return;
-    }
-    // Multi-tab: keep tab-specific selection stable; auto-pick first only when no saved company exists anywhere.
-    if (selectorCompanies.length > 0 && !hasAnySelectedCompanyId()) {
-      const pick = pickGateAwareAutoSelectCompanyId(selectorCompanies, activeGate);
-      if (pick) setCompanyId(pick);
+    if (!companyId) return;
+    if (selectedCompanyIsVisible) return;
+    const hiddenServerSelection =
+      !usePlServerCompanyMerge &&
+      ((contextCompany?.id === companyId && isServerGateCompany(contextCompany)) ||
+        companies.some((c) => c.id === companyId && isServerGateCompany(c)));
+    if (!hiddenServerSelection) {
+      // PL gate requires allowlisted reason — otherwise clear is a no-op and stale company stays open.
+      clearCompanyId({ force: true, reason: "user_clear" });
     }
   }, [
     activeGate,
@@ -2551,6 +2560,22 @@ export function CompanyActions({
     return () => { cancelled = true; };
   }, [sharedOwnerIdsKey]);
 
+  const markLogoutOnlyClick = useCallback(() => {
+    skipCompanySelectFromLogoutRef.current = true;
+  }, []);
+
+  const onCompanyRowSelect = useCallback(
+    (company: CompanyData, e: Event) => {
+      if (skipCompanySelectFromLogoutRef.current) {
+        skipCompanySelectFromLogoutRef.current = false;
+        e.preventDefault();
+        return;
+      }
+      void handleSelectCompany(company);
+    },
+    [handleSelectCompany]
+  );
+
   const companyTriggerLabel =
     companyDisplayName(activeCompany) ||
     (!companies?.length ? "No company — add one" : "Select company");
@@ -2577,6 +2602,7 @@ export function CompanyActions({
             <span className="min-w-0 flex-1 truncate text-left">
               {activeCompany ? activeCompany.name : "No Company"}
             </span>
+            <PlServerOnlineStatusDot company={activeCompany} className="ml-1.5" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuPortal>
@@ -2601,7 +2627,10 @@ export function CompanyActions({
                           My local companies
                         </DropdownMenuLabel>
                         {myLocalDisplay.map((company) => (
-                          <DropdownMenuItem key={company.id} onSelect={() => handleSelectCompany(company)}>
+                          <DropdownMenuItem
+                            key={company.id}
+                            onSelect={(e) => onCompanyRowSelect(company, e)}
+                          >
                             <Building2 className="mr-2 h-4 w-4 shrink-0" />
                             <span className="flex-1 truncate">{companyDisplayName(company)}</span>
                             {company.id === companyId && (
@@ -2611,10 +2640,19 @@ export function CompanyActions({
                               type="button"
                               variant="ghost"
                               size="icon"
+                              data-pl-company-logout=""
                               className="ml-1 h-7 w-7 shrink-0"
                               title="Log out from company"
-                              onPointerDown={(e) => e.stopPropagation()}
-                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleLogoutCompany(company.id); }}
+                              onPointerDown={(e) => {
+                                e.stopPropagation();
+                                markLogoutOnlyClick();
+                              }}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                markLogoutOnlyClick();
+                                handleLogoutCompany(company.id);
+                              }}
                             >
                               <LogOut className="h-3.5 w-3.5" />
                             </Button>
@@ -2630,7 +2668,7 @@ export function CompanyActions({
                         {sharedLocalDisplay.map((company) => (
                           <DropdownMenuItem
                             key={company.id}
-                            onSelect={() => handleSelectCompany(company)}
+                            onSelect={(e) => onCompanyRowSelect(company, e)}
                             className="flex flex-col items-stretch py-2 group"
                           >
                             <div className="flex w-full items-center gap-2">
@@ -2643,10 +2681,19 @@ export function CompanyActions({
                                 type="button"
                                 variant="ghost"
                                 size="icon"
+                                data-pl-company-logout=""
                                 className="h-7 w-7 shrink-0"
                                 title="Log out from company"
-                                onPointerDown={(e) => e.stopPropagation()}
-                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleLogoutCompany(company.id); }}
+                                onPointerDown={(e) => {
+                                  e.stopPropagation();
+                                  markLogoutOnlyClick();
+                                }}
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  markLogoutOnlyClick();
+                                  handleLogoutCompany(company.id);
+                                }}
                               >
                                 <LogOut className="h-3.5 w-3.5" />
                               </Button>
@@ -2766,12 +2813,13 @@ export function CompanyActions({
                       {serverList.map((company) => (
                         <DropdownMenuItem
                           key={company.id}
-                          onSelect={() => handleSelectCompany(company)}
+                          onSelect={(e) => onCompanyRowSelect(company, e)}
                           className="flex flex-col items-stretch py-2 group"
                         >
                           <div className="flex w-full items-center gap-2">
                             <Server className="h-4 w-4 shrink-0" />
                             <span className="flex-1 truncate font-medium">{companyDisplayName(company)}</span>
+                            <PlServerOnlineStatusDot company={company} />
                             {company.id === companyId && (
                               <Check className="h-4 w-4 shrink-0 text-green-600" />
                             )}
@@ -2779,10 +2827,19 @@ export function CompanyActions({
                               type="button"
                               variant="ghost"
                               size="icon"
+                              data-pl-company-logout=""
                               className="h-7 w-7 shrink-0"
                               title="Log out from company"
-                              onPointerDown={(e) => e.stopPropagation()}
-                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleLogoutCompany(company.id); }}
+                              onPointerDown={(e) => {
+                                e.stopPropagation();
+                                markLogoutOnlyClick();
+                              }}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                markLogoutOnlyClick();
+                                handleLogoutCompany(company.id);
+                              }}
                             >
                               <LogOut className="h-3.5 w-3.5" />
                             </Button>
@@ -2900,8 +2957,8 @@ export function CompanyActions({
           }
         }}
       >
-        <AlertDialogContent className="w-[calc(100%-8px)] max-w-md rounded-2xl">
-          <AlertDialogHeader>
+        <AlertDialogContent className="flex h-[90dvh] max-h-[90dvh] w-[calc(100%-8px)] max-w-md flex-col gap-4 overflow-hidden rounded-2xl supports-[not(height:1dvh)]:h-[90vh] supports-[not(height:1dvh)]:max-h-[90vh]">
+          <AlertDialogHeader className="shrink-0">
             <AlertDialogTitle>
               {companyToUnlock && isOfflineCompanyStorage(companyToUnlock)
                 ? "Enter your credentials"
@@ -2940,151 +2997,153 @@ export function CompanyActions({
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {companyToUnlock ? (
-            <CompanyUnlockContextPickers
-              companies={unlockPickerCompanies}
-              company={companyToUnlock}
-              unlockTab={unlockListTab}
-              onUnlockTabChange={handleUnlockTabChangeHeader}
-              onCompanyChange={handleUnlockCompanyChangeHeader}
-              onOpenGatePage={closeUnlockDialogHeader}
-            />
-          ) : null}
-          <div className="space-y-3">
-            {companyToUnlock && isOfflineCompanyStorage(companyToUnlock) ? (
-              <>
-                <div className="space-y-1.5">
-                  <Label htmlFor="ca-unlock-login-user">Login username</Label>
-                  <Input
-                    id="ca-unlock-login-user"
-                    autoComplete="username"
-                    placeholder="e.g. sales_user"
-                    value={usernameInput}
-                    onChange={(e) => setUsernameInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmitHeader()}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="ca-unlock-user-pw">Password</Label>
-                  <div className="relative">
-                    <Input
-                      id="ca-unlock-user-pw"
-                      type={showPassword ? "text" : "password"}
-                      autoComplete="current-password"
-                      placeholder="Password"
-                      value={passwordInput}
-                      onChange={(e) => setPasswordInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmitHeader()}
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
-                      onClick={() => setShowPassword(!showPassword)}
-                    >
-                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
-                  </div>
-                </div>
-                <RememberCompanyPasswordDurationSelect
-                  id="ca-remember-days"
-                  value={rememberUnlockDays}
-                  onChange={setRememberUnlockDays}
-                />
-              </>
-            ) : (
-              <>
-                {companyToUnlock &&
-                !isOfflineCompanyStorage(companyToUnlock) &&
-                !isServerGateCompany(companyToUnlock) ? (
-                  <FirebaseLedgerDataSyncInlineSwitch />
-                ) : null}
-                {companyToUnlock && showCompanyUserNameField(companyToUnlock, user?.email) && (
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-0.5 [-webkit-overflow-scrolling:touch]">
+            {companyToUnlock ? (
+              <CompanyUnlockContextPickers
+                companies={unlockPickerCompanies}
+                company={companyToUnlock}
+                unlockTab={unlockListTab}
+                onUnlockTabChange={handleUnlockTabChangeHeader}
+                onCompanyChange={handleUnlockCompanyChangeHeader}
+                onOpenGatePage={closeUnlockDialogHeader}
+              />
+            ) : null}
+            <div className="space-y-3">
+              {companyToUnlock && isOfflineCompanyStorage(companyToUnlock) ? (
+                <>
                   <div className="space-y-1.5">
-                    <Label htmlFor="ca-unlock-username">Company username</Label>
+                    <Label htmlFor="ca-unlock-login-user">Login username</Label>
                     <Input
-                      id="ca-unlock-username"
-                      autoComplete="off"
-                      name="pl-company-unlock-username-header"
-                      placeholder={
-                        isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
-                        onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
-                          ? "Email, display name, or email prefix"
-                          : "Company Profile → Admin username"
-                      }
+                      id="ca-unlock-login-user"
+                      autoComplete="username"
+                      placeholder="e.g. sales_user"
                       value={usernameInput}
                       onChange={(e) => setUsernameInput(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmitHeader()}
                     />
-                    {companyToUnlock &&
-                      canRememberCompanyUsername(companyToUnlock, user?.email) && (
-                        <div className="flex items-center space-x-2 pt-1">
-                          <Checkbox
-                            id="ca-remember-shared-username"
-                            checked={rememberSharedUsername}
-                            onCheckedChange={(v) =>
-                              handleRememberUsernameCheckboxChange(
-                                v === true,
-                                usernameInput,
-                                companyToUnlock.id,
-                                user?.uid,
-                                user?.email,
-                                setRememberSharedUsername
-                              )
-                            }
-                          />
-                          <Label htmlFor="ca-remember-shared-username" className="text-sm font-normal cursor-pointer">
-                            Remember username on this device
-                          </Label>
-                        </div>
-                      )}
                   </div>
-                )}
-                <div className="space-y-1.5">
-                  <Label htmlFor="ca-unlock-password">
-                    {companyToUnlock &&
-                    isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
-                    onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
-                      ? "Password (for your shared access)"
-                      : "Company password"}
-                  </Label>
-                  <div className="relative">
-                    <Input
-                      id="ca-unlock-password"
-                      type={showPassword ? "text" : "password"}
-                      autoComplete="current-password"
-                      placeholder={
-                        companyToUnlock &&
-                        isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
-                        onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
-                          ? "Enter the password set for your shared user"
-                          : "Enter company password"
-                      }
-                      value={passwordInput}
-                      onChange={(e) => setPasswordInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmitHeader()}
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
-                      onClick={() => setShowPassword(!showPassword)}
-                    >
-                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="ca-unlock-user-pw">Password</Label>
+                    <div className="relative">
+                      <Input
+                        id="ca-unlock-user-pw"
+                        type={showPassword ? "text" : "password"}
+                        autoComplete="current-password"
+                        placeholder="Password"
+                        value={passwordInput}
+                        onChange={(e) => setPasswordInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmitHeader()}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                        onClick={() => setShowPassword(!showPassword)}
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
                   </div>
-                </div>
-                <RememberCompanyPasswordDurationSelect
-                  id="ca-remember-cloud-pw"
-                  value={rememberUnlockDays}
-                  onChange={setRememberUnlockDays}
-                />
-              </>
-            )}
+                  <RememberCompanyPasswordDurationSelect
+                    id="ca-remember-days"
+                    value={rememberUnlockDays}
+                    onChange={setRememberUnlockDays}
+                  />
+                </>
+              ) : (
+                <>
+                  {companyToUnlock &&
+                  !isOfflineCompanyStorage(companyToUnlock) &&
+                  !isServerGateCompany(companyToUnlock) ? (
+                    <FirebaseLedgerDataSyncInlineSwitch />
+                  ) : null}
+                  {companyToUnlock && showCompanyUserNameField(companyToUnlock, user?.email) && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="ca-unlock-username">Company username</Label>
+                      <Input
+                        id="ca-unlock-username"
+                        autoComplete="off"
+                        name="pl-company-unlock-username-header"
+                        placeholder={
+                          isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
+                          onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
+                            ? "Email, display name, or email prefix"
+                            : "Company Profile → Admin username"
+                        }
+                        value={usernameInput}
+                        onChange={(e) => setUsernameInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmitHeader()}
+                      />
+                      {companyToUnlock &&
+                        canRememberCompanyUsername(companyToUnlock, user?.email) && (
+                          <div className="flex items-center space-x-2 pt-1">
+                            <Checkbox
+                              id="ca-remember-shared-username"
+                              checked={rememberSharedUsername}
+                              onCheckedChange={(v) =>
+                                handleRememberUsernameCheckboxChange(
+                                  v === true,
+                                  usernameInput,
+                                  companyToUnlock.id,
+                                  user?.uid,
+                                  user?.email,
+                                  setRememberSharedUsername
+                                )
+                              }
+                            />
+                            <Label htmlFor="ca-remember-shared-username" className="text-sm font-normal cursor-pointer">
+                              Remember username on this device
+                            </Label>
+                          </div>
+                        )}
+                    </div>
+                  )}
+                  <div className="space-y-1.5">
+                    <Label htmlFor="ca-unlock-password">
+                      {companyToUnlock &&
+                      isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
+                      onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
+                        ? "Password (for your shared access)"
+                        : "Company password"}
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        id="ca-unlock-password"
+                        type={showPassword ? "text" : "password"}
+                        autoComplete="current-password"
+                        placeholder={
+                          companyToUnlock &&
+                          isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
+                          onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
+                            ? "Enter the password set for your shared user"
+                            : "Enter company password"
+                        }
+                        value={passwordInput}
+                        onChange={(e) => setPasswordInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmitHeader()}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                        onClick={() => setShowPassword(!showPassword)}
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <RememberCompanyPasswordDurationSelect
+                    id="ca-remember-cloud-pw"
+                    value={rememberUnlockDays}
+                    onChange={setRememberUnlockDays}
+                  />
+                </>
+              )}
+            </div>
           </div>
-          <AlertDialogFooter className="flex-row items-center gap-2 sm:justify-end [&>*]:mt-0">
+          <AlertDialogFooter className="shrink-0 flex-row items-center gap-2 sm:justify-end [&>*]:mt-0">
             {/* Keep both actions on one row (mobile + desktop) with pill-style corners. */}
             {/* Color cue: cancel = blue, primary action = green (requested). */}
             <Button

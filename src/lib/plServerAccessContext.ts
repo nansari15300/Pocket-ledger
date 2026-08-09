@@ -879,7 +879,7 @@ export function buildPlServerGatePreviewCompanyList(
     const existing = findExistingForSharedRow(row);
     // Online/Firestore registry row pe plServerShared mat chipkao — Server tab me online company na aaye.
     if (existing && isCloudLinkedCompanyStorage(existing.company)) {
-      byId.set(id, {
+      const stub = {
         id,
         name: resolvePlServerGateCompanyDisplayName(id, gateId, registry),
         storageOption: "local",
@@ -893,7 +893,11 @@ export function buildPlServerGatePreviewCompanyList(
         ...(typeof row.planExpiryMs === "number" ? { planExpiryMs: row.planExpiryMs } : {}),
         ...(typeof row.requiresLogin === "boolean" ? { requiresLogin: row.requiresLogin } : {}),
         ...(row.usernameHint != null ? { usernameHint: row.usernameHint } : {}),
-      } as CompanyWithPlServerShared);
+      } as CompanyWithPlServerShared;
+      // Same Map key pe cloud overwrite mat karo — Online row preserve.
+      if (existing.key !== id) {
+        byId.set(id, stub);
+      }
       return;
     }
     if (existing) {
@@ -954,15 +958,18 @@ export function buildPlServerGatePreviewCompanyList(
   let list = [...byId.values()].filter(
     (c) => c && c.isDeleted !== true && c.movedToAdminRecycleAt == null
   );
+  // Gate "Shared companies" = host share list only. Never re-append client Online/Firebase registry
+  // (that leaked Online companies into Local server Shared even when host only shared "Local").
+  let plList = list.filter((c) => !isCloudLinkedCompanyStorage(c));
   if (allowedSet?.size) {
-    list = list.filter((c) => {
+    plList = plList.filter((c) => {
       const id = String(c.id || "").trim();
       const hostId = hostIdForCompany(c);
       return allowedSet.has(id) || (hostId ? allowedSet.has(hostId) : false) || Boolean(matchPlServerSharedCompanyForLocalId(id, allowedRows));
     });
   } else if (sharedRows.length > 0) {
-    list = list.filter((c) => {
-      if (c?.plServerShared !== true || isCloudLinkedCompanyStorage(c)) return false;
+    plList = plList.filter((c) => {
+      if (c?.plServerShared !== true) return false;
       const id = String(c.id || "").trim();
       const hostId = hostIdForCompany(c);
       return (
@@ -978,7 +985,7 @@ export function buildPlServerGatePreviewCompanyList(
     if (String(c.id || "").trim() !== key) return 2;
     return 1;
   };
-  for (const company of list) {
+  for (const company of plList) {
     const id = String(company.id || "").trim();
     const sharedMatch = matchPlServerSharedCompanyForLocalId(id, sharedRows);
     const key = hostIdForCompany(company) || sharedMatch?.id || id;
@@ -1089,21 +1096,44 @@ export function mergePlServerSharedCompaniesIntoRegistry(companies: Company[]): 
       ? normalizeServerUrl(activeGate.serverUrl || "")
       : "";
   // Har input row alag rakho — Online/Local/Server same id par collapse mat karo.
-  const out: CompanyWithPlServerShared[] = companies.map((c) => ({ ...c }) as CompanyWithPlServerShared);
+  const out: CompanyWithPlServerShared[] = companies.map((c) => {
+    const copy = { ...(c as CompanyWithPlServerShared) };
+    // Strip accidental PL stamps from Online rows so they stay Online.
+    if (isCloudLinkedCompanyStorage(copy)) {
+      copy.plServerShared = false;
+      copy.plServerGateId = undefined;
+      copy.plServerGateServerUrl = undefined;
+      copy.plServerHostCompanyId = undefined;
+    }
+    return copy;
+  });
   const authoritativeShareList = hasPlServerAuthoritativeShareList(contextGateId);
   for (const row of shared) {
+    const shareId = String(row.id || "").trim();
+    if (!shareId) continue;
+    // Same Firebase id already Online — do not inject a Server twin (host Online / client mix root).
+    if (out.some((c) => String(c.id || "").trim() === shareId && isCloudLinkedCompanyStorage(c))) {
+      continue;
+    }
     const idx = findServerRegistryRowIndexForShare(out, row, contextGateId);
+    const existing = idx >= 0 ? out[idx] : null;
+    // Online/Firestore row ko PL stub se overwrite mat karo.
+    if (existing && isCloudLinkedCompanyStorage(existing)) {
+      continue;
+    }
     const payload = buildPlServerSharedRegistryRow(
       row,
       contextGateId,
       contextGateServerUrl,
-      idx >= 0 ? out[idx] : null
+      existing
     );
     if (idx >= 0) out[idx] = payload;
     else out.push(payload);
   }
   if (!authoritativeShareList) return out;
   return out.filter((c) => {
+    // Never drop Firebase/Drive Online rows when PL share-list prune runs.
+    if (isCloudLinkedCompanyStorage(c)) return true;
     if ((c as { plServerShared?: boolean }).plServerShared !== true) return true;
     return isListedPlServerSharedCompany(c, contextGateId);
   });

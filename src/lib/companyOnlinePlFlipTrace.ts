@@ -159,13 +159,36 @@ function flipKind(row: FlipRow): "pl_server" | "online_firebase" | "local" | "no
 
 /** Same id: PL/local_server shape ko Firebase online stamp se overwrite mat hone do. */
 export function shouldPreferPlServerOverCloudRow(
-  row: { id?: string; plServerHostCompanyId?: string; plServerShared?: boolean } | null | undefined
+  row: {
+    id?: string;
+    plServerHostCompanyId?: string;
+    plServerShared?: boolean;
+    storageOption?: string | null;
+    syncedFromCloud?: boolean;
+    plServerGateId?: string;
+    plServerGateServerUrl?: string;
+  } | null | undefined
 ): boolean {
   if (!row) return false;
-  const id = String(row.id || "").trim();
+  // Explicit Online/Firebase/Drive rows must stay Online — share-list id overlap must not demote them.
+  const so = String(row.storageOption ?? "").toLowerCase().trim();
+  if (so === "firebase" || so === "drive" || row.syncedFromCloud === true) return false;
+
+  const hasPlStamp =
+    row.plServerShared === true ||
+    Boolean(String(row.plServerHostCompanyId || "").trim()) ||
+    Boolean(String(row.plServerGateId || "").trim()) ||
+    Boolean(String(row.plServerGateServerUrl || "").trim()) ||
+    isServerGateCompany(row as never);
+  // Id-only probes (`{ id }`) used to skip Firestore mirrors whenever the id was on the
+  // PL share list — that moved host Online companies into Server on shared clients.
+  // Prefer PL only when the row already has PL mirror stamps.
+  if (!hasPlStamp) return false;
+
   if (row.plServerShared === true) return true;
   if (isServerGateCompany(row as never)) return true;
   if (isListedPlServerSharedCompany(row)) return true;
+  const id = String(row.id || "").trim();
   if (id && isStickyPlServerCompanyId(id)) return true;
   try {
     const gate = getActiveGate();

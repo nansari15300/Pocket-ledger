@@ -177,6 +177,70 @@ async function clearPlServerMirrorFlagsOnLocalRow(
   void options;
 }
 
+/** Demoted Online (Firebase) row that was temporarily stamped as PL — restore Online, don't keep as Local. */
+function looksLikeDemotedOnlineCompany(
+  row: LocalCompanyDoc,
+  user: { uid: string; email: string | null }
+): boolean {
+  if (isCloudLinkedCompanyStorage(row as { storageOption?: string; syncedFromCloud?: boolean })) {
+    return true;
+  }
+  if (!isCurrentUserOwnerOfCompanyRow(row, user)) return false;
+  if (shouldPreserveDeviceLocalAfterGateRemoval(row, user)) return false;
+  const hadPl =
+    row.plServerShared === true ||
+    Boolean(rowString(row, "plServerGateId")) ||
+    Boolean(rowString(row, "plServerHostCompanyId")) ||
+    Boolean(
+      normalizeServerUrl(
+        rowString(row, "plServerGateServerUrl") ||
+          rowString(row, "plServerServerUrl") ||
+          rowString(row, "localServerUrl")
+      )
+    );
+  if (!hadPl) return false;
+  // Owned + PL stamps but not a protected device-local backup → was Online demoted by share-list overlap.
+  return true;
+}
+
+async function healDemotedOnlineCompanyAfterPlDetach(row: LocalCompanyDoc): Promise<void> {
+  const id = String(row.id || "").trim();
+  if (!id) return;
+  const { upsertLocalCompany } = await import("@/lib/localCompanyStore");
+  const so = String(row.storageOption ?? "").toLowerCase().trim();
+  await upsertLocalCompany({
+    ...row,
+    plServerShared: false,
+    plServerGateId: "",
+    plServerGateServerUrl: "",
+    plServerHostCompanyId: "",
+    storageOption: so === "drive" ? "drive" : "firebase",
+    syncedFromCloud: true,
+    syncPolicy: "online",
+  } as LocalCompanyDoc);
+  await clearRemovedPlServerCompanyCaches(id);
+}
+
+async function removeOrDetachPlMirrorRow(
+  row: LocalCompanyDoc,
+  user: { uid: string; email: string | null },
+  options?: { firebaseUid?: string | null }
+): Promise<"healed" | "preserved" | "deleted"> {
+  const id = String(row.id || "").trim();
+  if (!id) return "deleted";
+  if (looksLikeDemotedOnlineCompany(row, user)) {
+    await healDemotedOnlineCompanyAfterPlDetach(row);
+    return "healed";
+  }
+  if (shouldPreserveDeviceLocalAfterGateRemoval(row, user)) {
+    await clearPlServerMirrorFlagsOnLocalRow(row, { firebaseUid: options?.firebaseUid ?? null });
+    return "preserved";
+  }
+  await removeLocalCompanyById(id, { firebaseUid: options?.firebaseUid ?? null });
+  await clearRemovedPlServerCompanyCaches(id);
+  return "deleted";
+}
+
 function gateRemovalUser(options?: { firebaseUid?: string | null; firebaseEmail?: string | null }): {
   uid: string;
   email: string | null;
@@ -239,7 +303,12 @@ export async function pruneLocalServerGateCompaniesToLatest(
     const onlineMirror =
       isCloudLinkedCompanyStorage(row as { storageOption?: string; syncedFromCloud?: boolean }) ||
       (row as { syncedFromCloud?: boolean }).syncedFromCloud === true;
-    if (shouldPreserveDeviceLocalAfterGateRemoval(row, user) || onlineMirror) {
+    if (onlineMirror || looksLikeDemotedOnlineCompany(row, user)) {
+      await healDemotedOnlineCompanyAfterPlDetach(row);
+      removedIds.push(id);
+      continue;
+    }
+    if (shouldPreserveDeviceLocalAfterGateRemoval(row, user)) {
       await clearPlServerMirrorFlagsOnLocalRow(row, options);
       removedIds.push(id);
       continue;
@@ -272,13 +341,7 @@ export async function removeLocalServerGateCompanies(
     if (!rowMatchesGateForRemoval(row, gate, previewIds)) continue;
     const id = String(row.id || "").trim();
     if (!id || removedIds.includes(id)) continue;
-    if (shouldPreserveDeviceLocalAfterGateRemoval(row, user)) {
-      await clearPlServerMirrorFlagsOnLocalRow(row, { firebaseUid: options?.firebaseUid ?? null });
-      removedIds.push(id);
-      continue;
-    }
-    await removeLocalCompanyById(id, { firebaseUid: options?.firebaseUid ?? null });
-    await clearRemovedPlServerCompanyCaches(id);
+    await removeOrDetachPlMirrorRow(row, user, { firebaseUid: options?.firebaseUid ?? null });
     removedIds.push(id);
   }
   return { removedIds };
@@ -357,13 +420,7 @@ export async function purgeOrphanPlServerMirrorCompanies(
       Boolean(rowServerUrl);
 
     if (!hasServerMirrorMeta) continue;
-    if (shouldPreserveDeviceLocalAfterGateRemoval(row, user)) {
-      await clearPlServerMirrorFlagsOnLocalRow(row, { firebaseUid: options?.firebaseUid ?? null });
-      removedIds.push(id);
-      continue;
-    }
-    await removeLocalCompanyById(id, { firebaseUid: options?.firebaseUid ?? null });
-    await clearRemovedPlServerCompanyCaches(id);
+    await removeOrDetachPlMirrorRow(row, user, { firebaseUid: options?.firebaseUid ?? null });
     removedIds.push(id);
   }
   if (removedIds.length > 0) {

@@ -1,7 +1,5 @@
 "use client";
 
-import { isEmbeddedOfflinePreloadClient } from "@/lib/isEmbeddedOfflinePreloadClient";
-
 function normalizePath(p: string): string {
   return (p || "").replace(/\/+$/, "") || "/";
 }
@@ -18,7 +16,7 @@ function isOwnedByUser<
 
 /**
  * Main app (not `/admin/*`): SuperAdmin sees only owned companies — no shared-with list.
- * `/company` picker + EXE/APK: poori Firestore registry (shared + legacy ownerId owned rows).
+ * Same on web, EXE, APK (Online tab parity). `/company` picker + `/admin/*` stay unfiltered.
  */
 export function filterSharedOnlyCompaniesForSuperAdminInMainApp<
   T extends { ownerId?: string; ownerEmail?: string; isOwned?: boolean },
@@ -32,6 +30,5 @@ export function filterSharedOnlyCompaniesForSuperAdminInMainApp<
   const path = normalizePath(pathname ?? "");
   if (path.startsWith("/admin")) return companies;
   if (path === "/company") return companies;
-  if (isEmbeddedOfflinePreloadClient()) return companies;
   return companies.filter((c) => c.isOwned === true || isOwnedByUser(c, user));
 }
